@@ -100,7 +100,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                 component_name.clone(),
                 component_file.clone(),
                 &project,
-                component_type.clone(),
+                component_type,
             )
             .await;
 

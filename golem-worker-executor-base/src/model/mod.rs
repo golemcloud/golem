@@ -311,7 +311,9 @@ impl From<crate::preview2::golem::api0_2_0::host::PersistenceLevel> for Persiste
             crate::preview2::golem::api0_2_0::host::PersistenceLevel::PersistRemoteSideEffects => {
                 PersistenceLevel::PersistRemoteSideEffects
             }
-            crate::preview2::golem::api0_2_0::host::PersistenceLevel::Smart => PersistenceLevel::Smart,
+            crate::preview2::golem::api0_2_0::host::PersistenceLevel::Smart => {
+                PersistenceLevel::Smart
+            }
         }
     }
 }
@@ -325,7 +327,9 @@ impl From<PersistenceLevel> for crate::preview2::golem::api0_2_0::host::Persiste
             PersistenceLevel::PersistRemoteSideEffects => {
                 crate::preview2::golem::api0_2_0::host::PersistenceLevel::PersistRemoteSideEffects
             }
-            PersistenceLevel::Smart => crate::preview2::golem::api0_2_0::host::PersistenceLevel::Smart,
+            PersistenceLevel::Smart => {
+                crate::preview2::golem::api0_2_0::host::PersistenceLevel::Smart
+            }
         }
     }
 }

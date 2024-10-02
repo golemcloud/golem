@@ -103,22 +103,6 @@ pub mod router {
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
-    use golem_common::model::{ComponentId, IdempotencyKey};
-    use golem_service_base::model::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
-        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance, AnalysedType, TypeRecord, TypeStr, TypeTuple,
-    };
-    use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
-    use http::{HeaderMap, HeaderValue, Method};
-    use rib::{GetLiteralValue, RibInterpreterResult};
-    use serde_json::Value;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
     use crate::api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     };
@@ -135,6 +119,22 @@ mod tests {
     use crate::worker_service_rib_interpreter::{
         DefaultEvaluator, EvaluationError, WorkerServiceRibInterpreter,
     };
+    use async_trait::async_trait;
+    use golem_common::model::{ComponentId, IdempotencyKey};
+    use golem_service_base::model::VersionedComponentId;
+    use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
+    use golem_wasm_ast::analysis::{
+        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+        AnalysedInstance,
+    };
+    use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
+    use http::{HeaderMap, HeaderValue, Method};
+    use rib::{GetLiteralValue, RibInterpreterResult};
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     struct TestWorkerRequestExecutor {}
 
@@ -322,37 +322,21 @@ mod tests {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "a".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                     AnalysedFunctionParameter {
                         name: "b".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                 ],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Record(TypeRecord {
-                        fields: vec![
-                            golem_wasm_ast::analysis::NameTypePair {
-                                name: "component_id".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                            golem_wasm_ast::analysis::NameTypePair {
-                                name: "name".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                            golem_wasm_ast::analysis::NameTypePair {
-                                name: "function_name".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                            golem_wasm_ast::analysis::NameTypePair {
-                                name: "function_params".to_string(),
-                                typ: AnalysedType::Tuple(TypeTuple {
-                                    items: vec![AnalysedType::Str(TypeStr)],
-                                }),
-                            },
-                        ],
-                    }),
+                    typ: record(vec![
+                        field("component_id", str()),
+                        field("name", str()),
+                        field("function_name", str()),
+                        field("function_params", tuple(vec![str()])),
+                    ]),
                 }],
             }],
         });

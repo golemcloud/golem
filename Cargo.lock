@@ -3483,7 +3483,10 @@ dependencies = [
  "bytes 1.7.2",
  "chrono",
  "futures-core",
+ "golem-common",
  "golem-openapi-client-generator",
+ "golem-wasm-ast 0.0.0",
+ "golem-wasm-rpc 0.0.0",
  "http 1.1.0",
  "relative-path",
  "reqwest",
@@ -3665,9 +3668,8 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9da107cb4652aa207482f8c8de1040c9b606cebf3f07144f1a03c3d0b3ef985f"
+version = "0.0.0"
+source = "git+https://github.com/golemcloud/golem-openapi-client-generator?branch=vigoo/type-mappings#858e9bc03e20df5125dcec8c3d2c05f552694410"
 dependencies = [
  "clap 4.5.19",
  "convert_case 0.6.0",

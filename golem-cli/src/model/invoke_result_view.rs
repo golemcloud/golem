@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use golem_wasm_rpc::{protobuf, type_annotated_value_to_string};
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
@@ -6,7 +20,6 @@ use tracing::{debug, info};
 use golem_client::model::InvokeResult;
 
 use crate::model::component::{function_result_types, Component};
-use crate::model::conversions::decode_type_annotated_value_json;
 use crate::model::wave::type_wave_compatible;
 use crate::model::GolemError;
 
@@ -24,10 +37,9 @@ impl InvokeResultView {
         component: &Component,
         function: &str,
     ) -> Result<InvokeResultView, GolemError> {
-        let result = decode_type_annotated_value_json(res.result)?;
         Ok(
-            Self::try_parse(&result, component, function).unwrap_or_else(|_| {
-                let json = serde_json::to_value(&result).unwrap();
+            Self::try_parse(&res.result, component, function).unwrap_or_else(|_| {
+                let json = serde_json::to_value(&res.result).unwrap();
                 InvokeResultView::Json(json)
             }),
         )
@@ -98,6 +110,11 @@ impl InvokeResultView {
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
+    use golem_wasm_ast::analysis::analysed_type::{bool, handle};
+    use golem_wasm_ast::analysis::{
+        AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedResourceId,
+        AnalysedResourceMode,
+    };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::TypeAnnotatedValue as RootTypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::TypedTuple;
@@ -105,34 +122,24 @@ mod tests {
     use uuid::Uuid;
 
     use golem_client::model::{
-        AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedResourceMode,
-        AnalysedType, ComponentMetadata, ComponentType, InvokeResult, TypeBool, TypeHandle,
-        VersionedComponentId,
+        AnalysedType, ComponentMetadata, ComponentType, InvokeResult, VersionedComponentId,
     };
 
     use crate::model::component::Component;
-    use crate::model::conversions::{
-        analysed_type_client_to_model, encode_type_annotated_value_json,
-    };
     use crate::model::invoke_result_view::InvokeResultView;
 
     fn parse(results: Vec<golem_wasm_rpc::Value>, types: Vec<AnalysedType>) -> InvokeResultView {
         let typed_results = results
             .iter()
             .zip(&types)
-            .map(|(val, typ)| {
-                TypeAnnotatedValue::create(val, &analysed_type_client_to_model(typ)).unwrap()
-            })
+            .map(|(val, typ)| TypeAnnotatedValue::create(val, typ).unwrap())
             .map(|tv| RootTypeAnnotatedValue {
                 type_annotated_value: Some(tv),
             })
             .collect::<Vec<_>>();
 
         let typed_result = TypeAnnotatedValue::Tuple(TypedTuple {
-            typ: types
-                .iter()
-                .map(|t| (&analysed_type_client_to_model(t)).into())
-                .collect(),
+            typ: types.iter().map(|t| t.into()).collect(),
             value: typed_results,
         });
 
@@ -164,7 +171,7 @@ mod tests {
 
         InvokeResultView::try_parse_or_json(
             InvokeResult {
-                result: encode_type_annotated_value_json(typed_result).unwrap(),
+                result: typed_result,
             },
             &component,
             "func-name",
@@ -174,10 +181,7 @@ mod tests {
 
     #[test]
     fn represented_as_wave() {
-        let res = parse(
-            vec![golem_wasm_rpc::Value::Bool(true)],
-            vec![AnalysedType::Bool(TypeBool {})],
-        );
+        let res = parse(vec![golem_wasm_rpc::Value::Bool(true)], vec![bool()]);
 
         assert!(matches!(res, InvokeResultView::Wave(_)))
     }
@@ -191,10 +195,7 @@ mod tests {
                 },
                 resource_id: 1,
             }],
-            vec![AnalysedType::Handle(TypeHandle {
-                resource_id: 1,
-                mode: AnalysedResourceMode::Owned,
-            })],
+            vec![handle(AnalysedResourceId(1), AnalysedResourceMode::Owned)],
         );
 
         assert!(matches!(res, InvokeResultView::Json(_)))

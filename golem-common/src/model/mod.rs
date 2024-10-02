@@ -1035,6 +1035,20 @@ impl FromStr for WorkerStatus {
     }
 }
 
+impl Display for WorkerStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerStatus::Running => write!(f, "Running"),
+            WorkerStatus::Idle => write!(f, "Idle"),
+            WorkerStatus::Suspended => write!(f, "Suspended"),
+            WorkerStatus::Interrupted => write!(f, "Interrupted"),
+            WorkerStatus::Retrying => write!(f, "Retrying"),
+            WorkerStatus::Failed => write!(f, "Failed"),
+            WorkerStatus::Exited => write!(f, "Exited"),
+        }
+    }
+}
+
 impl From<WorkerStatus> for golem_api_grpc::proto::golem::worker::WorkerStatus {
     fn from(value: WorkerStatus) -> Self {
         match value {
@@ -2352,6 +2366,28 @@ impl From<ComponentType> for golem_api_grpc::proto::golem::component::ComponentT
             ComponentType::Ephemeral => {
                 golem_api_grpc::proto::golem::component::ComponentType::Ephemeral
             }
+        }
+    }
+}
+
+impl Display for ComponentType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ComponentType::Durable => "Durable",
+            ComponentType::Ephemeral => "Ephemeral",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl FromStr for ComponentType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Durable" => Ok(ComponentType::Durable),
+            "Ephemeral" => Ok(ComponentType::Ephemeral),
+            _ => Err(format!("Unknown Component Type: {}", s)),
         }
     }
 }

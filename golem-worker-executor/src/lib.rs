@@ -17,9 +17,11 @@ pub mod services;
 
 use std::sync::Arc;
 
+use crate::context::Context;
+use crate::services::AdditionalDeps;
 use async_trait::async_trait;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
-use golem_worker_executor_base::preview2::golem;
+use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0_rc1};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
@@ -46,9 +48,6 @@ use tokio::runtime::Handle;
 use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
-use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0_rc1};
-use crate::context::Context;
-use crate::services::AdditionalDeps;
 
 struct ServerBootstrap {}
 

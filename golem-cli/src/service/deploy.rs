@@ -16,7 +16,6 @@ use crate::model::{Format, GolemError, GolemResult, WorkerName, WorkerUpdateMode
 use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, TargetWorkerId};
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::urn::WorkerUrn;
 use inquire::Confirm;
@@ -129,10 +128,7 @@ impl<ProjectContext: Display + Send + Sync> DeployService for DeployServiceLive<
             info!("Deleting worker {worker_name}");
 
             let worker_urn = WorkerUrn {
-                id: TargetWorkerId {
-                    component_id: ComponentId(worker.worker_id.component_id),
-                    worker_name: Some(worker_name.clone()),
-                },
+                id: worker.worker_id.clone().into_target_worker_id(),
             };
             self.worker_service.delete_by_urn(worker_urn).await?;
         }

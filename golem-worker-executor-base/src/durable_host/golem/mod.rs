@@ -784,7 +784,9 @@ impl From<golem::api0_2_0::host::FilterComparator> for golem_common::model::Filt
             golem::api0_2_0::host::FilterComparator::NotEqual => {
                 golem_common::model::FilterComparator::NotEqual
             }
-            golem::api0_2_0::host::FilterComparator::Less => golem_common::model::FilterComparator::Less,
+            golem::api0_2_0::host::FilterComparator::Less => {
+                golem_common::model::FilterComparator::Less
+            }
             golem::api0_2_0::host::FilterComparator::LessEqual => {
                 golem_common::model::FilterComparator::LessEqual
             }
@@ -822,7 +824,9 @@ impl From<golem::api0_2_0::host::StringFilterComparator>
 impl From<golem::api0_2_0::host::WorkerStatus> for golem_common::model::WorkerStatus {
     fn from(value: golem::api0_2_0::host::WorkerStatus) -> Self {
         match value {
-            golem::api0_2_0::host::WorkerStatus::Running => golem_common::model::WorkerStatus::Running,
+            golem::api0_2_0::host::WorkerStatus::Running => {
+                golem_common::model::WorkerStatus::Running
+            }
             golem::api0_2_0::host::WorkerStatus::Idle => golem_common::model::WorkerStatus::Idle,
             golem::api0_2_0::host::WorkerStatus::Suspended => {
                 golem_common::model::WorkerStatus::Suspended
@@ -830,9 +834,15 @@ impl From<golem::api0_2_0::host::WorkerStatus> for golem_common::model::WorkerSt
             golem::api0_2_0::host::WorkerStatus::Interrupted => {
                 golem_common::model::WorkerStatus::Interrupted
             }
-            golem::api0_2_0::host::WorkerStatus::Retrying => golem_common::model::WorkerStatus::Retrying,
-            golem::api0_2_0::host::WorkerStatus::Failed => golem_common::model::WorkerStatus::Failed,
-            golem::api0_2_0::host::WorkerStatus::Exited => golem_common::model::WorkerStatus::Exited,
+            golem::api0_2_0::host::WorkerStatus::Retrying => {
+                golem_common::model::WorkerStatus::Retrying
+            }
+            golem::api0_2_0::host::WorkerStatus::Failed => {
+                golem_common::model::WorkerStatus::Failed
+            }
+            golem::api0_2_0::host::WorkerStatus::Exited => {
+                golem_common::model::WorkerStatus::Exited
+            }
         }
     }
 }
@@ -840,7 +850,9 @@ impl From<golem::api0_2_0::host::WorkerStatus> for golem_common::model::WorkerSt
 impl From<golem_common::model::WorkerStatus> for golem::api0_2_0::host::WorkerStatus {
     fn from(value: golem_common::model::WorkerStatus) -> Self {
         match value {
-            golem_common::model::WorkerStatus::Running => golem::api0_2_0::host::WorkerStatus::Running,
+            golem_common::model::WorkerStatus::Running => {
+                golem::api0_2_0::host::WorkerStatus::Running
+            }
             golem_common::model::WorkerStatus::Idle => golem::api0_2_0::host::WorkerStatus::Idle,
             golem_common::model::WorkerStatus::Suspended => {
                 golem::api0_2_0::host::WorkerStatus::Suspended
@@ -848,9 +860,15 @@ impl From<golem_common::model::WorkerStatus> for golem::api0_2_0::host::WorkerSt
             golem_common::model::WorkerStatus::Interrupted => {
                 golem::api0_2_0::host::WorkerStatus::Interrupted
             }
-            golem_common::model::WorkerStatus::Retrying => golem::api0_2_0::host::WorkerStatus::Retrying,
-            golem_common::model::WorkerStatus::Failed => golem::api0_2_0::host::WorkerStatus::Failed,
-            golem_common::model::WorkerStatus::Exited => golem::api0_2_0::host::WorkerStatus::Exited,
+            golem_common::model::WorkerStatus::Retrying => {
+                golem::api0_2_0::host::WorkerStatus::Retrying
+            }
+            golem_common::model::WorkerStatus::Failed => {
+                golem::api0_2_0::host::WorkerStatus::Failed
+            }
+            golem_common::model::WorkerStatus::Exited => {
+                golem::api0_2_0::host::WorkerStatus::Exited
+            }
         }
     }
 }

@@ -75,6 +75,7 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
+use golem_worker_executor_base::preview2::golem::api1_1_0_rc1;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -88,7 +89,6 @@ use tonic::transport::Channel;
 use tracing::{debug, error, info};
 use wasmtime::component::{Instance, Linker, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
-use golem_worker_executor_base::preview2::golem::api1_1_0_rc1;
 
 pub struct TestWorkerExecutor {
     handle: Option<JoinHandle<Result<(), String>>>,

@@ -350,7 +350,7 @@ mod type_inference_tests {
         };
         use crate::{Expr, FunctionTypeRegistry};
 
-        use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
+        use golem_wasm_ast::analysis::analysed_type::str;
 
         #[tokio::test]
         async fn test_enum_construction_and_pattern_match() {
@@ -365,7 +365,7 @@ mod type_inference_tests {
                     input_enum_type.clone(),
                     input_enum_type.clone(),
                     input_enum_type.clone(),
-                    AnalysedType::Str(TypeStr),
+                    str(),
                 ],
                 output_enum_type.clone(),
             );
@@ -413,25 +413,24 @@ mod type_inference_tests {
     }
 
     mod variant_tests {
-
         use crate::type_inference::type_inference_tests::internal::{
             get_analysed_exports, get_analysed_type_variant,
         };
         use crate::{Expr, FunctionTypeRegistry};
 
-        use golem_wasm_ast::analysis::{AnalysedType, TypeStr, TypeU64};
+        use golem_wasm_ast::analysis::analysed_type::{str, u64};
 
         #[tokio::test]
         async fn test_variant_construction_and_pattern_match() {
             let input_variant_type = get_analysed_type_variant(vec![
-                ("foo", Some(AnalysedType::U64(TypeU64))),
-                ("bar-baz", Some(AnalysedType::Str(TypeStr))),
+                ("foo", Some(u64())),
+                ("bar-baz", Some(str())),
                 ("foo-bar", None),
             ]);
 
             let output_variant_type = get_analysed_type_variant(vec![
-                ("success", Some(AnalysedType::U64(TypeU64))),
-                ("in-progress", Some(AnalysedType::Str(TypeStr))),
+                ("success", Some(u64())),
+                ("in-progress", Some(str())),
                 ("failure", None),
             ]);
 
@@ -441,7 +440,7 @@ mod type_inference_tests {
                     input_variant_type.clone(),
                     input_variant_type.clone(),
                     input_variant_type.clone(),
-                    AnalysedType::U64(TypeU64),
+                    u64(),
                 ],
                 output_variant_type.clone(),
             );
@@ -843,7 +842,7 @@ mod type_inference_tests {
           "#;
 
             let function_type_registry = internal::get_function_type_registry();
-            let mut expr = crate::Expr::from_text(rib_expr).unwrap();
+            let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
             let expected = Expr::Multiple(
@@ -1588,11 +1587,11 @@ mod type_inference_tests {
         }
     }
     mod record_tests {
-
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, FunctionTypeRegistry, InferredType, Number, VariableId};
-        use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeOption, TypeStr};
+        use golem_wasm_ast::analysis::analysed_type::{list, option, str};
+        use golem_wasm_ast::analysis::AnalysedType;
 
         #[test]
         fn test_record_type_inference() {
@@ -1730,33 +1729,26 @@ mod type_inference_tests {
         #[test]
         fn test_record_type_inference_select_with_function_call() {
             let request_body_type = internal::get_analysed_type_record(vec![
-                ("id".to_string(), AnalysedType::Str(TypeStr)),
-                ("name".to_string(), AnalysedType::Str(TypeStr)),
-                (
-                    "titles".to_string(),
-                    AnalysedType::List(TypeList {
-                        inner: Box::new(AnalysedType::Str(TypeStr)),
-                    }),
-                ),
+                ("id".to_string(), str()),
+                ("name".to_string(), str()),
+                ("titles".to_string(), list(str())),
                 (
                     "address".to_string(),
                     internal::get_analysed_type_record(vec![
-                        ("street".to_string(), AnalysedType::Str(TypeStr)),
-                        ("city".to_string(), AnalysedType::Str(TypeStr)),
+                        ("street".to_string(), str()),
+                        ("city".to_string(), str()),
                     ]),
                 ),
             ]);
 
-            let worker_response = internal::create_none(Some(&AnalysedType::Str(TypeStr)));
+            let worker_response = internal::create_none(Some(&str()));
 
             let request_type = internal::get_analysed_type_record(vec![(
                 "body".to_string(),
                 request_body_type.clone(),
             )]);
 
-            let return_type = AnalysedType::Option(TypeOption {
-                inner: Box::new(AnalysedType::try_from(&worker_response).unwrap()),
-            });
+            let return_type = option(AnalysedType::try_from(&worker_response).unwrap());
 
             let component_metadata =
                 internal::get_analysed_exports("foo", vec![request_type.clone()], return_type);
@@ -1891,10 +1883,11 @@ mod type_inference_tests {
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, MatchIdentifier,
             ParsedFunctionSite, VariableId,
         };
+        use golem_wasm_ast::analysis::analysed_type::u64;
         use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeU32, TypeU64,
+            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeU32,
         };
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use golem_wasm_rpc::protobuf::TypedOption;
@@ -1905,7 +1898,7 @@ mod type_inference_tests {
                     name: "foo".to_string(),
                     parameters: vec![AnalysedFunctionParameter {
                         name: "my_parameter".to_string(),
-                        typ: AnalysedType::U64(TypeU64),
+                        typ: u64(),
                     }],
                     results: vec![],
                 }),
