@@ -21,6 +21,7 @@ pub mod rust;
 pub mod stub;
 pub mod wit;
 
+use crate::commands::dependencies::UpdateCargoToml;
 use crate::stub::StubDefinition;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
@@ -238,7 +239,11 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
         &args.stub_wit_root,
         &args.dest_wit_root,
         args.overwrite,
-        args.update_cargo_toml,
+        if args.update_cargo_toml {
+            UpdateCargoToml::Update
+        } else {
+            UpdateCargoToml::NoUpdate
+        },
     )
 }
 

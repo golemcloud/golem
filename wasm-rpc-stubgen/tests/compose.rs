@@ -20,7 +20,7 @@ use fs_extra::dir::CopyOptions;
 use golem_wasm_ast::component::{Component, ComponentExternName};
 use golem_wasm_ast::{DefaultAst, IgnoreAllButMetadata};
 use golem_wasm_rpc_stubgen::commands::composition::compose;
-use golem_wasm_rpc_stubgen::commands::dependencies::add_stub_dependency;
+use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
 use golem_wasm_rpc_stubgen::stub::StubDefinition;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
@@ -36,7 +36,7 @@ async fn compose_with_single_stub() {
         &stub_dir.path().join("wit"),
         &caller_dir.path().join("wit"),
         false,
-        true,
+        UpdateCargoToml::Update,
     )
     .unwrap();
 
@@ -63,6 +63,7 @@ async fn compose_with_single_stub() {
     assert_not_importing(&dest_wasm, "test:main-stub/stub-api");
 }
 
+// TODO
 #[tokio::test]
 #[ignore] // NOTE: this is not working yet - produces an error
 async fn compose_with_single_stub_not_importing_stub() {
@@ -73,7 +74,7 @@ async fn compose_with_single_stub_not_importing_stub() {
         &stub_dir.path().join("wit"),
         &caller_dir.path().join("wit"),
         false,
-        true,
+        UpdateCargoToml::NoUpdate,
     )
     .unwrap();
 

@@ -1,3 +1,4 @@
+use crate::commands::dependencies::UpdateCargoToml;
 use crate::commands::log::{log_action, log_skipping_up_to_date, log_validated_action_result};
 use crate::model::oam;
 use crate::model::validation::ValidatedResult;
@@ -120,8 +121,8 @@ pub async fn pre_build(config: Config) -> anyhow::Result<()> {
             commands::dependencies::add_stub_dependency(
                 &app.stub_wit(dep_component_name),
                 &app.component_wit(component_name),
-                true,  // NOTE: in declarative mode we always assume overwrite
-                false, // TODO: should update Cargo.toml if exists
+                true, // NOTE: in declarative mode we always use overwrite
+                UpdateCargoToml::UpdateIfExists,
             )?
         }
     }
