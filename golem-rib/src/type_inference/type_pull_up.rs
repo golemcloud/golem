@@ -66,7 +66,7 @@ fn type_pull_up_non_recursive<'a>(expr: &'a Expr) {
                 inferred_type_stack.push_front(Expr::Flags(flags.clone(), current_inferred_type.clone()));
             }
 
-            Expr::SelectField(expr, field, current_inferred_type) => {
+            Expr::SelectField(_, field, current_inferred_type) => {
                 let expr = inferred_type_stack.pop_front().unwrap();
                 let inferred_type_of_selection_expr = expr.inferred_type();
                 let field_type = internal::get_inferred_type_of_selected_field(field, &inferred_type_of_selection_expr).unwrap();
@@ -74,7 +74,189 @@ fn type_pull_up_non_recursive<'a>(expr: &'a Expr) {
                 inferred_type_stack.push_front(new_select_field);
             }
 
-            _ => {}
+            Expr::SelectIndex(expr, index, current_inferred_type) => {
+                let expr = inferred_type_stack.pop_front().unwrap();
+                let inferred_type_of_selection_expr = expr.inferred_type();
+                let list_type = internal::get_inferred_type_of_selected_index(*index, &inferred_type_of_selection_expr).unwrap();
+                let new_select_index = Expr::SelectIndex(Box::new(expr.clone()), *index, current_inferred_type.merge(list_type));
+                inferred_type_stack.push_front(new_select_index);
+            }
+
+            Expr::Result(Ok(expr), current_inferred_type) => {
+                let expr = inferred_type_stack.pop_front().unwrap();
+                let inferred_type_of_ok_expr = expr.inferred_type();
+                let result_type = InferredType::Result {
+                    ok: Some(Box::new(inferred_type_of_ok_expr)),
+                    error: None,
+                };
+                let new_result = Expr::Result(Ok(Box::new(expr.clone())), current_inferred_type.merge(result_type));
+                inferred_type_stack.push_front(new_result);
+            }
+
+            Expr::Result(Err(expr), current_inferred_type) => {
+                let expr = inferred_type_stack.pop_front().unwrap();
+                let inferred_type_of_error_expr = expr.inferred_type();
+                let result_type = InferredType::Result {
+                    ok: None,
+                    error: Some(Box::new(inferred_type_of_error_expr)),
+                };
+                let new_result = Expr::Result(Err(Box::new(expr.clone())), current_inferred_type.merge(result_type));
+                inferred_type_stack.push_front(new_result);
+            }
+
+            Expr::Option(Some(expr), current_inferred_type) => {
+                let expr = inferred_type_stack.pop_front().unwrap();
+                let inferred_type_of_some_expr = expr.inferred_type();
+                let option_type = InferredType::Option(Box::new(inferred_type_of_some_expr));
+                let new_option = Expr::Option(Some(Box::new(expr.clone())), current_inferred_type.merge(option_type));
+                inferred_type_stack.push_front(new_option);
+            }
+
+            Expr::Option(None, current_inferred_type) => {
+                inferred_type_stack.push_front(Expr::Option(None, current_inferred_type.clone()));
+            }
+
+            Expr::Cond(cond, then_, else_, current_inferred_type) => {
+                let else_expr = inferred_type_stack.pop_front().unwrap();
+                let then_expr = inferred_type_stack.pop_front().unwrap();
+                let cond_expr = inferred_type_stack.pop_front().unwrap();
+                let inferred_type_of_then_expr = then_expr.inferred_type();
+                let inferred_type_of_else_expr = else_expr.inferred_type();
+
+                let new_type = if inferred_type_of_then_expr == inferred_type_of_then_expr {
+                    current_inferred_type.merge(inferred_type_of_then_expr)
+                } else if let Some(cond_then_else_type) =
+                    InferredType::all_of(vec![inferred_type_of_then_expr, inferred_type_of_else_expr])
+                {
+                    current_inferred_type.merge(cond_then_else_type)
+                } else { current_inferred_type.clone() };
+
+                let new_expr =
+                    Expr::Cond(Box::new(cond_expr), Box::new(then_expr.clone()), Box::new(else_expr.clone()), new_type);
+
+                inferred_type_stack.push_front(new_expr);
+
+            }
+
+            Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
+                let length = match_arms.len();
+                let mut new_resolutions = vec![];
+                for _ in 0..length {
+                    let arm_resolution = inferred_type_stack.pop_front().unwrap();
+                    new_resolutions.push(arm_resolution);
+                }
+
+                let inferred_types = new_resolutions.iter().map(|x| x.inferred_type()).collect::<Vec<_>>();
+                let new_inferred_type = InferredType::all_of(inferred_types).unwrap();
+
+                let mut total_exprs = 0;
+                for i in match_arms {
+                    let size = i.arm_pattern.get_expr_literals().len();
+                    total_exprs += size;
+                }
+
+                let mut new_arm_pattern_exprs = vec![];
+
+                for _ in 0..total_exprs {
+                    let expr = inferred_type_stack.pop_front().unwrap();
+                    new_arm_pattern_exprs.push(expr);
+                }
+
+                let mut new_arm_patterns = vec![];
+
+                for match_arm in match_arms {
+                    let mut arm_pattern = match_arm.arm_pattern.clone();
+                    let mut arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
+                    arm_pattern_exprs.iter_mut().zip(new_arm_pattern_exprs.iter()).for_each(|(arm_expr, new_expr)| {
+                        *arm_expr = &mut Box::new(new_expr.clone());
+                    });
+
+                    new_arm_patterns.push(arm_pattern);
+                }
+
+
+                let new_match_arms = new_arm_patterns.iter().zip(new_resolutions.iter()).map(|(arm_pattern, arm_resolution)| {
+                    crate::MatchArm {
+                        arm_pattern: arm_pattern.clone(),
+                        arm_resolution_expr: Box::new(arm_resolution.clone()),
+                    }
+                }).collect::<Vec<_>>();
+
+
+                let new_expr = Expr::PatternMatch(predicate.clone(), new_match_arms, current_inferred_type.merge(new_inferred_type));
+
+                inferred_type_stack.push_front(new_expr);
+            }
+
+            Expr::Concat(exprs, current_inferred_type) => {
+                let mut new_exprs = vec![];
+                for _ in 0..exprs.len() {
+                    let expr = inferred_type_stack.pop_front().unwrap();
+                    new_exprs.push(expr);
+                }
+
+                let new_concat = Expr::Concat(new_exprs, InferredType::Str);
+                inferred_type_stack.push_front(new_concat);
+            }
+
+            Expr::Multiple(exprs, current_inferred_type) => {
+                let length = exprs.len();
+                let mut new_exprs = vec![];
+                for _ in 0..length {
+                    let expr = inferred_type_stack.pop_front().unwrap();
+                    new_exprs.push(expr);
+                }
+
+                let new_inferred_type = new_exprs.last().unwrap().inferred_type();
+
+                let new_multiple = Expr::Multiple(new_exprs, current_inferred_type.merge(new_inferred_type));
+                inferred_type_stack.push_front(new_multiple);
+            }
+
+            Expr::Not(_, current_inferred_type) => {
+                let expr = inferred_type_stack.pop_front().unwrap();
+                let new_not = Expr::Not(Box::new(expr), current_inferred_type.clone());
+                inferred_type_stack.push_front(new_not);
+            }
+
+            Expr::GreaterThan(_, _, current_inferred_type) => {
+                let right_expr = inferred_type_stack.pop_front().unwrap();
+                let left_expr = inferred_type_stack.pop_front().unwrap();
+                let new_greater_than = Expr::GreaterThan(Box::new(left_expr), Box::new(right_expr), current_inferred_type.clone());
+                inferred_type_stack.push_front(new_greater_than);
+            }
+
+            Expr::GreaterThanOrEqualTo(_, _, current_inferred_type) => {
+                let right_expr = inferred_type_stack.pop_front().unwrap();
+                let left_expr = inferred_type_stack.pop_front().unwrap();
+                let new_greater_than_or_equal_to = Expr::GreaterThanOrEqualTo(Box::new(left_expr), Box::new(right_expr), current_inferred_type.clone());
+                inferred_type_stack.push_front(new_greater_than_or_equal_to);
+            }
+
+            Expr::LessThanOrEqualTo(_, _, current_inferred_type) => {
+                let right_expr = inferred_type_stack.pop_front().unwrap();
+                let left_expr = inferred_type_stack.pop_front().unwrap();
+                let new_less_than_or_equal_to = Expr::LessThanOrEqualTo(Box::new(left_expr), Box::new(right_expr), current_inferred_type.clone());
+                inferred_type_stack.push_front(new_less_than_or_equal_to);
+            }
+
+            Expr::EqualTo(_, _, current_inferred_type) => {
+                let right_expr = inferred_type_stack.pop_front().unwrap();
+                let left_expr = inferred_type_stack.pop_front().unwrap();
+                let new_equal_to = Expr::EqualTo(Box::new(left_expr), Box::new(right_expr), current_inferred_type.clone());
+                inferred_type_stack.push_front(new_equal_to);
+            }
+
+            Expr::LessThan(_, _, current_inferred_type) => {
+                let right_expr = inferred_type_stack.pop_front().unwrap();
+                let left_expr = inferred_type_stack.pop_front().unwrap();
+                let new_less_than = Expr::LessThan(Box::new(left_expr), Box::new(right_expr), current_inferred_type.clone());
+                inferred_type_stack.push_front(new_less_than);
+            }
+
+            _ => {
+                inferred_type_stack.push_front(expr.clone());
+            }
         }
     }
 }
