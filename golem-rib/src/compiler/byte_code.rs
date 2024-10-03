@@ -1035,7 +1035,7 @@ mod compiler_tests {
             let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
             assert_eq!(
                 compiler_error,
-                "Unknown resource method call golem:it/api.{cart(user_id).foo}. `foo` doesn't exist in resource `cart`"
+                "Unknown resource method call `golem:it/api.{cart(user_id).foo}`. `foo` doesn't exist in resource `cart`"
             );
         }
 
@@ -1096,6 +1096,24 @@ mod compiler_tests {
         }
 
         #[test]
+        fn test_invalid_arg_size_variants() {
+            let metadata = internal::metadata_with_variants();
+
+            let expr = r#"
+               let regiser_user_action = register-user(1, "foo");
+               let result = golem:it/api.{foo}(regiser_user_action);
+               result
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid number of arguments in variant `register-user`. Expected 1, but provided 2"
+            );
+        }
+
+        #[test]
         fn test_invalid_arg_types_function() {
             let metadata = internal::get_component_metadata(
                 "foo",
@@ -1146,6 +1164,24 @@ mod compiler_tests {
             assert_eq!(
                 compiler_error,
                 "Invalid type for the argument in resource constructor `cart`. Expected type `str`, but provided argument `{foo: \"bar\"}` is a `record`"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_types_variants() {
+            let metadata = internal::metadata_with_variants();
+
+            let expr = r#"
+               let regiser_user_action = register-user("foo");
+               let result = golem:it/api.{foo}(regiser_user_action);
+               result
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid type for the argument in variant constructor `register-user`. Expected type `number`, but provided argument `\"foo\"` is a `str`"
             );
         }
     }
@@ -1508,6 +1544,43 @@ mod compiler_tests {
         use crate::RibInputTypeInfo;
         use golem_wasm_ast::analysis::*;
         use std::collections::HashMap;
+
+        pub(crate) fn metadata_with_variants() -> Vec<AnalysedExport> {
+            let instance = AnalysedExport::Instance(AnalysedInstance {
+                name: "golem:it/api".to_string(),
+                functions: vec![AnalysedFunction {
+                    name: "foo".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "param1".to_string(),
+                        typ: AnalysedType::Variant(TypeVariant {
+                            cases: vec![
+                                NameOptionTypePair {
+                                    name: "register-user".to_string(),
+                                    typ: Some(AnalysedType::U64(TypeU64)),
+                                },
+                                NameOptionTypePair {
+                                    name: "process-user".to_string(),
+                                    typ: Some(AnalysedType::Str(TypeStr)),
+                                },
+                                NameOptionTypePair {
+                                    name: "validate".to_string(),
+                                    typ: None,
+                                },
+                            ],
+                        }),
+                    }],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: AnalysedType::Handle(TypeHandle {
+                            resource_id: AnalysedResourceId(0),
+                            mode: AnalysedResourceMode::Owned,
+                        }),
+                    }],
+                }],
+            });
+
+            vec![instance]
+        }
 
         pub(crate) fn metadata_with_resource_methods() -> Vec<AnalysedExport> {
             let instance = AnalysedExport::Instance(AnalysedInstance {

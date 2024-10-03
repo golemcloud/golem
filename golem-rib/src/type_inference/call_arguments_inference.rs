@@ -80,29 +80,21 @@ mod internal {
 
                     // Infer the types of constructor parameter expressions
                     infer_types(
-                        &FunctionNameInternal::ResourceConstructorName(constructor_name),
+                        &FunctionTypeInternal::ResourceConstructorName {
+                            fqn: parsed_function_static.to_string(),
+                            resource_constructor_name_pretty: parsed_function_static
+                                .function
+                                .resource_name()
+                                .cloned()
+                                .unwrap_or_default(),
+                            resource_constructor_name: constructor_name,
+                        },
                         function_type_registry,
                         registry_key,
                         constructor_params,
                         inferred_type,
-                    ).map_err(|e| match e {
-                        ArgTypesInferenceError::UnknownFunction => {
-                            format!("Unknown resource constructor call: `{}`. Resource `{}` doesn't exist" , parsed_function_static, resource_name)
-                        }
-                        ArgTypesInferenceError::ArgumentSizeMisMatch {
-                            expected,
-                            provided,
-                        } => format!(
-                            "Incorrect number of arguments for resource constructor `{}`. Expected {}, but provided {}",
-                            resource_name, expected, provided
-                        ),
-                        ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
-                            format!(
-                                "Invalid type for the argument in resource constructor `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
-                                resource_name, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
-                            )
-                        }
-                    })?;
+                    )
+                    .map_err(|e| e.to_string())?;
 
                     // Infer the types of resource method parameters
                     let resource_method_name = function.function_name();
@@ -112,55 +104,35 @@ mod internal {
                     );
 
                     infer_types(
-                        &FunctionNameInternal::ResourceMethodName(resource_method_name),
+                        &FunctionTypeInternal::ResourceMethodName {
+                            fqn: parsed_function_static.to_string(),
+                            resource_constructor_name_pretty: parsed_function_static
+                                .function
+                                .resource_name()
+                                .cloned()
+                                .unwrap_or_default(),
+                            resource_method_name_pretty: parsed_function_static
+                                .function
+                                .resource_method_name()
+                                .unwrap_or_default(),
+                            resource_method_name,
+                        },
                         function_type_registry,
                         registry_key,
                         args,
                         inferred_type,
-                    ).map_err(|e| match e {
-                        ArgTypesInferenceError::UnknownFunction => {
-                            format!("Unknown resource method call {}. `{}` doesn't exist in resource `{}`", parsed_function_static, parsed_function_static.function.resource_method_name().unwrap(), resource_name)
-                        }
-                        ArgTypesInferenceError::ArgumentSizeMisMatch {
-                            expected,
-                            provided,
-                        } => format!(
-                            "Incorrect number of arguments in resource method `{}`. Expected {}, but provided {}",
-                            parsed_function_static, expected, provided
-                        ),
-                        ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
-                            format!(
-                                "Invalid type for the argument in resource method `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
-                                parsed_function_static, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
-                            )
-                        }
-                    })
+                    )
+                    .map_err(|e| e.to_string())
                 } else {
                     let registry_key = RegistryKey::from_invocation_name(call_type);
                     infer_types(
-                        &FunctionNameInternal::Fqn(parsed_function_static.clone()),
+                        &FunctionTypeInternal::Fqn(parsed_function_static.to_string()),
                         function_type_registry,
                         registry_key,
                         args,
                         inferred_type,
-                    ).map_err(|e| match e {
-                        ArgTypesInferenceError::UnknownFunction => {
-                            format!("Unknown function call: `{}`", parsed_function_static.function.function_name())
-                        }
-                        ArgTypesInferenceError::ArgumentSizeMisMatch {
-                            expected,
-                            provided,
-                        } => format!(
-                            "Incorrect number of arguments for function `{}`. Expected {}, but provided {}",
-                            parsed_function_static, expected, provided
-                        ),
-                        ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
-                            format!(
-                                "Invalid type for the argument in function `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
-                                parsed_function_static.function.function_name(), expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
-                            )
-                        }
-                    })
+                    )
+                    .map_err(|e| e.to_string())
                 }
             }
 
@@ -175,57 +147,159 @@ mod internal {
             CallType::VariantConstructor(variant_name) => {
                 let registry_key = RegistryKey::FunctionName(variant_name.clone());
                 infer_types(
-                    &FunctionNameInternal::VariantName(variant_name.clone()),
+                    &FunctionTypeInternal::VariantName(variant_name.clone()),
                     function_type_registry,
                     registry_key,
                     args,
                     inferred_type,
-                ).map_err(|e| match e {
-                    ArgTypesInferenceError::UnknownFunction => {
-                        format!("Invalid variant constructor call: {}", variant_name)
-                    }
-                    ArgTypesInferenceError::ArgumentSizeMisMatch {
-                        expected,
-                        provided,
-                    } => format!(
-                        "Invalid variant construction: {}. Expected {} arguments, but provided {}",
-                        variant_name, expected, provided
-                    ),
-                    ArgTypesInferenceError::TypeMisMatchError { expected, provided } => {
-                        format!(
-                            "Invalid type for the argument in variant `{}`. Expected type `{}`, but provided argument `{}` is a `{}`",
-                            variant_name, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind()
-                        )
-                    }
-                })
+                )
+                .map_err(|e| e.to_string())
             }
         }
     }
-    enum ArgTypesInferenceError {
-        UnknownFunction,
+
+    // An internal error type for all possibilities of errors
+    // when inferring the type of arguments
+    enum FunctionArgsTypeInferenceError {
+        UnknownFunction(FunctionTypeInternal),
         ArgumentSizeMisMatch {
+            function_type_internal: FunctionTypeInternal,
             expected: usize,
             provided: usize,
         },
         TypeMisMatchError {
+            function_type_internal: FunctionTypeInternal,
             expected: AnalysedType,
             provided: Expr,
         },
     }
 
-    impl ArgTypesInferenceError {
-        fn type_mismatch(expected: AnalysedType, provided: Expr) -> ArgTypesInferenceError {
-            ArgTypesInferenceError::TypeMisMatchError { expected, provided }
+    impl FunctionArgsTypeInferenceError {
+        fn type_mismatch(
+            function_type_internal: FunctionTypeInternal,
+            expected: AnalysedType,
+            provided: Expr,
+        ) -> FunctionArgsTypeInferenceError {
+            FunctionArgsTypeInferenceError::TypeMisMatchError {
+                function_type_internal,
+                expected,
+                provided,
+            }
+        }
+    }
+
+    impl Display for FunctionArgsTypeInferenceError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            fn unknown_function_type(
+                function_type_internal: &FunctionTypeInternal,
+            ) -> &'static str {
+                match function_type_internal {
+                    FunctionTypeInternal::ResourceConstructorName { .. } => "resource constructor",
+                    FunctionTypeInternal::ResourceMethodName { .. } => "resource method",
+                    FunctionTypeInternal::Fqn(_) => "function",
+                    FunctionTypeInternal::VariantName(_) => "variant constructor",
+                }
+            }
+            match self {
+                FunctionArgsTypeInferenceError::UnknownFunction(FunctionTypeInternal::Fqn(
+                    parsed_function_name,
+                )) => {
+                    write!(f, "Unknown function call: `{}`", parsed_function_name)
+                }
+                FunctionArgsTypeInferenceError::UnknownFunction(
+                    FunctionTypeInternal::ResourceMethodName {
+                        fqn,
+                        resource_constructor_name_pretty: resource_name_human,
+                        resource_method_name_pretty: resource_method_name_human,
+                        ..
+                    },
+                ) => {
+                    write!(
+                        f,
+                        "Unknown resource method call `{}`. `{}` doesn't exist in resource `{}`",
+                        fqn, resource_method_name_human, resource_name_human
+                    )
+                }
+                FunctionArgsTypeInferenceError::UnknownFunction(
+                    FunctionTypeInternal::ResourceConstructorName {
+                        fqn,
+                        resource_constructor_name_pretty: resource_constructor_name_human,
+                        ..
+                    },
+                ) => {
+                    write!(
+                        f,
+                        "Unknown resource constructor call: `{}`. Resource `{}` doesn't exist",
+                        fqn, resource_constructor_name_human
+                    )
+                }
+
+                FunctionArgsTypeInferenceError::UnknownFunction(
+                    FunctionTypeInternal::VariantName(variant_name),
+                ) => {
+                    write!(f, "Invalid variant constructor call: {}", variant_name)
+                }
+
+                FunctionArgsTypeInferenceError::TypeMisMatchError {
+                    function_type_internal,
+                    expected,
+                    provided,
+                } => match function_type_internal {
+                    FunctionTypeInternal::ResourceConstructorName {
+                        fqn,
+                        resource_constructor_name_pretty: resource_constructor_name_human,
+                        ..
+                    } => {
+                        write!(f,"Invalid type for the argument in resource constructor `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", resource_constructor_name_human, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
+                    }
+                    FunctionTypeInternal::ResourceMethodName {
+                        fqn,
+                        ..
+                    } => {
+                        write!(f,"Invalid type for the argument in resource method `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", fqn, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
+                    }
+                    FunctionTypeInternal::Fqn(fqn) => {
+                        write!(f,"Invalid type for the argument in function `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", fqn, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
+                    }
+                    FunctionTypeInternal::VariantName(str) => {
+                        write!(f,"Invalid type for the argument in variant constructor `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", str, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
+                    }
+                },
+                FunctionArgsTypeInferenceError::ArgumentSizeMisMatch {
+                    function_type_internal,
+                    expected,
+                    provided,
+                } => match function_type_internal {
+                    FunctionTypeInternal::ResourceConstructorName {
+                        resource_constructor_name_pretty,
+                        ..
+                    } => {
+                        write!(f, "Incorrect number of arguments for resource constructor `{}`. Expected {}, but provided {}", resource_constructor_name_pretty, expected, provided)
+                    }
+                    FunctionTypeInternal::ResourceMethodName {
+                        fqn,
+                        ..
+                    } => {
+                        write!(f, "Incorrect number of arguments in resource method `{}`. Expected {}, but provided {}", fqn, expected, provided)
+                    }
+                    FunctionTypeInternal::Fqn(fqn) => {
+                        write!(f, "Incorrect number of arguments for function `{}`. Expected {}, but provided {}", fqn, expected, provided)
+                    }
+                    FunctionTypeInternal::VariantName(str) => {
+                        write!(f, "Invalid number of arguments in variant `{}`. Expected {}, but provided {}", str, expected, provided)
+                    }
+                },
+            }
         }
     }
 
     fn infer_types(
-        function_name: &FunctionNameInternal,
+        function_name: &FunctionTypeInternal,
         function_type_registry: &FunctionTypeRegistry,
         key: RegistryKey,
         args: &mut [Expr],
         inferred_type: &mut InferredType,
-    ) -> Result<(), ArgTypesInferenceError> {
+    ) -> Result<(), FunctionArgsTypeInferenceError> {
         if let Some(value) = function_type_registry.types.get(&key) {
             match value {
                 RegistryValue::Value(_) => Ok(()),
@@ -236,12 +310,13 @@ mod internal {
                     let parameter_types = parameter_types.clone();
 
                     if parameter_types.len() == args.len() {
-                        tag_argument_types(args, &parameter_types)?;
+                        tag_argument_types(function_name, args, &parameter_types)?;
                         *inferred_type = InferredType::from_variant_cases(variant_type);
 
                         Ok(())
                     } else {
-                        Err(ArgTypesInferenceError::ArgumentSizeMisMatch {
+                        Err(FunctionArgsTypeInferenceError::ArgumentSizeMisMatch {
+                            function_type_internal: function_name.clone(),
                             expected: parameter_types.len(),
                             provided: args.len(),
                         })
@@ -253,14 +328,14 @@ mod internal {
                 } => {
                     let mut parameter_types = parameter_types.clone();
 
-                    if let FunctionNameInternal::ResourceMethodName(_) = function_name {
+                    if let FunctionTypeInternal::ResourceMethodName { .. } = function_name {
                         if let Some(AnalysedType::Handle(_)) = parameter_types.first() {
                             parameter_types.remove(0);
                         }
                     }
 
                     if parameter_types.len() == args.len() {
-                        tag_argument_types(args, &parameter_types)?;
+                        tag_argument_types(function_name, args, &parameter_types)?;
 
                         *inferred_type = {
                             if return_types.len() == 1 {
@@ -274,7 +349,8 @@ mod internal {
 
                         Ok(())
                     } else {
-                        Err(ArgTypesInferenceError::ArgumentSizeMisMatch {
+                        Err(FunctionArgsTypeInferenceError::ArgumentSizeMisMatch {
+                            function_type_internal: function_name.clone(),
                             expected: parameter_types.len(),
                             provided: args.len(),
                         })
@@ -282,31 +358,48 @@ mod internal {
                 }
             }
         } else {
-            Err(ArgTypesInferenceError::UnknownFunction)
+            Err(FunctionArgsTypeInferenceError::UnknownFunction(
+                function_name.clone(),
+            ))
         }
     }
 
     #[derive(Clone)]
-    enum FunctionNameInternal {
-        ResourceConstructorName(String),
-        ResourceMethodName(String),
-        Fqn(ParsedFunctionName),
+    enum FunctionTypeInternal {
+        ResourceConstructorName {
+            fqn: String,
+            resource_constructor_name_pretty: String,
+            resource_constructor_name: String,
+        },
+        ResourceMethodName {
+            fqn: String,
+            resource_constructor_name_pretty: String,
+            resource_method_name_pretty: String,
+            resource_method_name: String,
+        },
+        Fqn(String),
         VariantName(String),
     }
 
-    impl Display for FunctionNameInternal {
+    impl Display for FunctionTypeInternal {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                FunctionNameInternal::ResourceConstructorName(name) => {
-                    write!(f, "{}", name)
+                FunctionTypeInternal::ResourceConstructorName {
+                    resource_constructor_name,
+                    ..
+                } => {
+                    write!(f, "{}", resource_constructor_name)
                 }
-                FunctionNameInternal::ResourceMethodName(name) => {
-                    write!(f, "{}", name)
+                FunctionTypeInternal::ResourceMethodName {
+                    resource_method_name,
+                    ..
+                } => {
+                    write!(f, "{}", resource_method_name)
                 }
-                FunctionNameInternal::Fqn(name) => {
-                    write!(f, "{}", name)
+                FunctionTypeInternal::Fqn(fqn) => {
+                    write!(f, "{}", fqn)
                 }
-                FunctionNameInternal::VariantName(name) => {
+                FunctionTypeInternal::VariantName(name) => {
                     write!(f, "{}", name)
                 }
             }
@@ -315,9 +408,10 @@ mod internal {
 
     // A preliminary check of the arguments passed before  typ inference
     fn check_function_arguments(
+        function_name: &FunctionTypeInternal,
         expected: &AnalysedType,
         provided: &Expr,
-    ) -> Result<(), ArgTypesInferenceError> {
+    ) -> Result<(), FunctionArgsTypeInferenceError> {
         let is_valid = if provided.inferred_type().is_unknown() {
             true
         } else {
@@ -327,7 +421,8 @@ mod internal {
         if is_valid {
             Ok(())
         } else {
-            Err(ArgTypesInferenceError::type_mismatch(
+            Err(FunctionArgsTypeInferenceError::type_mismatch(
+                function_name.clone(),
                 expected.clone(),
                 provided.clone(),
             ))
@@ -335,11 +430,12 @@ mod internal {
     }
 
     fn tag_argument_types(
+        function_name: &FunctionTypeInternal,
         args: &mut [Expr],
         parameter_types: &[AnalysedType],
-    ) -> Result<(), ArgTypesInferenceError> {
+    ) -> Result<(), FunctionArgsTypeInferenceError> {
         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
-            check_function_arguments(param_type, arg)?;
+            check_function_arguments(function_name, param_type, arg)?;
             arg.add_infer_type_mut(param_type.clone().into());
         }
 
