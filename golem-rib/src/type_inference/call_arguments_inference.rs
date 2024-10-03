@@ -42,9 +42,7 @@ pub fn infer_call_arguments_type(
 mod internal {
     use crate::call_type::CallType;
     use crate::type_inference::kind::GetTypeKind;
-    use crate::{
-        Expr, FunctionTypeRegistry, InferredType, ParsedFunctionName, RegistryKey, RegistryValue,
-    };
+    use crate::{Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
 
@@ -190,16 +188,6 @@ mod internal {
 
     impl Display for FunctionArgsTypeInferenceError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            fn unknown_function_type(
-                function_type_internal: &FunctionTypeInternal,
-            ) -> &'static str {
-                match function_type_internal {
-                    FunctionTypeInternal::ResourceConstructorName { .. } => "resource constructor",
-                    FunctionTypeInternal::ResourceMethodName { .. } => "resource method",
-                    FunctionTypeInternal::Fqn(_) => "function",
-                    FunctionTypeInternal::VariantName(_) => "variant constructor",
-                }
-            }
             match self {
                 FunctionArgsTypeInferenceError::UnknownFunction(FunctionTypeInternal::Fqn(
                     parsed_function_name,
@@ -246,16 +234,12 @@ mod internal {
                     provided,
                 } => match function_type_internal {
                     FunctionTypeInternal::ResourceConstructorName {
-                        fqn,
                         resource_constructor_name_pretty: resource_constructor_name_human,
                         ..
                     } => {
                         write!(f,"Invalid type for the argument in resource constructor `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", resource_constructor_name_human, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
                     }
-                    FunctionTypeInternal::ResourceMethodName {
-                        fqn,
-                        ..
-                    } => {
+                    FunctionTypeInternal::ResourceMethodName { fqn, .. } => {
                         write!(f,"Invalid type for the argument in resource method `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", fqn, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
                     }
                     FunctionTypeInternal::Fqn(fqn) => {
@@ -276,10 +260,7 @@ mod internal {
                     } => {
                         write!(f, "Incorrect number of arguments for resource constructor `{}`. Expected {}, but provided {}", resource_constructor_name_pretty, expected, provided)
                     }
-                    FunctionTypeInternal::ResourceMethodName {
-                        fqn,
-                        ..
-                    } => {
+                    FunctionTypeInternal::ResourceMethodName { fqn, .. } => {
                         write!(f, "Incorrect number of arguments in resource method `{}`. Expected {}, but provided {}", fqn, expected, provided)
                     }
                     FunctionTypeInternal::Fqn(fqn) => {
