@@ -5,6 +5,10 @@ use rib::RibInputTypeInfo;
 use std::collections::HashMap;
 use std::fmt::Display;
 
+// `RibInputValueResolver` is responsible
+// for converting to RibInputValue which is in the right shape
+// to act as input for Rib Script. Example: HttpRequestDetails
+// can be converted to RibInputValue
 pub trait RibInputValueResolver {
     fn resolve_rib_input_value(
         &self,

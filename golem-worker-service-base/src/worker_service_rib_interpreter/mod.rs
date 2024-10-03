@@ -17,7 +17,7 @@ use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutor};
 #[async_trait]
 pub trait WorkerServiceRibInterpreter {
     // Evaluate a Rib byte against a specific worker.
-    // RibByteCode may have actual function calls in a worker.
+    // RibByteCode may have actual function calls.
     async fn evaluate(
         &self,
         worker_name: &str,

@@ -158,7 +158,7 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
                 .response_rib_expr
                 .to_string(),
             response_mapping_input: Some(worker_binding.response_compiled.rib_input),
-            worker_name_input: Some(worker_binding.worker_name_compiled.rib_input),
+            worker_name_input: Some(worker_binding.worker_name_compiled.rib_input_type_info),
             idempotency_key_input: value
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),

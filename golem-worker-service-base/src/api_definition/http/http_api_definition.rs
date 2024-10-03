@@ -80,6 +80,11 @@ impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
     }
 }
 
+// The Rib Expressions that exists in various parts of HttpApiDefinition (mainly in Routes)
+// are compiled to form CompiledHttpApiDefinition.
+// The Compilation happens during API definition registration,
+// and is persisted, so that custom http requests are served by looking up
+// CompiledHttpApiDefinition
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledHttpApiDefinition {
     pub id: ApiDefinitionId,

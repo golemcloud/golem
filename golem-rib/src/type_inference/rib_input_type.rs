@@ -20,6 +20,8 @@ use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
+// RibInputTypeInfo refers to the required global inputs to a RibScript
+// with its type information. Example: `request` variable which should be of the type `Record`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Object)]
 pub struct RibInputTypeInfo {
     pub types: HashMap<String, AnalysedType>,
