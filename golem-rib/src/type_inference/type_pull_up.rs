@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::{Expr, InferredType};
+use std::collections::VecDeque;
 
 // TODO; This is recursion because we bumped into Rust borrowing issues with the following logic,
 // which may require changing Expr data structure with RefCells.
@@ -27,6 +28,61 @@ use crate::{Expr, InferredType};
 //  * Try to pop_front inferred_type_stack, and its Record(b -> Record(c -> u64)). Get the type of b and assign itself and push_front to stack.
 //  * Pop back from stack to get select_field(select_field(a, b), c)
 //  * Try to pop_front inferred_type_stack, and its  Record(c -> u64). Get the type of c and assign itself and push to stack.
+
+fn type_pull_up_non_recursive<'a>(expr: &'a Expr) {
+    let mut expr_queue = VecDeque::new();
+    make_expr_queue(expr, &mut expr_queue);
+
+    // select_field(expr, b)
+    let mut inferred_type_stack = VecDeque::new();
+
+    // First one will be identifier(a) in Expr::Tuple((identfier(a), identifer(b)))
+    while let Some(expr) = expr_queue.pop_back() {
+        match expr {
+            Expr::Tuple(exprs, current_inferred_type) => {
+                let mut ordered_types = vec![];
+                let mut new_exprs = vec![];
+
+                for _ in 0..exprs.len() {
+                    let expr: Expr = inferred_type_stack.pop_front().unwrap();
+                    new_exprs.push(expr.clone());
+                    let inferred_type: InferredType = expr.inferred_type();
+                    ordered_types.push(inferred_type);
+                }
+
+                let new_tuple_type = InferredType::Tuple(ordered_types);
+
+                let merged_tuple_type = current_inferred_type.merge(new_tuple_type);
+                let new_tuple = Expr::Tuple(new_exprs.iter().cloned().collect(), merged_tuple_type);
+                inferred_type_stack.push_front(new_tuple);
+            }
+
+            Expr::Identifier(variable_id, current_inferred_type) => {
+                inferred_type_stack
+                    .push_front(Expr::Identifier(variable_id.clone(), current_inferred_type.clone()));
+            }
+
+            Expr::Flags(flags, current_inferred_type) => {
+                inferred_type_stack.push_front(Expr::Flags(flags.clone(), current_inferred_type.clone()));
+            }
+
+            _ => {}
+        }
+    }
+}
+
+fn make_expr_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
+    let mut stack = VecDeque::new();
+
+    stack.push_back(expr);
+
+    while let Some(current_expr) = stack.pop_back() {
+        expr_queue.push_back(current_expr);
+
+        expr.visit_children_bottom_up(&mut stack)
+    }
+}
+
 pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
     match expr {
         Expr::Tuple(exprs, inferred_type) => {
