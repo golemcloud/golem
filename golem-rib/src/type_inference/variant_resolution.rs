@@ -24,7 +24,8 @@ pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegi
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::{Expr, FunctionTypeRegistry, RegistryKey, RegistryValue};
+    use crate::{Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+    use golem_wasm_ast::analysis::AnalysedType;
     use std::collections::VecDeque;
 
     pub(crate) fn convert_function_calls_to_variant_calls(
@@ -88,26 +89,25 @@ mod internal {
         while let Some(expr) = queue.pop_back() {
             match expr {
                 Expr::Identifier(variable_id, inferred_type) => {
-                    let key = RegistryKey::VariantName(variable_id.name().clone());
-                    if let Some(RegistryValue::Value(analysed_type)) =
+                    let key = RegistryKey::FunctionName(variable_id.name().clone());
+                    if let Some(RegistryValue::Value(AnalysedType::Variant(type_variant))) =
                         function_type_registry.types.get(&key)
                     {
                         no_arg_variants.push(variable_id.name());
-                        *inferred_type = inferred_type.merge(analysed_type.clone().into());
+                        *inferred_type =
+                            inferred_type.merge(InferredType::from_variant_cases(type_variant));
                     }
                 }
 
                 Expr::Call(CallType::Function(parsed_function_name), exprs, inferred_type) => {
-                    let key = RegistryKey::VariantName(parsed_function_name.to_string());
-                    if let Some(RegistryValue::Function { return_types, .. }) =
+                    let key = RegistryKey::FunctionName(parsed_function_name.to_string());
+                    if let Some(RegistryValue::Variant { variant_type, .. }) =
                         function_type_registry.types.get(&key)
                     {
-                        variant_with_args.push(parsed_function_name.to_string());
+                        let variant_inferred_type = InferredType::from_variant_cases(variant_type);
+                        *inferred_type = inferred_type.merge(variant_inferred_type);
 
-                        // TODO; return type is only 1 in reality for variants - we can make this typed
-                        if let Some(variant_type) = return_types.first() {
-                            *inferred_type = inferred_type.merge(variant_type.clone().into());
-                        }
+                        variant_with_args.push(parsed_function_name.to_string());
                     }
 
                     for expr in exprs {

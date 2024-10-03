@@ -50,7 +50,9 @@ impl Interpreter {
         }
     }
 
-    pub fn from_input(env: HashMap<String, TypeAnnotatedValue>) -> Self {
+    // Interpreter that's not expected to call a side-effecting function call.
+    // All it needs is environment with the required variables to evaluate the Rib script
+    pub fn pure(env: HashMap<String, TypeAnnotatedValue>) -> Self {
         Interpreter {
             stack: InterpreterStack::new(),
             env: InterpreterEnv::from_input(env),
@@ -140,8 +142,8 @@ impl Interpreter {
                     internal::run_create_function_name_instruction(site, function_type, self)?;
                 }
 
-                RibIR::InvokeFunction(arity, _) => {
-                    internal::run_call_instruction(arity, self).await?;
+                RibIR::InvokeFunction(arg_size, _) => {
+                    internal::run_call_instruction(arg_size, self).await?;
                 }
 
                 RibIR::PushVariant(variant_name, analysed_type) => {
@@ -335,7 +337,7 @@ mod internal {
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                            .ok_or("Internal Error: Failed to construct list".to_string())
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -363,12 +365,13 @@ mod internal {
                     .pop_n(list_size)
                     .ok_or(format!("Expected {} value on the stack", list_size))?;
 
+                dbg!(last_list.clone());
                 let type_annotated_values = last_list
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                            .ok_or("Internal Error: Failed to construct tuple".to_string())
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -634,7 +637,7 @@ mod internal {
                     .map(|interpreter_result| {
                         interpreter_result
                             .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                            .ok_or("Internal Error: Failed to construct resource".to_string())
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -666,9 +669,9 @@ mod internal {
                 let type_anntoated_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
-                        interpreter_result
-                            .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                        interpreter_result.get_val().ok_or(
+                            "Internal Error: Failed to call indexed resource method".to_string(),
+                        )
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -693,17 +696,17 @@ mod internal {
                 arg_size,
                 method,
             } => {
-                let last_n_elements = interpreter
-                    .stack
-                    .pop_n(arg_size)
-                    .ok_or("Failed to get values from the stack".to_string())?;
+                let last_n_elements = interpreter.stack.pop_n(arg_size).ok_or(
+                    "Internal error: Failed to get arguments for static resource method"
+                        .to_string(),
+                )?;
 
                 let type_anntoated_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
-                        interpreter_result
-                            .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                        interpreter_result.get_val().ok_or(
+                            "Internal error: Failed to call static resource method".to_string(),
+                        )
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -724,17 +727,17 @@ mod internal {
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
             FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => {
-                let last_n_elements = interpreter
-                    .stack
-                    .pop_n(arg_size)
-                    .ok_or("Failed to get values from the stack".to_string())?;
+                let last_n_elements = interpreter.stack.pop_n(arg_size).ok_or(
+                    "Internal Error: Failed to get resource parameters for indexed resource drop"
+                        .to_string(),
+                )?;
 
-                let type_anntoated_values = last_n_elements
+                let type_annotated_values = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
-                        interpreter_result
-                            .get_val()
-                            .ok_or("Failed to get value from the stack".to_string())
+                        interpreter_result.get_val().ok_or(
+                            "Internal Error: Failed to call indexed resource drop".to_string(),
+                        )
                     })
                     .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -742,7 +745,7 @@ mod internal {
                     site,
                     function: ParsedFunctionReference::IndexedResourceDrop {
                         resource,
-                        resource_params: type_anntoated_values
+                        resource_params: type_annotated_values
                             .iter()
                             .map(type_annotated_value_to_string)
                             .collect::<Result<Vec<String>, String>>()?,
@@ -758,27 +761,27 @@ mod internal {
         Ok(())
     }
 
-    // Separate variant
     pub(crate) async fn run_call_instruction(
-        argument_size: usize,
+        arg_size: usize,
         interpreter: &mut Interpreter,
     ) -> Result<(), String> {
         let function_name = interpreter
             .stack
             .pop_str()
-            .ok_or("Failed to get a function name from the stack".to_string())?;
+            .ok_or("Internal Error: Failed to get a function name".to_string())?;
 
         let last_n_elements = interpreter
             .stack
-            .pop_n(argument_size)
-            .ok_or("Failed to get values from the stack".to_string())?;
+            .pop_n(arg_size)
+            .ok_or("Internal Error: Failed to get arguments for the function call".to_string())?;
 
         let type_anntoated_values = last_n_elements
             .iter()
             .map(|interpreter_result| {
-                interpreter_result
-                    .get_val()
-                    .ok_or("Failed to get value from the stack".to_string())
+                interpreter_result.get_val().ok_or(format!(
+                    "Internal Error: Failed to call function {}",
+                    function_name
+                ))
             })
             .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
@@ -921,19 +924,19 @@ mod internal {
     ) -> Result<(), String> {
         let last_n_elements = interpreter_stack
             .pop_n(arg_size)
-            .ok_or("Failed to get values from the stack".to_string())?;
+            .ok_or("Internal Error: Failed to get arguments for concatenation".to_string())?;
 
-        let type_anntoated_values = last_n_elements
+        let type_annotated_values = last_n_elements
             .iter()
             .map(|interpreter_result| {
                 interpreter_result
                     .get_val()
-                    .ok_or("Failed to get value from the stack".to_string())
+                    .ok_or("Internal Error: Failed to execute concatenation".to_string())
             })
             .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
         let mut str = String::new();
-        for value in type_anntoated_values {
+        for value in type_annotated_values {
             let result = value
                 .get_literal()
                 .ok_or("Expected a literal value".to_string())?

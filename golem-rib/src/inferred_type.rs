@@ -1117,6 +1117,25 @@ impl InferredType {
             }
         }
     }
+
+    pub fn from_variant_cases(type_variant: &TypeVariant) -> InferredType {
+        let cases = type_variant
+            .cases
+            .iter()
+            .map(|name_type_pair| {
+                (
+                    name_type_pair.name.clone(),
+                    name_type_pair.typ.clone().map(|t| t.into()),
+                )
+            })
+            .collect();
+
+        InferredType::Variant(cases)
+    }
+
+    pub fn from_enum_cases(type_enum: &TypeEnum) -> InferredType {
+        InferredType::Enum(type_enum.cases.clone())
+    }
 }
 
 impl From<AnalysedType> for InferredType {
@@ -1146,7 +1165,7 @@ impl From<AnalysedType> for InferredType {
                     .collect(),
             ),
             AnalysedType::Flags(vs) => InferredType::Flags(vs.names),
-            AnalysedType::Enum(vs) => InferredType::Enum(vs.cases),
+            AnalysedType::Enum(vs) => InferredType::from_enum_cases(&vs),
             AnalysedType::Option(t) => InferredType::Option(Box::new((*t.inner).into())),
             AnalysedType::Result(golem_wasm_ast::analysis::TypeResult { ok, err, .. }) => {
                 InferredType::Result {
@@ -1154,14 +1173,7 @@ impl From<AnalysedType> for InferredType {
                     error: err.map(|t| Box::new((*t).into())),
                 }
             }
-            AnalysedType::Variant(vs) => InferredType::Variant(
-                vs.cases
-                    .into_iter()
-                    .map(|name_type_pair| {
-                        (name_type_pair.name, name_type_pair.typ.map(|t| t.into()))
-                    })
-                    .collect(),
-            ),
+            AnalysedType::Variant(vs) => InferredType::from_variant_cases(&vs),
             AnalysedType::Handle(golem_wasm_ast::analysis::TypeHandle { resource_id, mode }) => {
                 InferredType::Resource {
                     resource_id: resource_id.0,

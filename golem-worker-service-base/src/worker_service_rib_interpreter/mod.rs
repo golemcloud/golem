@@ -10,26 +10,20 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 use crate::worker_binding::RibInputValue;
 use rib::{RibByteCode, RibFunctionInvoke, RibInterpreterResult};
 
-use crate::worker_bridge_execution::{
-    NoopWorkerRequestExecutor, WorkerRequest, WorkerRequestExecutor,
-};
+use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutor};
 
 // A wrapper service over original RibInterpreter concerning
 // the details of the worker service.
 #[async_trait]
 pub trait WorkerServiceRibInterpreter {
+    // Evaluate a Rib byte against a specific worker.
+    // RibByteCode may have actual function calls.
     async fn evaluate(
         &self,
         worker_name: &str,
         component_id: &ComponentId,
         idempotency_key: &Option<IdempotencyKey>,
         rib_byte_code: &RibByteCode,
-        rib_input: &RibInputValue,
-    ) -> Result<RibInterpreterResult, EvaluationError>;
-
-    async fn evaluate_pure(
-        &self,
-        expr: &RibByteCode,
         rib_input: &RibInputValue,
     ) -> Result<RibInterpreterResult, EvaluationError>;
 }
@@ -49,28 +43,22 @@ impl From<String> for EvaluationError {
     }
 }
 
-pub struct DefaultEvaluator {
+pub struct DefaultRibInterpreter {
     worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
 }
 
-impl DefaultEvaluator {
-    pub fn noop() -> Self {
-        DefaultEvaluator {
-            worker_request_executor: Arc::new(NoopWorkerRequestExecutor),
-        }
-    }
-
+impl DefaultRibInterpreter {
     pub fn from_worker_request_executor(
         worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     ) -> Self {
-        DefaultEvaluator {
+        DefaultRibInterpreter {
             worker_request_executor,
         }
     }
 }
 
 #[async_trait]
-impl WorkerServiceRibInterpreter for DefaultEvaluator {
+impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
     async fn evaluate(
         &self,
         worker_name: &str,
@@ -111,25 +99,6 @@ impl WorkerServiceRibInterpreter for DefaultEvaluator {
                 .boxed() // This ensures the future is boxed with the correct type
             },
         );
-        rib::interpret(expr, rib_input.value.clone(), worker_invoke_function)
-            .await
-            .map_err(EvaluationError)
-    }
-
-    async fn evaluate_pure(
-        &self,
-        expr: &RibByteCode,
-        rib_input: &RibInputValue,
-    ) -> Result<RibInterpreterResult, EvaluationError> {
-        let worker_invoke_function: RibFunctionInvoke = Arc::new(|_, _| {
-            Box::pin(
-                async move {
-                    Err("Worker invoke function is not allowed in pure evaluation".to_string())
-                }
-                .boxed(),
-            )
-        });
-
         rib::interpret(expr, rib_input.value.clone(), worker_invoke_function)
             .await
             .map_err(EvaluationError)

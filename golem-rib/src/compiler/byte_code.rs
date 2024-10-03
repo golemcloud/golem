@@ -376,9 +376,9 @@ mod internal {
                             convert_to_analysed_type_for(expr, inferred_type)?,
                         ));
                     }
-                    CallType::EnumConstructor(enmum_name) => {
+                    CallType::EnumConstructor(enum_name) => {
                         instructions.push(RibIR::PushEnum(
-                            enmum_name.clone(),
+                            enum_name.clone(),
                             convert_to_analysed_type_for(expr, inferred_type)?,
                         ));
                     }
@@ -496,8 +496,8 @@ mod internal {
 #[cfg(test)]
 mod compiler_tests {
     use super::*;
-    use crate::{compiler, ArmPattern, InferredType, MatchArm, Number, VariableId};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
+    use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};
+    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     #[test]
@@ -985,6 +985,208 @@ mod compiler_tests {
     }
 
     #[cfg(test)]
+    mod invalid_function_invoke_tests {
+        use crate::compiler::byte_code::compiler_tests::internal;
+        use crate::{compiler, Expr};
+        use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
+
+        #[test]
+        fn test_unknown_function() {
+            let expr = r#"
+               foo(request);
+               "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &vec![]).unwrap_err();
+
+            assert_eq!(compiler_error, "Unknown function call: `foo`");
+        }
+
+        #[test]
+        fn test_unknown_resource_constructor() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id).add-item}("apple");
+               golem:it/api.{cart0(user_id).add-item}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Unknown resource constructor call: `golem:it/api.{cart0(user_id).add-item}`. Resource `cart0` doesn't exist"
+            );
+        }
+
+        #[test]
+        fn test_unknown_resource_method() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id).add-item}("apple");
+               golem:it/api.{cart(user_id).foo}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Unknown resource method call `golem:it/api.{cart(user_id).foo}`. `foo` doesn't exist in resource `cart`"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_size_function() {
+            let metadata = internal::get_component_metadata(
+                "foo",
+                vec![AnalysedType::Str(TypeStr)],
+                AnalysedType::Str(TypeStr),
+            );
+
+            let expr = r#"
+               let user_id = "user";
+               let result = foo(user_id, user_id);
+               result
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Incorrect number of arguments for function `foo`. Expected 1, but provided 2"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_size_resource_constructor() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id, user_id).add-item}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Incorrect number of arguments for resource constructor `cart`. Expected 1, but provided 2"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_size_resource_method() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id).add-item}("apple", "samsung");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Incorrect number of arguments in resource method `golem:it/api.{cart(user_id).add-item}`. Expected 1, but provided 2"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_size_variants() {
+            let metadata = internal::metadata_with_variants();
+
+            let expr = r#"
+               let regiser_user_action = register-user(1, "foo");
+               let result = golem:it/api.{foo}(regiser_user_action);
+               result
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid number of arguments in variant `register-user`. Expected 1, but provided 2"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_types_function() {
+            let metadata = internal::get_component_metadata(
+                "foo",
+                vec![AnalysedType::Str(TypeStr)],
+                AnalysedType::Str(TypeStr),
+            );
+
+            let expr = r#"
+               let result = foo(1u64);
+               result
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid type for the argument in function `foo`. Expected type `str`, but provided argument `1u64` is a `number`"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_types_resource_method() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               let user_id = "user";
+               golem:it/api.{cart(user_id).add-item}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid type for the argument in resource method `golem:it/api.{cart(user_id).add-item}`. Expected type `record`, but provided argument `\"apple\"` is a `str`"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_types_resource_constructor() {
+            let metadata = internal::metadata_with_resource_methods();
+            let expr = r#"
+               golem:it/api.{cart({foo : "bar"}).add-item}("apple");
+                "success"
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid type for the argument in resource constructor `cart`. Expected type `str`, but provided argument `{foo: \"bar\"}` is a `record`"
+            );
+        }
+
+        #[test]
+        fn test_invalid_arg_types_variants() {
+            let metadata = internal::metadata_with_variants();
+
+            let expr = r#"
+               let regiser_user_action = register-user("foo");
+               let result = golem:it/api.{foo}(regiser_user_action);
+               result
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiler_error = compiler::compile(&expr, &metadata).unwrap_err();
+            assert_eq!(
+                compiler_error,
+                "Invalid type for the argument in variant constructor `register-user`. Expected type `number`, but provided argument `\"foo\"` is a `str`"
+            );
+        }
+    }
+
+    #[cfg(test)]
     mod global_input_tests {
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{compiler, Expr};
@@ -992,6 +1194,64 @@ mod compiler_tests {
             AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeList, TypeOption,
             TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
         };
+
+        #[tokio::test]
+        async fn test_str_global_input() {
+            let request_value_type = AnalysedType::Str(TypeStr);
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                "foo"  => "success",
+                 _ => "fallback"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
+
+        #[tokio::test]
+        async fn test_number_global_input() {
+            let request_value_type = AnalysedType::U32(TypeU32);
+
+            let output_analysed_type = AnalysedType::Str(TypeStr);
+
+            let analysed_exports = internal::get_component_metadata(
+                "my-worker-function",
+                vec![request_value_type.clone()],
+                output_analysed_type,
+            );
+
+            let expr = r#"
+               let x = request;
+               my-worker-function(x);
+               match x {
+                1  => "success",
+                0 => "failure"
+               }
+            "#;
+
+            let expr = Expr::from_text(expr).unwrap();
+            let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
+            let expected_type_info =
+                internal::rib_input_type_info(vec![("request", request_value_type)]);
+
+            assert_eq!(compiled.global_input_type_info, expected_type_info);
+        }
 
         #[tokio::test]
         async fn test_variant_type_info() {
@@ -1280,72 +1540,93 @@ mod compiler_tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_str_global_input() {
-        let request_value_type = AnalysedType::Str(TypeStr);
-
-        let output_analysed_type = AnalysedType::Str(TypeStr);
-
-        let analysed_exports = internal::get_component_metadata(
-            "my-worker-function",
-            vec![request_value_type.clone()],
-            output_analysed_type,
-        );
-
-        let expr = r#"
-               let x = request;
-               my-worker-function(x);
-               match x {
-                "foo"  => "success",
-                 _ => "fallback"
-               }
-            "#;
-
-        let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let expected_type_info =
-            internal::rib_input_type_info(vec![("request", request_value_type)]);
-
-        assert_eq!(compiled.global_input_type_info, expected_type_info);
-    }
-
-    #[tokio::test]
-    async fn test_number_global_input() {
-        let request_value_type = AnalysedType::U32(TypeU32);
-
-        let output_analysed_type = AnalysedType::Str(TypeStr);
-
-        let analysed_exports = internal::get_component_metadata(
-            "my-worker-function",
-            vec![request_value_type.clone()],
-            output_analysed_type,
-        );
-
-        let expr = r#"
-               let x = request;
-               my-worker-function(x);
-               match x {
-                1  => "success",
-                0 => "failure"
-               }
-            "#;
-
-        let expr = Expr::from_text(expr).unwrap();
-        let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
-        let expected_type_info =
-            internal::rib_input_type_info(vec![("request", request_value_type)]);
-
-        assert_eq!(compiled.global_input_type_info, expected_type_info);
-    }
-
     mod internal {
         use crate::RibInputTypeInfo;
-        use golem_wasm_ast::analysis::{
-            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedType,
-        };
+        use golem_wasm_ast::analysis::*;
         use std::collections::HashMap;
 
+        pub(crate) fn metadata_with_variants() -> Vec<AnalysedExport> {
+            let instance = AnalysedExport::Instance(AnalysedInstance {
+                name: "golem:it/api".to_string(),
+                functions: vec![AnalysedFunction {
+                    name: "foo".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "param1".to_string(),
+                        typ: AnalysedType::Variant(TypeVariant {
+                            cases: vec![
+                                NameOptionTypePair {
+                                    name: "register-user".to_string(),
+                                    typ: Some(AnalysedType::U64(TypeU64)),
+                                },
+                                NameOptionTypePair {
+                                    name: "process-user".to_string(),
+                                    typ: Some(AnalysedType::Str(TypeStr)),
+                                },
+                                NameOptionTypePair {
+                                    name: "validate".to_string(),
+                                    typ: None,
+                                },
+                            ],
+                        }),
+                    }],
+                    results: vec![AnalysedFunctionResult {
+                        name: None,
+                        typ: AnalysedType::Handle(TypeHandle {
+                            resource_id: AnalysedResourceId(0),
+                            mode: AnalysedResourceMode::Owned,
+                        }),
+                    }],
+                }],
+            });
+
+            vec![instance]
+        }
+
+        pub(crate) fn metadata_with_resource_methods() -> Vec<AnalysedExport> {
+            let instance = AnalysedExport::Instance(AnalysedInstance {
+                name: "golem:it/api".to_string(),
+                functions: vec![
+                    AnalysedFunction {
+                        name: "[constructor]cart".to_string(),
+                        parameters: vec![AnalysedFunctionParameter {
+                            name: "param1".to_string(),
+                            typ: AnalysedType::Str(TypeStr),
+                        }],
+                        results: vec![AnalysedFunctionResult {
+                            name: None,
+                            typ: AnalysedType::Handle(TypeHandle {
+                                resource_id: AnalysedResourceId(0),
+                                mode: AnalysedResourceMode::Owned,
+                            }),
+                        }],
+                    },
+                    AnalysedFunction {
+                        name: "[method]cart.add-item".to_string(),
+                        parameters: vec![
+                            AnalysedFunctionParameter {
+                                name: "self".to_string(),
+                                typ: AnalysedType::Handle(TypeHandle {
+                                    resource_id: AnalysedResourceId(0),
+                                    mode: AnalysedResourceMode::Borrowed,
+                                }),
+                            },
+                            AnalysedFunctionParameter {
+                                name: "item".to_string(),
+                                typ: AnalysedType::Record(TypeRecord {
+                                    fields: vec![NameTypePair {
+                                        name: "name".to_string(),
+                                        typ: AnalysedType::Str(TypeStr),
+                                    }],
+                                }),
+                            },
+                        ],
+                        results: vec![],
+                    },
+                ],
+            });
+
+            vec![instance]
+        }
         pub(crate) fn get_component_metadata(
             function_name: &str,
             input_types: Vec<AnalysedType>,

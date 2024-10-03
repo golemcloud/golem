@@ -13,6 +13,7 @@ pub mod repo;
 pub mod service;
 mod worker_binding;
 pub mod worker_bridge_execution;
+mod worker_service_rib_compiler;
 pub mod worker_service_rib_interpreter;
 
 const VERSION: &str = golem_version!();

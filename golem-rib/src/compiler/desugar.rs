@@ -261,19 +261,19 @@ mod internal {
     ) -> Option<IfThenBranch> {
         match pred_expr_inferred_type {
             InferredType::Record(field_and_types) => {
-                // Resolution body is a list of expressions which grows (may be with some let bindings)
+                // Resolution body is a list of expressions which grows (maybe with some let bindings)
                 // as we recursively iterate over the bind patterns
                 // where bind patterns are {name: x, age: _, address : _ } in the case of `match record { {name: x, age: _, address : _ } ) =>`
-                // These will exist prior to the original resolution of a successful tuple match.
+                // These will exist prior to the original resolution of a successful record match.
                 let mut resolution_body = vec![];
 
                 // The conditions keep growing as we recursively iterate over the bind patterns
-                // and there are multiple conditions (if condition) for each element in the tuple
+                // and there are multiple conditions (if condition) for each element in the record.
                 let mut conditions = vec![];
 
-                // We assume pred-expr can be queried by field using Expr::select_field and we pick each element in the bind pattern
+                // We assume pred-expr can be queried by field using Expr::select_field, and we pick each element in the bind pattern
                 // to get the corresponding expr in pred-expr and keep recursively iterating until the record is completed.
-                // However there is no resolution body for each of this iteration, so we use an empty expression
+                // However, there is no resolution body for each of this iteration, so we use an empty expression
                 // and finally push the original resolution body once we fully build the conditions.
                 for (field, arm_pattern) in bind_patterns.iter() {
                     let new_pred = Expr::select_field(pred_expr.clone(), field);

@@ -35,3 +35,14 @@ pub async fn interpret(
     let mut interpreter = Interpreter::new(rib_input, function_invoke);
     interpreter.run(rib.clone()).await
 }
+
+// This function can be used for those the Rib Scripts
+// where there are no side effecting function calls.
+// It is recommended to use `interpret` over `interpret_pure` if you are unsure.
+pub async fn interpret_pure(
+    rib: &RibByteCode,
+    rib_input: &HashMap<String, TypeAnnotatedValue>,
+) -> Result<RibInterpreterResult, String> {
+    let mut interpreter = Interpreter::pure(rib_input.clone());
+    interpreter.run(rib.clone()).await
+}
