@@ -14,6 +14,7 @@
 
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
+use std::thread::current;
 
 // TODO; This is recursion because we bumped into Rust borrowing issues with the following logic,
 // which may require changing Expr data structure with RefCells.
@@ -29,9 +30,11 @@ use std::collections::VecDeque;
 //  * Pop back from stack to get select_field(select_field(a, b), c)
 //  * Try to pop_front inferred_type_stack, and its  Record(c -> u64). Get the type of c and assign itself and push to stack.
 
-fn type_pull_up_non_recursive<'a>(expr: &'a Expr) {
+pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
     let mut expr_queue = VecDeque::new();
-    make_expr_queue(expr, &mut expr_queue);
+    make_expr_nodes_queue(expr, &mut expr_queue);
+
+    dbg!(expr_queue.clone());
 
     // select_field(expr, b)
     let mut inferred_type_stack = VecDeque::new();
@@ -167,9 +170,11 @@ fn type_pull_up_non_recursive<'a>(expr: &'a Expr) {
                 for match_arm in match_arms {
                     let mut arm_pattern = match_arm.arm_pattern.clone();
                     let mut arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
-                    arm_pattern_exprs.iter_mut().zip(new_arm_pattern_exprs.iter()).for_each(|(arm_expr, new_expr)| {
-                        *arm_expr = &mut Box::new(new_expr.clone());
-                    });
+                    let result = arm_pattern_exprs.first_mut().unwrap();
+                    **result = Box::new(new_arm_pattern_exprs.pop().unwrap());
+                    // arm_pattern_exprs.iter().zip(new_arm_pattern_exprs.iter()).for_each(|(arm_expr, new_expr)| {
+                    //     **arm_expr = Box::new(new_expr.clone());
+                    // });
 
                     new_arm_patterns.push(arm_pattern);
                 }
@@ -254,14 +259,59 @@ fn type_pull_up_non_recursive<'a>(expr: &'a Expr) {
                 inferred_type_stack.push_front(new_less_than);
             }
 
-            _ => {
+            Expr::Let(_, _, _, _) => {}
+            Expr::Sequence(_, _) => {}
+            Expr::Record(expr, inferred_type) => {
+                let mut ordered_types = vec![];
+                let mut new_exprs = vec![];
+
+                for (field, _) in expr {
+                    let expr: Expr = inferred_type_stack.pop_front().unwrap();
+                    new_exprs.push((field.clone(), Box::new(expr.clone())));
+                }
+
+                let new_record_type = InferredType::Record(ordered_types);
+
+                let merged_record_type = inferred_type.merge(new_record_type);
+
+                let new_record = Expr::Record(new_exprs.iter().cloned().collect(), merged_record_type);
+                inferred_type_stack.push_front(new_record);
+            }
+            Expr::Literal(_, _) => {
                 inferred_type_stack.push_front(expr.clone());
+            }
+            Expr::Number(_, _, _) => {
+                inferred_type_stack.push_front(expr.clone());
+            }
+            Expr::Boolean(_, _) => {
+                inferred_type_stack.push_front(expr.clone());
+            }
+            Expr::And(_, _, _) => {
+                let right = inferred_type_stack.pop_front().unwrap();
+                let left = inferred_type_stack.pop_front().unwrap();
+                let new_and = Expr::And(Box::new(left), Box::new(right), InferredType::Bool);
+            }
+            Expr::Call(_, _, _) => {}
+            Expr::Unwrap(_, inferred_type) => {
+                let expr = inferred_type_stack.pop_front().unwrap();
+                let new_unwrap = Expr::Unwrap(Box::new(expr.clone()), inferred_type.merge(expr.inferred_type()));
+                inferred_type_stack.push_front(new_unwrap);
+            }
+            Expr::Throw(_, _) => {
+                inferred_type_stack.push_front(expr.clone());
+            }
+            Expr::GetTag(expr, inferred_type) => {
+                let expr = inferred_type_stack.pop_front().unwrap();
+                let new_get_tag = Expr::GetTag(Box::new(expr.clone()), inferred_type.merge(expr.inferred_type()));
+                inferred_type_stack.push_front(new_get_tag);
             }
         }
     }
+
+    inferred_type_stack.pop_front().unwrap()
 }
 
-fn make_expr_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
+pub fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
     let mut stack = VecDeque::new();
 
     stack.push_back(expr);
@@ -269,7 +319,7 @@ fn make_expr_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
     while let Some(current_expr) = stack.pop_back() {
         expr_queue.push_back(current_expr);
 
-        expr.visit_children_bottom_up(&mut stack)
+        current_expr.visit_children_bottom_up(&mut stack)
     }
 }
 
@@ -507,14 +557,15 @@ mod internal {
 mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::{ArmPattern, Expr, InferredType, Number};
+    use crate::type_inference::type_pull_up::type_pull_up_non_recursive;
 
     #[test]
     pub fn test_pull_up_identifier() {
         let expr = "foo";
         let mut expr = Expr::from_text(expr).unwrap();
         expr.add_infer_type_mut(InferredType::Str);
-        expr.pull_types_up().unwrap();
-        assert_eq!(expr.inferred_type(), InferredType::Str);
+        let new_expr = type_pull_up_non_recursive(&expr);
+        assert_eq!(new_expr.inferred_type(), InferredType::Str);
     }
 
     #[test]
@@ -526,8 +577,8 @@ mod type_pull_up_tests {
             )]));
         let select_expr = Expr::select_field(record_identifier, "foo");
         let mut expr = Expr::select_field(select_expr, "bar");
-        expr.pull_types_up().unwrap();
-        assert_eq!(expr.inferred_type(), InferredType::U64);
+        let new_expr = type_pull_up_non_recursive(&expr);
+        assert_eq!(new_expr.inferred_type(), InferredType::U64);
     }
 
     #[test]
