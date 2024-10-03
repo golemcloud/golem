@@ -66,6 +66,14 @@ fn type_pull_up_non_recursive<'a>(expr: &'a Expr) {
                 inferred_type_stack.push_front(Expr::Flags(flags.clone(), current_inferred_type.clone()));
             }
 
+            Expr::SelectField(expr, field, current_inferred_type) => {
+                let expr = inferred_type_stack.pop_front().unwrap();
+                let inferred_type_of_selection_expr = expr.inferred_type();
+                let field_type = internal::get_inferred_type_of_selected_field(field, &inferred_type_of_selection_expr).unwrap();
+                let new_select_field = Expr::SelectField(Box::new(expr.clone()), field.clone(), current_inferred_type.merge(field_type));
+                inferred_type_stack.push_front(new_select_field);
+            }
+
             _ => {}
         }
     }
