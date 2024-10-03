@@ -390,6 +390,27 @@ impl From<SerializableErrorCode> for ErrorCode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum SerializableHttpMethod {
+    Get,
+    Post,
+    Put,
+    Delete,
+    Head,
+    Connect,
+    Options,
+    Trace,
+    Patch,
+    Other(String)
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct SerializableHttpRequest {
+    pub uri: String,
+    pub method: SerializableHttpMethod
+    // TODO: headers?
+}
+
 #[cfg(test)]
 mod tests {
     use crate::durable_host::http::serialized::{SerializableErrorCode, SerializedHttpVersion};

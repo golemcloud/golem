@@ -177,16 +177,18 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     ) -> Result<bool, anyhow::Error> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api", "complete_promise");
-        Durability::<Ctx, bool, SerializableError>::wrap(
+        let promise_id: PromiseId = promise_id.into();
+        Durability::<Ctx, PromiseId, bool, SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteLocal,
             "golem_complete_promise",
+            promise_id.clone(),
             |ctx| {
                 Box::pin(async move {
                     Ok(ctx
                         .public_state
                         .promise_service
-                        .complete(promise_id.into(), data)
+                        .complete(promise_id, data)
                         .await?)
                 })
             },
@@ -200,16 +202,15 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
     ) -> Result<(), anyhow::Error> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::api", "delete_promise");
-        Durability::<Ctx, (), SerializableError>::wrap(
+        let promise_id: PromiseId = promise_id.into();
+        Durability::<Ctx, PromiseId, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteLocal,
             "golem_delete_promise",
+            promise_id.clone(),
             |ctx| {
                 Box::pin(async move {
-                    ctx.public_state
-                        .promise_service
-                        .delete(promise_id.into())
-                        .await;
+                    ctx.public_state.promise_service.delete(promise_id).await;
                     Ok(())
                 })
             },
@@ -459,10 +460,11 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
+        let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem api::generate_idempotency_key",
+            (),
             |_ctx| {
                 Box::pin(async move {
                     let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
@@ -495,10 +497,20 @@ impl<Ctx: WorkerCtx> golem::api0_2_0::host::Host for DurableWorkerCtx<Ctx> {
             UpdateMode::Automatic => golem_api_grpc::proto::golem::worker::UpdateMode::Automatic,
             UpdateMode::SnapshotBased => golem_api_grpc::proto::golem::worker::UpdateMode::Manual,
         };
-        Durability::<Ctx, (), SerializableError>::wrap(
+        Durability::<
+            Ctx,
+            (
+                WorkerId,
+                u64,
+                golem_api_grpc::proto::golem::worker::UpdateMode,
+            ),
+            (),
+            SerializableError,
+        >::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem::api::update-worker",
+            (worker_id, target_version, mode),
             |ctx| {
                 Box::pin(async move {
                     ctx.state

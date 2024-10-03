@@ -43,20 +43,23 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .get::<BucketEntry>(&bucket)?
             .name
             .clone();
-        let result: anyhow::Result<Vec<Option<Vec<u8>>>> =
-            Durability::<Ctx, Vec<Option<Vec<u8>>>, SerializableError>::wrap(
-                self,
-                WrappedFunctionType::ReadRemote,
-                "golem keyvalue::eventual_batch::get_many",
-                |ctx| {
-                    ctx.state.key_value_service.get_many(
-                        account_id.clone(),
-                        bucket.clone(),
-                        keys.clone(),
-                    )
-                },
-            )
-            .await;
+        let result: anyhow::Result<Vec<Option<Vec<u8>>>> = Durability::<
+            Ctx,
+            (String, Vec<String>),
+            Vec<Option<Vec<u8>>>,
+            SerializableError,
+        >::wrap(
+            self,
+            WrappedFunctionType::ReadRemote,
+            "golem keyvalue::eventual_batch::get_many",
+            (bucket.clone(), keys.clone()),
+            |ctx| {
+                ctx.state
+                    .key_value_service
+                    .get_many(account_id, bucket, keys)
+            },
+        )
+        .await;
         match result {
             Ok(values) => {
                 let mut result = Vec::new();
@@ -99,15 +102,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .get::<BucketEntry>(&bucket)?
             .name
             .clone();
-        let keys = Durability::<Ctx, Vec<String>, SerializableError>::wrap(
+        let keys = Durability::<Ctx, String, Vec<String>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem keyvalue::eventual_batch::get_keys",
-            |ctx| {
-                ctx.state
-                    .key_value_service
-                    .get_keys(account_id.clone(), bucket.clone())
-            },
+            bucket.clone(),
+            |ctx| ctx.state.key_value_service.get_keys(account_id, bucket),
         )
         .await?;
         Ok(Ok(keys))
@@ -141,16 +141,21 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 Ok((key, outgoing_value))
             })
             .collect::<Result<Vec<(String, Vec<u8>)>, ResourceTableError>>()?;
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, Vec<(String, u64)>), (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem keyvalue::eventual_batch::set_many",
+            (
+                bucket.clone(),
+                key_values
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.len() as u64))
+                    .collect(),
+            ),
             |ctx| {
-                ctx.state.key_value_service.set_many(
-                    account_id.clone(),
-                    bucket.clone(),
-                    key_values.clone(),
-                )
+                ctx.state
+                    .key_value_service
+                    .set_many(account_id, bucket, key_values)
             },
         )
         .await;
@@ -180,16 +185,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .get::<BucketEntry>(&bucket)?
             .name
             .clone();
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, Vec<String>), (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem keyvalue::eventual_batch::delete_many",
+            (bucket.clone(), keys.clone()),
             |ctx| {
-                ctx.state.key_value_service.delete_many(
-                    account_id.clone(),
-                    bucket.clone(),
-                    keys.clone(),
-                )
+                ctx.state
+                    .key_value_service
+                    .delete_many(account_id, bucket, keys)
             },
         )
         .await;

@@ -17,6 +17,7 @@ use crate::services::rpc::RpcError;
 use bincode::{Decode, Encode};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::WitValue;
+use golem_common::model::{IdempotencyKey, WorkerId};
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum SerializableInvokeResultV1 {
@@ -30,4 +31,12 @@ pub enum SerializableInvokeResult {
     Failed(SerializableError),
     Pending,
     Completed(Result<TypeAnnotatedValue, RpcError>),
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub struct SerializableInvokeRequest {
+    pub remote_worker_id: WorkerId,
+    pub idempotency_key: IdempotencyKey,
+    pub function_name: String,
+    pub function_params: Vec<WitValue>
 }

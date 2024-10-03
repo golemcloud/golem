@@ -52,10 +52,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("io::poll", "poll");
 
-        let result = Durability::<Ctx, Vec<u32>, SerializableError>::wrap_conditionally(
+        let result = Durability::<Ctx, (), Vec<u32>, SerializableError>::wrap_conditionally(
             self,
             WrappedFunctionType::ReadLocal,
             "golem io::poll::poll",
+            (),
             |ctx| Box::pin(async move { Host::poll(&mut ctx.as_wasi_view(), in_).await }),
             |result| is_suspend_for_sleep(result).is_none(), // We must not persist the suspend signal
         )

@@ -26,7 +26,7 @@ use std::pin::Pin;
 use tracing::error;
 
 #[async_trait]
-pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
+pub trait Durability<Ctx: WorkerCtx, SerializableInput, SerializableSuccess, SerializableErr> {
     /// A version of `wrap` allowing conversion between the success value and the serialized value within the mutable worker context.
     ///
     /// This can be used to fetch/register resources.
@@ -34,6 +34,7 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
         &mut self,
         wrapped_function_type: WrappedFunctionType,
         function_name: &str,
+        input: SerializableInput,
         function: AsyncFn,
         get_serializable: GetFn,
         put_serializable: PutFn,
@@ -47,15 +48,16 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
         GetFn:
-            FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err> + Send,
+            FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializableSuccess, Err> + Send,
         PutFn: for<'b> FnOnce(
                 &'b mut DurableWorkerCtx<Ctx>,
-                SerializedSuccess,
+                SerializableSuccess,
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess: Encode + Decode + Debug + Send + Sync,
-        SerializedErr: Encode
+        SerializableInput: Encode + Debug + Send + Sync + 'static,
+        SerializableSuccess: Encode + Decode + Debug + Send + Sync,
+        SerializableErr: Encode
             + Decode
             + for<'b> From<&'b Err>
             + From<GolemError>
@@ -89,6 +91,7 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
         &mut self,
         wrapped_function_type: WrappedFunctionType,
         function_name: &str,
+        input: SerializableInput,
         function: AsyncFn,
     ) -> Result<Success, Err>
     where
@@ -99,8 +102,9 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync,
-        SerializedErr: Encode
+        SerializableInput: Encode + Debug + Send + Sync + 'static,
+        SerializableSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync,
+        SerializableErr: Encode
             + Decode
             + for<'b> From<&'b Err>
             + From<GolemError>
@@ -113,6 +117,7 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
         &mut self,
         wrapped_function_type: WrappedFunctionType,
         function_name: &str,
+        input: SerializableInput,
         function: AsyncFn,
         persist: ConditionFn,
     ) -> Result<Success, Err>
@@ -125,19 +130,28 @@ pub trait Durability<Ctx: WorkerCtx, SerializedSuccess, SerializedErr> {
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
         ConditionFn: FnOnce(&Result<Success, Err>) -> bool + Send,
-        SerializedSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send,
-        SerializedErr:
-            Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send;
+        SerializableInput: Encode + Debug + Send + Sync + 'static,
+        SerializableSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync,
+        SerializableErr: Encode
+            + Decode
+            + for<'b> From<&'b Err>
+            + From<GolemError>
+            + Into<Err>
+            + Debug
+            + Send
+            + Sync;
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
-    Durability<Ctx, SerializedSuccess, SerializedErr> for DurableWorkerCtx<Ctx>
+impl<Ctx: WorkerCtx, SerializableInput, SerializableSuccess, SerializableErr>
+    Durability<Ctx, SerializableInput, SerializableSuccess, SerializableErr>
+    for DurableWorkerCtx<Ctx>
 {
     async fn custom_wrap<Success, Err, AsyncFn, GetFn, PutFn>(
         &mut self,
         wrapped_function_type: WrappedFunctionType,
         function_name: &str,
+        input: SerializableInput,
         function: AsyncFn,
         get_serializable: GetFn,
         put_serializable: PutFn,
@@ -151,16 +165,23 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
         GetFn:
-            FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializedSuccess, Err> + Send,
+            FnOnce(&mut DurableWorkerCtx<Ctx>, &Success) -> Result<SerializableSuccess, Err> + Send,
         PutFn: for<'b> FnOnce(
                 &'b mut DurableWorkerCtx<Ctx>,
-                SerializedSuccess,
+                SerializableSuccess,
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess: Encode + Decode + Debug + Send,
-        SerializedErr:
-            Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
+        SerializableInput: Encode + Debug + Send + Sync + 'static,
+        SerializableSuccess: Encode + Decode + Debug + Send + Sync,
+        SerializableErr: Encode
+            + Decode
+            + for<'b> From<&'b Err>
+            + From<GolemError>
+            + Into<Err>
+            + Debug
+            + Send
+            + Sync,
     {
         let begin_index = self
             .state
@@ -169,7 +190,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
         {
             let result = function(self).await;
-            let serializable_result: Result<SerializedSuccess, SerializedErr> = result
+            let serializable_result: Result<SerializableSuccess, SerializableErr> = result
                 .as_ref()
                 .map_err(|err| err.into())
                 .and_then(|result| get_serializable(self, result).map_err(|err| (&err).into()));
@@ -178,6 +199,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
                 &wrapped_function_type,
                 function_name,
                 begin_index,
+                &input,
                 &serializable_result,
             )
             .await?;
@@ -185,13 +207,14 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         } else {
             let (_, oplog_entry) = crate::get_oplog_entry!(
                 self.state.replay_state,
-                OplogEntry::ImportedFunctionInvoked
+                OplogEntry::ImportedFunctionInvoked,
+                OplogEntry::ImportedFunctionInvokedV1
             )?;
             DurableWorkerCtx::<Ctx>::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
                 .state
                 .oplog
-                .get_payload_of_entry::<Result<SerializedSuccess, SerializedErr>>(&oplog_entry)
+                .get_payload_of_entry::<Result<SerializableSuccess, SerializableErr>>(&oplog_entry)
                 .await
                 .map_err(|err| {
                     GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
@@ -216,6 +239,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         &mut self,
         wrapped_function_type: WrappedFunctionType,
         function_name: &str,
+        input: SerializableInput,
         function: AsyncFn,
     ) -> Result<Success, Err>
     where
@@ -226,19 +250,38 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
             )
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
-        SerializedSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send,
-        SerializedErr:
-            Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
+        SerializableInput: Encode + Debug + Send + Sync + 'static,
+        SerializableSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync,
+        SerializableErr: Encode
+            + Decode
+            + for<'b> From<&'b Err>
+            + From<GolemError>
+            + Into<Err>
+            + Debug
+            + Send
+            + Sync,
     {
-        <DurableWorkerCtx<Ctx> as Durability<Ctx, SerializedSuccess, SerializedErr>>::wrap_conditionally::<Success, Err, AsyncFn, _>(self, wrapped_function_type, function_name, function, |_: &Result<Success, Err>| {
-            true
-        }).await
+        <DurableWorkerCtx<Ctx> as Durability<
+            Ctx,
+            SerializableInput,
+            SerializableSuccess,
+            SerializableErr,
+        >>::wrap_conditionally::<Success, Err, AsyncFn, _>(
+            self,
+            wrapped_function_type,
+            function_name,
+            input,
+            function,
+            |_: &Result<Success, Err>| true,
+        )
+        .await
     }
 
     async fn wrap_conditionally<Success, Err, AsyncFn, ConditionFn>(
         &mut self,
         wrapped_function_type: WrappedFunctionType,
         function_name: &str,
+        input: SerializableInput,
         function: AsyncFn,
         persist: ConditionFn,
     ) -> Result<Success, Err>
@@ -251,9 +294,16 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
                 -> Pin<Box<dyn Future<Output = Result<Success, Err>> + 'b + Send>>
             + Send,
         ConditionFn: FnOnce(&Result<Success, Err>) -> bool + Send,
-        SerializedSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send,
-        SerializedErr:
-            Encode + Decode + for<'b> From<&'b Err> + From<GolemError> + Into<Err> + Debug + Send,
+        SerializableInput: Encode + Debug + Send + Sync + 'static,
+        SerializableSuccess: Encode + Decode + From<Success> + Into<Success> + Debug + Send + Sync,
+        SerializableErr: Encode
+            + Decode
+            + for<'b> From<&'b Err>
+            + From<GolemError>
+            + Into<Err>
+            + Debug
+            + Send
+            + Sync,
     {
         let begin_index = self
             .state
@@ -263,7 +313,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         {
             let result = function(self).await;
             if persist(&result) {
-                let serializable_result: Result<SerializedSuccess, SerializedErr> = result
+                let serializable_result: Result<SerializableSuccess, SerializableErr> = result
                     .as_ref()
                     .map(|result| result.clone().into())
                     .map_err(|err| err.into());
@@ -272,6 +322,7 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
                     &wrapped_function_type,
                     function_name,
                     begin_index,
+                    &input,
                     &serializable_result,
                 )
                 .await?;
@@ -280,13 +331,14 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
         } else {
             let (_, oplog_entry) = crate::get_oplog_entry!(
                 self.state.replay_state,
-                OplogEntry::ImportedFunctionInvoked
+                OplogEntry::ImportedFunctionInvoked,
+                OplogEntry::ImportedFunctionInvokedV1
             )?;
             DurableWorkerCtx::<Ctx>::validate_oplog_entry(&oplog_entry, function_name)?;
             let response = self
                 .state
                 .oplog
-                .get_payload_of_entry::<Result<SerializedSuccess, SerializedErr>>(&oplog_entry)
+                .get_payload_of_entry::<Result<SerializableSuccess, SerializableErr>>(&oplog_entry)
                 .await
                 .map_err(|err| {
                     GolemError::unexpected_oplog_entry("ImportedFunctionInvoked payload", err)
@@ -305,15 +357,17 @@ impl<Ctx: WorkerCtx, SerializedSuccess: Sync, SerializedErr: Sync>
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
-    async fn write_to_oplog<SerializedSuccess, Err, SerializedErr>(
+    async fn write_to_oplog<SerializedInput, SerializedSuccess, Err, SerializedErr>(
         &mut self,
         wrapped_function_type: &WrappedFunctionType,
         function_name: &str,
         begin_index: OplogIndex,
+        serializable_input: &SerializedInput,
         serializable_result: &Result<SerializedSuccess, SerializedErr>,
     ) -> Result<(), Err>
     where
         Err: Send,
+        SerializedInput: Encode + Debug + Send + Sync,
         SerializedSuccess: Encode + Debug + Send + Sync,
         SerializedErr: Encode + Debug + From<GolemError> + Into<Err> + Send + Sync,
     {
@@ -322,13 +376,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .oplog
                 .add_imported_function_invoked(
                     function_name.to_string(),
+                    &serializable_input,
                     &serializable_result,
                     wrapped_function_type.clone(),
                 )
                 .await
                 .unwrap_or_else(|err| {
                     panic!(
-                        "failed to serialize and store function response: {:?}: {err}",
+                        "failed to serialize and store function request ({:?}) and response ({:?}): {err}",
+                        serializable_input,
                         serializable_result
                     )
                 });
@@ -353,6 +409,19 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         expected_function_name: &str,
     ) -> Result<(), GolemError> {
         if let OplogEntry::ImportedFunctionInvoked { function_name, .. } = oplog_entry {
+            if function_name != expected_function_name {
+                error!(
+                    "Unexpected imported function call entry in oplog: expected {}, got {}",
+                    expected_function_name, function_name
+                );
+                Err(GolemError::unexpected_oplog_entry(
+                    expected_function_name,
+                    function_name,
+                ))
+            } else {
+                Ok(())
+            }
+        } else if let OplogEntry::ImportedFunctionInvokedV1 { function_name, .. } = oplog_entry {
             if function_name != expected_function_name {
                 error!(
                     "Unexpected imported function call entry in oplog: expected {}, got {}",

@@ -105,6 +105,7 @@ use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
 use golem_common::model::exports;
 use golem_common::retries::get_delay;
+use crate::durable_host::http::serialized::SerializableHttpRequest;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -1517,6 +1518,8 @@ struct HttpRequestState {
     pub close_owner: HttpRequestCloseOwner,
     /// The handle of the FutureIncomingResponse that is registered into the open_function_table
     pub root_handle: u32,
+    /// Information about the request to be included in the oplog
+    pub request: SerializableHttpRequest
 }
 
 pub struct PrivateDurableWorkerState {
@@ -1979,13 +1982,13 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
-    ($private_state:expr, $case:path) => {
+    ($private_state:expr, $($cases:path),+) => {
         loop {
             let (oplog_index, oplog_entry) = $private_state.get_oplog_entry().await;
             match oplog_entry {
-                $case { .. } => {
+                $($cases { .. } => {
                     break Ok((oplog_index, oplog_entry));
-                }
+                })+
                 entry if entry.is_hint() => {}
                 _ => {
                     break Err($crate::error::GolemError::unexpected_oplog_entry(

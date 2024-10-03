@@ -35,7 +35,8 @@ use wasmtime_wasi_http::{HttpError, HttpResult};
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
 
 use crate::durable_host::http::serialized::{
-    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
+    SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
+    SerializableResponseHeaders,
 };
 use crate::durable_host::http::{continue_http_request, end_http_request_sync};
 use crate::durable_host::serialized::SerializableError;
@@ -459,12 +460,14 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
 
         Durability::<
             Ctx,
+            SerializableHttpRequest,
             Option<Result<Result<Option<HashMap<String, Vec<u8>>>, SerializableErrorCode>, ()>>,
             SerializableError,
         >::custom_wrap(
             self,
             WrappedFunctionType::WriteRemoteBatched(Some(*begin_idx)),
             "golem http::types::future_trailers::get",
+            request_state.request.clone(),
             |ctx| {
                 Box::pin(async move {
                     HostFutureTrailers::get(&mut ctx.as_wasi_http_view(), self_).await
@@ -629,6 +632,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     )
                 })?;
 
+            let request = request_state.request.clone();
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
@@ -652,6 +656,7 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     .oplog
                     .add_imported_function_invoked(
                         "http::types::future_incoming_response::get".to_string(),
+                        &request,
                         &serializable_response,
                         WrappedFunctionType::WriteRemoteBatched(Some(begin_idx)),
                     )

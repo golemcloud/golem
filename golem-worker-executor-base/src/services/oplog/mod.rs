@@ -201,19 +201,23 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog + Send + Sync>) -> 
 
 #[async_trait]
 pub trait OplogOps: Oplog {
-    async fn add_imported_function_invoked<R: Encode + Sync>(
+    async fn add_imported_function_invoked<I: Encode + Sync, O: Encode + Sync>(
         &self,
         function_name: String,
-        response: &R,
+        request: &I,
+        response: &O,
         wrapped_function_type: WrappedFunctionType,
     ) -> Result<OplogEntry, String> {
+        let serialized_request = serialize(request)?.to_vec();
         let serialized_response = serialize(response)?.to_vec();
 
-        let payload = self.upload_payload(&serialized_response).await?;
+        let request_payload: OplogPayload = self.upload_payload(&serialized_request).await?;
+        let response_payload = self.upload_payload(&serialized_response).await?;
         let entry = OplogEntry::ImportedFunctionInvoked {
             timestamp: Timestamp::now_utc(),
             function_name,
-            response: payload,
+            request: request_payload,
+            response: response_payload,
             wrapped_function_type,
         };
         self.add(entry.clone()).await;
@@ -273,6 +277,10 @@ pub trait OplogOps: Oplog {
         entry: &OplogEntry,
     ) -> Result<Option<T>, String> {
         match entry {
+            OplogEntry::ImportedFunctionInvokedV1 { response, .. } => {
+                let response_bytes: Bytes = self.download_payload(response).await?;
+                try_deserialize(&response_bytes)
+            }
             OplogEntry::ImportedFunctionInvoked { response, .. } => {
                 let response_bytes: Bytes = self.download_payload(response).await?;
                 try_deserialize(&response_bytes)

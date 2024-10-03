@@ -231,10 +231,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
 
         let stat_clone1 = stat;
-        Durability::<Ctx, SerializableFileTimes, SerializableError>::custom_wrap(
+        Durability::<Ctx, String, SerializableFileTimes, SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "filesystem::types::descriptor::stat",
+            path.to_string_lossy().to_string(),
             |_ctx| {
                 Box::pin(async move { Ok(stat_clone1) as Result<DescriptorStat, anyhow::Error> })
             },
@@ -289,10 +290,11 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         stat.status_change_timestamp = None; // We cannot guarantee this to be the same during replays, so we rather not support it
 
         let stat_clone1 = stat;
-        Durability::<Ctx, SerializableFileTimes, SerializableError>::custom_wrap(
+        Durability::<Ctx, String, SerializableFileTimes, SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "filesystem::types::descriptor::stat_at",
+            full_path.to_string_lossy().to_string(),
             |_ctx| {
                 Box::pin(async move { Ok(stat_clone1) as Result<DescriptorStat, anyhow::Error> })
             },

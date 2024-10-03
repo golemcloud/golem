@@ -22,6 +22,7 @@ use wasmtime_wasi_http::{HttpError, HttpResult};
 
 use golem_common::model::oplog::WrappedFunctionType;
 
+use crate::durable_host::http::serialized::{SerializableHttpMethod, SerializableHttpRequest};
 use crate::durable_host::{DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
@@ -38,6 +39,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .await
             .map_err(HttpError::trap)?;
         record_host_function_call("http::outgoing_handler", "handle");
+
         // Durability is handled by the WasiHttpView send_request method and the follow-up calls to await/poll the response future
         let begin_index = self
             .state
@@ -50,6 +52,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(future_incoming_response) => {
                 // We have to call state.end_function to mark the completion of the remote write operation when we get a response.
                 // For that we need to store begin_index and associate it with the response handle.
+                let request = SerializableHttpRequest {
+                    uri: "TODO".to_string(),
+                    method: SerializableHttpMethod::Get, // TODO
+                };
+                // TODO ^^^
+
                 let handle = future_incoming_response.rep();
                 self.state.open_function_table.insert(handle, begin_index);
                 self.state.open_http_requests.insert(
@@ -57,6 +65,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     HttpRequestState {
                         close_owner: HttpRequestCloseOwner::FutureIncomingResponseDrop,
                         root_handle: handle,
+                        request,
                     },
                 );
             }

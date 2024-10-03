@@ -522,6 +522,26 @@ impl Display for PromiseId {
     }
 }
 
+impl IntoValue for PromiseId {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::Record(
+            vec![
+                self.worker_id.into_value(),
+                self.oplog_idx.into_value()
+            ]
+        )
+    }
+
+    fn get_type() -> AnalysedType {
+        record(
+            vec![
+                field("worker_id", WorkerId::get_type()),
+                field("oplog_idx", OplogIndex::get_type()),
+            ]
+        )
+    }
+}
+
 /// Actions that can be scheduled to be executed at a given point in time
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
 pub enum ScheduledAction {

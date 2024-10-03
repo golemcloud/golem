@@ -13,18 +13,22 @@
 // limitations under the License.
 
 use crate::durable_host::http::serialized::{
-    SerializableErrorCode, SerializableResponse, SerializableResponseHeaders,
+    SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
+    SerializableResponseHeaders,
 };
 use crate::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddresses,
     SerializableStreamError,
 };
-use crate::durable_host::wasm_rpc::serialized::SerializableInvokeResult;
+use crate::durable_host::wasm_rpc::serialized::{
+    SerializableInvokeRequest, SerializableInvokeResult,
+};
 use crate::error::GolemError;
 use crate::services::oplog::Oplog;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use bincode::Decode;
+use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
     IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError,
@@ -32,9 +36,12 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId, WorkerInvocation,
+    AccountId, ComponentVersion, IdempotencyKey, PromiseId, Timestamp, WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize;
+use golem_wasm_ast::analysis::analysed_type::{
+    case, field, list, option, record, result, str, u64, unit_case, variant,
+};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, TypeVariant};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
@@ -67,7 +74,7 @@ pub enum PublicOplogEntry {
     ImportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
-        // TODO: add request: ValueAndType
+        request: ValueAndType,
         response: ValueAndType,
         wrapped_function_type: WrappedFunctionType,
     },
@@ -222,6 +229,7 @@ impl PublicOplogEntry {
                 Ok(PublicOplogEntry::ImportedFunctionInvoked {
                     timestamp,
                     function_name,
+                    request: Self::no_request_payload()?,
                     response: value,
                     wrapped_function_type,
                 })
@@ -229,16 +237,21 @@ impl PublicOplogEntry {
             OplogEntry::ImportedFunctionInvoked {
                 timestamp,
                 function_name,
+                request,
                 response,
                 wrapped_function_type,
             } => {
-                let payload_bytes = oplog.download_payload(&response).await?;
-                let value =
-                    Self::encode_host_function_response_as_value(&function_name, &payload_bytes)?;
+                let request_bytes = oplog.download_payload(&request).await?;
+                let response_bytes = oplog.download_payload(&response).await?;
+                let request =
+                    Self::encode_host_function_request_as_value(&function_name, &request_bytes)?;
+                let response =
+                    Self::encode_host_function_response_as_value(&function_name, &response_bytes)?;
                 Ok(PublicOplogEntry::ImportedFunctionInvoked {
                     timestamp,
                     function_name,
-                    response: value,
+                    request,
+                    response,
                     wrapped_function_type,
                 })
             }
@@ -394,6 +407,285 @@ impl PublicOplogEntry {
         try_deserialize(data)?.ok_or("Unexpected oplog payload, cannot deserialize".to_string())
     }
 
+    fn no_request_payload() -> Result<ValueAndType, String> {
+        Ok(ValueAndType::new(Value::Option(None), option(str())))
+    }
+
+    fn encode_host_function_request_as_value(
+        function_name: &str,
+        bytes: &[u8],
+    ) -> Result<ValueAndType, String> {
+        match function_name {
+            "golem::rpc::future-invoke-result::get" => {
+                let payload: SerializableInvokeRequest = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "http::types::future_incoming_response::get" => {
+                let payload: SerializableHttpRequest = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "golem io::poll::poll" => Self::no_request_payload(),
+            "golem blobstore::container::object_info" => {
+                let payload: (String, String) = Self::try_deserialize(bytes)?;
+                Ok(container_and_object(payload.0, payload.1))
+            }
+            "golem blobstore::container::delete_objects" => {
+                let payload: (String, Vec<String>) = Self::try_deserialize(bytes)?;
+                Ok(container_and_objects(payload.0, payload.1))
+            }
+            "golem blobstore::container::list_objects" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(container(payload))
+            }
+            "golem blobstore::container::get_data" => {
+                let payload: (String, String, u64, u64) = Self::try_deserialize(bytes)?;
+                Ok(ValueAndType::new(
+                    Value::Record(vec![
+                        Value::String(payload.0),
+                        Value::String(payload.1),
+                        Value::U64(payload.2),
+                        Value::U64(payload.3),
+                    ]),
+                    record(vec![
+                        field("container", str()),
+                        field("object", str()),
+                        field("begin", u64()),
+                        field("end", u64()),
+                    ]),
+                ))
+            }
+            "golem blobstore::container::write_data" => {
+                let payload: (String, String, u64) = Self::try_deserialize(bytes)?;
+                Ok(ValueAndType::new(
+                    Value::Record(vec![
+                        Value::String(payload.0),
+                        Value::String(payload.1),
+                        Value::U64(payload.2),
+                    ]),
+                    record(vec![
+                        field("container", str()),
+                        field("object", str()),
+                        field("length", u64()),
+                    ]),
+                ))
+            }
+            "golem blobstore::container::delete_object" => {
+                let payload: (String, String) = Self::try_deserialize(bytes)?;
+                Ok(container_and_object(payload.0, payload.1))
+            }
+            "golem blobstore::container::has_object" => {
+                let payload: (String, String) = Self::try_deserialize(bytes)?;
+                Ok(container_and_object(payload.0, payload.1))
+            }
+            "golem blobstore::container::clear" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(container(payload))
+            }
+            "golem blobstore::blobstore::copy_object" => {
+                let payload: (String, String, String, String) = Self::try_deserialize(bytes)?;
+                Ok(ValueAndType::new(
+                    Value::Record(vec![
+                        Value::String(payload.0),
+                        Value::String(payload.1),
+                        Value::String(payload.2),
+                        Value::String(payload.3),
+                    ]),
+                    record(vec![
+                        field("src_container", str()),
+                        field("src_object", str()),
+                        field("dest_container", str()),
+                        field("dest_object", str()),
+                    ]),
+                ))
+            }
+            "golem blobstore::blobstore::delete_container" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(container(payload))
+            }
+            "golem blobstore::blobstore::create_container" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(container(payload))
+            }
+            "golem blobstore::blobstore::get_container" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(container(payload))
+            }
+            "golem blobstore::blobstore::container_exists" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(container(payload))
+            }
+            "golem blobstore::blobstore::move_object" => {
+                let payload: (String, String, String, String) = Self::try_deserialize(bytes)?;
+                Ok(ValueAndType::new(
+                    Value::Record(vec![
+                        Value::String(payload.0),
+                        Value::String(payload.1),
+                        Value::String(payload.2),
+                        Value::String(payload.3),
+                    ]),
+                    record(vec![
+                        field("src_container", str()),
+                        field("src_object", str()),
+                        field("dest_container", str()),
+                        field("dest_object", str()),
+                    ]),
+                ))
+            }
+            "golem_environment::get_arguments" => Self::no_request_payload(),
+            "golem_environment::get_environment" => Self::no_request_payload(),
+            "golem_environment::initial_cwd" => Self::no_request_payload(),
+            "monotonic_clock::resolution" => Self::no_request_payload(),
+            "monotonic_clock::now" => Self::no_request_payload(),
+            "monotonic_clock::subscribe_duration" => Self::no_request_payload(),
+            "wall_clock::now" => Self::no_request_payload(),
+            "wall_clock::resolution" => Self::no_request_payload(),
+            "golem_delete_promise" => {
+                let payload: PromiseId = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "golem_complete_promise" => {
+                let payload: PromiseId = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "golem::api::update-worker" => {
+                let payload: (WorkerId, ComponentVersion, UpdateMode) =
+                    Self::try_deserialize(bytes)?;
+                Ok(ValueAndType::new(
+                    Value::Record(vec![
+                        payload.0.into_value(),
+                        payload.1.into_value(),
+                        Value::String(format!("{:?}", payload.2)),
+                    ]),
+                    record(vec![
+                        field("worker_id", WorkerId::get_type()),
+                        field("component_version", u64()),
+                        field("update_mode", str()),
+                    ]),
+                ))
+            }
+            "http::types::incoming_body_stream::skip" => {
+                let payload: SerializableHttpRequest = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "http::types::incoming_body_stream::read" => {
+                let payload: SerializableHttpRequest = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "http::types::incoming_body_stream::blocking_read" => {
+                let payload: SerializableHttpRequest = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "http::types::incoming_body_stream::blocking_skip" => {
+                let payload: SerializableHttpRequest = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "golem keyvalue::eventual::delete" => {
+                let payload: (String, String) = Self::try_deserialize(bytes)?;
+                Ok(bucket_and_key(payload.0, payload.1))
+            }
+            "golem keyvalue::eventual::get" => {
+                let payload: (String, String) = Self::try_deserialize(bytes)?;
+                Ok(bucket_and_key(payload.0, payload.1))
+            }
+            "golem keyvalue::eventual::set" => {
+                let payload: (String, String, u64) = Self::try_deserialize(bytes)?;
+                Ok(ValueAndType::new(
+                    Value::Record(vec![
+                        Value::String(payload.0),
+                        Value::String(payload.1),
+                        Value::U64(payload.2),
+                    ]),
+                    record(vec![
+                        field("bucket", str()),
+                        field("key", str()),
+                        field("value", u64()),
+                    ]),
+                ))
+            }
+            "golem keyvalue::eventual::exists" => {
+                let payload: (String, String) = Self::try_deserialize(bytes)?;
+                Ok(bucket_and_key(payload.0, payload.1))
+            }
+            "golem keyvalue::eventual_batch::set_many" => {
+                let payload: (String, Vec<(String, u64)>) = Self::try_deserialize(bytes)?;
+                Ok(ValueAndType::new(
+                    Value::Record(vec![
+                        Value::String(payload.0),
+                        Value::List(
+                            payload
+                                .1
+                                .into_iter()
+                                .map(|(key, value)| {
+                                    Value::Record(vec![Value::String(key), Value::U64(value)])
+                                })
+                                .collect(),
+                        ),
+                    ]),
+                    record(vec![
+                        field("bucket", str()),
+                        field(
+                            "key_values",
+                            list(record(vec![field("key", str()), field("length", u64())])),
+                        ),
+                    ]),
+                ))
+            }
+            "golem keyvalue::eventual_batch::get_many" => {
+                let payload: (String, Vec<String>) = Self::try_deserialize(bytes)?;
+                Ok(bucket_and_keys(payload.0, payload.1))
+            }
+            "golem keyvalue::eventual_batch::get_keys" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(bucket(payload))
+            }
+            "golem keyvalue::eventual_batch::delete_many" => {
+                let payload: (String, Vec<String>) = Self::try_deserialize(bytes)?;
+                Ok(bucket_and_keys(payload.0, payload.1))
+            }
+            "golem random::insecure::get_insecure_random_bytes" => Self::no_request_payload(),
+            "golem random::insecure::get_insecure_random_u64" => Self::no_request_payload(),
+            "golem random::insecure_seed::insecure_seed" => Self::no_request_payload(),
+            "golem random::get_random_bytes" => Self::no_request_payload(),
+            "golem random::get_random_u64" => Self::no_request_payload(),
+            "sockets::ip_name_lookup::resolve_addresses" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "golem::rpc::wasm-rpc::invoke" => {
+                let payload: SerializableInvokeRequest = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "golem::rpc::wasm-rpc::invoke-and-await" => {
+                let payload: SerializableInvokeRequest = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "golem::rpc::wasm-rpc::generate_unique_local_worker_id" => Self::no_request_payload(),
+            "cli::preopens::get_directories" => {
+                let payload: Result<Vec<String>, SerializableError> = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "filesystem::types::descriptor::stat" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "filesystem::types::descriptor::stat_at" => {
+                let payload: String = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "golem api::generate_idempotency_key" => Self::no_request_payload(),
+            "golem http::types::future_trailers::get" => {
+                let payload: SerializableHttpRequest = Self::try_deserialize(bytes)?;
+                Ok(payload.into_value_and_type())
+            }
+            "golem::rpc::wasm-rpc::invoke idempotency key" => Self::no_request_payload(),
+            "golem::rpc::wasm-rpc::invoke-and-await idempotency key" => Self::no_request_payload(),
+            "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => {
+                Self::no_request_payload()
+            }
+            _ => Err(format!("Unsupported host function name: {}", function_name)),
+        }
+    }
+
     fn encode_host_function_response_as_value(
         function_name: &str,
         bytes: &[u8],
@@ -401,8 +693,60 @@ impl PublicOplogEntry {
         match function_name {
             "golem::rpc::future-invoke-result::get" => {
                 let payload: SerializableInvokeResult = Self::try_deserialize(bytes)?;
-                // TODO: special case because completed value is dynamic
-                todo!()
+                match payload {
+                    SerializableInvokeResult::Failed(error) => Ok(ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 0,
+                            case_value: Some(Box::new(error.into_value())),
+                        },
+                        variant(vec![
+                            case("Failed", SerializableError::get_type()),
+                            unit_case("Pending"),
+                            unit_case("Completed"),
+                        ]),
+                    )),
+                    SerializableInvokeResult::Pending => Ok(ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 1,
+                            case_value: None,
+                        },
+                        variant(vec![
+                            case("Failed", SerializableError::get_type()),
+                            unit_case("Pending"),
+                            unit_case("Completed"),
+                        ]),
+                    )),
+                    SerializableInvokeResult::Completed(Ok(value)) => {
+                        let typ: AnalysedType = (&value).try_into()?;
+                        let value: Value = value.try_into()?;
+                        Ok(ValueAndType::new(
+                            Value::Variant {
+                                case_idx: 2,
+                                case_value: Some(Box::new(Value::Result(Ok(Some(Box::new(
+                                    value,
+                                )))))),
+                            },
+                            variant(vec![
+                                case("Failed", SerializableError::get_type()),
+                                unit_case("Pending"),
+                                case("Completed", result(typ, RpcError::get_type())),
+                            ]),
+                        ))
+                    }
+                    SerializableInvokeResult::Completed(Err(rpc_error)) => Ok(ValueAndType::new(
+                        Value::Variant {
+                            case_idx: 2,
+                            case_value: Some(Box::new(Value::Result(Err(Some(Box::new(
+                                rpc_error.into_value(),
+                            )))))),
+                        },
+                        variant(vec![
+                            case("Failed", SerializableError::get_type()),
+                            unit_case("Pending"),
+                            case("Completed", result(record(vec![]), RpcError::get_type())),
+                        ]),
+                    )),
+                }
             }
             "http::types::future_incoming_response::get" => {
                 let payload: SerializableResponse = Self::try_deserialize(bytes)?;
@@ -868,4 +1212,75 @@ impl IntoValue for SerializableFileTimes {
     fn get_type() -> AnalysedType {
         todo!()
     }
+}
+
+impl IntoValue for SerializableInvokeRequest {
+    fn into_value(self) -> Value {
+        todo!()
+    }
+
+    fn get_type() -> AnalysedType {
+        todo!()
+    }
+}
+
+impl IntoValue for SerializableHttpRequest {
+    fn into_value(self) -> Value {
+        todo!()
+    }
+
+    fn get_type() -> AnalysedType {
+        todo!()
+    }
+}
+
+fn container(container: String) -> ValueAndType {
+    ValueAndType::new(
+        Value::Record(vec![Value::String(container)]),
+        record(vec![field("container", str())]),
+    )
+}
+
+fn container_and_object(container: String, object: String) -> ValueAndType {
+    ValueAndType::new(
+        Value::Record(vec![Value::String(container), Value::String(object)]),
+        record(vec![field("container", str()), field("object", str())]),
+    )
+}
+
+fn container_and_objects(container: String, objects: Vec<String>) -> ValueAndType {
+    ValueAndType::new(
+        Value::Record(vec![
+            Value::String(container),
+            Value::List(objects.into_iter().map(Value::String).collect()),
+        ]),
+        record(vec![
+            field("container", str()),
+            field("objects", list(str())),
+        ]),
+    )
+}
+
+fn bucket(bucket: String) -> ValueAndType {
+    ValueAndType::new(
+        Value::Record(vec![Value::String(bucket)]),
+        record(vec![field("bucket", str())]),
+    )
+}
+
+fn bucket_and_key(bucket: String, key: String) -> ValueAndType {
+    ValueAndType::new(
+        Value::Record(vec![Value::String(bucket), Value::String(key)]),
+        record(vec![field("bucket", str()), field("key", str())]),
+    )
+}
+
+fn bucket_and_keys(bucket: String, keys: Vec<String>) -> ValueAndType {
+    ValueAndType::new(
+        Value::Record(vec![
+            Value::String(bucket),
+            Value::List(keys.into_iter().map(Value::String).collect()),
+        ]),
+        record(vec![field("bucket", str()), field("keys", list(str()))]),
+    )
 }

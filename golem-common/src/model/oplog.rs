@@ -4,6 +4,9 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
+use golem_wasm_ast::analysis::analysed_type::u64;
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::{IntoValue, Value};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
@@ -69,6 +72,16 @@ impl Display for OplogIndex {
 impl From<OplogIndex> for u64 {
     fn from(value: OplogIndex) -> Self {
         value.0
+    }
+}
+
+impl IntoValue for OplogIndex {
+    fn into_value(self) -> Value {
+        Value::U64(self.0)
+    }
+
+    fn get_type() -> AnalysedType {
+        u64()
     }
 }
 
@@ -359,6 +372,7 @@ pub enum OplogEntry {
     ImportedFunctionInvoked {
         timestamp: Timestamp,
         function_name: String,
+        request: OplogPayload,
         response: OplogPayload,
         wrapped_function_type: WrappedFunctionType,
     },
