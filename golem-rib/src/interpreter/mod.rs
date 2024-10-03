@@ -36,6 +36,9 @@ pub async fn interpret(
     interpreter.run(rib.clone()).await
 }
 
+// This function can be used for those the Rib Scripts
+// where there are no side effecting function calls.
+// It is recommended to use `interpret` over `interpret_pure` if you are unsure.
 pub async fn interpret_pure(
     rib: &RibByteCode,
     rib_input: &HashMap<String, TypeAnnotatedValue>,
