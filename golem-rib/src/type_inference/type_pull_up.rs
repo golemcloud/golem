@@ -328,7 +328,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
         Expr::Tuple(exprs, inferred_type) => {
             let mut types = vec![];
             for expr in exprs {
-                expr.pull_types_up()?;
+                expr.pull_types_up_legacy()?;
                 types.push(expr.inferred_type());
             }
             let tuple_type = InferredType::Tuple(types);
@@ -337,7 +337,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
         Expr::Sequence(exprs, inferred_type) => {
             let mut types = vec![];
             for expr in exprs {
-                expr.pull_types_up()?;
+                expr.pull_types_up_legacy()?;
                 types.push(expr.inferred_type());
             }
             if let Some(new_inferred_type) = types.first() {
@@ -348,19 +348,19 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
         Expr::Record(exprs, inferred_type) => {
             let mut types = vec![];
             for (field_name, expr) in exprs {
-                expr.pull_types_up()?;
+                expr.pull_types_up_legacy()?;
                 types.push((field_name.clone(), expr.inferred_type()));
             }
             let record_type = InferredType::Record(types);
             *inferred_type = inferred_type.merge(record_type);
         }
         Expr::Option(Some(expr), inferred_type) => {
-            expr.pull_types_up()?;
+            expr.pull_types_up_legacy()?;
             let option_type = InferredType::Option(Box::new(expr.inferred_type()));
             *inferred_type = inferred_type.merge(option_type)
         }
         Expr::Result(Ok(expr), inferred_type) => {
-            expr.pull_types_up()?;
+            expr.pull_types_up_legacy()?;
             let result_type = InferredType::Result {
                 ok: Some(Box::new(expr.inferred_type())),
                 error: None,
@@ -368,7 +368,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
             *inferred_type = inferred_type.merge(result_type)
         }
         Expr::Result(Err(expr), inferred_type) => {
-            expr.pull_types_up()?;
+            expr.pull_types_up_legacy()?;
             let result_type = InferredType::Result {
                 ok: None,
                 error: Some(Box::new(expr.inferred_type())),
@@ -377,8 +377,8 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
         }
 
         Expr::Cond(_, then_, else_, inferred_type) => {
-            then_.pull_types_up()?;
-            else_.pull_types_up()?;
+            then_.pull_types_up_legacy()?;
+            else_.pull_types_up_legacy()?;
             let then_type = then_.inferred_type();
             let else_type = else_.inferred_type();
 
@@ -394,13 +394,13 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
         // When it comes to pattern match, the only way to resolve the type of the pattern match
         // from children (pulling types up) is from the match_arms
         Expr::PatternMatch(predicate, match_arms, inferred_type) => {
-            predicate.pull_types_up()?;
+            predicate.pull_types_up_legacy()?;
             let mut possible_inference_types = vec![];
 
             for match_arm in match_arms {
                 internal::pull_up_types_of_arm_pattern(&mut match_arm.arm_pattern)?;
 
-                match_arm.arm_resolution_expr.pull_types_up()?;
+                match_arm.arm_resolution_expr.pull_types_up_legacy()?;
                 possible_inference_types.push(match_arm.arm_resolution_expr.inferred_type())
             }
 
@@ -413,16 +413,16 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
                 }
             }
         }
-        Expr::Let(_, _, expr, _) => expr.pull_types_up()?,
+        Expr::Let(_, _, expr, _) => expr.pull_types_up_legacy()?,
         Expr::SelectField(expr, field, inferred_type) => {
-            expr.pull_types_up()?;
+            expr.pull_types_up_legacy()?;
             let expr_type = expr.inferred_type();
             let field_type = internal::get_inferred_type_of_selected_field(field, &expr_type)?;
             *inferred_type = inferred_type.merge(field_type);
         }
 
         Expr::SelectIndex(expr, index, inferred_type) => {
-            expr.pull_types_up()?;
+            expr.pull_types_up_legacy()?;
             let expr_type = expr.inferred_type();
             let list_type = internal::get_inferred_type_of_selected_index(*index, &expr_type)?;
             *inferred_type = inferred_type.merge(list_type);
@@ -434,52 +434,52 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
         Expr::Boolean(_, _) => {}
         Expr::Concat(exprs, _) => {
             for expr in exprs {
-                expr.pull_types_up()?
+                expr.pull_types_up_legacy()?
             }
         }
         Expr::Multiple(exprs, inferred_type) => {
             let length = &exprs.len();
             for (index, expr) in exprs.iter_mut().enumerate() {
-                expr.pull_types_up()?;
+                expr.pull_types_up_legacy()?;
 
                 if index == length - 1 {
                     *inferred_type = inferred_type.merge(expr.inferred_type());
                 }
             }
         }
-        Expr::Not(expr, _) => expr.pull_types_up()?,
+        Expr::Not(expr, _) => expr.pull_types_up_legacy()?,
         Expr::GreaterThan(left, right, _) => {
-            left.pull_types_up()?;
-            right.pull_types_up()?;
+            left.pull_types_up_legacy()?;
+            right.pull_types_up_legacy()?;
         }
         Expr::GreaterThanOrEqualTo(left, right, _) => {
-            left.pull_types_up()?;
-            right.pull_types_up()?;
+            left.pull_types_up_legacy()?;
+            right.pull_types_up_legacy()?;
         }
         Expr::LessThanOrEqualTo(left, right, _) => {
-            left.pull_types_up()?;
-            right.pull_types_up()?;
+            left.pull_types_up_legacy()?;
+            right.pull_types_up_legacy()?;
         }
         Expr::EqualTo(left, right, _) => {
-            left.pull_types_up()?;
-            right.pull_types_up()?;
+            left.pull_types_up_legacy()?;
+            right.pull_types_up_legacy()?;
         }
         Expr::LessThan(left, right, _) => {
-            left.pull_types_up()?;
-            right.pull_types_up()?;
+            left.pull_types_up_legacy()?;
+            right.pull_types_up_legacy()?;
         }
         Expr::Call(_, exprs, _) => {
             for expr in exprs {
-                expr.pull_types_up()?
+                expr.pull_types_up_legacy()?
             }
         }
-        Expr::Unwrap(expr, _) => expr.pull_types_up()?,
+        Expr::Unwrap(expr, _) => expr.pull_types_up_legacy()?,
         Expr::And(left, right, _) => {
-            left.pull_types_up()?;
-            right.pull_types_up()?;
+            left.pull_types_up_legacy()?;
+            right.pull_types_up_legacy()?;
         }
         Expr::Throw(_, _) => {}
-        Expr::GetTag(expr, _) => expr.pull_types_up()?,
+        Expr::GetTag(expr, _) => expr.pull_types_up_legacy()?,
         Expr::Option(None, _) => {}
     }
 
@@ -545,7 +545,7 @@ mod internal {
             }
 
             ArmPattern::Literal(expr) => {
-                expr.pull_types_up()?;
+                expr.pull_types_up_legacy()?;
             }
         }
 
@@ -564,7 +564,7 @@ mod type_pull_up_tests {
         let expr = "foo";
         let mut expr = Expr::from_text(expr).unwrap();
         expr.add_infer_type_mut(InferredType::Str);
-        let new_expr = type_pull_up_non_recursive(&expr);
+        let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Str);
     }
 
@@ -576,8 +576,8 @@ mod type_pull_up_tests {
                 InferredType::Record(vec![("bar".to_string(), InferredType::U64)]),
             )]));
         let select_expr = Expr::select_field(record_identifier, "foo");
-        let mut expr = Expr::select_field(select_expr, "bar");
-        let new_expr = type_pull_up_non_recursive(&expr);
+        let  expr = Expr::select_field(select_expr, "bar");
+        let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::U64);
     }
 
@@ -586,7 +586,7 @@ mod type_pull_up_tests {
         let expr =
             Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
         let mut expr = Expr::select_index(expr, 0);
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::U64);
     }
 
@@ -599,7 +599,7 @@ mod type_pull_up_tests {
             ],
             InferredType::Unknown,
         );
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(
             expr.inferred_type(),
             InferredType::List(Box::new(InferredType::U64))
@@ -612,7 +612,7 @@ mod type_pull_up_tests {
             Expr::literal("foo"),
             Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
         ]);
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(
             expr.inferred_type(),
             InferredType::Tuple(vec![InferredType::Str, InferredType::U64])
@@ -645,7 +645,7 @@ mod type_pull_up_tests {
                 ("bar".to_string(), InferredType::Unknown),
             ]),
         );
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
 
         assert_eq!(
             expr.inferred_type(),
@@ -665,49 +665,49 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_concat() {
         let mut expr = Expr::concat(vec![Expr::number(1f64), Expr::number(2f64)]);
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Str);
     }
 
     #[test]
     pub fn test_pull_up_for_not() {
         let mut expr = Expr::not(Expr::boolean(true));
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_greater_than() {
         let mut expr = Expr::greater_than(Expr::number(1f64), Expr::number(2f64));
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_greater_than_or_equal_to() {
         let mut expr = Expr::greater_than_or_equal_to(Expr::number(1f64), Expr::number(2f64));
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_less_than_or_equal_to() {
         let mut expr = Expr::less_than_or_equal_to(Expr::number(1f64), Expr::number(2f64));
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_equal_to() {
         let mut expr = Expr::equal_to(Expr::number(1f64), Expr::number(2f64));
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_less_than() {
         let mut expr = Expr::less_than(Expr::number(1f64), Expr::number(2f64));
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Bool);
     }
 
@@ -717,21 +717,21 @@ mod type_pull_up_tests {
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
             vec![Expr::number(1f64)],
         );
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
     }
 
     #[test]
     pub fn test_pull_up_for_unwrap() {
         let mut expr = Expr::option(Some(Expr::number(1f64))).unwrap();
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
     }
 
     #[test]
     pub fn test_pull_up_for_tag() {
         let mut expr = Expr::tag(Expr::number(1f64));
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
     }
 
@@ -766,7 +766,7 @@ mod type_pull_up_tests {
                 },
             ],
         );
-        expr.pull_types_up().unwrap();
+        expr.pull_types_up_legacy().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::U64);
     }
 }
