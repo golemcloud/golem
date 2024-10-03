@@ -251,7 +251,10 @@ mod internal {
             AnalysedType::Option(type_option) => {
                 update_registry(type_option.inner.as_ref(), registry);
             }
-            AnalysedType::Result(_) => {}
+            AnalysedType::Result(TypeResult {
+                ok: None,
+                err: None,
+            }) => {}
             AnalysedType::Flags(_) => {}
             AnalysedType::Str(_) => {}
             AnalysedType::Chr(_) => {}
