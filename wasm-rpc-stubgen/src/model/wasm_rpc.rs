@@ -252,6 +252,20 @@ impl Application {
             (Ok(properties), false) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
 
+                for build_step in &properties.build {
+                    let has_inputs = !build_step.inputs.is_empty();
+                    let has_outputs = !build_step.outputs.is_empty();
+
+                    if (has_inputs && !has_outputs) || (!has_inputs && has_outputs) {
+                        validation.push_context("command", build_step.command.clone());
+                        validation.add_warn(
+                            "Using inputs and outputs only has effect when both defined"
+                                .to_string(),
+                        );
+                        validation.pop_context();
+                    }
+                }
+
                 Some(WasmComponent {
                     name: component.name,
                     source: source.to_path_buf(),
@@ -684,7 +698,7 @@ pub struct BuildStep {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub output: Vec<String>,
+    pub outputs: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

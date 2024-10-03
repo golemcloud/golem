@@ -10,7 +10,7 @@ use crate::model::wasm_rpc::{
 };
 use crate::stub::StubDefinition;
 use crate::{commands, WasmRpcOverride};
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, Context, Error};
 use colored::Colorize;
 use glob::glob;
 use itertools::Itertools;
@@ -108,7 +108,7 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
 
         for dep_component_name in &component.wasm_rpc_dependencies {
             // TODO: this should check into the wit deps for the specific stubs or do folder diffs
-            /*if is_up_to_date(
+            if is_up_to_date(
                 config.skip_up_to_date_checks,
                 || [app.stub_wit(dep_component_name)],
                 || [app.component_wit(component_name)],
@@ -118,7 +118,7 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
                     dep_component_name, component_name
                 ));
                 continue;
-            }*/
+            }
 
             log_action(
                 "Adding",
@@ -145,7 +145,7 @@ pub fn component_build(config: Config) -> anyhow::Result<()> {
     component_build_app(&config, &app)
 }
 
-pub fn component_build_app(_config: &Config, app: &Application) -> anyhow::Result<()> {
+pub fn component_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
     let components_with_build_steps = app
         .wasm_components_by_name
         .values()
@@ -165,7 +165,22 @@ pub fn component_build_app(_config: &Config, app: &Application) -> anyhow::Resul
     for component in components_with_build_steps {
         log_action("Building", format!("component: {}", component.name));
         for build_step in &component.build_steps {
-            // TODO: handle up-to-date checks optionally based on step.input and step.output
+            let build_dir = build_step
+                .dir
+                .as_ref()
+                .map(|dir| component.source_dir().join(dir))
+                .unwrap_or_else(|| component.source_dir().to_path_buf());
+
+            if !build_step.inputs.is_empty() && !build_step.outputs.is_empty() {
+                let inputs = compile_and_collect_globs(&build_dir, &build_step.inputs)?;
+                let outputs = compile_and_collect_globs(&build_dir, &build_step.outputs)?;
+
+                if is_up_to_date(config.skip_up_to_date_checks, || inputs, || outputs) {
+                    log_skipping_up_to_date(format!("executing command: {}", build_step.command));
+                    continue;
+                }
+            }
+
             log_action("Executing", format!("command: {}", build_step.command));
 
             let command_tokens = build_step.command.split(' ').collect::<Vec<_>>();
@@ -175,13 +190,7 @@ pub fn component_build_app(_config: &Config, app: &Application) -> anyhow::Resul
 
             let result = Command::new(command_tokens[0])
                 .args(command_tokens.iter().skip(1))
-                .current_dir(
-                    build_step
-                        .dir
-                        .as_ref()
-                        .map(|dir| component.source_dir().join(dir))
-                        .unwrap_or_else(|| component.source_dir().to_path_buf()),
-                )
+                .current_dir(build_dir)
                 .status();
 
             if let Some(err) = result.err() {
@@ -497,4 +506,22 @@ where
         }
         None => false,
     }
+}
+
+fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<PathBuf>, Error> {
+    globs
+        .iter()
+        .map(|pattern| {
+            glob(&format!("{}/{}", root_dir.to_string_lossy(), pattern))
+                .with_context(|| format!("Failed to compile glob expression: {}", pattern))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| anyhow!(err))
+        .and_then(|paths| {
+            paths
+                .into_iter()
+                .flatten()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| anyhow!(err))
+        })
 }
