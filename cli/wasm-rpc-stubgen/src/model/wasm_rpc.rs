@@ -847,7 +847,7 @@ mod tests {
         println!("Errors:\n{}", errors.join("\n"));
 
         assert!(app.wasm_components_by_name.len() == 3);
-        assert!(warns.len() == 2);
+        assert!(warns.len() == 3);
         assert!(errors.len() == 0);
 
         let (component_name, component) = app.wasm_components_by_name.iter().next().unwrap();
