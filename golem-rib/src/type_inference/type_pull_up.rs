@@ -238,6 +238,8 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                     new_exprs.push(expr);
                 }
 
+                new_exprs.reverse();
+
                 let new_inferred_type = new_exprs.last().unwrap().inferred_type();
 
                 let new_multiple =
@@ -306,14 +308,20 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 inferred_type_stack.push_front(new_less_than);
             }
 
-            Expr::Let(_, _, _, _) => {}
+            Expr::Let(variable_id, typ, expr, inferred_type) => {
+                let new_expr = inferred_type_stack.pop_front().unwrap();
+                let new_let = Expr::Let(variable_id.clone(), typ.clone(), Box::new(new_expr), inferred_type.clone());
+                inferred_type_stack.push_front(new_let);
+            }
             Expr::Sequence(exprs, current_inferred_type) => {
                 let mut new_exprs = vec![];
 
                 for _ in 0..exprs.len() {
-                    let expr = inferred_type_stack.pop_back().unwrap();
+                    let expr = inferred_type_stack.pop_front().unwrap();
                     new_exprs.push(expr);
                 }
+
+                new_exprs.reverse();
 
                 let new_inferred_type =
                     InferredType::List(Box::new(new_exprs.first().unwrap().inferred_type()));
@@ -327,11 +335,15 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 let mut ordered_types = vec![];
                 let mut new_exprs = vec![];
 
-                for (field, _) in expr {
-                    let expr: Expr = inferred_type_stack.pop_back().unwrap();
+                for (field, _) in expr.iter().rev() {
+                    let expr: Expr = inferred_type_stack.pop_front().unwrap();
                     ordered_types.push((field.clone(), expr.inferred_type()));
                     new_exprs.push((field.clone(), Box::new(expr.clone())));
                 }
+
+                new_exprs.reverse();
+                ordered_types.reverse();
+
 
                 let new_record_type = InferredType::Record(ordered_types);
 
@@ -358,6 +370,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
             }
             Expr::Call(call_type, exprs, inferred_type) => {
 
+                dbg!(inferred_type_stack.clone());
                 let mut new_arg_exprs = vec![];
 
                 for _ in 0..exprs.len() {
@@ -374,9 +387,11 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                         if let Some(resource_params) = resource_params {
                             let mut new_resource_params = vec![];
                             for _ in  0..resource_params.len() {
-                                let expr = inferred_type_stack.pop_back().unwrap();
+                                let expr = inferred_type_stack.pop_front().unwrap();
                                 new_resource_params.push(expr);
                             }
+
+                            new_resource_params.reverse();
 
                             resource_params.iter_mut().zip(new_resource_params.iter()).for_each(|(param, new_expr)| {
                                 *param = new_expr.clone();
@@ -668,8 +683,10 @@ mod internal {
 #[cfg(test)]
 mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
-    use crate::type_inference::type_pull_up::type_pull_up_non_recursive;
-    use crate::{ArmPattern, Expr, FunctionTypeRegistry, InferredType, Number};
+    use crate::{ArmPattern, Expr, FunctionTypeRegistry, Id, InferredType, Number, VariableId};
+    use crate::call_type::CallType;
+    use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
+    use crate::ParsedFunctionSite::PackagedInterface;
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -746,9 +763,9 @@ mod type_pull_up_tests {
             (
                 "bar".to_string(),
                 Box::new(Expr::Number(
-                    Number { value: 1f64 },
+                    Number { value: 2f64 },
                     None,
-                    InferredType::U64,
+                    InferredType::U32,
                 )),
             ),
         ];
@@ -768,7 +785,7 @@ mod type_pull_up_tests {
                 InferredType::AllOf(vec![
                     InferredType::Record(vec![
                         ("foo".to_string(), InferredType::U64),
-                        ("bar".to_string(), InferredType::U64)
+                        ("bar".to_string(), InferredType::U32)
                     ]),
                     InferredType::Record(vec![
                         ("foo".to_string(), InferredType::Unknown),
@@ -899,7 +916,6 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_dynamic_call() {
-
         let rib = r#"
            let input = { foo: "afs", bar: "al" };
            golem:it/api.{cart(input.foo).checkout}()
@@ -910,17 +926,95 @@ mod type_pull_up_tests {
         let function_registry = FunctionTypeRegistry::empty();
         expr.infer_types_initial_phase(&function_registry).unwrap();
         expr.infer_all_identifiers().unwrap();
-
-        dbg!(expr.clone());
         let new_expr = expr.pull_types_up().unwrap();
-        dbg!(new_expr.clone());
 
-       // let result = expr.pull_types_up().unwrap();
+        let expected =  Expr::Multiple(
+            vec![
+                Expr::Let(
+                    VariableId::local(
+                        "input",
+                        0
+                    ),
+                    None,
+                    Box::new(Expr::Record(
+                        vec![
+                            (
+                                "foo".to_string(),
+                                Box::new(Expr::Literal(
+                                    "afs".to_string(),
+                                   InferredType::Str,
+                                )),
+                            ),
+                            (
+                                "bar".to_string(),
+                                Box::new(Expr::Literal(
+                                    "al".to_string(),
+                                    InferredType::Str,
+                                )),
+                            ),
+                        ],
+                        InferredType::Record(
+                            vec![
+                                (
+                                    "foo".to_string(),
+                                    InferredType::Str,
+                                ),
+                                (
+                                    "bar".to_string(),
+                                    InferredType::Str,
+                                ),
+                            ],
+                        ),
+                    )),
+                    InferredType::Unknown,
+                ),
+                Expr::Call(
+                    CallType::Function(
+                        DynamicParsedFunctionName {
+                            site: PackagedInterface {
+                                namespace: "golem".to_string(),
+                                package: "it".to_string(),
+                                interface: "api".to_string(),
+                                version: None,
+                            },
+                            function: IndexedResourceMethod {
+                                resource: "cart".to_string(),
+                                resource_params: vec![
+                                    Expr::SelectField(
+                                        Box::new(Expr::Identifier(
+                                            VariableId::local(
+                                                "input",
+                                                0
+                                            ),
+                                            InferredType::Record(
+                                                vec![
+                                                    (
+                                                        "foo".to_string(),
+                                                        InferredType::Str,
+                                                    ),
+                                                    (
+                                                        "bar".to_string(),
+                                                        InferredType::Str,
+                                                    ),
+                                                ],
+                                            ),
+                                        )),
+                                        "foo".to_string(),
+                                        InferredType::Str,
+                                    ),
+                                ],
+                                method: "checkout".to_string(),
+                            },
+                        },
+                    ),
+                    vec![],
+                    InferredType::Unknown,
+                ),
+            ],
+            InferredType::Unknown,
+        );
 
-        //let new_expr = expr.pull_types_up().unwrap();
-
-        assert!(false);
-        //assert_eq!(result.inferred_type(), InferredType::Unknown);
+        assert_eq!(new_expr, expected);
     }
 
     #[test]
