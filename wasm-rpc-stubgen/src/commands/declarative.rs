@@ -191,10 +191,17 @@ pub fn component_build_app(config: &Config, app: &Application) -> anyhow::Result
             let result = Command::new(command_tokens[0])
                 .args(command_tokens.iter().skip(1))
                 .current_dir(build_dir)
-                .status();
+                .status()
+                .with_context(|| "Failed to execute command".to_string())?;
 
-            if let Some(err) = result.err() {
-                return Err(anyhow!("Command failed: {}", err));
+            if !result.success() {
+                return Err(anyhow!(format!(
+                    "Command failed with exit code: {}",
+                    result
+                        .code()
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "?".to_string())
+                )));
             }
         }
     }
