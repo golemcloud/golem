@@ -18,7 +18,7 @@ use std::borrow::BorrowMut;
 use std::collections::VecDeque;
 use std::thread::current;
 
-pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
+pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
     let mut expr_queue = VecDeque::new();
     make_expr_nodes_queue(expr, &mut expr_queue);
 
@@ -27,24 +27,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
     while let Some(expr) = expr_queue.pop_back() {
         match expr {
             Expr::Tuple(exprs, current_inferred_type) => {
-                let mut ordered_types = vec![];
-                let mut new_exprs = vec![];
-
-                for _ in 0..exprs.len() {
-                    let expr: Expr = inferred_type_stack.pop_front().unwrap();
-                    new_exprs.push(expr.clone());
-                    let inferred_type: InferredType = expr.inferred_type();
-                    ordered_types.push(inferred_type);
-                }
-
-                new_exprs.reverse();
-                ordered_types.reverse();
-
-                let new_tuple_type = InferredType::Tuple(ordered_types);
-
-                let merged_tuple_type = current_inferred_type.merge(new_tuple_type);
-                let new_tuple = Expr::Tuple(new_exprs.iter().cloned().collect(), merged_tuple_type);
-                inferred_type_stack.push_front(new_tuple);
+                internal::handle_tuple(exprs, current_inferred_type, &mut inferred_type_stack)?;
             }
 
             Expr::Identifier(variable_id, current_inferred_type) => {
@@ -451,7 +434,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
         }
     }
 
-    inferred_type_stack.pop_front().unwrap()
+    inferred_type_stack.pop_front().ok_or("Failed type inference during pull up".to_string())
 }
 
 pub fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
@@ -630,10 +613,33 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
 }
 
 mod internal {
+    use std::collections::VecDeque;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
-    use crate::{ArmPattern, InferredType};
+    use crate::{ArmPattern, Expr, InferredType};
 
+    pub(crate) fn handle_tuple(exprs: &Vec<Expr>, current_inferred_type: &InferredType, inferred_type_stack: &mut VecDeque<Expr>) -> Result<(), String> {
+        let mut ordered_types = vec![];
+        let mut new_exprs = vec![];
+
+        for _ in 0..exprs.len() {
+            let expr: Expr = inferred_type_stack.pop_front().unwrap();
+            new_exprs.push(expr.clone());
+            let inferred_type: InferredType = expr.inferred_type();
+            ordered_types.push(inferred_type);
+        }
+
+        new_exprs.reverse();
+        ordered_types.reverse();
+
+        let new_tuple_type = InferredType::Tuple(ordered_types);
+
+        let merged_tuple_type = current_inferred_type.merge(new_tuple_type);
+        let new_tuple = Expr::Tuple(new_exprs.iter().cloned().collect(), merged_tuple_type);
+        inferred_type_stack.push_front(new_tuple);
+
+        Ok(())
+    }
     pub(crate) fn get_inferred_type_of_selected_field(
         select_field: &str,
         select_from_type: &InferredType,

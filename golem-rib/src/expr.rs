@@ -485,8 +485,7 @@ impl Expr {
     }
 
     pub fn pull_types_up(&self) -> Result<Expr, String> {
-        let expr = type_inference::type_pull_up_non_recursive(&self);
-        Ok(expr)
+        type_inference::type_pull_up_non_recursive(&self)
     }
 
     pub fn pull_types_up_legacy(&mut self) -> Result<(), String> {
