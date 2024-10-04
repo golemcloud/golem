@@ -207,6 +207,9 @@ pub struct DeclarativeBuildArgs {
     /// List of application manifests, can be defined multiple times
     #[clap(long, short)]
     pub app: Vec<PathBuf>,
+    /// When set to true will skip modification time based up-to-date checks, defaults to false
+    #[clap(long, short, default_value = "false")]
+    pub force_build: bool,
 }
 
 pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
@@ -295,6 +298,6 @@ fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative
                 commands::declarative::ApplicationResolveMode::Explicit(args.app)
             }
         },
-        skip_up_to_date_checks: false,
+        skip_up_to_date_checks: args.force_build,
     }
 }
