@@ -30,11 +30,8 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
                 internal::handle_tuple(tuple_elems, current_inferred_type, &mut inferred_type_stack)?;
             }
 
-            Expr::Identifier(variable_id, current_inferred_type) => {
-                inferred_type_stack.push_front(Expr::Identifier(
-                    variable_id.clone(),
-                    current_inferred_type.clone(),
-                ));
+            expr @ Expr::Identifier(_, _) => {
+                inferred_type_stack.push_front(expr.clone());
             }
 
             Expr::Flags(flags, current_inferred_type) => {
