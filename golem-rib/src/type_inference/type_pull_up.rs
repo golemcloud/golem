@@ -60,9 +60,8 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                     .push_front(Expr::Flags(flags.clone(), current_inferred_type.clone()));
             }
 
-            exp @ Expr::SelectField(_, field, current_inferred_type) => {
+            Expr::SelectField(_, field, current_inferred_type) => {
                 let expr = inferred_type_stack.pop_front().unwrap();
-                dbg!(expr.clone());
                 let inferred_type_of_selection_expr = expr.inferred_type();
                 let field_type = internal::get_inferred_type_of_selected_field(
                     field,
@@ -75,8 +74,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                     current_inferred_type.merge(field_type),
                 );
 
-                dbg!(exp.clone());
-                dbg!(new_select_field.clone());
                 inferred_type_stack.push_front(new_select_field);
             }
 
@@ -96,7 +93,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 inferred_type_stack.push_front(new_select_index);
             }
 
-            Expr::Result(Ok(expr), current_inferred_type) => {
+            Expr::Result(Ok(_), current_inferred_type) => {
                 let expr = inferred_type_stack.pop_front().unwrap();
                 let inferred_type_of_ok_expr = expr.inferred_type();
                 let result_type = InferredType::Result {
@@ -110,7 +107,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 inferred_type_stack.push_front(new_result);
             }
 
-            Expr::Result(Err(expr), current_inferred_type) => {
+            Expr::Result(Err(_), current_inferred_type) => {
                 let expr = inferred_type_stack.pop_front().unwrap();
                 let inferred_type_of_error_expr = expr.inferred_type();
                 let result_type = InferredType::Result {
@@ -139,7 +136,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 inferred_type_stack.push_front(Expr::Option(None, current_inferred_type.clone()));
             }
 
-            Expr::Cond(cond, then_, else_, current_inferred_type) => {
+            Expr::Cond(_, _, _, current_inferred_type) => {
                 let else_expr = inferred_type_stack.pop_front().unwrap();
                 let then_expr = inferred_type_stack.pop_front().unwrap();
                 let cond_expr = inferred_type_stack.pop_front().unwrap();
@@ -167,15 +164,34 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 inferred_type_stack.push_front(new_expr);
             }
 
-            Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
-                let length = match_arms.len();
+            Expr::PatternMatch(predicate, uninferred_match_arms, current_inferred_type) => {
                 let mut new_resolutions = vec![];
-                for _ in 0..length {
+                let mut new_arm_patterns = vec![];
+                for un_inferred_match_arm in uninferred_match_arms.iter().rev() {
                     let arm_resolution = inferred_type_stack.pop_front().unwrap();
+
+                    let mut arm_pattern = un_inferred_match_arm.arm_pattern.clone();
+                    let mut uninferred_arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
+
+
+                    let mut new_arm_pattern_exprs = vec![];
+
+                    for _ in &uninferred_arm_pattern_exprs {
+                        let arm_expr = inferred_type_stack.pop_front().unwrap();
+                        new_arm_pattern_exprs.push(arm_expr)
+                    }
+                    new_arm_pattern_exprs.reverse();
+
+                    uninferred_arm_pattern_exprs.iter_mut().borrow_mut().zip(new_arm_pattern_exprs.iter()).for_each(|(arm_expr, new_expr)| {
+                        **arm_expr = Box::new(new_expr.clone());
+                    });
+
                     new_resolutions.push(arm_resolution);
+                    new_arm_patterns.push(arm_pattern);
                 }
 
-                new_resolutions.reverse();
+                dbg!(new_resolutions.clone());
+                dbg!(new_arm_patterns.clone());
 
                 let inferred_types = new_resolutions
                     .iter()
@@ -184,32 +200,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
 
                 let new_inferred_type = InferredType::all_of(inferred_types).unwrap();
 
-                let mut total_exprs = 0;
-                for i in match_arms {
-                    let size = i.arm_pattern.get_expr_literals().len();
-                    total_exprs += size;
-                }
-
-                let mut new_arm_pattern_exprs = vec![];
-
-                for _ in 0..total_exprs {
-                    let expr = inferred_type_stack.pop_front().unwrap();
-                    new_arm_pattern_exprs.push(expr);
-                }
-
-                let mut new_arm_patterns = vec![];
-
-                for match_arm in match_arms {
-                    let mut arm_pattern = match_arm.arm_pattern.clone();
-                    let mut arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
-                    arm_pattern_exprs.iter_mut().borrow_mut().zip(new_arm_pattern_exprs.iter()).for_each(|(arm_expr, new_expr)| {
-                        **arm_expr = Box::new(new_expr.clone());
-                    });
-
-                    new_arm_patterns.push(arm_pattern);
-                }
-
-                let new_match_arms = new_arm_patterns
+                let mut new_match_arms = new_arm_patterns
                     .iter()
                     .zip(new_resolutions.iter())
                     .map(|(arm_pattern, arm_resolution)| crate::MatchArm {
@@ -217,6 +208,8 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                         arm_resolution_expr: Box::new(arm_resolution.clone()),
                     })
                     .collect::<Vec<_>>();
+                new_match_arms.reverse();
+
 
                 let new_expr = Expr::PatternMatch(
                     predicate.clone(),
@@ -1043,9 +1036,9 @@ mod type_pull_up_tests {
                     )))]),
                     arm_resolution_expr: Box::new(Expr::SelectField(
                         Box::new(Expr::identifier("baz").add_infer_type(InferredType::Record(vec![
-                            ("buuz".to_string(), InferredType::Str),
+                            ("qux".to_string(), InferredType::Str),
                         ]))),
-                        "buuz".to_string(),
+                        "qux".to_string(),
                         InferredType::Unknown,
                     )),
                 },
@@ -1135,13 +1128,13 @@ mod type_pull_up_tests {
                                 InferredType::Record(
                                     vec![
                                         (
-                                            "buuz".to_string(),
+                                            "qux".to_string(),
                                             InferredType::Str,
                                         ),
                                     ],
                                 ),
                             )),
-                            "buuz".to_string(),
+                            "qux".to_string(),
                             InferredType::Str,
                         )),
                     },
@@ -1153,7 +1146,7 @@ mod type_pull_up_tests {
                                     Box::new(Expr::SelectField(
                                         Box::new(Expr::Identifier(
                                             VariableId::global(
-                                                "qux".to_string(),
+                                                "quux".to_string(),
                                             ),
                                             InferredType::Record(
                                                 vec![
