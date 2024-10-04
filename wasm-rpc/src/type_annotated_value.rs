@@ -61,11 +61,14 @@ impl TryFrom<TypeAnnotatedValue> for ValueAndType {
 pub trait IntoValue {
     fn into_value(self) -> Value;
     fn get_type() -> AnalysedType;
+}
 
-    fn into_value_and_type(self) -> ValueAndType
-    where
-        Self: Sized,
-    {
+pub trait IntoValueAndType {
+    fn into_value_and_type(self) -> ValueAndType;
+}
+
+impl<T: IntoValue + Sized> IntoValueAndType for T {
+    fn into_value_and_type(self) -> ValueAndType {
         ValueAndType::new(self.into_value(), Self::get_type())
     }
 }
