@@ -22,19 +22,19 @@ use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServi
 use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, delete_worker_response, get_worker_metadata_response,
     get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
-    invoke_and_await_response, invoke_response, launch_new_worker_response, resume_worker_response,
-    update_worker_response, worker_error, worker_execution_error, CompletePromiseRequest,
-    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
-    WorkerExecutionError,
+    invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
+    launch_new_worker_response, resume_worker_response, update_worker_response, worker_error,
+    worker_execution_error, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest,
+    DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, UnknownError, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
 };
-use golem_api_grpc::proto::golem::worker::{InvokeResult, WorkerMetadata};
+use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
     proto_invocation_context_parent_worker_id_string, proto_target_worker_id_string,
@@ -267,6 +267,37 @@ impl GrpcWorkerService for WorkerGrpcApi {
         };
 
         Ok(Response::new(InvokeAndAwaitJsonResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn invoke_and_await_typed(
+        &self,
+        request: Request<InvokeAndAwaitRequest>,
+    ) -> Result<Response<InvokeAndAwaitTypedResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invoke_and_await_typed",
+            worker_id = proto_target_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            function = request.function,
+            context_parent_worker_id =
+                proto_invocation_context_parent_worker_id_string(&request.context)
+        );
+
+        let response = match self
+            .invoke_and_await_typed(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(result) => record.succeed(invoke_and_await_typed_response::Result::Success(result)),
+            Err(error) => record.fail(
+                invoke_and_await_typed_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(InvokeAndAwaitTypedResponse {
             result: Some(response),
         }))
     }
@@ -596,9 +627,9 @@ impl WorkerGrpcApi {
             .ok_or_else(|| bad_request_error("Missing invoke parameters"))?;
 
         self.worker_service
-            .invoke_function_proto(
+            .invoke(
                 &worker_id,
-                request.idempotency_key,
+                request.idempotency_key.map(|k| k.into()),
                 request.function,
                 params.params,
                 request.context,
@@ -620,7 +651,7 @@ impl WorkerGrpcApi {
             .into();
 
         self.worker_service
-            .invoke_function_json(
+            .validate_and_invoke(
                 &worker_id,
                 Some(idempotency_key),
                 request.function,
@@ -645,9 +676,9 @@ impl WorkerGrpcApi {
 
         let result = self
             .worker_service
-            .invoke_and_await_function_proto(
+            .invoke_and_await(
                 &worker_id,
-                request.idempotency_key,
+                request.idempotency_key.map(|k| k.into()),
                 request.function,
                 params.params,
                 request.context,
@@ -672,7 +703,7 @@ impl WorkerGrpcApi {
 
         let result = self
             .worker_service
-            .invoke_and_await_function_json(
+            .validate_and_invoke_and_await_typed(
                 &worker_id,
                 Some(idempotency_key),
                 request.function,
@@ -691,6 +722,39 @@ impl WorkerGrpcApi {
                 })),
             })?
             .to_string())
+    }
+
+    async fn invoke_and_await_typed(
+        &self,
+        request: InvokeAndAwaitRequest,
+    ) -> Result<InvokeResultTyped, GrpcWorkerError> {
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let params = request
+            .invoke_parameters
+            .ok_or(bad_request_error("Missing invoke parameters"))?;
+
+        let idempotency_key = request
+            .idempotency_key
+            .ok_or_else(|| bad_request_error("Missing idempotency key"))?
+            .into();
+
+        let result = self
+            .worker_service
+            .invoke_and_await_typed(
+                &worker_id,
+                Some(idempotency_key),
+                request.function,
+                params.params,
+                request.context,
+                empty_worker_metadata(),
+            )
+            .await?;
+
+        Ok(InvokeResultTyped {
+            result: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(result),
+            }),
+        })
     }
 
     async fn resume_worker(&self, request: ResumeWorkerRequest) -> Result<(), GrpcWorkerError> {

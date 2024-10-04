@@ -50,7 +50,7 @@ use golem_worker_executor_base::durable_host::serialized::{
     SerializableDateTime, SerializableError, SerializableFileTimes, SerializableIpAddress,
     SerializableIpAddresses, SerializableStreamError,
 };
-use golem_worker_executor_base::durable_host::wasm_rpc::serialized::{SerializableInvokeResult, SerializableInvokeResultV1};
+use golem_worker_executor_base::durable_host::wasm_rpc::serialized::SerializableInvokeResultV1;
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::model::InterruptKind;
 use golem_worker_executor_base::services::blob_store;

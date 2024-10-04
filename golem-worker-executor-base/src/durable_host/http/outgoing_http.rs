@@ -14,6 +14,7 @@
 
 use anyhow::anyhow;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use wasmtime::component::Resource;
 use wasmtime_wasi_http::bindings::http::types;
 use wasmtime_wasi_http::bindings::wasi::http::outgoing_handler::Host;
@@ -22,7 +23,7 @@ use wasmtime_wasi_http::{HttpError, HttpResult};
 
 use golem_common::model::oplog::WrappedFunctionType;
 
-use crate::durable_host::http::serialized::{SerializableHttpMethod, SerializableHttpRequest};
+use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::{DurableWorkerCtx, HttpRequestCloseOwner, HttpRequestState};
 use crate::metrics::wasm::record_host_function_call;
 use crate::workerctx::WorkerCtx;
@@ -46,6 +47,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .begin_function(&WrappedFunctionType::WriteRemoteBatched(None))
             .await
             .map_err(|err| HttpError::trap(anyhow!(err)))?;
+
+        let host_request = self.table().get(&request)?;
+        let uri = format!(
+            "{}{}",
+            host_request.authority.as_ref().unwrap_or(&String::new()),
+            host_request
+                .path_with_query
+                .as_ref()
+                .unwrap_or(&String::new())
+        );
+        let method = host_request.method.clone().into();
+        let headers: HashMap<String, String> = host_request
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string(),
+                    String::from_utf8_lossy(v.as_bytes()).to_string(),
+                )
+            })
+            .collect();
+
         let result = Host::handle(&mut self.as_wasi_http_view(), request, options).await;
 
         match &result {
@@ -53,10 +76,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 // We have to call state.end_function to mark the completion of the remote write operation when we get a response.
                 // For that we need to store begin_index and associate it with the response handle.
                 let request = SerializableHttpRequest {
-                    uri: "TODO".to_string(),
-                    method: SerializableHttpMethod::Get, // TODO
+                    uri,
+                    method,
+                    headers,
                 };
-                // TODO ^^^
 
                 let handle = future_incoming_response.rep();
                 self.state.open_function_table.insert(handle, begin_index);

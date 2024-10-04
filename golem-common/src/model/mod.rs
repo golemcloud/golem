@@ -33,11 +33,11 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
-use golem_wasm_ast::analysis::analysed_type::{field, record};
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::IntoValue;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::Cursor;
+use golem_wasm_ast::analysis::analysed_type::{field, record, s64, str};
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::IntoValue;
 use poem::http::Uri;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
@@ -314,21 +314,17 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
 
 impl IntoValue for WorkerId {
     fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::Record(
-            vec![
-                self.component_id.into_value(),
-                self.worker_name.into_value()
-            ]
-        )
+        golem_wasm_rpc::Value::Record(vec![
+            self.component_id.into_value(),
+            self.worker_name.into_value(),
+        ])
     }
 
     fn get_type() -> AnalysedType {
-        record(
-            vec![
-                field("component_id", ComponentId::get_type()),
-                field("worker_name", std::string::String::get_type()),
-            ]
-        )
+        record(vec![
+            field("component_id", ComponentId::get_type()),
+            field("worker_name", std::string::String::get_type()),
+        ])
     }
 }
 
@@ -524,21 +520,17 @@ impl Display for PromiseId {
 
 impl IntoValue for PromiseId {
     fn into_value(self) -> golem_wasm_rpc::Value {
-        golem_wasm_rpc::Value::Record(
-            vec![
-                self.worker_id.into_value(),
-                self.oplog_idx.into_value()
-            ]
-        )
+        golem_wasm_rpc::Value::Record(vec![
+            self.worker_id.into_value(),
+            self.oplog_idx.into_value(),
+        ])
     }
 
     fn get_type() -> AnalysedType {
-        record(
-            vec![
-                field("worker_id", WorkerId::get_type()),
-                field("oplog_idx", OplogIndex::get_type()),
-            ]
-        )
+        record(vec![
+            field("worker_id", WorkerId::get_type()),
+            field("oplog_idx", OplogIndex::get_type()),
+        ])
     }
 }
 
@@ -673,6 +665,16 @@ impl From<ShardId> for golem_api_grpc::proto::golem::shardmanager::ShardId {
 impl From<golem_api_grpc::proto::golem::shardmanager::ShardId> for ShardId {
     fn from(proto: golem_api_grpc::proto::golem::shardmanager::ShardId) -> Self {
         Self { value: proto.value }
+    }
+}
+
+impl IntoValue for ShardId {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::S64(self.value)
+    }
+
+    fn get_type() -> AnalysedType {
+        s64()
     }
 }
 
@@ -876,6 +878,16 @@ impl From<golem_api_grpc::proto::golem::worker::IdempotencyKey> for IdempotencyK
 impl From<IdempotencyKey> for golem_api_grpc::proto::golem::worker::IdempotencyKey {
     fn from(value: IdempotencyKey) -> Self {
         Self { value: value.value }
+    }
+}
+
+impl IntoValue for IdempotencyKey {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::String(self.value)
+    }
+
+    fn get_type() -> AnalysedType {
+        str()
     }
 }
 

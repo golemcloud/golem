@@ -140,21 +140,19 @@ impl WorkerApi {
         let worker_id = make_target_worker_id(component_id.0, None)?;
 
         let record = recorded_http_api_request!(
-            "invoke_and_await_function",
+            "invoke_and_await_function_without_name",
             worker_id = worker_id.to_string(),
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
         );
 
-        let precise_jsons = params.0.params;
-
         let response = self
             .worker_service
-            .invoke_and_await_function_json(
+            .validate_and_invoke_and_await_typed(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                precise_jsons,
+                params.0.params,
                 None,
                 empty_worker_metadata(),
             )
@@ -162,6 +160,7 @@ impl WorkerApi {
             .await
             .map_err(|e| e.into())
             .map(|result| Json(InvokeResult { result }));
+
         record.result(response)
     }
 
@@ -190,15 +189,13 @@ impl WorkerApi {
             function = function.0
         );
 
-        let precise_jsons = params.0.params;
-
         let response = self
             .worker_service
-            .invoke_and_await_function_json(
+            .validate_and_invoke_and_await_typed(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                precise_jsons,
+                params.0.params,
                 None,
                 empty_worker_metadata(),
             )
@@ -228,21 +225,19 @@ impl WorkerApi {
         let worker_id = make_target_worker_id(component_id.0, None)?;
 
         let record = recorded_http_api_request!(
-            "invoke_function",
+            "invoke_function_without_name",
             worker_id = worker_id.to_string(),
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
         );
 
-        let precise_json_array = params.0.params;
-
         let response = self
             .worker_service
-            .invoke_function_json(
+            .validate_and_invoke(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                precise_json_array.clone(),
+                params.0.params,
                 None,
                 empty_worker_metadata(),
             )
@@ -279,15 +274,13 @@ impl WorkerApi {
             function = function.0
         );
 
-        let precise_json_array = params.0.params;
-
         let response = self
             .worker_service
-            .invoke_function_json(
+            .validate_and_invoke(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                precise_json_array.clone(),
+                params.0.params,
                 None,
                 empty_worker_metadata(),
             )

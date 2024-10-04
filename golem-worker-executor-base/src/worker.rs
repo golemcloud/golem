@@ -1214,6 +1214,7 @@ impl RunningWorker {
             parent.scheduler_service(),
             parent.rpc(),
             parent.worker_proxy(),
+            parent.component_service(),
             parent.extra_deps(),
             parent.config(),
             WorkerConfig::new(

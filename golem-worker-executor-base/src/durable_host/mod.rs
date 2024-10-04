@@ -96,16 +96,16 @@ mod durability;
 mod replay_state;
 mod sync_helper;
 
+use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
 use crate::function_result_interpreter::interpret_function_results;
-use crate::services::component::ComponentMetadata;
+use crate::services::component::{ComponentMetadata, ComponentService};
 use crate::services::worker_proxy::WorkerProxy;
 use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
 use golem_common::model::exports;
 use golem_common::retries::get_delay;
-use crate::durable_host::http::serialized::SerializableHttpRequest;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -137,6 +137,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -192,6 +193,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_enumeration_service,
                 key_value_service,
                 blob_store_service,
+                component_service,
                 config.clone(),
                 owned_worker_id.clone(),
                 rpc,
@@ -1519,7 +1521,7 @@ struct HttpRequestState {
     /// The handle of the FutureIncomingResponse that is registered into the open_function_table
     pub root_handle: u32,
     /// Information about the request to be included in the oplog
-    pub request: SerializableHttpRequest
+    pub request: SerializableHttpRequest,
 }
 
 pub struct PrivateDurableWorkerState {
@@ -1531,6 +1533,7 @@ pub struct PrivateDurableWorkerState {
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+    component_service: Arc<dyn ComponentService + Send + Sync>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     current_idempotency_key: Option<IdempotencyKey>,
@@ -1568,6 +1571,7 @@ impl PrivateDurableWorkerState {
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc + Send + Sync>,
@@ -1594,6 +1598,7 @@ impl PrivateDurableWorkerState {
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
+            component_service,
             config,
             owned_worker_id,
             current_idempotency_key: None,

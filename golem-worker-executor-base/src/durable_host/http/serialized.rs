@@ -20,7 +20,7 @@ use std::str::FromStr;
 
 use crate::durable_host::serialized::SerializableError;
 use wasmtime_wasi_http::bindings::http::types::{
-    DnsErrorPayload, ErrorCode, FieldSizePayload, TlsAlertReceivedPayload,
+    DnsErrorPayload, ErrorCode, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };
 use wasmtime_wasi_http::body::HostIncomingBody;
 use wasmtime_wasi_http::types::{FieldMap, HostIncomingResponse};
@@ -401,14 +401,31 @@ pub enum SerializableHttpMethod {
     Options,
     Trace,
     Patch,
-    Other(String)
+    Other(String),
+}
+
+impl From<Method> for SerializableHttpMethod {
+    fn from(value: Method) -> Self {
+        match value {
+            Method::Get => SerializableHttpMethod::Get,
+            Method::Post => SerializableHttpMethod::Post,
+            Method::Put => SerializableHttpMethod::Put,
+            Method::Delete => SerializableHttpMethod::Delete,
+            Method::Head => SerializableHttpMethod::Head,
+            Method::Connect => SerializableHttpMethod::Connect,
+            Method::Options => SerializableHttpMethod::Options,
+            Method::Trace => SerializableHttpMethod::Trace,
+            Method::Patch => SerializableHttpMethod::Patch,
+            Method::Other(method) => SerializableHttpMethod::Other(method),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct SerializableHttpRequest {
     pub uri: String,
-    pub method: SerializableHttpMethod
-    // TODO: headers?
+    pub method: SerializableHttpMethod,
+    pub headers: HashMap<String, String>,
 }
 
 #[cfg(test)]

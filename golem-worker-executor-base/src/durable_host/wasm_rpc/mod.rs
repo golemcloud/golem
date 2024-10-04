@@ -16,28 +16,33 @@ pub mod serialized;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::serialized::{
-    SerializableInvokeResult, SerializableInvokeRequest,
+    SerializableInvokeRequest, SerializableInvokeResult,
 };
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
+use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::{InvocationManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_common::model::exports::function_by_name;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{ComponentId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, WasmRpcEntry, WitValue};
+use golem_wasm_rpc::{
+    FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, ValueAndType, WasmRpcEntry, WitValue,
+};
 use std::any::Any;
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{error, warn};
 use uuid::Uuid;
 use wasmtime::component::Resource;
@@ -131,7 +136,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
-                function_params: function_params.clone(),
+                function_params: try_get_typed_parameters(
+                    self.state.component_service.clone(),
+                    &remote_worker_id.worker_id.component_id,
+                    &function_name,
+                    &function_params,
+                )
+                .await,
             },
             |ctx| {
                 Box::pin(async move {
@@ -214,7 +225,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 remote_worker_id: remote_worker_id.worker_id(),
                 idempotency_key: idempotency_key.clone(),
                 function_name: function_name.clone(),
-                function_params: function_params.clone(),
+                function_params: try_get_typed_parameters(
+                    self.state.component_service.clone(),
+                    &remote_worker_id.worker_id.component_id,
+                    &function_name,
+                    &function_params,
+                )
+                .await,
             },
             |ctx| {
                 Box::pin(async move {
@@ -294,7 +311,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             remote_worker_id: remote_worker_id.worker_id(),
             idempotency_key: idempotency_key.clone(),
             function_name: function_name.clone(),
-            function_params: function_params.clone(),
+            function_params: try_get_typed_parameters(
+                self.state.component_service.clone(),
+                &remote_worker_id.worker_id.component_id,
+                &function_name,
+                &function_params,
+            )
+            .await,
         };
         let result = if self.state.is_live() {
             let rpc = self.rpc();
@@ -432,6 +455,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::future-invoke-result", "get");
         let rpc = self.rpc();
+        let component_service = self.state.component_service.clone();
 
         let handle = this.rep();
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
@@ -528,7 +552,13 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         remote_worker_id: remote_worker_id.worker_id(),
                         idempotency_key: idempotency_key.clone(),
                         function_name: function_name.clone(),
-                        function_params: function_params.clone(),
+                        function_params: try_get_typed_parameters(
+                            component_service,
+                            &remote_worker_id.worker_id.component_id,
+                            function_name,
+                            function_params,
+                        )
+                        .await,
                     };
                     tx.send(std::mem::replace(
                         entry,
@@ -668,6 +698,33 @@ async fn generate_unique_local_worker_id<Ctx: WorkerCtx>(
             Ok(worker_id)
         }
     }
+}
+
+/// Tries to get a `ValueAndType` representation for the given `WitValue` parameters by querying the latest component metadata for the
+/// target component.
+/// If the query fails, or the expected function name is not in its metadata or the number of parameters does not match, then it returns an
+/// empty vector.
+///
+/// This should only be used for generating "debug information" for the stored oplog entries.
+async fn try_get_typed_parameters(
+    components: Arc<dyn ComponentService + Send + Sync>,
+    component_id: &ComponentId,
+    function_name: &str,
+    params: &[WitValue],
+) -> Vec<ValueAndType> {
+    if let Ok(metadata) = components.get_metadata(component_id, None).await {
+        if let Ok(Some(function)) = function_by_name(&metadata.exports, function_name) {
+            if function.parameters.len() == params.len() {
+                return params
+                    .iter()
+                    .zip(function.parameters)
+                    .map(|(value, def)| ValueAndType::new(value.clone().into(), def.typ.clone()))
+                    .collect();
+            }
+        }
+    }
+
+    Vec::new()
 }
 
 pub struct WasmRpcEntryPayload {

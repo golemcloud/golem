@@ -11,4 +11,3 @@ pub fn golem_error() {
 
 // TODO: add new oplog entries
 // TODO: add new SerializableInvokeResult
-
