@@ -629,7 +629,7 @@ mod internal {
 mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::type_inference::type_pull_up::type_pull_up_non_recursive;
-    use crate::{ArmPattern, Expr, InferredType, Number};
+    use crate::{ArmPattern, Expr, FunctionTypeRegistry, InferredType, Number};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -859,18 +859,20 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_dynamic_call() {
-        let dynamic_function_name = DynamicParsedFunctionName::parse(
-            "ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}",
-        )
-        .unwrap();
-        let mut expr = Expr::call(
-            DynamicParsedFunctionName::parse(
-                "ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}",
-            )
-            .unwrap(),
-            vec![Expr::number(1f64)],
-        );
-        expr.pull_types_up_legacy().unwrap();
+        let rib = r#"
+           let input = { foo: 1u64, bar: 2u64 };
+           ns:interface.{resource1(input.foo, { field-a: some(input.bar) }).new}(input)
+        "#;
+
+        let mut expr = Expr::from_text(rib.clone()).unwrap();
+        expr.infer_types_initial_phase(&FunctionTypeRegistry::empty())?;
+
+
+        let new_expr = expr.pull_types_up().unwrap();
+
+        dbg!(expr);
+        dbg!(new_expr);
+
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
     }
 

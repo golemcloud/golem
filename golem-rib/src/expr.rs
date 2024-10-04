@@ -420,6 +420,14 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), Vec<String>> {
+        self.infer_types_initial_phase(function_type_registry)?;
+        type_inference::type_inference_fix_point(Self::inference_scan, self)
+            .map_err(|x| vec![x])?;
+        self.unify_types()?;
+        Ok(())
+    }
+
+    pub fn infer_types_initial_phase(&mut self, function_type_registry: &FunctionTypeRegistry) -> Result<(), Vec<String>> {
         self.bind_types();
         self.name_binding_pattern_match_variables();
         self.name_binding_local_variables();
@@ -427,9 +435,7 @@ impl Expr {
         self.infer_enums(function_type_registry);
         self.infer_call_arguments_type(function_type_registry)
             .map_err(|x| vec![x])?;
-        type_inference::type_inference_fix_point(Self::inference_scan, self)
-            .map_err(|x| vec![x])?;
-        self.unify_types()?;
+
         Ok(())
     }
 
@@ -446,16 +452,20 @@ impl Expr {
         Ok(())
     }
 
+    // Make sure the bindings in the arm pattern of a pattern match are given variable-ids.
+    // The same variable-ids will be tagged to the corresponding identifiers in the arm resolution
+    // to avoid conflicts.
     pub fn name_binding_pattern_match_variables(&mut self) {
         type_inference::name_binding_pattern_matches(self);
     }
-    // We make sure the let bindings name are properly
-    // bound to the named identifiers.
+
+    // Make sure the variable assignment (let binding) are given variable ids,
+    // which will be tagged to the corresponding identifiers to avoid conflicts.
+    // This is done only for local variables and not global variables
     pub fn name_binding_local_variables(&mut self) {
         type_inference::name_binding_local_variables(self);
     }
 
-    // At this point we simply update the types to the parameter type expressions and the call expression itself.
     pub fn infer_call_arguments_type(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
