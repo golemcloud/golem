@@ -34,9 +34,8 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
-            Expr::Flags(flags, current_inferred_type) => {
-                inferred_type_stack
-                    .push_front(Expr::Flags(flags.clone(), current_inferred_type.clone()));
+            expr @ Expr::Flags(_, _) => {
+                inferred_type_stack.push_front(expr.clone());
             }
 
             Expr::SelectField(_, field, current_inferred_type) => {
