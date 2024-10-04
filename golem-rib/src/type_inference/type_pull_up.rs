@@ -260,7 +260,22 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
             }
 
             Expr::Let(_, _, _, _) => {}
-            Expr::Sequence(_, _) => {}
+            Expr::Sequence(exprs, current_inferred_type) => {
+
+                let mut new_exprs = vec![];
+
+                for _ in 0..exprs.len() {
+                    let expr = inferred_type_stack.pop_back().unwrap();
+                    new_exprs.push(expr);
+                }
+
+                let new_inferred_type = InferredType::List(Box::new(new_exprs.first().unwrap().inferred_type()));
+
+                let new_sequence = Expr::Sequence(new_exprs, current_inferred_type.merge(new_inferred_type));
+
+                dbg!(new_sequence.clone());
+                inferred_type_stack.push_front(new_sequence);
+            }
             Expr::Record(expr, inferred_type) => {
                 let mut ordered_types = vec![];
                 let mut new_exprs = vec![];
@@ -586,8 +601,8 @@ mod type_pull_up_tests {
         let expr =
             Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
         let mut expr = Expr::select_index(expr, 0);
-        expr.pull_types_up_legacy().unwrap();
-        assert_eq!(expr.inferred_type(), InferredType::U64);
+        let new_expr = expr.pull_types_up().unwrap();
+        assert_eq!(new_expr.inferred_type(), InferredType::U64);
     }
 
     #[test]
@@ -599,9 +614,9 @@ mod type_pull_up_tests {
             ],
             InferredType::Unknown,
         );
-        expr.pull_types_up_legacy().unwrap();
+        let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(
-            expr.inferred_type(),
+            new_expr.inferred_type(),
             InferredType::List(Box::new(InferredType::U64))
         );
     }

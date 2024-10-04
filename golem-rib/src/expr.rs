@@ -439,8 +439,7 @@ impl Expr {
         self.infer_all_identifiers()?;
         self.push_types_down()?;
         self.infer_all_identifiers()?;
-        let expr = self.pull_types_up_legacy()?;
-        *self = expr;
+        self.pull_types_up_legacy()?;
         self.unify_types().unwrap_or(());
         self.infer_global_inputs();
 
