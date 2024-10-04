@@ -67,7 +67,7 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
                     ]
                 },
             ) {
-                log_skipping_up_to_date(format!("building component stub: {}", component_name));
+                log_skipping_up_to_date(format!("building wasm rpc stub: {}", component_name));
                 continue;
             }
 
