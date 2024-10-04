@@ -903,7 +903,7 @@ pub struct ParsedFunctionName {
 // in ParsedFunctionName is a textual representation of the "real" values.
 // `Examples`:
 // `DynamicParsedFunctionName` : ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}
-// ParsedFunctionName : ns:name/interface.{resource1("foo", { field-a: some("bar") }).new}
+// `ParsedFunctionName` : ns:name/interface.{resource1("foo", { field-a: some("bar") }).new}
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub struct DynamicParsedFunctionName {
     pub site: ParsedFunctionSite,
