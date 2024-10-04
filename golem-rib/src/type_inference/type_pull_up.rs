@@ -60,8 +60,9 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                     .push_front(Expr::Flags(flags.clone(), current_inferred_type.clone()));
             }
 
-            Expr::SelectField(_, field, current_inferred_type) => {
+            exp @ Expr::SelectField(_, field, current_inferred_type) => {
                 let expr = inferred_type_stack.pop_front().unwrap();
+                dbg!(expr.clone());
                 let inferred_type_of_selection_expr = expr.inferred_type();
                 let field_type = internal::get_inferred_type_of_selected_field(
                     field,
@@ -73,6 +74,9 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                     field.clone(),
                     current_inferred_type.merge(field_type),
                 );
+
+                dbg!(exp.clone());
+                dbg!(new_select_field.clone());
                 inferred_type_stack.push_front(new_select_field);
             }
 
@@ -164,7 +168,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
             }
 
             Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
-                dbg!(inferred_type_stack.clone());
                 let length = match_arms.len();
                 let mut new_resolutions = vec![];
                 for _ in 0..length {
@@ -378,7 +381,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 inferred_type_stack.push_front(new_and);
             }
             Expr::Call(call_type, exprs, inferred_type) => {
-                dbg!(inferred_type_stack.clone());
                 let mut new_arg_exprs = vec![];
 
                 for _ in 0..exprs.len() {
@@ -1043,7 +1045,7 @@ mod type_pull_up_tests {
                         Box::new(Expr::identifier("baz").add_infer_type(InferredType::Record(vec![
                             ("buuz".to_string(), InferredType::Str),
                         ]))),
-                        "qux".to_string(),
+                        "buuz".to_string(),
                         InferredType::Unknown,
                     )),
                 },
@@ -1059,15 +1061,15 @@ mod type_pull_up_tests {
                         Box::new(Expr::identifier("grault").add_infer_type(InferredType::Record(vec![
                             ("garply".to_string(), InferredType::Str),
                         ]))),
-                        "garphy".to_string(),
+                        "garply".to_string(),
                         InferredType::Unknown,
                     )),
                 },
             ],
         );
         let new_expr = expr.pull_types_up().unwrap();
-        dbg!(new_expr.clone());
-        assert_eq!(new_expr.inferred_type(), InferredType::U64);
+        let expected = internal::expected_pattern_match();
+        assert_eq!(new_expr, expected);
     }
 
     mod internal {
@@ -1077,6 +1079,119 @@ mod type_pull_up_tests {
             NameOptionTypePair, NameTypePair, TypeF32, TypeHandle, TypeList, TypeRecord, TypeStr,
             TypeU32, TypeVariant,
         };
+        use crate::{ArmPattern, Expr, InferredType, MatchArm, Number, VariableId};
+
+        pub(crate) fn expected_pattern_match() -> Expr{
+            Expr::PatternMatch(
+                Box::new(Expr::Number(
+                    Number {
+                        value: 1.0,
+                    },
+                    None,
+                    InferredType::OneOf(
+                        vec![
+                           InferredType::U64,
+                           InferredType::U32,
+                          InferredType:: U8,
+                           InferredType::U16,
+                           InferredType::S64,
+                           InferredType::S32,
+                          InferredType:: S8,
+                           InferredType::S16,
+                           InferredType::F64,
+                           InferredType::F32,
+                        ],
+                    ),
+                )),
+                vec![
+                    MatchArm {
+                        arm_pattern: ArmPattern::Constructor(
+                            "cons1".to_string(),
+                            vec![
+                                ArmPattern::Literal(
+                                    Box::new(Expr::SelectField(
+                                       Box::new(Expr::Identifier(
+                                            VariableId::global("foo".to_string()),
+                                            InferredType::Record(
+                                                vec![
+                                                    (
+                                                        "bar".to_string(),
+                                                        InferredType::Str,
+                                                    ),
+                                                ],
+                                            ),
+                                        )),
+                                        "bar".to_string(),
+                                        InferredType::Str,
+                                    )),
+                                ),
+                            ],
+                        ),
+                        arm_resolution_expr: Box::new(Expr::SelectField(
+                            Box::new(Expr::Identifier(
+                                VariableId::global(
+                                    "baz".to_string(),
+                                ),
+                                InferredType::Record(
+                                    vec![
+                                        (
+                                            "buuz".to_string(),
+                                            InferredType::Str,
+                                        ),
+                                    ],
+                                ),
+                            )),
+                            "buuz".to_string(),
+                            InferredType::Str,
+                        )),
+                    },
+                    MatchArm {
+                        arm_pattern: ArmPattern::Constructor(
+                            "cons2".to_string(),
+                            vec![
+                                ArmPattern::Literal(
+                                    Box::new(Expr::SelectField(
+                                        Box::new(Expr::Identifier(
+                                            VariableId::global(
+                                                "qux".to_string(),
+                                            ),
+                                            InferredType::Record(
+                                                vec![
+                                                    (
+                                                        "corge".to_string(),
+                                                        InferredType::Str,
+                                                    ),
+                                                ],
+                                            ),
+                                        )),
+                                        "corge".to_string(),
+                                        InferredType::Str,
+                                    ),
+                                )),
+                            ],
+                        ),
+                        arm_resolution_expr: Box::new(Expr::SelectField(
+                            Box::new(Expr::Identifier(
+                                VariableId::global(
+                                    "grault".to_string(),
+                                ),
+                                InferredType::Record(
+                                    vec![
+                                        (
+                                            "garply".to_string(),
+                                            InferredType::Str,
+                                        ),
+                                    ],
+                                ),
+                            )),
+                            "garply".to_string(),
+                            InferredType::Str,
+                        )),
+                    },
+                ],
+                InferredType::Str,
+            )
+        }
 
         pub(crate) fn get_shopping_cart_metadata_with_cart_resource() -> Vec<AnalysedExport> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
