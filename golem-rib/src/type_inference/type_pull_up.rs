@@ -776,7 +776,8 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_greater_than_or_equal_to() {
-        let inner = Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+        let inner =
+            Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
 
         let select_index1 = Expr::select_index(inner.clone(), 0);
         let select_index2 = Expr::select_index(inner, 1);
@@ -788,28 +789,61 @@ mod type_pull_up_tests {
             select_index1.add_infer_type(InferredType::U64),
             select_index2.add_infer_type(InferredType::U64),
         )
-            .add_infer_type(InferredType::Bool);
+        .add_infer_type(InferredType::Bool);
         assert_eq!(new_expr, expected);
     }
 
     #[test]
     pub fn test_pull_up_for_less_than_or_equal_to() {
-        let mut expr = Expr::less_than_or_equal_to(Expr::number(1f64), Expr::number(2f64));
-        expr.pull_types_up_legacy().unwrap();
-        assert_eq!(expr.inferred_type(), InferredType::Bool);
+        let record_type = InferredType::Record(vec![
+            ("bar".to_string(), InferredType::Str),
+            ("baz".to_string(), InferredType::U64),
+        ]);
+
+        let inner = Expr::identifier("foo")
+            .add_infer_type(InferredType::List(Box::new(record_type.clone())));
+
+        let select_field_from_first =
+            Expr::select_field(Expr::select_index(inner.clone(), 0), "bar");
+        let select_field_from_second =
+            Expr::select_field(Expr::select_index(inner.clone(), 1), "baz");
+        let expr = Expr::less_than_or_equal_to(
+            select_field_from_first.clone(),
+            select_field_from_second.clone(),
+        );
+
+        let new_expr = expr.pull_types_up().unwrap();
+
+        let new_select_field_from_first = Expr::select_field(
+            Expr::select_index(inner.clone(), 0).add_infer_type(record_type.clone()),
+            "bar",
+        )
+        .add_infer_type(InferredType::Str);
+
+        let new_select_field_from_second = Expr::select_field(
+            Expr::select_index(inner.clone(), 1).add_infer_type(record_type),
+            "baz",
+        )
+        .add_infer_type(InferredType::U64);
+
+        let expected =
+            Expr::less_than_or_equal_to(new_select_field_from_first, new_select_field_from_second)
+                .add_infer_type(InferredType::Bool);
+
+        assert_eq!(new_expr, expected);
     }
 
     #[test]
     pub fn test_pull_up_for_equal_to() {
         let mut expr = Expr::equal_to(Expr::number(1f64), Expr::number(2f64));
-        expr.pull_types_up_legacy().unwrap();
-        assert_eq!(expr.inferred_type(), InferredType::Bool);
+        let new_expr = expr.pull_types_up().unwrap();
+        assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_less_than() {
         let mut expr = Expr::less_than(Expr::number(1f64), Expr::number(2f64));
-        expr.pull_types_up_legacy().unwrap();
+        let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Bool);
     }
 
@@ -817,6 +851,23 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_call() {
         let mut expr = Expr::call(
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
+            vec![Expr::number(1f64)],
+        );
+        expr.pull_types_up_legacy().unwrap();
+        assert_eq!(expr.inferred_type(), InferredType::Unknown);
+    }
+
+    #[test]
+    pub fn test_pull_up_for_dynamic_call() {
+        let dynamic_function_name = DynamicParsedFunctionName::parse(
+            "ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}",
+        )
+        .unwrap();
+        let mut expr = Expr::call(
+            DynamicParsedFunctionName::parse(
+                "ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}",
+            )
+            .unwrap(),
             vec![Expr::number(1f64)],
         );
         expr.pull_types_up_legacy().unwrap();
