@@ -169,10 +169,17 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                     new_resolutions.push(arm_resolution);
                 }
 
+                new_resolutions.reverse();
+
+                dbg!(new_resolutions.clone());
+
                 let inferred_types = new_resolutions
                     .iter()
                     .map(|x| x.inferred_type())
                     .collect::<Vec<_>>();
+
+
+
                 let new_inferred_type = InferredType::all_of(inferred_types).unwrap();
 
                 let mut total_exprs = 0;
@@ -703,7 +710,7 @@ mod type_pull_up_tests {
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
-    use crate::{ArmPattern, Expr, FunctionTypeRegistry, Id, InferredType, Number, TypeName, VariableId};
+    use crate::{ArmPattern, Expr, FunctionTypeRegistry, Id, InferredType, MatchArm, Number, TypeName, VariableId};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -1025,33 +1032,42 @@ mod type_pull_up_tests {
         let mut expr = Expr::pattern_match(
             Expr::number(1f64),
             vec![
-                crate::MatchArm {
-                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Number(
-                        Number { value: 1f64 },
-                        None,
-                        InferredType::U64,
-                    ))),
-                    arm_resolution_expr: Box::new(Expr::Number(
-                        Number { value: 1f64 },
-                        None,
-                        InferredType::U64,
+                MatchArm {
+                    arm_pattern: ArmPattern::Constructor("cons1".to_string(), vec![ArmPattern::Literal(Box::new(Expr::SelectField(
+                        Box::new(Expr::identifier("foo").add_infer_type(InferredType::Record(vec![
+                            ("bar".to_string(), InferredType::Str),
+                        ]))),
+                        "bar".to_string(),
+                        InferredType::Unknown,
+                    )))]),
+                    arm_resolution_expr: Box::new(Expr::SelectField(
+                        Box::new(Expr::identifier("baz").add_infer_type(InferredType::Record(vec![
+                            ("buuz".to_string(), InferredType::Str),
+                        ]))),
+                        "qux".to_string(),
+                        InferredType::Unknown,
                     )),
                 },
-                crate::MatchArm {
-                    arm_pattern: ArmPattern::Literal(Box::new(Expr::Number(
-                        Number { value: 2f64 },
-                        None,
-                        InferredType::U64,
-                    ))),
-                    arm_resolution_expr: Box::new(Expr::Number(
-                        Number { value: 2f64 },
-                        None,
-                        InferredType::U64,
+                MatchArm {
+                    arm_pattern: ArmPattern::Constructor("cons2".to_string(), vec![ArmPattern::Literal(Box::new(Expr::SelectField(
+                        Box::new(Expr::identifier("quux").add_infer_type(InferredType::Record(vec![
+                            ("corge".to_string(), InferredType::Str),
+                        ]))),
+                        "corge".to_string(),
+                        InferredType::Unknown,
+                    )))]),
+                    arm_resolution_expr: Box::new(Expr::SelectField(
+                        Box::new(Expr::identifier("grault").add_infer_type(InferredType::Record(vec![
+                            ("garply".to_string(), InferredType::Str),
+                        ]))),
+                        "garphy".to_string(),
+                        InferredType::Unknown,
                     )),
                 },
             ],
         );
         let new_expr = expr.pull_types_up().unwrap();
+        dbg!(new_expr.clone());
         assert_eq!(new_expr.inferred_type(), InferredType::U64);
     }
 
