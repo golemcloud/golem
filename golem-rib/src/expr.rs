@@ -421,6 +421,8 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), Vec<String>> {
         self.infer_types_initial_phase(function_type_registry)?;
+        self.infer_call_arguments_type(function_type_registry)
+            .map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
         self.unify_types()?;
@@ -433,8 +435,6 @@ impl Expr {
         self.name_binding_local_variables();
         self.infer_variants(function_type_registry);
         self.infer_enums(function_type_registry);
-        self.infer_call_arguments_type(function_type_registry)
-            .map_err(|x| vec![x])?;
 
         Ok(())
     }

@@ -15,6 +15,7 @@
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 use std::thread::current;
+use crate::call_type::CallType;
 
 pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
     let mut expr_queue = VecDeque::new();
@@ -357,7 +358,48 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 let new_and = Expr::And(Box::new(left), Box::new(right), InferredType::Bool);
                 inferred_type_stack.push_front(new_and);
             }
-            Expr::Call(_, _, _) => {}
+            Expr::Call(call_type, exprs, inferred_type) => {
+
+                let mut new_arg_exprs = vec![];
+
+                for _ in 0..exprs.len() {
+                    let expr = inferred_type_stack.pop_back().unwrap();
+                    new_arg_exprs.push(expr);
+                }
+
+                match call_type {
+                    CallType::Function(fun_name) => {
+                        let mut function_name = fun_name.clone();
+
+                        let resource_params = function_name.function.raw_resource_params_mut();
+
+                        if let Some(resource_params) = resource_params {
+                            let mut new_resource_params = vec![];
+                            for _ in  0..resource_params.len() {
+                                let expr = inferred_type_stack.pop_back().unwrap();
+                                new_resource_params.push(expr);
+                            }
+
+                            resource_params.iter_mut().zip(new_resource_params.iter()).for_each(|(param, new_expr)| {
+                                **param = new_expr.clone();
+                            });
+                        }
+
+                        let new_call = Expr::Call(CallType::Function(function_name), new_arg_exprs, inferred_type.clone());
+                        inferred_type_stack.push_front(new_call);
+                    }
+
+                    CallType::VariantConstructor(str) => {
+                        let new_call = Expr::Call(CallType::VariantConstructor(str.clone()), new_arg_exprs, inferred_type.clone());
+                        inferred_type_stack.push_front(new_call);
+                    }
+
+                    CallType::EnumConstructor(str) => {
+                        let new_call = Expr::Call(CallType::EnumConstructor(str.clone()), new_arg_exprs, inferred_type.clone());
+                        inferred_type_stack.push_front(new_call);
+                    }
+                }
+            }
             Expr::Unwrap(_, inferred_type) => {
                 let expr = inferred_type_stack.pop_front().unwrap();
                 let new_unwrap = Expr::Unwrap(
@@ -844,7 +886,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_less_than() {
         let mut expr = Expr::less_than(Expr::number(1f64), Expr::number(2f64));
         let new_expr = expr.pull_types_up().unwrap();
-        assert_eq!(expr.inferred_type(), InferredType::Bool);
+        assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
@@ -859,21 +901,22 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_dynamic_call() {
+
         let rib = r#"
            let input = { foo: 1u64, bar: 2u64 };
-           ns:interface.{resource1(input.foo, { field-a: some(input.bar) }).new}(input)
+           golem:it/api.{cart(input.foo).update-item-quantity}({ field-a: some(input.bar) })
         "#;
 
         let mut expr = Expr::from_text(rib.clone()).unwrap();
-        expr.infer_types_initial_phase(&FunctionTypeRegistry::empty())?;
+        expr.infer_types_initial_phase(&FunctionTypeRegistry::empty()).unwrap();
 
+        let result = expr.pull_types_up().unwrap();
 
         let new_expr = expr.pull_types_up().unwrap();
 
-        dbg!(expr);
-        dbg!(new_expr);
+        dbg!(&new_expr);
 
-        assert_eq!(expr.inferred_type(), InferredType::Unknown);
+        assert_eq!(new_expr.inferred_type(), InferredType::Unknown);
     }
 
     #[test]
