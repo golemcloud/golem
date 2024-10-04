@@ -622,8 +622,8 @@ mod internal {
         let mut ordered_types = vec![];
         let mut new_exprs = vec![];
 
-        for _ in 0..exprs.len() {
-            let expr: Expr = inferred_type_stack.pop_front().unwrap();
+        for old_expr in exprs.iter().rev() {
+            let expr = inferred_type_stack.pop_front().unwrap_or(old_expr.clone());
             new_exprs.push(expr.clone());
             let inferred_type: InferredType = expr.inferred_type();
             ordered_types.push(inferred_type);
@@ -640,6 +640,7 @@ mod internal {
 
         Ok(())
     }
+    
     pub(crate) fn get_inferred_type_of_selected_field(
         select_field: &str,
         select_from_type: &InferredType,
