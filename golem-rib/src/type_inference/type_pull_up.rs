@@ -281,7 +281,8 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 let mut new_exprs = vec![];
 
                 for (field, _) in expr {
-                    let expr: Expr = inferred_type_stack.pop_front().unwrap();
+                    let expr: Expr = inferred_type_stack.pop_back().unwrap();
+                    ordered_types.push((field.clone(), expr.inferred_type()));
                     new_exprs.push((field.clone(), Box::new(expr.clone())));
                 }
 
@@ -660,10 +661,10 @@ mod type_pull_up_tests {
                 ("bar".to_string(), InferredType::Unknown),
             ]),
         );
-        expr.pull_types_up_legacy().unwrap();
+        let new_expr = expr.pull_types_up().unwrap();
 
         assert_eq!(
-            expr.inferred_type(),
+            new_expr.inferred_type(),
             InferredType::AllOf(vec![
                 InferredType::Record(vec![
                     ("foo".to_string(), InferredType::U64),
