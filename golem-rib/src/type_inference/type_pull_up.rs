@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::call_type::CallType;
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 use std::thread::current;
-use crate::call_type::CallType;
+use std::borrow::BorrowMut;
 
 pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
     let mut expr_queue = VecDeque::new();
@@ -192,11 +193,9 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 for match_arm in match_arms {
                     let mut arm_pattern = match_arm.arm_pattern.clone();
                     let mut arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
-                    let result = arm_pattern_exprs.first_mut().unwrap();
-                    **result = Box::new(new_arm_pattern_exprs.pop().unwrap());
-                    // arm_pattern_exprs.iter().zip(new_arm_pattern_exprs.iter()).for_each(|(arm_expr, new_expr)| {
-                    //     **arm_expr = Box::new(new_expr.clone());
-                    // });
+                    arm_pattern_exprs.iter_mut().borrow_mut().zip(new_arm_pattern_exprs.iter()).for_each(|(arm_expr, new_expr)| {
+                        **arm_expr = Box::new(new_expr.clone());
+                    });
 
                     new_arm_patterns.push(arm_pattern);
                 }
@@ -310,7 +309,12 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
 
             Expr::Let(variable_id, typ, expr, inferred_type) => {
                 let new_expr = inferred_type_stack.pop_front().unwrap();
-                let new_let = Expr::Let(variable_id.clone(), typ.clone(), Box::new(new_expr), inferred_type.clone());
+                let new_let = Expr::Let(
+                    variable_id.clone(),
+                    typ.clone(),
+                    Box::new(new_expr),
+                    inferred_type.clone(),
+                );
                 inferred_type_stack.push_front(new_let);
             }
             Expr::Sequence(exprs, current_inferred_type) => {
@@ -344,7 +348,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 new_exprs.reverse();
                 ordered_types.reverse();
 
-
                 let new_record_type = InferredType::Record(ordered_types);
 
                 let merged_record_type = inferred_type.merge(new_record_type);
@@ -369,7 +372,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 inferred_type_stack.push_front(new_and);
             }
             Expr::Call(call_type, exprs, inferred_type) => {
-
                 dbg!(inferred_type_stack.clone());
                 let mut new_arg_exprs = vec![];
 
@@ -386,29 +388,44 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
 
                         if let Some(resource_params) = resource_params {
                             let mut new_resource_params = vec![];
-                            for _ in  0..resource_params.len() {
+                            for _ in 0..resource_params.len() {
                                 let expr = inferred_type_stack.pop_front().unwrap();
                                 new_resource_params.push(expr);
                             }
 
                             new_resource_params.reverse();
 
-                            resource_params.iter_mut().zip(new_resource_params.iter()).for_each(|(param, new_expr)| {
-                                *param = new_expr.clone();
-                            });
+                            resource_params
+                                .iter_mut()
+                                .zip(new_resource_params.iter())
+                                .for_each(|(param, new_expr)| {
+                                    *param = new_expr.clone();
+                                });
                         }
 
-                        let new_call = Expr::Call(CallType::Function(function_name), new_arg_exprs, inferred_type.clone());
+                        let new_call = Expr::Call(
+                            CallType::Function(function_name),
+                            new_arg_exprs,
+                            inferred_type.clone(),
+                        );
                         inferred_type_stack.push_front(new_call);
                     }
 
                     CallType::VariantConstructor(str) => {
-                        let new_call = Expr::Call(CallType::VariantConstructor(str.clone()), new_arg_exprs, inferred_type.clone());
+                        let new_call = Expr::Call(
+                            CallType::VariantConstructor(str.clone()),
+                            new_arg_exprs,
+                            inferred_type.clone(),
+                        );
                         inferred_type_stack.push_front(new_call);
                     }
 
                     CallType::EnumConstructor(str) => {
-                        let new_call = Expr::Call(CallType::EnumConstructor(str.clone()), new_arg_exprs, inferred_type.clone());
+                        let new_call = Expr::Call(
+                            CallType::EnumConstructor(str.clone()),
+                            new_arg_exprs,
+                            inferred_type.clone(),
+                        );
                         inferred_type_stack.push_front(new_call);
                     }
                 }
@@ -682,11 +699,11 @@ mod internal {
 
 #[cfg(test)]
 mod type_pull_up_tests {
-    use crate::function_name::DynamicParsedFunctionName;
-    use crate::{ArmPattern, Expr, FunctionTypeRegistry, Id, InferredType, Number, VariableId};
     use crate::call_type::CallType;
+    use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
+    use crate::{ArmPattern, Expr, FunctionTypeRegistry, Id, InferredType, Number, TypeName, VariableId};
 
     #[test]
     pub fn test_pull_up_identifier() {
@@ -928,85 +945,53 @@ mod type_pull_up_tests {
         expr.infer_all_identifiers().unwrap();
         let new_expr = expr.pull_types_up().unwrap();
 
-        let expected =  Expr::Multiple(
+        let expected = Expr::Multiple(
             vec![
                 Expr::Let(
-                    VariableId::local(
-                        "input",
-                        0
-                    ),
+                    VariableId::local("input", 0),
                     None,
                     Box::new(Expr::Record(
                         vec![
                             (
                                 "foo".to_string(),
-                                Box::new(Expr::Literal(
-                                    "afs".to_string(),
-                                   InferredType::Str,
-                                )),
+                                Box::new(Expr::Literal("afs".to_string(), InferredType::Str)),
                             ),
                             (
                                 "bar".to_string(),
-                                Box::new(Expr::Literal(
-                                    "al".to_string(),
-                                    InferredType::Str,
-                                )),
+                                Box::new(Expr::Literal("al".to_string(), InferredType::Str)),
                             ),
                         ],
-                        InferredType::Record(
-                            vec![
-                                (
-                                    "foo".to_string(),
-                                    InferredType::Str,
-                                ),
-                                (
-                                    "bar".to_string(),
-                                    InferredType::Str,
-                                ),
-                            ],
-                        ),
+                        InferredType::Record(vec![
+                            ("foo".to_string(), InferredType::Str),
+                            ("bar".to_string(), InferredType::Str),
+                        ]),
                     )),
                     InferredType::Unknown,
                 ),
                 Expr::Call(
-                    CallType::Function(
-                        DynamicParsedFunctionName {
-                            site: PackagedInterface {
-                                namespace: "golem".to_string(),
-                                package: "it".to_string(),
-                                interface: "api".to_string(),
-                                version: None,
-                            },
-                            function: IndexedResourceMethod {
-                                resource: "cart".to_string(),
-                                resource_params: vec![
-                                    Expr::SelectField(
-                                        Box::new(Expr::Identifier(
-                                            VariableId::local(
-                                                "input",
-                                                0
-                                            ),
-                                            InferredType::Record(
-                                                vec![
-                                                    (
-                                                        "foo".to_string(),
-                                                        InferredType::Str,
-                                                    ),
-                                                    (
-                                                        "bar".to_string(),
-                                                        InferredType::Str,
-                                                    ),
-                                                ],
-                                            ),
-                                        )),
-                                        "foo".to_string(),
-                                        InferredType::Str,
-                                    ),
-                                ],
-                                method: "checkout".to_string(),
-                            },
+                    CallType::Function(DynamicParsedFunctionName {
+                        site: PackagedInterface {
+                            namespace: "golem".to_string(),
+                            package: "it".to_string(),
+                            interface: "api".to_string(),
+                            version: None,
                         },
-                    ),
+                        function: IndexedResourceMethod {
+                            resource: "cart".to_string(),
+                            resource_params: vec![Expr::SelectField(
+                                Box::new(Expr::Identifier(
+                                    VariableId::local("input", 0),
+                                    InferredType::Record(vec![
+                                        ("foo".to_string(), InferredType::Str),
+                                        ("bar".to_string(), InferredType::Str),
+                                    ]),
+                                )),
+                                "foo".to_string(),
+                                InferredType::Str,
+                            )],
+                            method: "checkout".to_string(),
+                        },
+                    }),
                     vec![],
                     InferredType::Unknown,
                 ),
@@ -1019,16 +1004,20 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_unwrap() {
-        let mut expr = Expr::option(Some(Expr::number(1f64))).unwrap();
-        expr.pull_types_up_legacy().unwrap();
-        assert_eq!(expr.inferred_type(), InferredType::Unknown);
+        let mut number = Expr::number(1f64);
+        number.override_type_type_mut(InferredType::F64);
+        let mut expr = Expr::option(Some(number)).unwrap();
+        let expr = expr.pull_types_up().unwrap();
+        assert_eq!(expr.inferred_type(),  InferredType::Option(Box::new(InferredType::F64)));
     }
 
     #[test]
     pub fn test_pull_up_for_tag() {
+        let mut number = Expr::number(1f64);
+        number.override_type_type_mut(InferredType::F64);
         let mut expr = Expr::tag(Expr::number(1f64));
-        expr.pull_types_up_legacy().unwrap();
-        assert_eq!(expr.inferred_type(), InferredType::Unknown);
+        let expr = expr.pull_types_up().unwrap();
+        assert_eq!(expr.inferred_type(), InferredType::Option(Box::new(InferredType::F64)));
     }
 
     #[test]
@@ -1062,12 +1051,17 @@ mod type_pull_up_tests {
                 },
             ],
         );
-        expr.pull_types_up_legacy().unwrap();
-        assert_eq!(expr.inferred_type(), InferredType::U64);
+        let new_expr = expr.pull_types_up().unwrap();
+        assert_eq!(new_expr.inferred_type(), InferredType::U64);
     }
 
     mod internal {
-        use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair, TypeF32, TypeHandle, TypeList, TypeRecord, TypeStr, TypeU32, TypeVariant};
+        use golem_wasm_ast::analysis::{
+            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
+            NameOptionTypePair, NameTypePair, TypeF32, TypeHandle, TypeList, TypeRecord, TypeStr,
+            TypeU32, TypeVariant,
+        };
 
         pub(crate) fn get_shopping_cart_metadata_with_cart_resource() -> Vec<AnalysedExport> {
             let instance = AnalysedExport::Instance(AnalysedInstance {
@@ -1075,7 +1069,7 @@ mod type_pull_up_tests {
                 functions: vec![
                     AnalysedFunction {
                         name: "[constructor]cart".to_string(),
-                        parameters: vec![AnalysedFunctionParameter{
+                        parameters: vec![AnalysedFunctionParameter {
                             name: "cart-id".to_string(),
                             typ: AnalysedType::Str(TypeStr),
                         }],

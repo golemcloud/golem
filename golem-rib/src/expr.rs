@@ -429,7 +429,10 @@ impl Expr {
         Ok(())
     }
 
-    pub fn infer_types_initial_phase(&mut self, function_type_registry: &FunctionTypeRegistry) -> Result<(), Vec<String>> {
+    pub fn infer_types_initial_phase(
+        &mut self,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> Result<(), Vec<String>> {
         self.bind_types();
         self.name_binding_pattern_match_variables();
         self.name_binding_local_variables();
