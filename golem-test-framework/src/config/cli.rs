@@ -1088,8 +1088,8 @@ impl TestDependencies for CliTestDependencies {
 
     fn cassandra(
         &self,
-    ) -> Arc<dyn crate::components::cassandra::Cassandra + Send + Sync + 'static> {
-        panic!("Not supported")
+    ) -> Option<Arc<dyn crate::components::cassandra::Cassandra + Send + Sync + 'static>> {
+        None
     }
 }
 

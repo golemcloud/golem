@@ -124,18 +124,21 @@ impl GetKeyValueStorage for CassandraKeyValueStorageWrapper {
 }
 
 pub(crate) async fn cassandra_storage() -> impl GetKeyValueStorage {
-    let cassandra = BASE_DEPS.cassandra();
-    cassandra.assert_valid();
-    let test_keyspace = format!("golem_test_{}", &Uuid::new_v4().to_string()[..8]);
-    let session = cassandra.get_session(None).await;
-    let cassandra_session = CassandraSession::new(session, true, &test_keyspace);
-    if let Err(err_msg) = cassandra_session.create_schema().await {
-        cassandra.kill();
-        panic!("Cannot create schema : {}", err_msg);
-    }
+    if let Some(cassandra) = BASE_DEPS.cassandra() {
+        cassandra.assert_valid();
+        let test_keyspace = format!("golem_test_{}", &Uuid::new_v4().to_string()[..8]);
+        let session = cassandra.get_session(None).await;
+        let cassandra_session = CassandraSession::new(session, true, &test_keyspace);
+        if let Err(err_msg) = cassandra_session.create_schema().await {
+            cassandra.kill();
+            panic!("Cannot create schema : {}", err_msg);
+        }
 
-    let kvs = CassandraKeyValueStorage::new(cassandra_session);
-    CassandraKeyValueStorageWrapper { kvs }
+        let kvs = CassandraKeyValueStorage::new(cassandra_session);
+        CassandraKeyValueStorageWrapper { kvs }
+    } else {
+        panic!("Cassandra is not configured");
+    }
 }
 
 pub fn ns() -> KeyValueStorageNamespace {

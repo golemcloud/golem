@@ -111,8 +111,8 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
         panic!("Not supported")
     }
 
-    fn cassandra(&self) -> Arc<dyn Cassandra + Send + Sync + 'static> {
-        self.cassandra.clone()
+    fn cassandra(&self) -> Option<Arc<dyn Cassandra + Send + Sync + 'static>> {
+        Some(self.cassandra.clone())
     }
 }
 
@@ -220,8 +220,8 @@ impl TestDependencies for WorkerExecutorTestDependencies {
         panic!("Not supported")
     }
 
-    fn cassandra(&self) -> Arc<dyn Cassandra + Send + Sync + 'static> {
-        self.cassandra.clone()
+    fn cassandra(&self) -> Option<Arc<dyn Cassandra + Send + Sync + 'static>> {
+        Some(self.cassandra.clone())
     }
 }
 
@@ -234,7 +234,9 @@ unsafe fn drop_base_deps() {
     let base_deps_ptr = base_deps_ptr as *mut WorkerExecutorTestDependencies;
     (*base_deps_ptr).redis().kill();
     (*base_deps_ptr).redis_monitor().kill();
-    (*base_deps_ptr).cassandra().kill();
+    if let Some(c) = (*base_deps_ptr).cassandra() {
+        c.kill()
+    }
 }
 
 struct Tracing;

@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::components;
-use crate::components::cassandra::docker::DockerCassandra;
 use crate::components::cassandra::Cassandra;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
@@ -43,7 +42,6 @@ use crate::components::worker_service::docker::DockerWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::{DbType, TestDependencies};
-use once_cell::sync::Lazy;
 use tracing::Level;
 
 pub struct EnvBasedTestDependenciesConfig {
@@ -154,7 +152,7 @@ pub struct EnvBasedTestDependencies {
     component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
-    cassandra: Lazy<Arc<dyn Cassandra + Send + Sync + 'static>>,
+    cassandra: RwLock<Option<Arc<dyn Cassandra + Send + Sync + 'static>>>,
 }
 
 impl EnvBasedTestDependencies {
@@ -412,8 +410,8 @@ impl EnvBasedTestDependencies {
 
     fn make_cassandra(
         _config: Arc<EnvBasedTestDependenciesConfig>,
-    ) -> Lazy<Arc<dyn Cassandra + Send + Sync + 'static>> {
-        Lazy::new(|| Arc::new(DockerCassandra::new(false)))
+    ) -> RwLock<Option<Arc<dyn Cassandra + Send + Sync + 'static>>> {
+        RwLock::new(None)
     }
 
     pub async fn new(config: EnvBasedTestDependenciesConfig) -> Self {
@@ -527,8 +525,11 @@ impl TestDependencies for EnvBasedTestDependencies {
         self.worker_executor_cluster.clone()
     }
 
-    fn cassandra(&self) -> Arc<dyn Cassandra + Send + Sync + 'static> {
-        self.cassandra.clone()
+    fn cassandra(&self) -> Option<Arc<dyn Cassandra + Send + Sync + 'static>> {
+        match self.cassandra.read() {
+            Ok(cassandra) => cassandra.as_ref().map(|c| c.clone()),
+            Err(poison_err) => poison_err.into_inner().as_ref().map(|c| c.clone()),
+        }
     }
 }
 

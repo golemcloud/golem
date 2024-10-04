@@ -237,7 +237,7 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.worker_executor_cluster()
     }
 
-    fn cassandra(&self) -> Arc<dyn Cassandra + Send + Sync + 'static> {
+    fn cassandra(&self) -> Option<Arc<dyn Cassandra + Send + Sync + 'static>> {
         self.deps.cassandra()
     }
 }
