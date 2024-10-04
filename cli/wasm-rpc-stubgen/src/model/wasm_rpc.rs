@@ -357,14 +357,14 @@ impl Application {
                     && wasm_rpc_stub_build.wasm.is_some()
                 {
                     validation.add_warn(
-                        "In common (without component name) component stub builds the wasm field has no effect".to_string(),
+                        "In common (without component name) wasm rpc stub build the wasm field has no effect".to_string(),
                     );
                 }
 
                 if wasm_rpc_stub_build.component_name.is_some() && wasm_rpc_stub_build.wit.is_some()
                 {
                     validation.add_warn(
-                        "In common (without component name) component stub builds the wit field has no effect".to_string(),
+                        "In common (without component name) wasm rpc stub build the wit field has no effect".to_string(),
                     );
                 }
 
@@ -372,7 +372,7 @@ impl Application {
             }
             Err(err) => {
                 validation.add_error(format!(
-                    "Failed to get component stub build properties: {}",
+                    "Failed to get wasm rpc stub build properties: {}",
                     err
                 ));
                 None
@@ -383,7 +383,7 @@ impl Application {
             Some((
                 vec![],
                 format!(
-                    "Unknown trait for component stub build, trait type: {}",
+                    "Unknown trait for wasm rpc stub build, trait type: {}",
                     component_trait.trait_type
                 ),
             ))
@@ -512,7 +512,7 @@ impl Application {
                 Some((
                     vec![("component name", component_name)],
                     format!(
-                        "Component Stub Build is specified multiple times in sources: {}",
+                        "Wasm rpc stub build is specified multiple times in sources: {}",
                         sources.join(", ")
                     ),
                 ))
@@ -522,7 +522,7 @@ impl Application {
         if common_sources.len() > 1 {
             validation.add_error(
                 format!(
-                    "Common (without component name) Component Stub Build is specified multiple times in sources: {}",
+                    "Common (without component name) wasm rpc build is specified multiple times in sources: {}",
                     common_sources.join(", "),
                 )
             )
@@ -535,7 +535,7 @@ impl Application {
                     (
                         vec![("source", wasm_rpc_stub_build.source_as_string())],
                         format!(
-                            "Component Stub Build {} references unknown component {}",
+                            "Wasm rpc stub build {} references unknown component {}",
                             wasm_rpc_stub_build.name, component_name
                         ),
                     )
