@@ -16,7 +16,7 @@ pub mod serialized;
 
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::wasm_rpc::serialized::{
-    SerializableInvokeRequest, SerializableInvokeResult,
+    SerializableInvokeRequest, SerializableInvokeResult, SerializableInvokeResultV1,
 };
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::error::GolemError;
@@ -648,45 +648,80 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 )
                     })?;
 
-            // TODO: must support SerializableInvokeResultV1 as well
-
-            let serialized_invoke_result = self
+            let serialized_invoke_result: Result<SerializableInvokeResult, String> = self
                 .state
                 .oplog
                 .get_payload_of_entry::<SerializableInvokeResult>(&oplog_entry)
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to deserialize function response: {:?}: {err}",
-                        oplog_entry
-                    )
-                })
-                .unwrap();
+                .map(_.unwrap());
 
-            if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
-                match self.state.open_function_table.get(&handle) {
-                    Some(begin_index) => {
-                        self.state
-                            .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
-                            .await?;
-                        self.state.open_function_table.remove(&handle);
-                    }
-                    None => {
-                        warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
+            if let Ok(serialized_invoke_result) = serialized_invoke_result {
+                if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
+                    match self.state.open_function_table.get(&handle) {
+                        Some(begin_index) => {
+                            self.state
+                                .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                                .await?;
+                            self.state.open_function_table.remove(&handle);
+                        }
+                        None => {
+                            warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
+                        }
                     }
                 }
-            }
 
-            match serialized_invoke_result {
-                SerializableInvokeResult::Pending => Ok(None),
-                SerializableInvokeResult::Completed(result) => match result {
-                    Ok(tav) => {
-                        let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
-                        Ok(Some(Ok(wit_value)))
+                match serialized_invoke_result {
+                    SerializableInvokeResult::Pending => Ok(None),
+                    SerializableInvokeResult::Completed(result) => match result {
+                        Ok(tav) => {
+                            let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
+                            Ok(Some(Ok(wit_value)))
+                        }
+                        Err(error) => Ok(Some(Err(error.into()))),
+                    },
+                    SerializableInvokeResult::Failed(error) => Err(error.into()),
+                }
+            } else {
+                let serialized_invoke_result = self
+                    .state
+                    .oplog
+                    .get_payload_of_entry::<SerializableInvokeResultV1>(&oplog_entry)
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "failed to deserialize function response: {:?}: {err}",
+                            oplog_entry
+                        )
+                    })
+                    .unwrap();
+
+                if let Ok(serialized_invoke_result) = serialized_invoke_result {
+                    if !matches!(
+                        serialized_invoke_result,
+                        SerializableInvokeResultV1::Pending
+                    ) {
+                        match self.state.open_function_table.get(&handle) {
+                            Some(begin_index) => {
+                                self.state
+                                    .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                                    .await?;
+                                self.state.open_function_table.remove(&handle);
+                            }
+                            None => {
+                                warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
+                            }
+                        }
                     }
-                    Err(error) => Ok(Some(Err(error.into()))),
-                },
-                SerializableInvokeResult::Failed(error) => Err(error.into()),
+
+                    match serialized_invoke_result {
+                        SerializableInvokeResultV1::Pending => Ok(None),
+                        SerializableInvokeResultV1::Completed(result) => match result {
+                            Ok(wit_value) => Ok(Some(Ok(wit_value))),
+                            Err(error) => Ok(Some(Err(error.into()))),
+                        },
+                        SerializableInvokeResultV1::Failed(error) => Err(error.into()),
+                    }
+                }
             }
         }
     }
