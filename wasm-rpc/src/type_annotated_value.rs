@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "bincode", derive(::bincode::Encode, ::bincode::Decode))]
 pub struct ValueAndType {
     pub value: Value,
     pub typ: AnalysedType,
