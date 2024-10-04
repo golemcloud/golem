@@ -22,8 +22,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
     let mut expr_queue = VecDeque::new();
     make_expr_nodes_queue(expr, &mut expr_queue);
 
-    dbg!(expr_queue.clone());
-
     // select_field(expr, b)
     let mut inferred_type_stack = VecDeque::new();
 
@@ -190,8 +188,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                     new_arm_patterns.push(arm_pattern);
                 }
 
-                dbg!(new_resolutions.clone());
-                dbg!(new_arm_patterns.clone());
 
                 let inferred_types = new_resolutions
                     .iter()
@@ -442,7 +438,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
             Expr::Throw(_, _) => {
                 inferred_type_stack.push_front(expr.clone());
             }
-            Expr::GetTag(expr, inferred_type) => {
+            Expr::GetTag(_, inferred_type) => {
                 let expr = inferred_type_stack.pop_front().unwrap();
                 let new_get_tag = Expr::GetTag(
                     Box::new(expr.clone()),
@@ -1016,7 +1012,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_tag() {
         let mut number = Expr::number(1f64);
         number.override_type_type_mut(InferredType::F64);
-        let mut expr = Expr::tag(Expr::number(1f64));
+        let mut expr = Expr::tag(Expr::option(Some(number)));
         let expr = expr.pull_types_up().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Option(Box::new(InferredType::F64)));
     }
