@@ -15,7 +15,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ValueAndType {
     pub value: Value,
     pub typ: AnalysedType,
