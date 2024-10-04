@@ -18,7 +18,7 @@ pub const OAM_COMPONENT_TYPE_WASM_BUILD: &str = "wasm-build";
 pub const OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD: &str = "wasm-rpc-stub-build";
 
 pub fn init_oam_app(_component_name: String) -> oam::Application {
-    // TODO: let's create samples directly in yaml / yaml templates with comments
+    // TODO: let's do it as part of https://github.com/golemcloud/wasm-rpc/issues/89
     todo!()
 }
 
@@ -689,7 +689,6 @@ impl WasmComponent {
     }
 }
 
-// TODO: unknown props
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BuildStep {
     pub command: String,
