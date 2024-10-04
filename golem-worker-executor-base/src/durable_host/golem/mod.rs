@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod v11;
+pub mod v11;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -64,7 +64,7 @@ impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
         self_: Resource<GetWorkersEntry>,
     ) -> anyhow::Result<Option<Vec<WorkerMetadata>>> {
         let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("golem::api::get-workers", "get_next");
+        record_host_function_call("golem::api::get-workers", "get-next");
         let (component_id, filter, count, precise, cursor) = self
             .as_wasi_view()
             .table()
@@ -772,7 +772,7 @@ impl From<RetryPolicy> for RetryConfig {
             min_delay: Duration::from_nanos(value.min_delay),
             max_delay: Duration::from_nanos(value.max_delay),
             multiplier: value.multiplier,
-            max_jitter_factor: None, // TODO: should we add this to RetryPolicy or use a default jitter?
+            max_jitter_factor: None,
         }
     }
 }

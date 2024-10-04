@@ -133,6 +133,20 @@ pub trait OplogService: Debug {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
+
+    /// Uploads a big oplog payload and returns a reference to it
+    async fn upload_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        data: &[u8],
+    ) -> Result<OplogPayload, String>;
+
+    /// Downloads a big oplog payload by its reference
+    async fn download_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        payload: &OplogPayload,
+    ) -> Result<Bytes, String>;
 }
 
 /// Level of commit guarantees

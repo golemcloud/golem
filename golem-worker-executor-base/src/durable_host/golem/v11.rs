@@ -14,6 +14,8 @@
 
 use crate::durable_host::golem::GetWorkersEntry;
 use crate::durable_host::DurableWorkerCtx;
+use crate::metrics::wasm::record_host_function_call;
+use crate::model::public_oplog::get_public_oplog_chunk;
 use crate::preview2::golem;
 use crate::preview2::golem::api0_2_0::host::GetWorkers;
 use crate::preview2::golem::api1_1_0_rc1::host::{
@@ -23,12 +25,16 @@ use crate::preview2::golem::api1_1_0_rc1::host::{
     WorkerMetadata, WorkerNameFilter, WorkerPropertyFilter, WorkerStatus, WorkerStatusFilter,
     WorkerVersionFilter,
 };
-use crate::preview2::golem::api1_1_0_rc1::oplog::{
-    GetOplog, Host as OplogHost, HostGetOplog, OplogEntry,
-};
+use crate::preview2::golem::api1_1_0_rc1::oplog::{Host as OplogHost, HostGetOplog, OplogEntry};
+use crate::services::HasOplogService;
 use crate::workerctx::WorkerCtx;
+use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_common::config::RetryConfig;
+use golem_common::model::OwnedWorkerId;
+use std::time::Duration;
 use wasmtime::component::Resource;
+use wasmtime_wasi::WasiView;
 
 #[async_trait]
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
@@ -180,19 +186,131 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         &mut self,
         worker_id: crate::preview2::golem::api1_1_0_rc1::oplog::WorkerId,
         start: crate::preview2::golem::api1_1_0_rc1::oplog::OplogIndex,
-    ) -> anyhow::Result<Resource<GetOplog>> {
-        todo!()
+    ) -> anyhow::Result<Resource<GetOplogEntry>> {
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("golem::api::get-oplog", "new");
+
+        let account_id = self.owned_worker_id.account_id();
+        let worker_id: golem_common::model::WorkerId = worker_id.into();
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let start = golem_common::model::oplog::OplogIndex::from_u64(start);
+
+        // TODO: extract to public_oplog module?
+        let mut initial_component_version = 0;
+        let last_oplog_index = self
+            .state
+            .oplog_service
+            .get_last_index(&owned_worker_id)
+            .await;
+        let mut current = golem_common::model::oplog::OplogIndex::INITIAL;
+        while current < start && current <= last_oplog_index {
+            // NOTE: could be reading in pages for optimization
+            let entry = self
+                .state
+                .oplog_service()
+                .read(&owned_worker_id, current, 1)
+                .await
+                .iter()
+                .next()
+                .map(|(_, v)| v.clone());
+
+            if let Some(golem_common::model::oplog::OplogEntry::Create {
+                component_version, ..
+            }) = entry
+            {
+                initial_component_version = component_version;
+            } else if let Some(golem_common::model::oplog::OplogEntry::SuccessfulUpdate {
+                target_version,
+                ..
+            }) = entry
+            {
+                initial_component_version = target_version;
+            }
+            current = current.next();
+        }
+
+        let entry = GetOplogEntry::new(owned_worker_id, start, initial_component_version, 100);
+        let resource = self.as_wasi_view().table().push(entry)?;
+        Ok(resource)
     }
 
     async fn get_next(
         &mut self,
-        self_: Resource<GetOplog>,
+        self_: Resource<GetOplogEntry>,
     ) -> anyhow::Result<Option<Vec<OplogEntry>>> {
-        todo!()
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("golem::api::get-oplog", "get-next");
+
+        let component_service = self.state.component_service.clone();
+        let oplog_service = self.state.oplog_service();
+
+        let entry = self.as_wasi_view().table().get(&self_)?.clone();
+
+        let chunk = get_public_oplog_chunk(
+            component_service,
+            oplog_service,
+            &entry.owned_worker_id,
+            entry.current_component_version,
+            entry.next_oplog_index,
+            entry.page_size,
+        )
+        .await
+        .map_err(|msg| anyhow!(msg))?;
+
+        if chunk.next_oplog_index != entry.next_oplog_index {
+            self.as_wasi_view()
+                .table()
+                .get_mut(&self_)?
+                .update(chunk.next_oplog_index, chunk.current_component_version);
+            Ok(Some(
+                chunk
+                    .entries
+                    .into_iter()
+                    .map(|entry| entry.into())
+                    .collect(),
+            ))
+        } else {
+            Ok(None)
+        }
     }
 
-    fn drop(&mut self, rep: Resource<GetOplog>) -> anyhow::Result<()> {
-        todo!()
+    fn drop(&mut self, rep: Resource<GetOplogEntry>) -> anyhow::Result<()> {
+        record_host_function_call("golem::api::get-oplog", "drop");
+        self.as_wasi_view().table().delete(rep)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GetOplogEntry {
+    pub owned_worker_id: OwnedWorkerId,
+    pub next_oplog_index: golem_common::model::oplog::OplogIndex,
+    pub current_component_version: ComponentVersion,
+    pub page_size: usize,
+}
+
+impl GetOplogEntry {
+    pub fn new(
+        owned_worker_id: OwnedWorkerId,
+        initial_oplog_index: golem_common::model::oplog::OplogIndex,
+        initial_component_version: ComponentVersion,
+        page_size: usize,
+    ) -> Self {
+        Self {
+            owned_worker_id,
+            next_oplog_index: initial_oplog_index,
+            current_component_version: initial_component_version,
+            page_size,
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        next_oplog_index: golem_common::model::oplog::OplogIndex,
+        current_component_version: ComponentVersion,
+    ) {
+        self.next_oplog_index = next_oplog_index;
+        self.current_component_version = current_component_version;
     }
 }
 
@@ -324,18 +442,18 @@ impl<Ctx: WorkerCtx> HostGetOplog for &mut DurableWorkerCtx<Ctx> {
         &mut self,
         worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
         start: golem::api1_1_0_rc1::oplog::OplogIndex,
-    ) -> anyhow::Result<Resource<GetOplog>> {
+    ) -> anyhow::Result<Resource<GetOplogEntry>> {
         HostGetOplog::new(*self, worker_id, start).await
     }
 
     async fn get_next(
         &mut self,
-        self_: Resource<GetOplog>,
+        self_: Resource<GetOplogEntry>,
     ) -> anyhow::Result<Option<Vec<OplogEntry>>> {
         HostGetOplog::get_next(*self, self_).await
     }
 
-    fn drop(&mut self, rep: Resource<GetOplog>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<GetOplogEntry>) -> anyhow::Result<()> {
         HostGetOplog::drop(*self, rep)
     }
 }
@@ -644,6 +762,98 @@ impl From<WorkerAnyFilter> for golem::api0_2_0::host::WorkerAnyFilter {
     fn from(value: WorkerAnyFilter) -> Self {
         golem::api0_2_0::host::WorkerAnyFilter {
             filters: value.filters.into_iter().map(|x| x.into()).collect(),
+        }
+    }
+}
+
+impl From<golem_common::model::WorkerId> for golem::api1_1_0_rc1::host::WorkerId {
+    fn from(worker_id: golem_common::model::WorkerId) -> Self {
+        golem::api1_1_0_rc1::host::WorkerId {
+            component_id: worker_id.component_id.into(),
+            worker_name: worker_id.worker_name,
+        }
+    }
+}
+
+impl From<golem::api1_1_0_rc1::host::WorkerId> for golem_common::model::WorkerId {
+    fn from(host: golem::api1_1_0_rc1::host::WorkerId) -> Self {
+        Self {
+            component_id: host.component_id.into(),
+            worker_name: host.worker_name,
+        }
+    }
+}
+
+impl From<golem::api1_1_0_rc1::host::ComponentId> for golem_common::model::ComponentId {
+    fn from(host: golem::api1_1_0_rc1::host::ComponentId) -> Self {
+        let high_bits = host.uuid.high_bits;
+        let low_bits = host.uuid.low_bits;
+
+        Self(uuid::Uuid::from_u64_pair(high_bits, low_bits))
+    }
+}
+
+impl From<golem_common::model::ComponentId> for golem::api1_1_0_rc1::host::ComponentId {
+    fn from(component_id: golem_common::model::ComponentId) -> Self {
+        let (high_bits, low_bits) = component_id.0.as_u64_pair();
+
+        golem::api1_1_0_rc1::host::ComponentId {
+            uuid: golem::api1_1_0_rc1::host::Uuid {
+                high_bits,
+                low_bits,
+            },
+        }
+    }
+}
+
+impl From<golem_common::model::PromiseId> for golem::api1_1_0_rc1::host::PromiseId {
+    fn from(promise_id: golem_common::model::PromiseId) -> Self {
+        golem::api1_1_0_rc1::host::PromiseId {
+            worker_id: promise_id.worker_id.into(),
+            oplog_idx: promise_id.oplog_idx.into(),
+        }
+    }
+}
+
+impl From<golem::api1_1_0_rc1::host::PromiseId> for golem_common::model::PromiseId {
+    fn from(host: golem::api1_1_0_rc1::host::PromiseId) -> Self {
+        Self {
+            worker_id: host.worker_id.into(),
+            oplog_idx: golem_common::model::oplog::OplogIndex::from_u64(host.oplog_idx),
+        }
+    }
+}
+
+impl From<&RetryConfig> for crate::preview2::golem::api1_1_0_rc1::host::RetryPolicy {
+    fn from(value: &RetryConfig) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            min_delay: value.min_delay.as_nanos() as u64,
+            max_delay: value.max_delay.as_nanos() as u64,
+            multiplier: value.multiplier,
+            max_jitter_factory: value.max_jitter_factor,
+        }
+    }
+}
+
+impl From<RetryPolicy> for RetryConfig {
+    fn from(value: RetryPolicy) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            min_delay: Duration::from_nanos(value.min_delay),
+            max_delay: Duration::from_nanos(value.max_delay),
+            multiplier: value.multiplier,
+            max_jitter_factor: value.max_jitter_factory,
+        }
+    }
+}
+
+impl From<uuid::Uuid> for Uuid {
+    fn from(uuid: uuid::Uuid) -> Self {
+        let (high_bits, low_bits) = uuid.as_u64_pair();
+        Uuid {
+            high_bits,
+            low_bits,
         }
     }
 }

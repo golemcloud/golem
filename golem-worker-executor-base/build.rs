@@ -86,6 +86,7 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
             "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
             "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
             "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
+            "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
         }},
         skip_mut_forwarding_impls: true,
     }});

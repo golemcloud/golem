@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod wit;
+
 use crate::durable_host::http::serialized::{
     SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
     SerializableHttpMethod, SerializableHttpRequest, SerializableResponse,
@@ -27,7 +29,7 @@ use crate::durable_host::wasm_rpc::serialized::{
 use crate::error::GolemError;
 use crate::model::InterruptKind;
 use crate::services::component::ComponentService;
-use crate::services::oplog::Oplog;
+use crate::services::oplog::OplogService;
 use crate::services::rpc::RpcError;
 use crate::services::worker_proxy::WorkerProxyError;
 use bincode::Decode;
@@ -40,8 +42,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, PromiseId, ShardId, Timestamp,
-    WorkerId, WorkerInvocation,
+    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, ShardId,
+    Timestamp, WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize;
 use golem_wasm_ast::analysis::analysed_type::{
@@ -55,6 +57,52 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
+
+pub struct PublicOplogChunk {
+    pub entries: Vec<PublicOplogEntry>,
+    pub next_oplog_index: OplogIndex,
+    pub current_component_version: ComponentVersion,
+}
+
+pub async fn get_public_oplog_chunk(
+    component_service: Arc<dyn ComponentService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    owned_worker_id: &OwnedWorkerId,
+    initial_component_version: ComponentVersion,
+    initial_oplog_index: OplogIndex,
+    count: usize,
+) -> Result<PublicOplogChunk, String> {
+    let raw_entries = oplog_service
+        .read(owned_worker_id, initial_oplog_index, count as u64)
+        .await;
+
+    let mut entries = Vec::new();
+    let mut current_component_version = initial_component_version;
+    let mut next_oplog_index = initial_oplog_index;
+
+    for (index, raw_entry) in raw_entries {
+        if let OplogEntry::SuccessfulUpdate { target_version, .. } = &raw_entry {
+            current_component_version = *target_version;
+        }
+
+        let entry = PublicOplogEntry::from_oplog_entry(
+            raw_entry,
+            oplog_service.clone(),
+            component_service.clone(),
+            owned_worker_id,
+            current_component_version,
+        )
+        .await?;
+        entries.push(entry);
+        next_oplog_index = index.next();
+    }
+
+    Ok(PublicOplogChunk {
+        entries,
+        next_oplog_index,
+        current_component_version,
+    })
+}
 
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
 ///
@@ -199,9 +247,9 @@ pub enum PublicOplogEntry {
 impl PublicOplogEntry {
     pub async fn from_oplog_entry(
         value: OplogEntry,
-        oplog: Arc<dyn Oplog + Send + Sync>,
+        oplog_service: Arc<dyn OplogService + Send + Sync>,
         components: Arc<dyn ComponentService + Send + Sync>,
-        component_id: &ComponentId,
+        owned_worker_id: &OwnedWorkerId,
         component_version: ComponentVersion,
     ) -> Result<Self, String> {
         match value {
@@ -232,7 +280,9 @@ impl PublicOplogEntry {
                 response,
                 wrapped_function_type,
             } => {
-                let payload_bytes = oplog.download_payload(&response).await?;
+                let payload_bytes = oplog_service
+                    .download_payload(owned_worker_id, &response)
+                    .await?;
                 let value =
                     Self::encode_host_function_response_as_value(&function_name, &payload_bytes)?;
                 Ok(PublicOplogEntry::ImportedFunctionInvoked {
@@ -250,8 +300,12 @@ impl PublicOplogEntry {
                 response,
                 wrapped_function_type,
             } => {
-                let request_bytes = oplog.download_payload(&request).await?;
-                let response_bytes = oplog.download_payload(&response).await?;
+                let request_bytes = oplog_service
+                    .download_payload(owned_worker_id, &request)
+                    .await?;
+                let response_bytes = oplog_service
+                    .download_payload(owned_worker_id, &response)
+                    .await?;
                 let request =
                     Self::encode_host_function_request_as_value(&function_name, &request_bytes)?;
                 let response =
@@ -270,7 +324,9 @@ impl PublicOplogEntry {
                 request,
                 idempotency_key,
             } => {
-                let payload_bytes = oplog.download_payload(&request).await?;
+                let payload_bytes = oplog_service
+                    .download_payload(owned_worker_id, &request)
+                    .await?;
                 let proto_params: Vec<golem_wasm_rpc::protobuf::Val> =
                     try_deserialize(&payload_bytes)?.unwrap_or_default();
                 let params = proto_params
@@ -279,11 +335,14 @@ impl PublicOplogEntry {
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let metadata = components
-                    .get_metadata(component_id, Some(component_version))
+                    .get_metadata(
+                        &owned_worker_id.worker_id.component_id,
+                        Some(component_version),
+                    )
                     .await
-                    .map_err(|err| err.to_string())?; // TODO: decide if we want to propagate GolemError out of here
+                    .map_err(|err| err.to_string())?;
                 let function = function_by_name(&metadata.exports, &function_name)?.ok_or(
-                    format!("Exported function {function_name} not found in component {component_id} version {component_version}")
+                    format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
                 let request = function
                     .parameters
@@ -304,7 +363,9 @@ impl PublicOplogEntry {
                 response,
                 consumed_fuel,
             } => {
-                let payload_bytes = oplog.download_payload(&response).await?;
+                let payload_bytes = oplog_service
+                    .download_payload(owned_worker_id, &response)
+                    .await?;
                 let proto_type_annotated_value: golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue =
                     try_deserialize(&payload_bytes)?.unwrap_or(
                         golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue::Record(
@@ -705,6 +766,7 @@ impl PublicOplogEntry {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn encode_host_function_response_as_value(
         function_name: &str,
         bytes: &[u8],
