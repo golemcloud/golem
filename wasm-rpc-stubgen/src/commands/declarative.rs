@@ -248,7 +248,7 @@ pub async fn post_component_build_app(config: &Config, app: &Application) -> any
             log_action(
                 "Composing",
                 format!(
-                    "wasm rpc dependencies ({}) into {}, dependencies",
+                    "wasm rpc dependencies ({}) into {}",
                     component.wasm_rpc_dependencies.iter().join(", "),
                     component_name,
                 ),

@@ -1,5 +1,6 @@
 use crate::commands::log::log_warn_action;
 use anyhow::Context;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use wac_graph::types::{Package, SubtypeChecker};
 use wac_graph::{CompositionGraph, EncodeOptions, PackageId, PlugError};
@@ -34,7 +35,7 @@ pub async fn compose(
             graph.types_mut(),
         )?;
         let package_id = graph.register_package(plug_package)?;
-        plug_packages.push(package_id);
+        plug_packages.push((stub_wasm.to_string_lossy().to_string(), package_id));
     }
 
     plug(&mut graph, plug_packages, socket)?;
@@ -53,12 +54,17 @@ pub async fn compose(
 // but instead of returning NoPlugError, it logs skipped instantiations
 fn plug(
     graph: &mut CompositionGraph,
-    plugs: Vec<PackageId>,
+    plugs: Vec<(String, PackageId)>,
     socket: PackageId,
 ) -> Result<(), PlugError> {
     let socket_instantiation = graph.instantiate(socket);
 
-    for plug in plugs {
+    let mut requested_plugs = BTreeSet::<String>::new();
+    let mut plug_exports_to_plug = BTreeMap::<String, String>::new();
+
+    for (plug_name, plug) in plugs {
+        requested_plugs.insert(plug_name.clone());
+
         let mut plug_exports = Vec::new();
         let mut cache = Default::default();
         let mut checker = SubtypeChecker::new(&mut cache);
@@ -75,20 +81,34 @@ fn plug(
 
         // Instantiate the plug component
         let mut plug_instantiation = None;
-        for plug_name in plug_exports {
+        for plug_export_name in plug_exports {
+            plug_exports_to_plug.insert(plug_export_name.clone(), plug_name.clone());
+
             let plug_instantiation =
                 *plug_instantiation.get_or_insert_with(|| graph.instantiate(plug));
             let export = graph
-                .alias_instance_export(plug_instantiation, &plug_name)
+                .alias_instance_export(plug_instantiation, &plug_export_name)
                 .map_err(|err| PlugError::GraphError { source: err.into() })?;
             graph
-                .set_instantiation_argument(socket_instantiation, &plug_name, export)
+                .set_instantiation_argument(socket_instantiation, &plug_export_name, export)
                 .map_err(|err| PlugError::GraphError { source: err.into() })?;
         }
     }
 
-    for (name, _) in graph.get_instantiation_arguments(socket_instantiation) {
-        log_warn_action("Skipping", format!("instantiation of {}, not used", name));
+    let unused_plugs = {
+        for (plug_export_name, _) in graph.get_instantiation_arguments(socket_instantiation) {
+            plug_exports_to_plug
+                .remove(plug_export_name)
+                .iter()
+                .for_each(|plug_name| {
+                    requested_plugs.remove(plug_name);
+                });
+        }
+        requested_plugs
+    };
+
+    for plug_name in unused_plugs {
+        log_warn_action("Skipping", format!("{}, not used", plug_name));
     }
 
     // Export all exports from the socket component.
