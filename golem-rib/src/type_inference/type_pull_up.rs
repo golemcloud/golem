@@ -22,6 +22,8 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
     let mut expr_queue = VecDeque::new();
     make_expr_nodes_queue(expr, &mut expr_queue);
 
+    dbg!(expr_queue.clone());
+
     // select_field(expr, b)
     let mut inferred_type_stack = VecDeque::new();
 
@@ -162,6 +164,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
             }
 
             Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
+                dbg!(inferred_type_stack.clone());
                 let length = match_arms.len();
                 let mut new_resolutions = vec![];
                 for _ in 0..length {
@@ -171,14 +174,10 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
 
                 new_resolutions.reverse();
 
-                dbg!(new_resolutions.clone());
-
                 let inferred_types = new_resolutions
                     .iter()
                     .map(|x| x.inferred_type())
                     .collect::<Vec<_>>();
-
-
 
                 let new_inferred_type = InferredType::all_of(inferred_types).unwrap();
 
