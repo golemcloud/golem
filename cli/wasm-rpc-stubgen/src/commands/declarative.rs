@@ -238,7 +238,7 @@ pub async fn post_component_build_app(config: &Config, app: &Application) -> any
             log_action(
                 "Copying",
                 format!(
-                    "{} to {}, no wasm rpc dependencies defined",
+                    "(without composing) {} to {}, no wasm rpc dependencies defined",
                     input_wasm.to_string_lossy(),
                     output_wasm.to_string_lossy()
                 ),
