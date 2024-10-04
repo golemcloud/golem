@@ -22,10 +22,8 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
     let mut expr_queue = VecDeque::new();
     make_expr_nodes_queue(expr, &mut expr_queue);
 
-    // select_field(expr, b)
     let mut inferred_type_stack = VecDeque::new();
 
-    // First one will be identifier(a) in Expr::Tuple((identfier(a), identifer(b)))
     while let Some(expr) = expr_queue.pop_back() {
         match expr {
             Expr::Tuple(exprs, current_inferred_type) => {
@@ -33,11 +31,14 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 let mut new_exprs = vec![];
 
                 for _ in 0..exprs.len() {
-                    let expr: Expr = inferred_type_stack.pop_back().unwrap();
+                    let expr: Expr = inferred_type_stack.pop_front().unwrap();
                     new_exprs.push(expr.clone());
                     let inferred_type: InferredType = expr.inferred_type();
                     ordered_types.push(inferred_type);
                 }
+
+                new_exprs.reverse();
+                ordered_types.reverse();
 
                 let new_tuple_type = InferredType::Tuple(ordered_types);
 
