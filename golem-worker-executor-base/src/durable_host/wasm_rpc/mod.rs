@@ -122,13 +122,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        // TODO: Now writing TypeAnnotatedValue but must support old WitValue values during recovery
-        let result = Durability::<
+        // NOTE: Could be Durability::<Ctx, SerializableInvokeRequest, TypeAnnotatedValue, SerializableError>::wrap but need to support old WitValue values during recovery
+        let result: Result<WitValue, RpcError> = Durability::<
             Ctx,
             SerializableInvokeRequest,
             TypeAnnotatedValue,
             SerializableError,
-        >::wrap(
+        >::full_custom_wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem::rpc::wasm-rpc::invoke-and-await",
@@ -159,14 +159,41 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .await
                 })
             },
+            |_, typed_value| Ok(typed_value.clone()),
+            |_, typed_value| {
+                typed_value
+                    .clone()
+                    .try_into()
+                    .map_err(|s: String| RpcError::ProtocolError { details: s })
+            },
+            |_, oplog, entry| {
+                Box::pin(async move {
+                    let typed_value = DurableWorkerCtx::<Ctx>::try_default_load::<
+                        TypeAnnotatedValue,
+                        SerializableError,
+                    >(oplog.clone(), entry)
+                    .await;
+                    if let Ok(Ok(typed_value)) = typed_value {
+                        typed_value
+                            .try_into()
+                            .map_err(|s: String| RpcError::ProtocolError { details: s })
+                    } else if let Ok(Err(err)) = typed_value {
+                        Err(err.into())
+                    } else {
+                        let wit_value = DurableWorkerCtx::<Ctx>::default_load::<
+                            WitValue,
+                            SerializableError,
+                        >(oplog, entry)
+                        .await;
+                        wit_value.map_err(|err| err.into())
+                    }
+                })
+            },
         )
         .await;
 
         match result {
-            Ok(result) => {
-                let wit_value: WitValue = result.try_into().map_err(|s: String| anyhow!(s))?;
-                Ok(Ok(wit_value))
-            }
+            Ok(wit_value) => Ok(Ok(wit_value)),
             Err(err) => {
                 error!("RPC error: {err}");
                 Ok(Err(err.into()))

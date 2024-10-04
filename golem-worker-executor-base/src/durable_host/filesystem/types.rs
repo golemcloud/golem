@@ -245,7 +245,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                     data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
                 })
             },
-            |_ctx, times| {
+            move |_ctx, times| {
                 Box::pin(async move {
                     let accessed = times.data_access_timestamp.as_ref().map(|t| {
                         SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
@@ -304,7 +304,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
                     data_modification_timestamp: stat.data_modification_timestamp.map(|t| t.into()),
                 })
             },
-            |_ctx, times| {
+            move |_ctx, times| {
                 Box::pin(async move {
                     let accessed = times.data_access_timestamp.as_ref().map(|t| {
                         SystemTimeSpec::from(<SerializableDateTime as Into<SystemTime>>::into(
