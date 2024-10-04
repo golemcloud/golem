@@ -47,7 +47,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Expr {
                 let mut new_exprs = vec![];
 
                 for _ in 0..exprs.len() {
-                    let expr: Expr = inferred_type_stack.pop_front().unwrap();
+                    let expr: Expr = inferred_type_stack.pop_back().unwrap();
                     new_exprs.push(expr.clone());
                     let inferred_type: InferredType = expr.inferred_type();
                     ordered_types.push(inferred_type);
@@ -627,9 +627,9 @@ mod type_pull_up_tests {
             Expr::literal("foo"),
             Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
         ]);
-        expr.pull_types_up_legacy().unwrap();
+        let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(
-            expr.inferred_type(),
+            new_expr.inferred_type(),
             InferredType::Tuple(vec![InferredType::Str, InferredType::U64])
         );
     }
