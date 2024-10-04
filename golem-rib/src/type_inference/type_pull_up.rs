@@ -625,14 +625,11 @@ mod internal {
         for old_expr in exprs.iter().rev() {
             let expr = inferred_type_stack.pop_front().unwrap_or(old_expr.clone());
             new_exprs.push(expr.clone());
-            let inferred_type: InferredType = expr.inferred_type();
-            ordered_types.push(inferred_type);
         }
 
         new_exprs.reverse();
-        ordered_types.reverse();
 
-        let new_tuple_type = InferredType::Tuple(ordered_types);
+        let new_tuple_type  =InferredType::Tuple(new_exprs.iter().map(|x| x.inferred_type()).collect());
 
         let merged_tuple_type = current_inferred_type.merge(new_tuple_type);
         let new_tuple = Expr::Tuple(new_exprs.iter().cloned().collect(), merged_tuple_type);
@@ -640,7 +637,7 @@ mod internal {
 
         Ok(())
     }
-    
+
     pub(crate) fn get_inferred_type_of_selected_field(
         select_field: &str,
         select_from_type: &InferredType,
