@@ -26,8 +26,8 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
 
     while let Some(expr) = expr_queue.pop_back() {
         match expr {
-            Expr::Tuple(exprs, current_inferred_type) => {
-                internal::handle_tuple(exprs, current_inferred_type, &mut inferred_type_stack)?;
+            Expr::Tuple(tuple_elems, current_inferred_type) => {
+                internal::handle_tuple(tuple_elems, current_inferred_type, &mut inferred_type_stack)?;
             }
 
             Expr::Identifier(variable_id, current_inferred_type) => {
@@ -434,7 +434,9 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
         }
     }
 
-    inferred_type_stack.pop_front().ok_or("Failed type inference during pull up".to_string())
+    inferred_type_stack
+        .pop_front()
+        .ok_or("Failed type inference during pull up".to_string())
 }
 
 pub fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
@@ -613,26 +615,31 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
 }
 
 mod internal {
-    use std::collections::VecDeque;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{ArmPattern, Expr, InferredType};
+    use std::collections::VecDeque;
 
-    pub(crate) fn handle_tuple(exprs: &Vec<Expr>, current_inferred_type: &InferredType, inferred_type_stack: &mut VecDeque<Expr>) -> Result<(), String> {
-        let mut ordered_types = vec![];
-        let mut new_exprs = vec![];
+    pub(crate) fn handle_tuple(
+        tuple_elems: &Vec<Expr>,
+        current_tuple_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) -> Result<(), String> {
+        let mut new_tuple_elems = vec![];
 
-        for old_expr in exprs.iter().rev() {
-            let expr = inferred_type_stack.pop_front().unwrap_or(old_expr.clone());
-            new_exprs.push(expr.clone());
+        for current_tuple_elem in tuple_elems.iter().rev() {
+            let pulled_up_type = inferred_type_stack.pop_front();
+            let new_tuple_elem = pulled_up_type.unwrap_or(current_tuple_elem.clone());
+            new_tuple_elems.push(new_tuple_elem);
         }
 
-        new_exprs.reverse();
+        new_tuple_elems.reverse();
 
-        let new_tuple_type  =InferredType::Tuple(new_exprs.iter().map(|x| x.inferred_type()).collect());
+        let new_tuple_type =
+            InferredType::Tuple(new_tuple_elems.iter().map(|x| x.inferred_type()).collect());
 
-        let merged_tuple_type = current_inferred_type.merge(new_tuple_type);
-        let new_tuple = Expr::Tuple(new_exprs.iter().cloned().collect(), merged_tuple_type);
+        let merged_tuple_type = current_tuple_type.merge(new_tuple_type);
+        let new_tuple = Expr::Tuple(new_tuple_elems, merged_tuple_type);
         inferred_type_stack.push_front(new_tuple);
 
         Ok(())
