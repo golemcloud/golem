@@ -170,14 +170,10 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
                 );
             }
             Expr::Sequence(exprs, current_inferred_type) => {
-                internal::handle_sequence(
-                    exprs,
-                    current_inferred_type,
-                    &mut inferred_type_stack,
-                );
+                internal::handle_sequence(exprs, current_inferred_type, &mut inferred_type_stack);
             }
             Expr::Record(expr, inferred_type) => {
-               internal::handle_record(expr, inferred_type, &mut inferred_type_stack);
+                internal::handle_record(expr, inferred_type, &mut inferred_type_stack);
             }
             Expr::Literal(_, _) => {
                 inferred_type_stack.push_front(expr.clone());
@@ -188,88 +184,29 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
             Expr::Boolean(_, _) => {
                 inferred_type_stack.push_front(expr.clone());
             }
-            Expr::And(_, _, _) => {
-                let right = inferred_type_stack.pop_front().unwrap();
-                let left = inferred_type_stack.pop_front().unwrap();
-                let new_and = Expr::And(Box::new(left), Box::new(right), InferredType::Bool);
-                inferred_type_stack.push_front(new_and);
+            Expr::And(left, right, _) => {
+                internal::handle_binary(
+                    left,
+                    right,
+                    &InferredType::Bool,
+                    &mut inferred_type_stack,
+                    Expr::And,
+                );
             }
             Expr::Call(call_type, exprs, inferred_type) => {
-                let mut new_arg_exprs = vec![];
-
-                for _ in 0..exprs.len() {
-                    let expr = inferred_type_stack.pop_back().unwrap();
-                    new_arg_exprs.push(expr);
-                }
-
-                match call_type {
-                    CallType::Function(fun_name) => {
-                        let mut function_name = fun_name.clone();
-
-                        let resource_params = function_name.function.raw_resource_params_mut();
-
-                        if let Some(resource_params) = resource_params {
-                            let mut new_resource_params = vec![];
-                            for _ in 0..resource_params.len() {
-                                let expr = inferred_type_stack.pop_front().unwrap();
-                                new_resource_params.push(expr);
-                            }
-
-                            new_resource_params.reverse();
-
-                            resource_params
-                                .iter_mut()
-                                .zip(new_resource_params.iter())
-                                .for_each(|(param, new_expr)| {
-                                    *param = new_expr.clone();
-                                });
-                        }
-
-                        let new_call = Expr::Call(
-                            CallType::Function(function_name),
-                            new_arg_exprs,
-                            inferred_type.clone(),
-                        );
-                        inferred_type_stack.push_front(new_call);
-                    }
-
-                    CallType::VariantConstructor(str) => {
-                        let new_call = Expr::Call(
-                            CallType::VariantConstructor(str.clone()),
-                            new_arg_exprs,
-                            inferred_type.clone(),
-                        );
-                        inferred_type_stack.push_front(new_call);
-                    }
-
-                    CallType::EnumConstructor(str) => {
-                        let new_call = Expr::Call(
-                            CallType::EnumConstructor(str.clone()),
-                            new_arg_exprs,
-                            inferred_type.clone(),
-                        );
-                        inferred_type_stack.push_front(new_call);
-                    }
-                }
+                internal::handle_call(call_type, exprs, inferred_type, &mut inferred_type_stack);
             }
-            Expr::Unwrap(_, inferred_type) => {
-                let expr = inferred_type_stack.pop_front().unwrap();
-                let new_unwrap = Expr::Unwrap(
-                    Box::new(expr.clone()),
-                    inferred_type.merge(expr.inferred_type()),
-                );
-                inferred_type_stack.push_front(new_unwrap);
+
+            Expr::Unwrap(expr, inferred_type) => {
+                internal::handle_unwrap(expr, inferred_type, &mut inferred_type_stack);
             }
+
             Expr::Throw(_, _) => {
                 inferred_type_stack.push_front(expr.clone());
             }
+
             Expr::GetTag(_, inferred_type) => {
-                let expr = inferred_type_stack.pop_front().unwrap();
-                let new_get_tag = Expr::GetTag(
-                    Box::new(expr.clone()),
-                    inferred_type.merge(expr.inferred_type()),
-                );
-                inferred_type_stack.push_front(new_get_tag);
+                internal::handle_get_tag(expr, inferred_type, &mut inferred_type_stack);
             }
         }
     }
@@ -278,7 +215,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
         .pop_front()
         .ok_or("Failed type inference during pull up".to_string())
 }
-
 
 pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
     match expr {
@@ -444,6 +380,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
 }
 
 mod internal {
+    use crate::call_type::CallType;
     use crate::type_inference::type_pull_up::internal;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
@@ -639,10 +576,9 @@ mod internal {
         let mut new_resolutions = vec![];
         let mut new_arm_patterns = vec![];
         for un_inferred_match_arm in current_match_arms.iter().rev() {
-            let arm_resolution =
-                inferred_type_stack
-                    .pop_front()
-                    .unwrap_or(un_inferred_match_arm.arm_resolution_expr.deref().clone());
+            let arm_resolution = inferred_type_stack
+                .pop_front()
+                .unwrap_or(un_inferred_match_arm.arm_resolution_expr.deref().clone());
 
             let mut arm_pattern = un_inferred_match_arm.arm_pattern.clone();
             let mut current_arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
@@ -741,7 +677,9 @@ mod internal {
         current_not_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
-        let expr = inferred_type_stack.pop_front().unwrap_or(original_not_expr.clone());
+        let expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_not_expr.clone());
         let new_not = Expr::Not(Box::new(expr), current_not_type.clone());
         inferred_type_stack.push_front(new_not);
     }
@@ -751,10 +689,16 @@ mod internal {
         original_right_expr: &Expr,
         current_inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
-        f: F
-    ) where F: Fn(Box<Expr>, Box<Expr>, InferredType) -> Expr {
-        let right_expr = inferred_type_stack.pop_front().unwrap_or(original_right_expr.clone());
-        let left_expr = inferred_type_stack.pop_front().unwrap_or(original_left_expr.clone());
+        f: F,
+    ) where
+        F: Fn(Box<Expr>, Box<Expr>, InferredType) -> Expr,
+    {
+        let right_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_right_expr.clone());
+        let left_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_left_expr.clone());
         let new_binary = f(
             Box::new(left_expr),
             Box::new(right_expr),
@@ -763,6 +707,95 @@ mod internal {
         inferred_type_stack.push_front(new_binary);
     }
 
+    pub(crate) fn handle_call(
+        call_type: &CallType,
+        exprs: &Vec<Expr>,
+        inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let mut new_arg_exprs = vec![];
+
+        for expr in exprs.iter().rev() {
+            let expr = inferred_type_stack.pop_back().unwrap_or(expr.clone());
+            new_arg_exprs.push(expr);
+        }
+
+        match call_type {
+            CallType::Function(fun_name) => {
+                let mut function_name = fun_name.clone();
+
+                let resource_params = function_name.function.raw_resource_params_mut();
+
+                if let Some(resource_params) = resource_params {
+                    let mut new_resource_params = vec![];
+                    for expr in resource_params.iter().rev() {
+                        let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+                        new_resource_params.push(expr);
+                    }
+
+                    new_resource_params.reverse();
+
+                    resource_params
+                        .iter_mut()
+                        .zip(new_resource_params.iter())
+                        .for_each(|(param, new_expr)| {
+                            *param = new_expr.clone();
+                        });
+                }
+
+                let new_call = Expr::Call(
+                    CallType::Function(function_name),
+                    new_arg_exprs,
+                    inferred_type.clone(),
+                );
+                inferred_type_stack.push_front(new_call);
+            }
+
+            CallType::VariantConstructor(str) => {
+                let new_call = Expr::Call(
+                    CallType::VariantConstructor(str.clone()),
+                    new_arg_exprs,
+                    inferred_type.clone(),
+                );
+                inferred_type_stack.push_front(new_call);
+            }
+
+            CallType::EnumConstructor(str) => {
+                let new_call = Expr::Call(
+                    CallType::EnumConstructor(str.clone()),
+                    new_arg_exprs,
+                    inferred_type.clone(),
+                );
+                inferred_type_stack.push_front(new_call);
+            }
+        }
+    }
+
+    pub(crate) fn handle_unwrap(
+        expr: &Expr,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+        let new_unwrap = Expr::Unwrap(
+            Box::new(expr.clone()),
+            current_inferred_type.merge(expr.inferred_type()),
+        );
+        inferred_type_stack.push_front(new_unwrap);
+    }
+
+    pub(crate) fn handle_get_tag(
+        expr: &Expr,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+        let new_get_tag = Expr::GetTag(
+            Box::new(expr.clone()),
+            current_inferred_type.merge(expr.inferred_type()),
+        );
+        inferred_type_stack.push_front(new_get_tag);
+    }
 
     pub(crate) fn handle_let(
         original_variable_id: &VariableId,
@@ -771,7 +804,9 @@ mod internal {
         current_inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
-        let expr = inferred_type_stack.pop_front().unwrap_or(original_expr.clone());
+        let expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_expr.clone());
         let new_let = Expr::Let(
             original_variable_id.clone(),
             optional_type.clone(),
@@ -788,21 +823,25 @@ mod internal {
     ) {
         let mut new_exprs = vec![];
 
-        for expr in current_expr_list {
+        for expr in current_expr_list.iter().rev() {
             let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
             new_exprs.push(expr);
         }
 
         new_exprs.reverse();
 
-        let new_sequence ={
-            if let Some(first_expr) = new_exprs.first() {
-                Expr::Sequence(new_exprs, current_inferred_type.merge(first_expr.inferred_type()))
+        let new_sequence = {
+            if let Some(first_expr) = new_exprs.clone().first() {
+                Expr::Sequence(
+                    new_exprs,
+                    InferredType::List(Box::new(
+                        current_inferred_type.merge(first_expr.inferred_type()),
+                    )),
+                )
             } else {
                 Expr::Sequence(new_exprs, current_inferred_type.clone())
             }
         };
-
 
         inferred_type_stack.push_front(new_sequence);
     }
@@ -816,7 +855,9 @@ mod internal {
         let mut new_exprs = vec![];
 
         for (field, expr) in current_expr_list.iter().rev() {
-            let expr: Expr = inferred_type_stack.pop_front().unwrap_or(*expr.deref().clone());
+            let expr: Expr = inferred_type_stack
+                .pop_front()
+                .unwrap_or(expr.deref().clone());
             ordered_types.push((field.clone(), expr.inferred_type()));
             new_exprs.push((field.clone(), Box::new(expr.clone())));
         }
@@ -828,9 +869,20 @@ mod internal {
 
         let merged_record_type = current_inferred_type.merge(new_record_type);
 
-        let new_record =
-            Expr::Record(new_exprs.iter().cloned().collect(), merged_record_type);
+        let new_record = Expr::Record(new_exprs.iter().cloned().collect(), merged_record_type);
         inferred_type_stack.push_front(new_record);
+    }
+
+    pub(crate) fn handle_and(
+        left: &Expr,
+        right: &Expr,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let right = inferred_type_stack.pop_front().unwrap_or(right.clone());
+        let left = inferred_type_stack.pop_front().unwrap_or(left.clone());
+        let new_and = Expr::And(Box::new(left), Box::new(right), InferredType::Bool);
+        inferred_type_stack.push_front(new_and);
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
@@ -1019,10 +1071,7 @@ mod type_pull_up_tests {
         let mut expr = Expr::concat(vec![Expr::literal("foo"), Expr::literal("bar")]);
         let new_expr = expr.pull_types_up().unwrap();
         let expected = Expr::Concat(
-            vec![
-                Expr::literal("foo"),
-                Expr::literal("bar"),
-            ],
+            vec![Expr::literal("foo"), Expr::literal("bar")],
             InferredType::Str,
         );
         assert_eq!(new_expr, expected);
