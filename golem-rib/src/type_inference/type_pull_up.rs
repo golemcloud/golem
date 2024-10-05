@@ -90,24 +90,17 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
                 );
             }
 
-            Expr::PatternMatch(predicate, uninferred_match_arms, current_inferred_type) => {
+            Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
                 internal::handle_pattern_match(
                     predicate,
-                    uninferred_match_arms,
+                    match_arms,
                     current_inferred_type,
                     &mut inferred_type_stack,
                 );
             }
 
-            Expr::Concat(exprs, current_inferred_type) => {
-                let mut new_exprs = vec![];
-                for _ in 0..exprs.len() {
-                    let expr = inferred_type_stack.pop_front().unwrap();
-                    new_exprs.push(expr);
-                }
-
-                let new_concat = Expr::Concat(new_exprs, InferredType::Str);
-                inferred_type_stack.push_front(new_concat);
+            Expr::Concat(exprs, _) => {
+                internal::handle_concat(exprs, &mut inferred_type_stack);
             }
 
             Expr::Multiple(exprs, current_inferred_type) => {
@@ -745,6 +738,19 @@ mod internal {
         inferred_type_stack.push_front(new_expr);
     }
 
+    pub(crate) fn handle_concat(exprs: &Vec<Expr>, inferred_type_stack: &mut VecDeque<Expr>) {
+        let mut new_exprs = vec![];
+        for expr in exprs {
+            let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+            new_exprs.push(expr);
+        }
+
+        new_exprs.reverse();
+
+        let new_concat = Expr::Concat(new_exprs, InferredType::Str);
+        inferred_type_stack.push_front(new_concat);
+    }
+
     pub(crate) fn get_inferred_type_of_selected_field(
         select_field: &str,
         select_from_type: &InferredType,
@@ -928,9 +934,16 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_concat() {
-        let mut expr = Expr::concat(vec![Expr::number(1f64), Expr::number(2f64)]);
+        let mut expr = Expr::concat(vec![Expr::literal("foo"), Expr::literal("bar")]);
         let new_expr = expr.pull_types_up().unwrap();
-        assert_eq!(new_expr.inferred_type(), InferredType::Str);
+        let expected = Expr::Concat(
+            vec![
+                Expr::literal("foo"),
+                Expr::literal("bar"),
+            ],
+            InferredType::Str,
+        );
+        assert_eq!(new_expr, expected);
     }
 
     #[test]
