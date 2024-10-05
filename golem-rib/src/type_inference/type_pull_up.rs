@@ -16,7 +16,6 @@ use crate::call_type::CallType;
 use crate::{Expr, InferredType};
 use std::borrow::BorrowMut;
 use std::collections::VecDeque;
-use std::thread::current;
 
 pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
     let mut expr_queue = VecDeque::new();
@@ -104,92 +103,71 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
             }
 
             Expr::Multiple(exprs, current_inferred_type) => {
-                let length = exprs.len();
-                let mut new_exprs = vec![];
-                for _ in 0..length {
-                    let expr = inferred_type_stack.pop_front().unwrap();
-                    new_exprs.push(expr);
-                }
-
-                new_exprs.reverse();
-
-                let new_inferred_type = new_exprs.last().unwrap().inferred_type();
-
-                let new_multiple =
-                    Expr::Multiple(new_exprs, current_inferred_type.merge(new_inferred_type));
-                inferred_type_stack.push_front(new_multiple);
+                internal::handle_multiple(exprs, current_inferred_type, &mut inferred_type_stack);
             }
 
             Expr::Not(_, current_inferred_type) => {
-                let expr = inferred_type_stack.pop_front().unwrap();
-                let new_not = Expr::Not(Box::new(expr), current_inferred_type.clone());
-                inferred_type_stack.push_front(new_not);
+                internal::handle_not(expr, current_inferred_type, &mut inferred_type_stack);
             }
 
-            Expr::GreaterThan(_, _, current_inferred_type) => {
-                let right_expr = inferred_type_stack.pop_front().unwrap();
-                let left_expr = inferred_type_stack.pop_front().unwrap();
-                let new_greater_than = Expr::GreaterThan(
-                    Box::new(left_expr),
-                    Box::new(right_expr),
-                    current_inferred_type.clone(),
+            Expr::GreaterThan(left, right, current_inferred_type) => {
+                internal::handle_binary(
+                    left,
+                    right,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                    Expr::GreaterThan,
                 );
-                inferred_type_stack.push_front(new_greater_than);
             }
 
-            Expr::GreaterThanOrEqualTo(_, _, current_inferred_type) => {
-                let right_expr = inferred_type_stack.pop_front().unwrap();
-                let left_expr = inferred_type_stack.pop_front().unwrap();
-                let new_greater_than_or_equal_to = Expr::GreaterThanOrEqualTo(
-                    Box::new(left_expr),
-                    Box::new(right_expr),
-                    current_inferred_type.clone(),
+            Expr::GreaterThanOrEqualTo(left, right, current_inferred_type) => {
+                internal::handle_binary(
+                    left,
+                    right,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                    Expr::GreaterThanOrEqualTo,
                 );
-                inferred_type_stack.push_front(new_greater_than_or_equal_to);
             }
 
-            Expr::LessThanOrEqualTo(_, _, current_inferred_type) => {
-                let right_expr = inferred_type_stack.pop_front().unwrap();
-                let left_expr = inferred_type_stack.pop_front().unwrap();
-                let new_less_than_or_equal_to = Expr::LessThanOrEqualTo(
-                    Box::new(left_expr),
-                    Box::new(right_expr),
-                    current_inferred_type.clone(),
+            Expr::LessThanOrEqualTo(left, right, current_inferred_type) => {
+                internal::handle_binary(
+                    left,
+                    right,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                    Expr::LessThanOrEqualTo,
                 );
-                inferred_type_stack.push_front(new_less_than_or_equal_to);
             }
 
-            Expr::EqualTo(_, _, current_inferred_type) => {
-                let right_expr = inferred_type_stack.pop_front().unwrap();
-                let left_expr = inferred_type_stack.pop_front().unwrap();
-                let new_equal_to = Expr::EqualTo(
-                    Box::new(left_expr),
-                    Box::new(right_expr),
-                    current_inferred_type.clone(),
+            Expr::EqualTo(left, right, current_inferred_type) => {
+                internal::handle_binary(
+                    left,
+                    right,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                    Expr::EqualTo,
                 );
-                inferred_type_stack.push_front(new_equal_to);
             }
 
-            Expr::LessThan(_, _, current_inferred_type) => {
-                let right_expr = inferred_type_stack.pop_front().unwrap();
-                let left_expr = inferred_type_stack.pop_front().unwrap();
-                let new_less_than = Expr::LessThan(
-                    Box::new(left_expr),
-                    Box::new(right_expr),
-                    current_inferred_type.clone(),
+            Expr::LessThan(left, right, current_inferred_type) => {
+                internal::handle_binary(
+                    left,
+                    right,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                    Expr::LessThan,
                 );
-                inferred_type_stack.push_front(new_less_than);
             }
 
             Expr::Let(variable_id, typ, expr, inferred_type) => {
-                let new_expr = inferred_type_stack.pop_front().unwrap();
-                let new_let = Expr::Let(
-                    variable_id.clone(),
-                    typ.clone(),
-                    Box::new(new_expr),
-                    inferred_type.clone(),
+                internal::handle_let(
+                    variable_id,
+                    expr,
+                    typ,
+                    inferred_type,
+                    &mut inferred_type_stack,
                 );
-                inferred_type_stack.push_front(new_let);
             }
             Expr::Sequence(exprs, current_inferred_type) => {
                 let mut new_exprs = vec![];
@@ -509,8 +487,9 @@ mod internal {
     use crate::type_inference::type_pull_up::internal;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
-    use crate::{ArmPattern, Expr, InferredType, MatchArm};
+    use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
     use std::collections::VecDeque;
+    use std::ops::Deref;
 
     pub(crate) fn handle_tuple(
         tuple_elems: &Vec<Expr>,
@@ -681,31 +660,36 @@ mod internal {
 
     pub fn handle_pattern_match(
         predicate: &Expr,
-        uninferred_match_arms: &Vec<MatchArm>,
+        current_match_arms: &Vec<MatchArm>,
         current_inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
         let mut new_resolutions = vec![];
         let mut new_arm_patterns = vec![];
-        for un_inferred_match_arm in uninferred_match_arms.iter().rev() {
-            let arm_resolution = inferred_type_stack.pop_front().unwrap();
+        for un_inferred_match_arm in current_match_arms.iter().rev() {
+            let arm_resolution =
+                inferred_type_stack
+                    .pop_front()
+                    .unwrap_or(un_inferred_match_arm.arm_resolution_expr.deref().clone());
 
             let mut arm_pattern = un_inferred_match_arm.arm_pattern.clone();
-            let mut uninferred_arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
+            let mut current_arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
 
             let mut new_arm_pattern_exprs = vec![];
 
-            for _ in &uninferred_arm_pattern_exprs {
-                let arm_expr = inferred_type_stack.pop_front().unwrap();
+            for _ in &current_arm_pattern_exprs {
+                let arm_expr = inferred_type_stack.pop_front();
                 new_arm_pattern_exprs.push(arm_expr)
             }
             new_arm_pattern_exprs.reverse();
 
-            uninferred_arm_pattern_exprs
+            current_arm_pattern_exprs
                 .iter_mut()
                 .zip(new_arm_pattern_exprs.iter())
-                .for_each(|(arm_expr, new_expr)| {
-                    **arm_expr = Box::new(new_expr.clone());
+                .for_each(|(arm_expr, new_expr_opt)| {
+                    if let Some(new_expr) = new_expr_opt {
+                        **arm_expr = Box::new(new_expr.clone());
+                    }
                 });
 
             new_resolutions.push(arm_resolution);
@@ -714,7 +698,7 @@ mod internal {
 
         let inferred_types = new_resolutions
             .iter()
-            .map(|x| x.inferred_type())
+            .map(|expr| expr.inferred_type())
             .collect::<Vec<_>>();
 
         let new_inferred_type = InferredType::all_of(inferred_types).unwrap();
@@ -727,6 +711,7 @@ mod internal {
                 arm_resolution_expr: Box::new(arm_resolution.clone()),
             })
             .collect::<Vec<_>>();
+
         new_match_arms.reverse();
 
         let new_expr = Expr::PatternMatch(
@@ -749,6 +734,79 @@ mod internal {
 
         let new_concat = Expr::Concat(new_exprs, InferredType::Str);
         inferred_type_stack.push_front(new_concat);
+    }
+
+    pub(crate) fn handle_multiple(
+        current_expr_list: &Vec<Expr>,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let mut new_exprs = vec![];
+        for _ in current_expr_list {
+            let expr = inferred_type_stack.pop_front();
+            if let Some(expr) = expr {
+                new_exprs.push(expr);
+            } else {
+                break;
+            }
+        }
+
+        new_exprs.reverse();
+
+        let new_inferred_type = if let Some(last_expr) = new_exprs.last() {
+            last_expr.inferred_type()
+        } else {
+            InferredType::Unknown
+        };
+
+        let new_multiple =
+            Expr::Multiple(new_exprs, current_inferred_type.merge(new_inferred_type));
+        inferred_type_stack.push_front(new_multiple);
+    }
+
+    pub(crate) fn handle_not(
+        original_not_expr: &Expr,
+        current_not_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let expr = inferred_type_stack.pop_front().unwrap_or(original_not_expr.clone());
+        let new_not = Expr::Not(Box::new(expr), current_not_type.clone());
+        inferred_type_stack.push_front(new_not);
+    }
+
+    pub(crate) fn handle_binary<F>(
+        original_left_expr: &Expr,
+        original_right_expr: &Expr,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+        f: F
+    ) where F: Fn(Box<Expr>, Box<Expr>, InferredType) -> Expr {
+        let right_expr = inferred_type_stack.pop_front().unwrap_or(original_right_expr.clone());
+        let left_expr = inferred_type_stack.pop_front().unwrap_or(original_left_expr.clone());
+        let new_binary = f(
+            Box::new(left_expr),
+            Box::new(right_expr),
+            current_inferred_type.clone(),
+        );
+        inferred_type_stack.push_front(new_binary);
+    }
+
+
+    pub(crate) fn handle_let(
+        original_variable_id: &VariableId,
+        original_expr: &Expr,
+        optional_type: &Option<crate::parser::type_name::TypeName>,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let expr = inferred_type_stack.pop_front().unwrap_or(original_expr.clone());
+        let new_let = Expr::Let(
+            original_variable_id.clone(),
+            optional_type.clone(),
+            Box::new(expr),
+            current_inferred_type.clone(),
+        );
+        inferred_type_stack.push_front(new_let);
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
