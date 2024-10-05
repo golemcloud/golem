@@ -27,7 +27,7 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
     while let Some(expr) = expr_queue.pop_back() {
         match expr {
             Expr::Tuple(tuple_elems, current_inferred_type) => {
-                internal::handle_tuple(tuple_elems, current_inferred_type, &mut inferred_type_stack)?;
+                internal::handle_tuple(tuple_elems, current_inferred_type, &mut inferred_type_stack);
             }
 
             expr @ Expr::Identifier(_, _) => {
@@ -38,65 +38,20 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
 
-            Expr::SelectField(_, field, current_inferred_type) => {
-                let expr = inferred_type_stack.pop_front().unwrap();
-                let inferred_type_of_selection_expr = expr.inferred_type();
-                let field_type = internal::get_inferred_type_of_selected_field(
-                    field,
-                    &inferred_type_of_selection_expr,
-                )
-                .unwrap();
-                let new_select_field = Expr::SelectField(
-                    Box::new(expr.clone()),
-                    field.clone(),
-                    current_inferred_type.merge(field_type),
-                );
-
-                inferred_type_stack.push_front(new_select_field);
+            Expr::SelectField(expr, field, current_inferred_type) => {
+                internal::handle_select_field(expr, field, current_inferred_type, &mut inferred_type_stack)?;
             }
 
             Expr::SelectIndex(expr, index, current_inferred_type) => {
-                let expr = inferred_type_stack.pop_front().unwrap();
-                let inferred_type_of_selection_expr = expr.inferred_type();
-                let list_type = internal::get_inferred_type_of_selected_index(
-                    *index,
-                    &inferred_type_of_selection_expr,
-                )
-                .unwrap();
-                let new_select_index = Expr::SelectIndex(
-                    Box::new(expr.clone()),
-                    *index,
-                    current_inferred_type.merge(list_type),
-                );
-                inferred_type_stack.push_front(new_select_index);
+                internal::handle_select_index(expr, index, current_inferred_type, &mut inferred_type_stack)?;
             }
 
             Expr::Result(Ok(_), current_inferred_type) => {
-                let expr = inferred_type_stack.pop_front().unwrap();
-                let inferred_type_of_ok_expr = expr.inferred_type();
-                let result_type = InferredType::Result {
-                    ok: Some(Box::new(inferred_type_of_ok_expr)),
-                    error: None,
-                };
-                let new_result = Expr::Result(
-                    Ok(Box::new(expr.clone())),
-                    current_inferred_type.merge(result_type),
-                );
-                inferred_type_stack.push_front(new_result);
+                internal::handle_result_ok(expr, current_inferred_type, &mut inferred_type_stack);
             }
 
             Expr::Result(Err(_), current_inferred_type) => {
-                let expr = inferred_type_stack.pop_front().unwrap();
-                let inferred_type_of_error_expr = expr.inferred_type();
-                let result_type = InferredType::Result {
-                    ok: None,
-                    error: Some(Box::new(inferred_type_of_error_expr)),
-                };
-                let new_result = Expr::Result(
-                    Err(Box::new(expr.clone())),
-                    current_inferred_type.merge(result_type),
-                );
-                inferred_type_stack.push_front(new_result);
+                internal::handle_result_error(expr, current_inferred_type, &mut inferred_type_stack);
             }
 
             Expr::Option(Some(expr), current_inferred_type) => {
@@ -548,7 +503,7 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
         Expr::SelectIndex(expr, index, inferred_type) => {
             expr.pull_types_up_legacy()?;
             let expr_type = expr.inferred_type();
-            let list_type = internal::get_inferred_type_of_selected_index(*index, &expr_type)?;
+            let list_type = internal::get_inferred_type_of_selection_index(*index, &expr_type)?;
             *inferred_type = inferred_type.merge(list_type);
         }
         Expr::Literal(_, _) => {}
@@ -615,12 +570,13 @@ mod internal {
     use crate::type_refinement::TypeRefinement;
     use crate::{ArmPattern, Expr, InferredType};
     use std::collections::VecDeque;
+    use crate::type_inference::type_pull_up::internal;
 
     pub(crate) fn handle_tuple(
         tuple_elems: &Vec<Expr>,
         current_tuple_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
-    ) -> Result<(), String> {
+    ) {
         let mut new_tuple_elems = vec![];
 
         for current_tuple_elem in tuple_elems.iter().rev() {
@@ -637,8 +593,88 @@ mod internal {
         let merged_tuple_type = current_tuple_type.merge(new_tuple_type);
         let new_tuple = Expr::Tuple(new_tuple_elems, merged_tuple_type);
         inferred_type_stack.push_front(new_tuple);
+    }
+
+    pub(crate) fn handle_select_field(
+        original_selection_expr: &Expr,
+        field: &str,
+        current_field_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) -> Result<(), String> {
+        let expr = inferred_type_stack.pop_front().unwrap_or(original_selection_expr.clone());
+        let select_from_expr_type = expr.inferred_type();
+        let selection_field_type = get_inferred_type_of_selected_field(
+            field,
+            &select_from_expr_type,
+        )?;
+
+        let new_select_field = Expr::SelectField(
+            Box::new(expr.clone()),
+            field.to_string(),
+            current_field_type.merge(selection_field_type),
+        );
+
+        inferred_type_stack.push_front(new_select_field);
 
         Ok(())
+    }
+
+    pub fn handle_select_index(
+        original_selection_expr: &Expr,
+        index: &usize,
+        current_index_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) -> Result<(), String> {
+        let expr = inferred_type_stack.pop_front().unwrap_or(original_selection_expr.clone());
+        let inferred_type_of_selection_expr = expr.inferred_type();
+        let list_type = internal::get_inferred_type_of_selection_index(
+            *index,
+            &inferred_type_of_selection_expr,
+        )?;
+        let new_select_index = Expr::SelectIndex(
+            Box::new(expr.clone()),
+            *index,
+            current_index_type.merge(list_type),
+        );
+        inferred_type_stack.push_front(new_select_index);
+
+        Ok(())
+    }
+
+    pub(crate) fn handle_result_ok(
+        original_ok_expr: &Expr,
+        current_ok_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let ok_expr = inferred_type_stack.pop_front().unwrap_or(original_ok_expr.clone());
+        let inferred_type_of_ok_expr = ok_expr.inferred_type();
+        let result_type = InferredType::Result {
+            ok: Some(Box::new(inferred_type_of_ok_expr)),
+            error: None,
+        };
+        let new_result = Expr::Result(
+            Ok(Box::new(ok_expr.clone())),
+            current_ok_type.merge(result_type),
+        );
+        inferred_type_stack.push_front(new_result);
+    }
+
+    pub(crate) fn handle_result_error(
+        original_error_expr: &Expr,
+        current_error_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    )  {
+        let expr = inferred_type_stack.pop_front().unwrap_or(original_error_expr.clone());
+        let inferred_type_of_error_expr = expr.inferred_type();
+        let result_type = InferredType::Result {
+            ok: None,
+            error: Some(Box::new(inferred_type_of_error_expr)),
+        };
+        let new_result = Expr::Result(
+            Err(Box::new(expr.clone())),
+            current_error_type.merge(result_type),
+        );
+        inferred_type_stack.push_front(new_result);
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
@@ -653,7 +689,7 @@ mod internal {
         Ok(refined_record.inner_type_by_field(select_field))
     }
 
-    pub(crate) fn get_inferred_type_of_selected_index(
+    pub(crate) fn get_inferred_type_of_selection_index(
         selected_index: usize,
         select_from_type: &InferredType,
     ) -> Result<InferredType, String> {
