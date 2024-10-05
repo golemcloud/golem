@@ -27,7 +27,11 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
     while let Some(expr) = expr_queue.pop_back() {
         match expr {
             Expr::Tuple(tuple_elems, current_inferred_type) => {
-                internal::handle_tuple(tuple_elems, current_inferred_type, &mut inferred_type_stack);
+                internal::handle_tuple(
+                    tuple_elems,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                );
             }
 
             expr @ Expr::Identifier(_, _) => {
@@ -39,11 +43,21 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
             }
 
             Expr::SelectField(expr, field, current_inferred_type) => {
-                internal::handle_select_field(expr, field, current_inferred_type, &mut inferred_type_stack)?;
+                internal::handle_select_field(
+                    expr,
+                    field,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                )?;
             }
 
             Expr::SelectIndex(expr, index, current_inferred_type) => {
-                internal::handle_select_index(expr, index, current_inferred_type, &mut inferred_type_stack)?;
+                internal::handle_select_index(
+                    expr,
+                    index,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                )?;
             }
 
             Expr::Result(Ok(_), current_inferred_type) => {
@@ -51,50 +65,29 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
             }
 
             Expr::Result(Err(_), current_inferred_type) => {
-                internal::handle_result_error(expr, current_inferred_type, &mut inferred_type_stack);
+                internal::handle_result_error(
+                    expr,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                );
             }
 
             Expr::Option(Some(expr), current_inferred_type) => {
-                let expr = inferred_type_stack.pop_front().unwrap();
-                let inferred_type_of_some_expr = expr.inferred_type();
-                let option_type = InferredType::Option(Box::new(inferred_type_of_some_expr));
-                let new_option = Expr::Option(
-                    Some(Box::new(expr.clone())),
-                    current_inferred_type.merge(option_type),
-                );
-                inferred_type_stack.push_front(new_option);
+                internal::handle_option_some(expr, current_inferred_type, &mut inferred_type_stack);
             }
 
             Expr::Option(None, current_inferred_type) => {
                 inferred_type_stack.push_front(Expr::Option(None, current_inferred_type.clone()));
             }
 
-            Expr::Cond(_, _, _, current_inferred_type) => {
-                let else_expr = inferred_type_stack.pop_front().unwrap();
-                let then_expr = inferred_type_stack.pop_front().unwrap();
-                let cond_expr = inferred_type_stack.pop_front().unwrap();
-                let inferred_type_of_then_expr = then_expr.inferred_type();
-                let inferred_type_of_else_expr = else_expr.inferred_type();
-
-                let new_type = if inferred_type_of_then_expr == inferred_type_of_then_expr {
-                    current_inferred_type.merge(inferred_type_of_then_expr)
-                } else if let Some(cond_then_else_type) = InferredType::all_of(vec![
-                    inferred_type_of_then_expr,
-                    inferred_type_of_else_expr,
-                ]) {
-                    current_inferred_type.merge(cond_then_else_type)
-                } else {
-                    current_inferred_type.clone()
-                };
-
-                let new_expr = Expr::Cond(
-                    Box::new(cond_expr),
-                    Box::new(then_expr.clone()),
-                    Box::new(else_expr.clone()),
-                    new_type,
+            Expr::Cond(pred, then, else_, current_inferred_type) => {
+                internal::handle_if_else(
+                    pred,
+                    then,
+                    else_,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
                 );
-
-                inferred_type_stack.push_front(new_expr);
             }
 
             Expr::PatternMatch(predicate, uninferred_match_arms, current_inferred_type) => {
@@ -566,11 +559,11 @@ pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
 }
 
 mod internal {
+    use crate::type_inference::type_pull_up::internal;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
     use crate::{ArmPattern, Expr, InferredType};
     use std::collections::VecDeque;
-    use crate::type_inference::type_pull_up::internal;
 
     pub(crate) fn handle_tuple(
         tuple_elems: &Vec<Expr>,
@@ -601,12 +594,12 @@ mod internal {
         current_field_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) -> Result<(), String> {
-        let expr = inferred_type_stack.pop_front().unwrap_or(original_selection_expr.clone());
+        let expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_selection_expr.clone());
         let select_from_expr_type = expr.inferred_type();
-        let selection_field_type = get_inferred_type_of_selected_field(
-            field,
-            &select_from_expr_type,
-        )?;
+        let selection_field_type =
+            get_inferred_type_of_selected_field(field, &select_from_expr_type)?;
 
         let new_select_field = Expr::SelectField(
             Box::new(expr.clone()),
@@ -625,7 +618,9 @@ mod internal {
         current_index_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) -> Result<(), String> {
-        let expr = inferred_type_stack.pop_front().unwrap_or(original_selection_expr.clone());
+        let expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_selection_expr.clone());
         let inferred_type_of_selection_expr = expr.inferred_type();
         let list_type = internal::get_inferred_type_of_selection_index(
             *index,
@@ -646,7 +641,9 @@ mod internal {
         current_ok_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
-        let ok_expr = inferred_type_stack.pop_front().unwrap_or(original_ok_expr.clone());
+        let ok_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_ok_expr.clone());
         let inferred_type_of_ok_expr = ok_expr.inferred_type();
         let result_type = InferredType::Result {
             ok: Some(Box::new(inferred_type_of_ok_expr)),
@@ -663,8 +660,10 @@ mod internal {
         original_error_expr: &Expr,
         current_error_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
-    )  {
-        let expr = inferred_type_stack.pop_front().unwrap_or(original_error_expr.clone());
+    ) {
+        let expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_error_expr.clone());
         let inferred_type_of_error_expr = expr.inferred_type();
         let result_type = InferredType::Result {
             ok: None,
@@ -675,6 +674,62 @@ mod internal {
             current_error_type.merge(result_type),
         );
         inferred_type_stack.push_front(new_result);
+    }
+
+    pub(crate) fn handle_option_some(
+        original_some_expr: &Expr,
+        current_some_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_some_expr.clone());
+        let inferred_type_of_some_expr = expr.inferred_type();
+        let option_type = InferredType::Option(Box::new(inferred_type_of_some_expr));
+        let new_option = Expr::Option(
+            Some(Box::new(expr.clone())),
+            current_some_type.merge(option_type),
+        );
+        inferred_type_stack.push_front(new_option);
+    }
+
+    pub(crate) fn handle_if_else(
+        original_predicate: &Expr,
+        original_then_expr: &Expr,
+        original_else_expr: &Expr,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let else_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_else_expr.clone());
+        let then_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_then_expr.clone());
+        let cond_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_predicate.clone());
+        let inferred_type_of_then_expr = then_expr.inferred_type();
+        let inferred_type_of_else_expr = else_expr.inferred_type();
+
+        let new_type = if inferred_type_of_then_expr == inferred_type_of_then_expr {
+            current_inferred_type.merge(inferred_type_of_then_expr)
+        } else if let Some(cond_then_else_type) =
+            InferredType::all_of(vec![inferred_type_of_then_expr, inferred_type_of_else_expr])
+        {
+            current_inferred_type.merge(cond_then_else_type)
+        } else {
+            current_inferred_type.clone()
+        };
+
+        let new_expr = Expr::Cond(
+            Box::new(cond_expr),
+            Box::new(then_expr.clone()),
+            Box::new(else_expr.clone()),
+            new_type,
+        );
+
+        inferred_type_stack.push_front(new_expr);
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
@@ -870,6 +925,68 @@ mod type_pull_up_tests {
         let mut expr = Expr::not(Expr::boolean(true));
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
+    }
+
+    #[test]
+    pub fn test_pull_up_if_else() {
+        let inner1 =
+            Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+
+        let select_index1 = Expr::select_index(inner1.clone(), 0);
+        let select_index2 = Expr::select_index(inner1, 1);
+
+        let inner2 =
+            Expr::identifier("bar").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
+
+        let select_index3 = Expr::select_index(inner2.clone(), 0);
+        let select_index4 = Expr::select_index(inner2, 1);
+
+        let expr = Expr::cond(
+            Expr::greater_than(select_index1.clone(), select_index2.clone()),
+            select_index3.clone(),
+            select_index4.clone(),
+        );
+
+        let new_expr = expr.pull_types_up().unwrap();
+        let expected = Expr::Cond(
+            Box::new(Expr::GreaterThan(
+                Box::new(Expr::SelectIndex(
+                    Box::new(Expr::Identifier(
+                        VariableId::global("foo".to_string()),
+                        InferredType::List(Box::new(InferredType::U64)),
+                    )),
+                    0,
+                    InferredType::U64,
+                )),
+                Box::new(Expr::SelectIndex(
+                    Box::new(Expr::Identifier(
+                        VariableId::global("foo".to_string()),
+                        InferredType::List(Box::new(InferredType::U64)),
+                    )),
+                    1,
+                    InferredType::U64,
+                )),
+                InferredType::Bool,
+            )),
+            Box::new(Expr::SelectIndex(
+                Box::new(Expr::Identifier(
+                    VariableId::global("bar".to_string()),
+                    InferredType::List(Box::new(InferredType::U64)),
+                )),
+                0,
+                InferredType::U64,
+            )),
+            Box::new(Expr::SelectIndex(
+                Box::new(Expr::Identifier(
+                    VariableId::global("bar".to_string()),
+                    InferredType::List(Box::new(InferredType::U64)),
+                )),
+                1,
+                InferredType::U64,
+            )),
+            InferredType::U64,
+        );
+        assert_eq!(new_expr, expected);
     }
 
     #[test]
