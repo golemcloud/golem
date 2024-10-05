@@ -17,7 +17,7 @@ use crate::{Expr, InferredType};
 use std::borrow::BorrowMut;
 use std::collections::VecDeque;
 
-pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
+pub fn type_pull_up<'a>(expr: &'a Expr) -> Result<Expr, String> {
     let mut expr_queue = VecDeque::new();
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
 
@@ -214,169 +214,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
     inferred_type_stack
         .pop_front()
         .ok_or("Failed type inference during pull up".to_string())
-}
-
-pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
-    match expr {
-        Expr::Tuple(exprs, inferred_type) => {
-            let mut types = vec![];
-            for expr in exprs {
-                expr.pull_types_up_legacy()?;
-                types.push(expr.inferred_type());
-            }
-            let tuple_type = InferredType::Tuple(types);
-            *inferred_type = inferred_type.merge(tuple_type)
-        }
-        Expr::Sequence(exprs, inferred_type) => {
-            let mut types = vec![];
-            for expr in exprs {
-                expr.pull_types_up_legacy()?;
-                types.push(expr.inferred_type());
-            }
-            if let Some(new_inferred_type) = types.first() {
-                let sequence_type = InferredType::List(Box::new(new_inferred_type.clone()));
-                *inferred_type = inferred_type.merge(sequence_type)
-            }
-        }
-        Expr::Record(exprs, inferred_type) => {
-            let mut types = vec![];
-            for (field_name, expr) in exprs {
-                expr.pull_types_up_legacy()?;
-                types.push((field_name.clone(), expr.inferred_type()));
-            }
-            let record_type = InferredType::Record(types);
-            *inferred_type = inferred_type.merge(record_type);
-        }
-        Expr::Option(Some(expr), inferred_type) => {
-            expr.pull_types_up_legacy()?;
-            let option_type = InferredType::Option(Box::new(expr.inferred_type()));
-            *inferred_type = inferred_type.merge(option_type)
-        }
-        Expr::Result(Ok(expr), inferred_type) => {
-            expr.pull_types_up_legacy()?;
-            let result_type = InferredType::Result {
-                ok: Some(Box::new(expr.inferred_type())),
-                error: None,
-            };
-            *inferred_type = inferred_type.merge(result_type)
-        }
-        Expr::Result(Err(expr), inferred_type) => {
-            expr.pull_types_up_legacy()?;
-            let result_type = InferredType::Result {
-                ok: None,
-                error: Some(Box::new(expr.inferred_type())),
-            };
-            *inferred_type = inferred_type.merge(result_type)
-        }
-
-        Expr::Cond(_, then_, else_, inferred_type) => {
-            then_.pull_types_up_legacy()?;
-            else_.pull_types_up_legacy()?;
-            let then_type = then_.inferred_type();
-            let else_type = else_.inferred_type();
-
-            if then_type == else_type {
-                *inferred_type = inferred_type.merge(then_type);
-            } else if let Some(cond_then_else_type) =
-                InferredType::all_of(vec![then_type, else_type])
-            {
-                *inferred_type = inferred_type.merge(cond_then_else_type);
-            }
-        }
-
-        // When it comes to pattern match, the only way to resolve the type of the pattern match
-        // from children (pulling types up) is from the match_arms
-        Expr::PatternMatch(predicate, match_arms, inferred_type) => {
-            predicate.pull_types_up_legacy()?;
-            let mut possible_inference_types = vec![];
-
-            for match_arm in match_arms {
-                internal::pull_up_types_of_arm_pattern(&mut match_arm.arm_pattern)?;
-
-                match_arm.arm_resolution_expr.pull_types_up_legacy()?;
-                possible_inference_types.push(match_arm.arm_resolution_expr.inferred_type())
-            }
-
-            if !possible_inference_types.is_empty() {
-                let first_type = possible_inference_types[0].clone();
-                if possible_inference_types.iter().all(|t| t == &first_type) {
-                    *inferred_type = inferred_type.merge(first_type);
-                } else if let Some(all_of) = InferredType::all_of(possible_inference_types) {
-                    *inferred_type = inferred_type.merge(all_of);
-                }
-            }
-        }
-        Expr::Let(_, _, expr, _) => expr.pull_types_up_legacy()?,
-        Expr::SelectField(expr, field, inferred_type) => {
-            expr.pull_types_up_legacy()?;
-            let expr_type = expr.inferred_type();
-            let field_type = internal::get_inferred_type_of_selected_field(field, &expr_type)?;
-            *inferred_type = inferred_type.merge(field_type);
-        }
-
-        Expr::SelectIndex(expr, index, inferred_type) => {
-            expr.pull_types_up_legacy()?;
-            let expr_type = expr.inferred_type();
-            let list_type = internal::get_inferred_type_of_selection_index(*index, &expr_type)?;
-            *inferred_type = inferred_type.merge(list_type);
-        }
-        Expr::Literal(_, _) => {}
-        Expr::Number(_, _, _) => {}
-        Expr::Flags(_, _) => {}
-        Expr::Identifier(_, _) => {}
-        Expr::Boolean(_, _) => {}
-        Expr::Concat(exprs, _) => {
-            for expr in exprs {
-                expr.pull_types_up_legacy()?
-            }
-        }
-        Expr::Multiple(exprs, inferred_type) => {
-            let length = &exprs.len();
-            for (index, expr) in exprs.iter_mut().enumerate() {
-                expr.pull_types_up_legacy()?;
-
-                if index == length - 1 {
-                    *inferred_type = inferred_type.merge(expr.inferred_type());
-                }
-            }
-        }
-        Expr::Not(expr, _) => expr.pull_types_up_legacy()?,
-        Expr::GreaterThan(left, right, _) => {
-            left.pull_types_up_legacy()?;
-            right.pull_types_up_legacy()?;
-        }
-        Expr::GreaterThanOrEqualTo(left, right, _) => {
-            left.pull_types_up_legacy()?;
-            right.pull_types_up_legacy()?;
-        }
-        Expr::LessThanOrEqualTo(left, right, _) => {
-            left.pull_types_up_legacy()?;
-            right.pull_types_up_legacy()?;
-        }
-        Expr::EqualTo(left, right, _) => {
-            left.pull_types_up_legacy()?;
-            right.pull_types_up_legacy()?;
-        }
-        Expr::LessThan(left, right, _) => {
-            left.pull_types_up_legacy()?;
-            right.pull_types_up_legacy()?;
-        }
-        Expr::Call(_, exprs, _) => {
-            for expr in exprs {
-                expr.pull_types_up_legacy()?
-            }
-        }
-        Expr::Unwrap(expr, _) => expr.pull_types_up_legacy()?,
-        Expr::And(left, right, _) => {
-            left.pull_types_up_legacy()?;
-            right.pull_types_up_legacy()?;
-        }
-        Expr::Throw(_, _) => {}
-        Expr::GetTag(expr, _) => expr.pull_types_up_legacy()?,
-        Expr::Option(None, _) => {}
-    }
-
-    Ok(())
 }
 
 mod internal {
@@ -909,42 +746,6 @@ mod internal {
         Ok(refined_list.inner_type())
     }
 
-    pub(crate) fn pull_up_types_of_arm_pattern(arm_pattern: &mut ArmPattern) -> Result<(), String> {
-        match arm_pattern {
-            ArmPattern::WildCard => {}
-            ArmPattern::As(_, arms_patterns) => {
-                pull_up_types_of_arm_pattern(arms_patterns)?;
-            }
-            ArmPattern::Constructor(_, arm_patterns) => {
-                for arm_pattern in arm_patterns {
-                    pull_up_types_of_arm_pattern(arm_pattern)?;
-                }
-            }
-            ArmPattern::TupleConstructor(arm_patterns) => {
-                for arm_pattern in arm_patterns {
-                    pull_up_types_of_arm_pattern(arm_pattern)?;
-                }
-            }
-
-            ArmPattern::ListConstructor(arm_patterns) => {
-                for arm_pattern in arm_patterns {
-                    pull_up_types_of_arm_pattern(arm_pattern)?;
-                }
-            }
-
-            ArmPattern::RecordConstructor(fields) => {
-                for (_, arm_pattern) in fields {
-                    pull_up_types_of_arm_pattern(arm_pattern)?;
-                }
-            }
-
-            ArmPattern::Literal(expr) => {
-                expr.pull_types_up_legacy()?;
-            }
-        }
-
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -1246,7 +1047,7 @@ mod type_pull_up_tests {
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
             vec![Expr::number(1f64)],
         );
-        expr.pull_types_up_legacy().unwrap();
+        expr.pull_types_up().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
     }
 

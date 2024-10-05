@@ -448,7 +448,8 @@ impl Expr {
         self.infer_all_identifiers()?;
         self.push_types_down()?;
         self.infer_all_identifiers()?;
-        self.pull_types_up_legacy()?;
+        let expr = self.pull_types_up()?;
+        *self = expr;
         self.unify_types().unwrap_or(());
         self.infer_global_inputs();
 
@@ -485,11 +486,7 @@ impl Expr {
     }
 
     pub fn pull_types_up(&self) -> Result<Expr, String> {
-        type_inference::type_pull_up_non_recursive(&self)
-    }
-
-    pub fn pull_types_up_legacy(&mut self) -> Result<(), String> {
-        type_inference::pull_types_up(self)
+        type_inference::type_pull_up(&self)
     }
 
     pub fn infer_global_inputs(&mut self) {
