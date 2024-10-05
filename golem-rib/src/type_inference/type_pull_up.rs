@@ -91,58 +91,12 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
             }
 
             Expr::PatternMatch(predicate, uninferred_match_arms, current_inferred_type) => {
-                let mut new_resolutions = vec![];
-                let mut new_arm_patterns = vec![];
-                for un_inferred_match_arm in uninferred_match_arms.iter().rev() {
-                    let arm_resolution = inferred_type_stack.pop_front().unwrap();
-
-                    let mut arm_pattern = un_inferred_match_arm.arm_pattern.clone();
-                    let mut uninferred_arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
-
-                    let mut new_arm_pattern_exprs = vec![];
-
-                    for _ in &uninferred_arm_pattern_exprs {
-                        let arm_expr = inferred_type_stack.pop_front().unwrap();
-                        new_arm_pattern_exprs.push(arm_expr)
-                    }
-                    new_arm_pattern_exprs.reverse();
-
-                    uninferred_arm_pattern_exprs
-                        .iter_mut()
-                        .borrow_mut()
-                        .zip(new_arm_pattern_exprs.iter())
-                        .for_each(|(arm_expr, new_expr)| {
-                            **arm_expr = Box::new(new_expr.clone());
-                        });
-
-                    new_resolutions.push(arm_resolution);
-                    new_arm_patterns.push(arm_pattern);
-                }
-
-                let inferred_types = new_resolutions
-                    .iter()
-                    .map(|x| x.inferred_type())
-                    .collect::<Vec<_>>();
-
-                let new_inferred_type = InferredType::all_of(inferred_types).unwrap();
-
-                let mut new_match_arms = new_arm_patterns
-                    .iter()
-                    .zip(new_resolutions.iter())
-                    .map(|(arm_pattern, arm_resolution)| crate::MatchArm {
-                        arm_pattern: arm_pattern.clone(),
-                        arm_resolution_expr: Box::new(arm_resolution.clone()),
-                    })
-                    .collect::<Vec<_>>();
-                new_match_arms.reverse();
-
-                let new_expr = Expr::PatternMatch(
-                    predicate.clone(),
-                    new_match_arms,
-                    current_inferred_type.merge(new_inferred_type),
+                internal::handle_pattern_match(
+                    predicate,
+                    uninferred_match_arms,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
                 );
-
-                inferred_type_stack.push_front(new_expr);
             }
 
             Expr::Concat(exprs, current_inferred_type) => {
@@ -562,7 +516,7 @@ mod internal {
     use crate::type_inference::type_pull_up::internal;
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
-    use crate::{ArmPattern, Expr, InferredType};
+    use crate::{ArmPattern, Expr, InferredType, MatchArm};
     use std::collections::VecDeque;
 
     pub(crate) fn handle_tuple(
@@ -727,6 +681,65 @@ mod internal {
             Box::new(then_expr.clone()),
             Box::new(else_expr.clone()),
             new_type,
+        );
+
+        inferred_type_stack.push_front(new_expr);
+    }
+
+    pub fn handle_pattern_match(
+        predicate: &Expr,
+        uninferred_match_arms: &Vec<MatchArm>,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let mut new_resolutions = vec![];
+        let mut new_arm_patterns = vec![];
+        for un_inferred_match_arm in uninferred_match_arms.iter().rev() {
+            let arm_resolution = inferred_type_stack.pop_front().unwrap();
+
+            let mut arm_pattern = un_inferred_match_arm.arm_pattern.clone();
+            let mut uninferred_arm_pattern_exprs = arm_pattern.get_expr_literals_mut();
+
+            let mut new_arm_pattern_exprs = vec![];
+
+            for _ in &uninferred_arm_pattern_exprs {
+                let arm_expr = inferred_type_stack.pop_front().unwrap();
+                new_arm_pattern_exprs.push(arm_expr)
+            }
+            new_arm_pattern_exprs.reverse();
+
+            uninferred_arm_pattern_exprs
+                .iter_mut()
+                .zip(new_arm_pattern_exprs.iter())
+                .for_each(|(arm_expr, new_expr)| {
+                    **arm_expr = Box::new(new_expr.clone());
+                });
+
+            new_resolutions.push(arm_resolution);
+            new_arm_patterns.push(arm_pattern);
+        }
+
+        let inferred_types = new_resolutions
+            .iter()
+            .map(|x| x.inferred_type())
+            .collect::<Vec<_>>();
+
+        let new_inferred_type = InferredType::all_of(inferred_types).unwrap();
+
+        let mut new_match_arms = new_arm_patterns
+            .iter()
+            .zip(new_resolutions.iter())
+            .map(|(arm_pattern, arm_resolution)| crate::MatchArm {
+                arm_pattern: arm_pattern.clone(),
+                arm_resolution_expr: Box::new(arm_resolution.clone()),
+            })
+            .collect::<Vec<_>>();
+        new_match_arms.reverse();
+
+        let new_expr = Expr::PatternMatch(
+            Box::new(predicate.clone()),
+            new_match_arms,
+            current_inferred_type.merge(new_inferred_type),
         );
 
         inferred_type_stack.push_front(new_expr);
