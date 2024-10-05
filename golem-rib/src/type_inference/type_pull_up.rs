@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 
 pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
     let mut expr_queue = VecDeque::new();
-    make_expr_nodes_queue(expr, &mut expr_queue);
+    internal::make_expr_nodes_queue(expr, &mut expr_queue);
 
     let mut inferred_type_stack = VecDeque::new();
 
@@ -170,43 +170,14 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
                 );
             }
             Expr::Sequence(exprs, current_inferred_type) => {
-                let mut new_exprs = vec![];
-
-                for _ in 0..exprs.len() {
-                    let expr = inferred_type_stack.pop_front().unwrap();
-                    new_exprs.push(expr);
-                }
-
-                new_exprs.reverse();
-
-                let new_inferred_type =
-                    InferredType::List(Box::new(new_exprs.first().unwrap().inferred_type()));
-
-                let new_sequence =
-                    Expr::Sequence(new_exprs, current_inferred_type.merge(new_inferred_type));
-
-                inferred_type_stack.push_front(new_sequence);
+                internal::handle_sequence(
+                    exprs,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                );
             }
             Expr::Record(expr, inferred_type) => {
-                let mut ordered_types = vec![];
-                let mut new_exprs = vec![];
-
-                for (field, _) in expr.iter().rev() {
-                    let expr: Expr = inferred_type_stack.pop_front().unwrap();
-                    ordered_types.push((field.clone(), expr.inferred_type()));
-                    new_exprs.push((field.clone(), Box::new(expr.clone())));
-                }
-
-                new_exprs.reverse();
-                ordered_types.reverse();
-
-                let new_record_type = InferredType::Record(ordered_types);
-
-                let merged_record_type = inferred_type.merge(new_record_type);
-
-                let new_record =
-                    Expr::Record(new_exprs.iter().cloned().collect(), merged_record_type);
-                inferred_type_stack.push_front(new_record);
+               internal::handle_record(expr, inferred_type, &mut inferred_type_stack);
             }
             Expr::Literal(_, _) => {
                 inferred_type_stack.push_front(expr.clone());
@@ -308,17 +279,6 @@ pub fn type_pull_up_non_recursive<'a>(expr: &'a Expr) -> Result<Expr, String> {
         .ok_or("Failed type inference during pull up".to_string())
 }
 
-pub fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
-    let mut stack = VecDeque::new();
-
-    stack.push_back(expr);
-
-    while let Some(current_expr) = stack.pop_back() {
-        expr_queue.push_back(current_expr);
-
-        current_expr.visit_children_bottom_up(&mut stack)
-    }
-}
 
 pub fn pull_types_up(expr: &mut Expr) -> Result<(), String> {
     match expr {
@@ -490,6 +450,18 @@ mod internal {
     use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
+
+    pub(crate) fn make_expr_nodes_queue<'a>(expr: &'a Expr, expr_queue: &mut VecDeque<&'a Expr>) {
+        let mut stack = VecDeque::new();
+
+        stack.push_back(expr);
+
+        while let Some(current_expr) = stack.pop_back() {
+            expr_queue.push_back(current_expr);
+
+            current_expr.visit_children_bottom_up(&mut stack)
+        }
+    }
 
     pub(crate) fn handle_tuple(
         tuple_elems: &Vec<Expr>,
@@ -807,6 +779,58 @@ mod internal {
             current_inferred_type.clone(),
         );
         inferred_type_stack.push_front(new_let);
+    }
+
+    pub(crate) fn handle_sequence(
+        current_expr_list: &Vec<Expr>,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let mut new_exprs = vec![];
+
+        for expr in current_expr_list {
+            let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
+            new_exprs.push(expr);
+        }
+
+        new_exprs.reverse();
+
+        let new_sequence ={
+            if let Some(first_expr) = new_exprs.first() {
+                Expr::Sequence(new_exprs, current_inferred_type.merge(first_expr.inferred_type()))
+            } else {
+                Expr::Sequence(new_exprs, current_inferred_type.clone())
+            }
+        };
+
+
+        inferred_type_stack.push_front(new_sequence);
+    }
+
+    pub(crate) fn handle_record(
+        current_expr_list: &Vec<(String, Box<Expr>)>,
+        current_inferred_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let mut ordered_types = vec![];
+        let mut new_exprs = vec![];
+
+        for (field, expr) in current_expr_list.iter().rev() {
+            let expr: Expr = inferred_type_stack.pop_front().unwrap_or(*expr.deref().clone());
+            ordered_types.push((field.clone(), expr.inferred_type()));
+            new_exprs.push((field.clone(), Box::new(expr.clone())));
+        }
+
+        new_exprs.reverse();
+        ordered_types.reverse();
+
+        let new_record_type = InferredType::Record(ordered_types);
+
+        let merged_record_type = current_inferred_type.merge(new_record_type);
+
+        let new_record =
+            Expr::Record(new_exprs.iter().cloned().collect(), merged_record_type);
+        inferred_type_stack.push_front(new_record);
     }
 
     pub(crate) fn get_inferred_type_of_selected_field(
