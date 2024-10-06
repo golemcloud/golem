@@ -446,7 +446,7 @@ mod internal {
             .map(|expr| expr.inferred_type())
             .collect::<Vec<_>>();
 
-        let new_inferred_type = InferredType::all_of(inferred_types).unwrap();
+        let new_inferred_type = InferredType::all_of(inferred_types);
 
         let mut new_match_arms = new_arm_patterns
             .iter()
@@ -459,11 +459,15 @@ mod internal {
 
         new_match_arms.reverse();
 
-        let new_expr = Expr::PatternMatch(
-            Box::new(predicate.clone()),
-            new_match_arms,
-            current_inferred_type.merge(new_inferred_type),
-        );
+        let new_type = if let Some(new_inferred_type) = new_inferred_type {
+            current_inferred_type.merge(new_inferred_type)
+        } else {
+            current_inferred_type.clone()
+        };
+
+        let pred = inferred_type_stack.pop_front().unwrap_or(predicate.clone());
+
+        let new_expr = Expr::PatternMatch(Box::new(pred.clone()), new_match_arms, new_type);
 
         inferred_type_stack.push_front(new_expr);
     }
@@ -745,7 +749,6 @@ mod internal {
 
         Ok(refined_list.inner_type())
     }
-
 }
 
 #[cfg(test)]
@@ -1149,7 +1152,13 @@ mod type_pull_up_tests {
     #[test]
     pub fn test_pull_up_for_pattern_match() {
         let mut expr = Expr::pattern_match(
-            Expr::number(1f64),
+            Expr::select_field(
+                Expr::identifier("foo").add_infer_type(InferredType::Record(vec![(
+                    "bar".to_string(),
+                    InferredType::Str,
+                )])),
+                "bar",
+            ),
             vec![
                 MatchArm {
                     arm_pattern: ArmPattern::Constructor(
@@ -1212,21 +1221,13 @@ mod type_pull_up_tests {
 
         pub(crate) fn expected_pattern_match() -> Expr {
             Expr::PatternMatch(
-                Box::new(Expr::Number(
-                    Number { value: 1.0 },
-                    None,
-                    InferredType::OneOf(vec![
-                        InferredType::U64,
-                        InferredType::U32,
-                        InferredType::U8,
-                        InferredType::U16,
-                        InferredType::S64,
-                        InferredType::S32,
-                        InferredType::S8,
-                        InferredType::S16,
-                        InferredType::F64,
-                        InferredType::F32,
-                    ]),
+                Box::new(Expr::SelectField(
+                    Box::new(Expr::Identifier(
+                        VariableId::global("foo".to_string()),
+                        InferredType::Record(vec![("bar".to_string(), InferredType::Str)]),
+                    )),
+                    "bar".to_string(),
+                    InferredType::Str,
                 )),
                 vec![
                     MatchArm {

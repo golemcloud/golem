@@ -1304,7 +1304,7 @@ mod type_inference_tests {
         fn test_pattern_match_with_record_with_select_field() {
             let expr_str = r#"
               let x = { foo : "bar" };
-              match some(x) {
+              match 1 {
                 some(x) => x.foo
               }
             "#;
