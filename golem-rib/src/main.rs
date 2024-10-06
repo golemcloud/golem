@@ -15,27 +15,3 @@ fn main() {
 
     dbg!(expr);
 }
-
-fn get_component_metadata(
-    function_name: &str,
-    input_types: Vec<AnalysedType>,
-    output: AnalysedType,
-) -> Vec<AnalysedExport> {
-    let analysed_function_parameters = input_types
-        .into_iter()
-        .enumerate()
-        .map(|(index, typ)| AnalysedFunctionParameter {
-            name: format!("param{}", index),
-            typ,
-        })
-        .collect();
-
-    vec![AnalysedExport::Function(AnalysedFunction {
-        name: function_name.to_string(),
-        parameters: analysed_function_parameters,
-        results: vec![AnalysedFunctionResult {
-            name: None,
-            typ: output,
-        }],
-    })]
-}
