@@ -119,7 +119,7 @@ mod comprehensive_test {
               };
 
               let option_list_response_processed = match option_list_response {
-                    some([_]) => "found list",
+                    some([foo]) => foo,
                      _ => "not found"
                 };
 
@@ -178,7 +178,7 @@ mod comprehensive_test {
               };
 
               let result_of_variant_response_processed = match result_of_variant_response {
-                ok(case-str(_)) => "found",
+                ok(case-str(a)) => a,
                 err(msg) => "not found"
               };
 
@@ -203,7 +203,7 @@ mod comprehensive_test {
                };
 
               let result_of_record_response_processed = match result_of_record_response {
-                 ok({data-body: {list-of-str : _}}) => "found list",
+                 ok({data-body: {list-of-str : mylist}}) => mylist[0],
                  err(msg) => "not found"
                };
 
@@ -262,11 +262,13 @@ mod comprehensive_test {
         let mut rib_executor = mock_interpreter::interpreter();
         let result = rib_executor.run(compiled_expr).await.unwrap();
 
+        dbg!(test_utils::convert_type_annotated_value_to_str(&result.get_val().unwrap()));
+
         assert_eq!(result.get_val().unwrap(), expected_type_annotated_value());
     }
 
     fn expected_type_annotated_value() -> TypeAnnotatedValue {
-        let wasm_wave_str = "{a: \"foo\", b: 42, c: \"foo\", d: \"found\", e: \"a\", f: \"foo\", g: \"foo\", h: \"found list\", i: \"greater\", j: \"foo\", k: \"foo\", l: \"foo\", m: \"foo\", n: \"a\", o: \"foo\", p: \"foo\", q: \"foo\", r: 42, s: \"found\", t: \"a\", u: \"foo\", v: \"found x\", w: \"found list\", x: \"42\", y: \"a\", z: \"foo\"}";
+        let wasm_wave_str = "{a: \"foo\", b: 42, c: \"foo\", d: \"found\", e: \"a\", f: \"foo\", g: \"foo\", h: \"foo\", i: \"greater\", j: \"foo\", k: \"foo\", l: \"foo\", m: \"foo\", n: \"a\", o: \"foo\", p: \"foo\", q: \"foo\", r: 42, s: \"foo\", t: \"a\", u: \"foo\", v: \"found x\", w: \"foo\", x: \"42\", y: \"a\", z: \"foo\"}";
 
         test_utils::get_type_annotated_value(&expected_analysed_type(), wasm_wave_str)
     }
