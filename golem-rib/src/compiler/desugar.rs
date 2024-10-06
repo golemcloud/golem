@@ -27,7 +27,7 @@ pub fn desugar_pattern_match(
         }
     }
 
-   internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
+    internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
 }
 
 mod internal {
@@ -160,7 +160,7 @@ mod internal {
                     InferredType::Option(inner) => *inner,
                     _ => InferredType::Unknown,
                 };
-                
+
                 get_conditions(
                     &MatchArm::new(
                         ArmPattern::Literal(inner_pattern.clone()),
