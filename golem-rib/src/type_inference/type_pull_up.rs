@@ -294,10 +294,8 @@ mod internal {
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
         let inferred_type_of_selection_expr = expr.inferred_type();
-        let list_type = get_inferred_type_of_selection_index(
-            *index,
-            &inferred_type_of_selection_expr,
-        )?;
+        let list_type =
+            get_inferred_type_of_selection_index(*index, &inferred_type_of_selection_expr)?;
         let new_select_index = Expr::SelectIndex(
             Box::new(expr.clone()),
             *index,
@@ -677,7 +675,9 @@ mod internal {
             if let Some(first_expr) = new_exprs.clone().first() {
                 Expr::Sequence(
                     new_exprs,
-                    current_inferred_type.clone().merge(InferredType::List(Box::new(first_expr.inferred_type()))),
+                    current_inferred_type
+                        .clone()
+                        .merge(InferredType::List(Box::new(first_expr.inferred_type()))),
                 )
             } else {
                 Expr::Sequence(new_exprs, current_inferred_type.clone())

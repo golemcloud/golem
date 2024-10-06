@@ -2,7 +2,7 @@ use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
     AnalysedType, TypeStr,
 };
-use rib::{type_pull_up, Expr, InferredType, RibInputTypeInfo, FunctionTypeRegistry};
+use rib::{type_pull_up, Expr, FunctionTypeRegistry, InferredType, RibInputTypeInfo};
 use std::collections::HashMap;
 
 fn main() {
