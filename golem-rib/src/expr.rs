@@ -486,7 +486,7 @@ impl Expr {
     }
 
     pub fn pull_types_up(&self) -> Result<Expr, String> {
-        type_inference::type_pull_up(&self)
+        type_inference::type_pull_up(self)
     }
 
     pub fn infer_global_inputs(&mut self) {
@@ -1560,9 +1560,10 @@ mod tests {
                     Expr::identifier("foo"),
                     vec![
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
-                                "x",
-                            ))))),
+                            ArmPattern::Constructor(
+                                "some".to_string(),
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                            ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
@@ -1578,11 +1579,17 @@ mod tests {
                     Expr::identifier("bar"),
                     vec![
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier("x")))),
+                            ArmPattern::Constructor(
+                                "ok".to_string(),
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                            ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::err(Expr::identifier("msg")))),
+                            ArmPattern::Constructor(
+                                "err".to_string(),
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("msg")))],
+                            ),
                             Expr::boolean(false),
                         ),
                     ],
@@ -1609,6 +1616,7 @@ mod tests {
             Expr::identifier("result"),
         ])
     }
+
 
     #[test]
     fn test_rib() {

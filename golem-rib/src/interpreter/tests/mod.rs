@@ -115,7 +115,6 @@ mod comprehensive_test {
 
               let option_record_response_processed = match option_record_response {
                   some({data-body: {list-of-str : mylist}}) => mylist[0],
-                  some(
                    _ => "not found"
               };
 

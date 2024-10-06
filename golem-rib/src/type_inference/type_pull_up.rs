@@ -236,7 +236,7 @@ mod internal {
     }
 
     pub(crate) fn handle_tuple(
-        tuple_elems: &Vec<Expr>,
+        tuple_elems: &[Expr],
         current_tuple_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
@@ -380,15 +380,7 @@ mod internal {
         let inferred_type_of_then_expr = then_expr.inferred_type();
         let inferred_type_of_else_expr = else_expr.inferred_type();
 
-        let new_type = if inferred_type_of_then_expr == inferred_type_of_then_expr {
-            current_inferred_type.merge(inferred_type_of_then_expr)
-        } else if let Some(cond_then_else_type) =
-            InferredType::all_of(vec![inferred_type_of_then_expr, inferred_type_of_else_expr])
-        {
-            current_inferred_type.merge(cond_then_else_type)
-        } else {
-            current_inferred_type.clone()
-        };
+        let new_type = current_inferred_type.merge(inferred_type_of_then_expr.merge(inferred_type_of_else_expr));
 
         let new_expr = Expr::Cond(
             Box::new(cond_expr),
@@ -1196,12 +1188,6 @@ mod type_pull_up_tests {
 
     mod internal {
         use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
-        use golem_wasm_ast::analysis::{
-            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
-            NameOptionTypePair, NameTypePair, TypeF32, TypeHandle, TypeList, TypeRecord, TypeStr,
-            TypeU32, TypeVariant,
-        };
 
         pub(crate) fn expected_pattern_match() -> Expr {
             Expr::PatternMatch(

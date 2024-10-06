@@ -1,7 +1,3 @@
-use golem_wasm_ast::analysis::{
-    AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-    AnalysedType,
-};
 use rib::{Expr, FunctionTypeRegistry};
 
 fn main() {
