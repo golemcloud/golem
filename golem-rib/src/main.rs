@@ -1,9 +1,8 @@
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-    AnalysedType, TypeStr,
+    AnalysedType,
 };
-use rib::{type_pull_up, Expr, FunctionTypeRegistry, InferredType, RibInputTypeInfo};
-use std::collections::HashMap;
+use rib::{Expr, FunctionTypeRegistry};
 
 fn main() {
     let expr_str = r#"

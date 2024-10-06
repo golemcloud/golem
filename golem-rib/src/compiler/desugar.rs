@@ -19,7 +19,7 @@ pub fn desugar_pattern_match(
     expr_type: InferredType,
 ) -> Option<Expr> {
     dbg!(pred.to_string());
-    dbg!(match_arms.clone());
+    dbg!(match_arms);
     let mut if_else_branches = vec![];
 
     for match_arm in match_arms.iter() {

@@ -129,7 +129,7 @@ mod internal {
     use crate::expr::ArmPattern;
     use crate::parser::errors::RibParseError;
     use crate::parser::pattern_match::arm_pattern::*;
-    use crate::parser::result::result;
+    
     use crate::parser::rib_expr::rib_expr;
 
     pub(crate) fn arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>

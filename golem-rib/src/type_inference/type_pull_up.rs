@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::CallType;
 use crate::{Expr, InferredType};
-use std::borrow::BorrowMut;
 use std::collections::VecDeque;
 
 pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
@@ -218,10 +216,10 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
 
 mod internal {
     use crate::call_type::CallType;
-    use crate::type_inference::type_pull_up::internal;
+    
     use crate::type_refinement::precise_types::{ListType, RecordType};
     use crate::type_refinement::TypeRefinement;
-    use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
+    use crate::{Expr, InferredType, MatchArm, VariableId};
     use std::collections::VecDeque;
     use std::ops::Deref;
 
@@ -758,7 +756,7 @@ mod type_pull_up_tests {
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
     use crate::ParsedFunctionSite::PackagedInterface;
     use crate::{
-        ArmPattern, Expr, FunctionTypeRegistry, Id, InferredType, MatchArm, Number, TypeName,
+        ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number,
         VariableId,
     };
 
@@ -788,7 +786,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_select_index() {
         let identifier =
             Expr::identifier("foo").add_infer_type(InferredType::List(Box::new(InferredType::U64)));
-        let mut expr = Expr::select_index(identifier.clone(), 0);
+        let expr = Expr::select_index(identifier.clone(), 0);
         let new_expr = expr.pull_types_up().unwrap();
         let expected = Expr::select_index(identifier, 0).add_infer_type(InferredType::U64);
         assert_eq!(new_expr, expected);
@@ -801,7 +799,7 @@ mod type_pull_up_tests {
             Expr::Number(Number { value: 2f64 }, None, InferredType::U64),
         ];
 
-        let mut expr = Expr::Sequence(elems.clone(), InferredType::Unknown);
+        let expr = Expr::Sequence(elems.clone(), InferredType::Unknown);
         let new_expr = expr.pull_types_up().unwrap();
 
         assert_eq!(
@@ -812,7 +810,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_tuple() {
-        let mut expr = Expr::tuple(vec![
+        let expr = Expr::tuple(vec![
             Expr::literal("foo"),
             Expr::Number(Number { value: 1f64 }, None, InferredType::U64),
         ]);
@@ -843,7 +841,7 @@ mod type_pull_up_tests {
                 )),
             ),
         ];
-        let mut expr = Expr::Record(
+        let expr = Expr::Record(
             elems.clone(),
             InferredType::Record(vec![
                 ("foo".to_string(), InferredType::Unknown),
@@ -872,7 +870,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_concat() {
-        let mut expr = Expr::concat(vec![Expr::literal("foo"), Expr::literal("bar")]);
+        let expr = Expr::concat(vec![Expr::literal("foo"), Expr::literal("bar")]);
         let new_expr = expr.pull_types_up().unwrap();
         let expected = Expr::Concat(
             vec![Expr::literal("foo"), Expr::literal("bar")],
@@ -883,7 +881,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_not() {
-        let mut expr = Expr::not(Expr::boolean(true));
+        let expr = Expr::not(Expr::boolean(true));
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
@@ -1032,21 +1030,21 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_equal_to() {
-        let mut expr = Expr::equal_to(Expr::number(1f64), Expr::number(2f64));
+        let expr = Expr::equal_to(Expr::number(1f64), Expr::number(2f64));
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_less_than() {
-        let mut expr = Expr::less_than(Expr::number(1f64), Expr::number(2f64));
+        let expr = Expr::less_than(Expr::number(1f64), Expr::number(2f64));
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_call() {
-        let mut expr = Expr::call(
+        let expr = Expr::call(
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
             vec![Expr::number(1f64)],
         );
@@ -1061,7 +1059,7 @@ mod type_pull_up_tests {
            golem:it/api.{cart(input.foo).checkout}()
         "#;
 
-        let mut expr = Expr::from_text(rib.clone()).unwrap();
+        let mut expr = Expr::from_text(rib).unwrap();
         let metadata = internal::get_shopping_cart_metadata_with_cart_resource();
         let function_registry = FunctionTypeRegistry::empty();
         expr.infer_types_initial_phase(&function_registry).unwrap();
@@ -1129,7 +1127,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_unwrap() {
         let mut number = Expr::number(1f64);
         number.override_type_type_mut(InferredType::F64);
-        let mut expr = Expr::option(Some(number)).unwrap();
+        let expr = Expr::option(Some(number)).unwrap();
         let expr = expr.pull_types_up().unwrap();
         assert_eq!(
             expr.inferred_type(),
@@ -1141,7 +1139,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_tag() {
         let mut number = Expr::number(1f64);
         number.override_type_type_mut(InferredType::F64);
-        let mut expr = Expr::tag(Expr::option(Some(number)));
+        let expr = Expr::tag(Expr::option(Some(number)));
         let expr = expr.pull_types_up().unwrap();
         assert_eq!(
             expr.inferred_type(),
@@ -1151,7 +1149,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_pattern_match() {
-        let mut expr = Expr::pattern_match(
+        let expr = Expr::pattern_match(
             Expr::select_field(
                 Expr::identifier("foo").add_infer_type(InferredType::Record(vec![(
                     "bar".to_string(),
@@ -1211,7 +1209,7 @@ mod type_pull_up_tests {
     }
 
     mod internal {
-        use crate::{ArmPattern, Expr, InferredType, MatchArm, Number, VariableId};
+        use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
