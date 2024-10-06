@@ -550,16 +550,18 @@ mod internal {
 
     pub(crate) fn handle_call(
         call_type: &CallType,
-        exprs: &Vec<Expr>,
+        arguments: &Vec<Expr>,
         inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
         let mut new_arg_exprs = vec![];
 
-        for expr in exprs.iter().rev() {
-            let expr = inferred_type_stack.pop_back().unwrap_or(expr.clone());
+        for expr in arguments.iter().rev() {
+            let expr = inferred_type_stack.pop_front().unwrap_or(expr.clone());
             new_arg_exprs.push(expr);
         }
+
+        new_arg_exprs.reverse();
 
         match call_type {
             CallType::Function(fun_name) => {
