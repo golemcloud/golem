@@ -114,7 +114,8 @@ mod comprehensive_test {
                 };
 
               let option_record_response_processed = match option_record_response {
-                  some({data-body: {list-of-str : _}}) => "found list",
+                  some({data-body: {list-of-str : mylist}}) => mylist[0],
+                  some(
                    _ => "not found"
               };
 
@@ -266,7 +267,7 @@ mod comprehensive_test {
     }
 
     fn expected_type_annotated_value() -> TypeAnnotatedValue {
-        let wasm_wave_str = "{a: \"foo\", b: 42, c: \"foo\", d: \"found\", e: \"a\", f: \"foo\", g: \"found list\", h: \"found list\", i: \"greater\", j: \"foo\", k: \"foo\", l: \"foo\", m: \"foo\", n: \"a\", o: \"foo\", p: \"foo\", q: \"foo\", r: 42, s: \"found\", t: \"a\", u: \"foo\", v: \"found x\", w: \"found list\", x: \"42\", y: \"a\", z: \"foo\"}";
+        let wasm_wave_str = "{a: \"foo\", b: 42, c: \"foo\", d: \"found\", e: \"a\", f: \"foo\", g: \"foo\", h: \"found list\", i: \"greater\", j: \"foo\", k: \"foo\", l: \"foo\", m: \"foo\", n: \"a\", o: \"foo\", p: \"foo\", q: \"foo\", r: 42, s: \"found\", t: \"a\", u: \"foo\", v: \"found x\", w: \"found list\", x: \"42\", y: \"a\", z: \"foo\"}";
 
         test_utils::get_type_annotated_value(&expected_analysed_type(), wasm_wave_str)
     }

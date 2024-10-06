@@ -128,7 +128,6 @@ mod internal {
 
     use crate::expr::ArmPattern;
     use crate::parser::errors::RibParseError;
-    use crate::parser::optional::option;
     use crate::parser::pattern_match::arm_pattern::*;
     use crate::parser::result::result;
     use crate::parser::rib_expr::rib_expr;
@@ -141,8 +140,6 @@ mod internal {
         >,
     {
         choice((
-            attempt(option().map(|expr| ArmPattern::Literal(Box::new(expr)))),
-            attempt(result().map(|expr| ArmPattern::Literal(Box::new(expr)))),
             attempt(custom_arm_pattern_constructor()),
             attempt(tuple_arm_pattern_constructor()),
             attempt(list_arm_pattern_constructor()),
