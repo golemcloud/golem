@@ -365,7 +365,6 @@ mod internal {
                     .pop_n(list_size)
                     .ok_or(format!("Expected {} value on the stack", list_size))?;
 
-                dbg!(last_list.clone());
                 let type_annotated_values = last_list
                     .iter()
                     .map(|interpreter_result| {

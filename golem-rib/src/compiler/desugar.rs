@@ -18,8 +18,6 @@ pub fn desugar_pattern_match(
     match_arms: &[MatchArm],
     expr_type: InferredType,
 ) -> Option<Expr> {
-    dbg!(pred.to_string());
-    dbg!(match_arms);
     let mut if_else_branches = vec![];
 
     for match_arm in match_arms.iter() {
@@ -29,9 +27,7 @@ pub fn desugar_pattern_match(
         }
     }
 
-    let x = internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type));
-    dbg!(x.clone().unwrap().to_string());
-    x
+   internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
 }
 
 mod internal {
@@ -164,9 +160,7 @@ mod internal {
                     InferredType::Option(inner) => *inner,
                     _ => InferredType::Unknown,
                 };
-
-                dbg!(inner_pattern.to_string());
-
+                
                 get_conditions(
                     &MatchArm::new(
                         ArmPattern::Literal(inner_pattern.clone()),
@@ -255,8 +249,6 @@ mod internal {
                     body: resolution.clone(),
                 };
 
-                dbg!(pred_expr.clone().to_string());
-                dbg!(arm_pattern_expr.clone().to_string());
                 Some(branch)
             }
         }
@@ -268,7 +260,6 @@ mod internal {
         resolution: &Expr,
         pred_expr_inferred_type: InferredType,
     ) -> Option<IfThenBranch> {
-        dbg!("here???");
         match pred_expr_inferred_type {
             InferredType::Record(field_and_types) => {
                 // Resolution body is a list of expressions which grows (maybe with some let bindings)
