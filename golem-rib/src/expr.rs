@@ -1617,7 +1617,6 @@ mod tests {
         ])
     }
 
-
     #[test]
     fn test_rib() {
         let sample_rib = r#"

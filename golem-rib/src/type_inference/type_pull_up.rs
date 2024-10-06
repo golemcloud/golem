@@ -380,7 +380,8 @@ mod internal {
         let inferred_type_of_then_expr = then_expr.inferred_type();
         let inferred_type_of_else_expr = else_expr.inferred_type();
 
-        let new_type = current_inferred_type.merge(inferred_type_of_then_expr.merge(inferred_type_of_else_expr));
+        let new_type = current_inferred_type
+            .merge(inferred_type_of_then_expr.merge(inferred_type_of_else_expr));
 
         let new_expr = Expr::Cond(
             Box::new(cond_expr),

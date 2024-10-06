@@ -169,17 +169,17 @@ mod comprehensive_test {
 
               let result_of_str_response_processed = match result_of_str_response {
                 ok(text) => text,
-                err(msg) => "not found"
+                err(msg) => msg
               };
 
               let result_of_number_response_processed = match result_of_number_response {
                 ok(number) => number,
-                err(msg) => 0
+                err(number) => number
               };
 
               let result_of_variant_response_processed = match result_of_variant_response {
                 ok(case-str(a)) => a,
-                err(msg) => "not found"
+                err(case-str(b)) => b
               };
 
               let result_of_enum_response_processed = match result_of_enum_response {
@@ -262,7 +262,9 @@ mod comprehensive_test {
         let mut rib_executor = mock_interpreter::interpreter();
         let result = rib_executor.run(compiled_expr).await.unwrap();
 
-        dbg!(test_utils::convert_type_annotated_value_to_str(&result.get_val().unwrap()));
+        dbg!(test_utils::convert_type_annotated_value_to_str(
+            &result.get_val().unwrap()
+        ));
 
         assert_eq!(result.get_val().unwrap(), expected_type_annotated_value());
     }
