@@ -423,8 +423,10 @@ impl Expr {
         self.infer_types_initial_phase(function_type_registry)?;
         self.infer_call_arguments_type(function_type_registry)
             .map_err(|x| vec![x])?;
-        type_inference::type_inference_fix_point(Self::inference_scan, self)
-            .map_err(|x| vec![x])?;
+        self.inference_scan().map_err(|x| vec![x])?;
+
+        // type_inference::type_inference_fix_point(Self::inference_scan, self)
+        //     .map_err(|x| vec![x])?;
         self.unify_types()?;
         Ok(())
     }

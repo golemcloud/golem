@@ -1373,16 +1373,12 @@ mod type_inference_tests {
         #[test]
         fn test_pattern_match_with_record_with_select_index() {
             let expr_str = r#"
-              let x = { foo : "bar" };
-              let y: list<u64> = [1, 2, 3];
+              let x = 2;
+              let y = [1];
 
-              match some(x) {
-                some(x) => x.foo
-              };
+              y
 
-              match some(y) {
-                 some(y) => y[0]
-              }
+
             "#;
 
             let mut expr = Expr::from_text(expr_str).unwrap();

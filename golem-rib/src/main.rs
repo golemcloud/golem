@@ -2,29 +2,19 @@ use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
     AnalysedType, TypeStr,
 };
-use rib::{type_pull_up, Expr, InferredType, RibInputTypeInfo};
+use rib::{type_pull_up, Expr, InferredType, RibInputTypeInfo, FunctionTypeRegistry};
 use std::collections::HashMap;
 
 fn main() {
-    let request_value_type = AnalysedType::Str(TypeStr);
-    let output_analysed_type = AnalysedType::Str(TypeStr);
-
-    let expr = r#"
-               let x: str = "afsal";
-               my-worker-function(x)
+    let expr_str = r#"
+              ["thaj"]
             "#;
 
-    let expr = Expr::from_text(expr).unwrap();
+    let mut expr = Expr::from_text(expr_str).unwrap();
 
-    let analysed_exports = get_component_metadata(
-        "my-worker-function",
-        vec![request_value_type.clone()],
-        output_analysed_type,
-    );
+    expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
 
-    let compiled = rib::compile(&expr, &analysed_exports).unwrap();
-
-    dbg!(compiled);
+    dbg!(expr);
 }
 
 fn get_component_metadata(

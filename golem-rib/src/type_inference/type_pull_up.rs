@@ -17,7 +17,7 @@ use crate::{Expr, InferredType};
 use std::borrow::BorrowMut;
 use std::collections::VecDeque;
 
-pub fn type_pull_up<'a>(expr: &'a Expr) -> Result<Expr, String> {
+pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
     let mut expr_queue = VecDeque::new();
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
 
@@ -294,7 +294,7 @@ mod internal {
             .pop_front()
             .unwrap_or(original_selection_expr.clone());
         let inferred_type_of_selection_expr = expr.inferred_type();
-        let list_type = internal::get_inferred_type_of_selection_index(
+        let list_type = get_inferred_type_of_selection_index(
             *index,
             &inferred_type_of_selection_expr,
         )?;
@@ -677,9 +677,7 @@ mod internal {
             if let Some(first_expr) = new_exprs.clone().first() {
                 Expr::Sequence(
                     new_exprs,
-                    InferredType::List(Box::new(
-                        current_inferred_type.merge(first_expr.inferred_type()),
-                    )),
+                    current_inferred_type.clone().merge(InferredType::List(Box::new(first_expr.inferred_type()))),
                 )
             } else {
                 Expr::Sequence(new_exprs, current_inferred_type.clone())
