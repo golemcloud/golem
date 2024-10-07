@@ -2,6 +2,9 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::metadata::{Metadata, Producers, ProducersField, VersionedName};
 use golem_wasm_ast::IgnoreAllButMetadata;
 use pretty_assertions::assert_eq;
+use test_r::test;
+
+test_r::enable!();
 
 #[test]
 fn metadata_shopping_cart_component() {
