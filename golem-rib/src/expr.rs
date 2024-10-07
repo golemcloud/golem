@@ -132,6 +132,10 @@ impl Expr {
         matches!(self, Expr::Cond(_, _, _, _))
     }
 
+    pub fn is_function_call(&self) -> bool {
+        matches!(self, Expr::Call(_, _, _))
+    }
+
     pub fn is_match_expr(&self) -> bool {
         matches!(self, Expr::PatternMatch(_, _, _))
     }
@@ -419,10 +423,10 @@ impl Expr {
         self.bind_types();
         self.name_binding_pattern_match_variables();
         self.name_binding_local_variables();
-        self.infer_function_types(function_type_registry)
-            .map_err(|x| vec![x])?;
         self.infer_variants(function_type_registry);
         self.infer_enums(function_type_registry);
+        self.infer_call_arguments_type(function_type_registry)
+            .map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
         self.unify_types()?;
@@ -452,11 +456,11 @@ impl Expr {
     }
 
     // At this point we simply update the types to the parameter type expressions and the call expression itself.
-    pub fn infer_function_types(
+    pub fn infer_call_arguments_type(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
-        type_inference::infer_function_types(self, function_type_registry)
+        type_inference::infer_call_arguments_type(self, function_type_registry)
     }
 
     pub fn push_types_down(&mut self) -> Result<(), String> {

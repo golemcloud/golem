@@ -2,8 +2,8 @@ use crate::api_definition::http::{CompiledHttpApiDefinition, VarInfo};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
+use crate::worker_service_rib_interpreter::EvaluationError;
 use crate::worker_service_rib_interpreter::WorkerServiceRibInterpreter;
-use crate::worker_service_rib_interpreter::{DefaultEvaluator, EvaluationError};
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
 use golem_service_base::model::VersionedComponentId;
@@ -17,12 +17,9 @@ use crate::worker_binding::rib_input_value_resolver::RibInputValueResolver;
 use crate::worker_binding::{RequestDetails, ResponseMappingCompiled, RibInputTypeMismatch};
 use crate::worker_bridge_execution::to_response::ToResponse;
 
-// Every request (http or others) can have an instance of this resolver
-// to resolve to a single worker-binding with additional-info which is required for worker_service_rib_interpreter
-// TODO; It will be better if worker binding resolver
-// able to deal with only one API definition
-// as the first stage resolution can take place (based on host, input request (route resolution)
-// up the stage
+// Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
+// to resolve a single worker-binding is then executed with the help of worker_service_rib_interpreter, which internally
+// calls the worker function.
 #[async_trait]
 pub trait RequestToWorkerBindingResolver<ApiDefinition> {
     async fn resolve_worker_binding(
@@ -127,17 +124,15 @@ impl ResolvedWorkerBindingFromRequest {
 impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
     async fn resolve_worker_binding(
         &self,
-        api_definition: Vec<CompiledHttpApiDefinition>,
+        compiled_api_definitions: Vec<CompiledHttpApiDefinition>,
     ) -> Result<ResolvedWorkerBindingFromRequest, WorkerBindingResolutionError> {
-        let default_evaluator = DefaultEvaluator::noop();
-
-        let routes = api_definition
+        let compiled_routes = compiled_api_definitions
             .iter()
             .flat_map(|x| x.routes.clone())
             .collect::<Vec<_>>();
 
         let api_request = self;
-        let router = router::build(routes);
+        let router = router::build(compiled_routes);
         let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
         let request_query_variables = self.input_path.query_components().unwrap_or_default();
         let request_body = &self.req_body;
@@ -158,7 +153,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
                 .collect()
         };
 
-        let request_details = RequestDetails::from(
+        let http_request_details = RequestDetails::from(
             &zipped_path_params,
             &request_query_variables,
             query_params,
@@ -167,33 +162,36 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
         )
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
-        let resolve_rib_input = request_details
-            .resolve_rib_input_value(&binding.worker_name_compiled.rib_input)
-            .map_err(|err| format!("Failed to resolve rib input value {}", err))?;
+        let resolve_rib_input = http_request_details
+            .resolve_rib_input_value(&binding.worker_name_compiled.rib_input_type_info)
+            .map_err(|err| {
+                format!(
+                    "Failed to resolve rib input value from http request details {}",
+                    err
+                )
+            })?;
 
         // To evaluate worker-name, most probably
-        let worker_name: String = default_evaluator
-            .evaluate_pure(
-                &binding.worker_name_compiled.compiled_worker_name,
-                &resolve_rib_input,
-            )
-            .await
-            .map_err(|err| format!("Failed to evaluate worker name expression. {}", err))?
-            .get_literal()
-            .ok_or("Worker name is not a String".to_string())?
-            .as_string();
+        let worker_name: String = rib::interpret_pure(
+            &binding.worker_name_compiled.compiled_worker_name,
+            &resolve_rib_input.value,
+        )
+        .await
+        .map_err(|err| format!("Failed to evaluate worker name rib expression. {}", err))?
+        .get_literal()
+        .ok_or("Worker name is not a Rib expression that resolves to String".to_string())?
+        .as_string();
 
         let component_id = &binding.component_id;
 
         let idempotency_key =
             if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
-                let idempotency_key_value = default_evaluator
-                    .evaluate_pure(
-                        &idempotency_key_compiled.compiled_idempotency_key,
-                        &resolve_rib_input,
-                    )
-                    .await
-                    .map_err(|err| err.to_string())?;
+                let idempotency_key_value = rib::interpret_pure(
+                    &idempotency_key_compiled.compiled_idempotency_key,
+                    &resolve_rib_input.value,
+                )
+                .await
+                .map_err(|err| err.to_string())?;
 
                 let idempotency_key = idempotency_key_value
                     .get_literal()
@@ -216,7 +214,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
 
         let resolved_binding = ResolvedWorkerBindingFromRequest {
             worker_detail,
-            request_details,
+            request_details: http_request_details,
             compiled_response_mapping: binding.response_compiled.clone(),
         };
 

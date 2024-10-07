@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::api_definition::http::CompiledHttpApiDefinition;
-use crate::worker_service_rib_interpreter::{DefaultEvaluator, WorkerServiceRibInterpreter};
+use crate::worker_service_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
 use futures_util::FutureExt;
 use hyper::header::HOST;
 use poem::http::StatusCode;
@@ -19,7 +19,7 @@ use crate::worker_bridge_execution::WorkerRequestExecutor;
 // This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi {
-    pub evaluator: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
+    pub worker_service_rib_interpreter: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
     pub api_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
 }
@@ -31,12 +31,12 @@ impl CustomHttpRequestApi {
             dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send,
         >,
     ) -> Self {
-        let evaluator = Arc::new(DefaultEvaluator::from_worker_request_executor(
+        let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             worker_request_executor_service.clone(),
         ));
 
         Self {
-            evaluator,
+            worker_service_rib_interpreter: evaluator,
             api_definition_lookup_service,
         }
     }
@@ -71,7 +71,7 @@ impl CustomHttpRequestApi {
             }
         };
 
-        let api_request = InputHttpRequest {
+        let input_http_request = InputHttpRequest {
             input_path: ApiInputPath {
                 base_path: uri.path().to_string(),
                 query_path: uri.query().map(|x| x.to_string()),
@@ -83,25 +83,28 @@ impl CustomHttpRequestApi {
 
         let possible_api_definitions = match self
             .api_definition_lookup_service
-            .get(api_request.clone())
+            .get(input_http_request.clone())
             .await
         {
-            Ok(api_definition) => api_definition,
-            Err(err) => {
-                error!("API request host: {} - error: {}", host, err);
+            Ok(api_defs) => api_defs,
+            Err(api_defs_lookup_error) => {
+                error!(
+                    "API request host: {} - error: {}",
+                    host, api_defs_lookup_error
+                );
                 return Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .body(Body::from_string("Internal error".to_string()));
             }
         };
 
-        match api_request
+        match input_http_request
             .resolve_worker_binding(possible_api_definitions)
             .await
         {
-            Ok(resolved_worker_request) => {
-                resolved_worker_request
-                    .interpret_response_mapping::<poem::Response>(&self.evaluator)
+            Ok(resolved_worker_binding) => {
+                resolved_worker_binding
+                    .interpret_response_mapping(&self.worker_service_rib_interpreter)
                     .await
             }
 

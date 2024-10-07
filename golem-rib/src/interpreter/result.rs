@@ -47,20 +47,21 @@ impl RibInterpreterResult {
     pub fn get_bool(&self) -> Option<bool> {
         match self {
             RibInterpreterResult::Val(TypeAnnotatedValue::Bool(bool)) => Some(*bool),
-            _ => None,
+            RibInterpreterResult::Val(_) => None,
+            RibInterpreterResult::Unit => None,
         }
     }
     pub fn get_val(&self) -> Option<TypeAnnotatedValue> {
         match self {
             RibInterpreterResult::Val(val) => Some(val.clone()),
-            _ => None,
+            RibInterpreterResult::Unit => None,
         }
     }
 
     pub fn get_literal(&self) -> Option<LiteralValue> {
         match self {
             RibInterpreterResult::Val(val) => val.get_literal(),
-            _ => None,
+            RibInterpreterResult::Unit => None,
         }
     }
 
