@@ -49,6 +49,8 @@ jobs:
       if: success() || failure() # always run even if the previous step fails
       with:
         report_paths: '**/target/report-*.xml'
+        detailed_summary: true
+        include_passed: true
 
   publish:
     needs: [ build ]
