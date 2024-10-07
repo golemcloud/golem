@@ -67,9 +67,12 @@ pub mod metadata;
 
 pub use customization::*;
 
+#[cfg(test)]
+test_r::enable!();
+
 /// An index space defines one of the possible indexes various WASM nodes can belong to.
 ///
-/// In many cases, espacially in the core WASM AST, each top-level WASM node (such as data, memory, type, etc.) has its own index space.
+/// In many cases, especially in the core WASM AST, each top-level WASM node (such as data, memory, type, etc.) has its own index space.
 /// Indexes to these nodes are represented by unsigned integers, and each index space are independent from each other.
 ///
 /// In the component model many top-level AST nodes are mapped to multiple index spaces depending on their contents. For example a [component::ComponentImport] node

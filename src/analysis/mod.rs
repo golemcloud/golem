@@ -696,6 +696,7 @@ mod tests {
         AnalysedResourceMode, AnalysedType, NameTypePair, TypeF32, TypeHandle, TypeRecord,
         TypeResult, TypeStr, TypeU32, TypeU64,
     };
+    use test_r::test;
 
     #[test]
     fn analysed_function_kind() {

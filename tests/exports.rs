@@ -6,6 +6,9 @@ use golem_wasm_ast::analysis::{
 };
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
+use test_r::test;
+
+test_r::enable!();
 
 #[test]
 fn exports_shopping_cart_component() {
