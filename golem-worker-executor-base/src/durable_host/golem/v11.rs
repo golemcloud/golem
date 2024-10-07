@@ -15,7 +15,7 @@
 use crate::durable_host::golem::GetWorkersEntry;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
-use crate::model::public_oplog::get_public_oplog_chunk;
+use crate::model::public_oplog::{find_component_version_at, get_public_oplog_chunk};
 use crate::preview2::golem;
 use crate::preview2::golem::api0_2_0::host::GetWorkers;
 use crate::preview2::golem::api1_1_0_rc1::host::{
@@ -193,41 +193,10 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let account_id = self.owned_worker_id.account_id();
         let worker_id: golem_common::model::WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
         let start = golem_common::model::oplog::OplogIndex::from_u64(start);
-
-        // TODO: extract to public_oplog module?
-        let mut initial_component_version = 0;
-        let last_oplog_index = self
-            .state
-            .oplog_service
-            .get_last_index(&owned_worker_id)
-            .await;
-        let mut current = golem_common::model::oplog::OplogIndex::INITIAL;
-        while current < start && current <= last_oplog_index {
-            // NOTE: could be reading in pages for optimization
-            let entry = self
-                .state
-                .oplog_service()
-                .read(&owned_worker_id, current, 1)
-                .await
-                .iter()
-                .next()
-                .map(|(_, v)| v.clone());
-
-            if let Some(golem_common::model::oplog::OplogEntry::Create {
-                component_version, ..
-            }) = entry
-            {
-                initial_component_version = component_version;
-            } else if let Some(golem_common::model::oplog::OplogEntry::SuccessfulUpdate {
-                target_version,
-                ..
-            }) = entry
-            {
-                initial_component_version = target_version;
-            }
-            current = current.next();
-        }
+        let initial_component_version =
+            find_component_version_at(self.state.oplog_service(), &owned_worker_id, start).await?;
 
         let entry = GetOplogEntry::new(owned_worker_id, start, initial_component_version, 100);
         let resource = self.as_wasi_view().table().push(entry)?;

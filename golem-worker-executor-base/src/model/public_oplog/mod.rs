@@ -70,6 +70,8 @@ pub struct PublicOplogChunk {
     pub entries: Vec<PublicOplogEntry>,
     pub next_oplog_index: OplogIndex,
     pub current_component_version: ComponentVersion,
+    pub first_index_in_chunk: OplogIndex,
+    pub last_index: OplogIndex,
 }
 
 pub async fn get_public_oplog_chunk(
@@ -83,6 +85,8 @@ pub async fn get_public_oplog_chunk(
     let raw_entries = oplog_service
         .read(owned_worker_id, initial_oplog_index, count as u64)
         .await;
+
+    let last_index = oplog_service.get_last_index(owned_worker_id).await;
 
     let mut entries = Vec::new();
     let mut current_component_version = initial_component_version;
@@ -109,7 +113,40 @@ pub async fn get_public_oplog_chunk(
         entries,
         next_oplog_index,
         current_component_version,
+        first_index_in_chunk: initial_oplog_index,
+        last_index,
     })
+}
+
+pub async fn find_component_version_at(
+    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    owned_worker_id: &OwnedWorkerId,
+    start: OplogIndex,
+) -> Result<ComponentVersion, GolemError> {
+    let mut initial_component_version = 0;
+    let last_oplog_index = oplog_service.get_last_index(owned_worker_id).await;
+    let mut current = OplogIndex::INITIAL;
+    while current < start && current <= last_oplog_index {
+        // NOTE: could be reading in pages for optimization
+        let entry = oplog_service
+            .read(owned_worker_id, current, 1)
+            .await
+            .iter()
+            .next()
+            .map(|(_, v)| v.clone());
+
+        if let Some(OplogEntry::Create {
+            component_version, ..
+        }) = entry
+        {
+            initial_component_version = component_version;
+        } else if let Some(OplogEntry::SuccessfulUpdate { target_version, .. }) = entry {
+            initial_component_version = target_version;
+        }
+        current = current.next();
+    }
+
+    Ok(initial_component_version)
 }
 
 #[async_trait]

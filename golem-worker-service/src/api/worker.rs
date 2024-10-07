@@ -607,6 +607,23 @@ impl WorkerApi {
 
         record.result(response)
     }
+
+    /// Get the oplog of a worker
+    #[oai(
+        path = "/:component_id/workers/:worker_name/oplog",
+        method = "get",
+        operation_id = "get_oplog"
+    )]
+    async fn get_oplog(
+        &self,
+        _component_id: Path<ComponentId>,
+        _worker_name: Path<String>,
+        _from: Query<u64>,
+        _count: Query<u64>,
+        _cursor: Query<OplogCursor>,
+    ) -> Result<Json<GetOplogResponse>> {
+        todo!()
+    }
 }
 
 fn make_worker_id(

@@ -25,14 +25,15 @@ use golem_api_grpc::proto::golem::worker::v1::{
     invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
     launch_new_worker_response, resume_worker_response, update_worker_response, worker_error,
     worker_execution_error, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest,
-    DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, UnknownError, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
+    DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest, GetOplogResponse,
+    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
+    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
 use golem_common::grpc::{
@@ -466,6 +467,13 @@ impl GrpcWorkerService for WorkerGrpcApi {
         Ok(Response::new(UpdateWorkerResponse {
             result: Some(response),
         }))
+    }
+
+    async fn get_oplog(
+        &self,
+        _request: Request<GetOplogRequest>,
+    ) -> Result<Response<GetOplogResponse>, Status> {
+        todo!()
     }
 }
 
