@@ -25,7 +25,9 @@ impl GetLiteralValue for TypeAnnotatedValue {
     fn get_literal(&self) -> Option<LiteralValue> {
         match self {
             TypeAnnotatedValue::Str(value) => Some(LiteralValue::String(value.clone())),
-            TypeAnnotatedValue::Char(code_point) => char::from_u32(*code_point as u32).map(|c| c.to_string()).map(LiteralValue::String),
+            TypeAnnotatedValue::Char(code_point) => char::from_u32(*code_point as u32)
+                .map(|c| c.to_string())
+                .map(LiteralValue::String),
             TypeAnnotatedValue::Bool(value) => Some(LiteralValue::Bool(*value)),
             TypeAnnotatedValue::Enum(value) => {
                 // An enum can be turned into a simple literal and can be part of string concatenations
