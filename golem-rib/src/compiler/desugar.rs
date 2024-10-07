@@ -99,6 +99,7 @@ mod internal {
                 arm_patterns,
                 resolution,
                 inferred_type_of_pred,
+                tag
             ),
 
             ArmPattern::TupleConstructor(arm_patterns) => hande_constructor(
@@ -107,6 +108,7 @@ mod internal {
                 arm_patterns,
                 resolution,
                 inferred_type_of_pred,
+                tag
             ),
 
             ArmPattern::ListConstructor(arm_patterns) => hande_constructor(
@@ -115,6 +117,7 @@ mod internal {
                 arm_patterns,
                 resolution,
                 inferred_type_of_pred,
+                tag
             ),
 
             ArmPattern::RecordConstructor(field_arm_pattern_collection) => {
@@ -161,12 +164,14 @@ mod internal {
                 );
 
                 let block = Expr::multiple(vec![assign_var, resolution.clone()]);
+
                 let branch = IfThenBranch {
                     condition: tag.unwrap_or(Expr::boolean(true)),
                     body: block,
                 };
                 Some(branch)
             }
+
 
             _ => {
                 let branch = IfThenBranch {
@@ -242,6 +247,7 @@ mod internal {
         bind_patterns: &[ArmPattern],
         resolution: &Expr,
         pred_expr_inferred_type: InferredType,
+        tag: Option<Expr>
     ) -> Option<IfThenBranch> {
         match pred_expr_inferred_type {
             InferredType::Variant(variant) => {
@@ -252,42 +258,64 @@ mod internal {
                     .find(|(case_name, _)| case_name == constructor_name);
                 let inner_variant_arg_type = inner_type.and_then(|(_, typ)| typ.clone());
 
+                let cond = if let Some(t) = tag {
+                    Expr::and(t, Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    ))
+                } else {
+                    Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    )
+                };
                 match (arg_pattern_opt, inner_variant_arg_type) {
                     (None, None) => None,
                     (Some(pattern), Some(inferred_type)) => get_conditions(
                         &MatchArm::new(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
-                        Some(Expr::equal_to(
-                            Expr::get_tag(pred_expr.clone()),
-                            Expr::literal(constructor_name),
-                        )),
+                        Some(cond),
                         inferred_type,
                     ),
                     _ => None, // Probably fail here
                 }
             }
+
+            // some(some(x)) =>
             InferredType::Option(inner) if constructor_name == "some" => {
+
+                let cond = if let Some(t) = tag {
+                    Expr::and(t, Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    ))
+                } else {
+                    Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    )
+                };
+
                 match bind_patterns.first() {
                     Some(pattern) => get_conditions(
                         &MatchArm::new(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
-                        Some(Expr::equal_to(
-                            Expr::get_tag(pred_expr.clone()),
-                            Expr::literal(constructor_name),
-                        )),
+                        Some(cond),
                         *inner,
                     ),
                     _ => None,
                 }
             }
 
-            InferredType::Option(_) if constructor_name == "none" => Some(IfThenBranch {
-                condition: Expr::equal_to(
-                    Expr::get_tag(pred_expr.clone()),
-                    Expr::literal(constructor_name),
-                ),
-                body: resolution.clone(),
-            }),
+            InferredType::Option(_) if constructor_name == "none" => {
+                Some(IfThenBranch {
+                    condition: Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    ),
+                    body: resolution.clone(),
+                })
+            },
 
             InferredType::Result { ok, error } => {
                 let inner_variant_arg_type = if constructor_name == "ok" {
@@ -298,14 +326,23 @@ mod internal {
                     return None;
                 };
 
+                let cond = if let Some(t) = tag {
+                    Expr::and(t, Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    ))
+                } else {
+                    Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    )
+                };
+
                 match bind_patterns.first() {
                     Some(pattern) => get_conditions(
                         &MatchArm::new(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
-                        Some(Expr::equal_to(
-                            Expr::get_tag(pred_expr.clone()),
-                            Expr::literal(constructor_name),
-                        )),
+                        Some(cond),
                         inner_variant_arg_type
                             .unwrap_or(&InferredType::Unknown)
                             .clone(),

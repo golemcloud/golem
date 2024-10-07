@@ -1305,12 +1305,11 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
-           let x = some(some(1u64));
+           let x: option<option<u64>> = none;
 
            match x {
-              some(x) => match x {
-                some(x) => x
-              }
+              some(some(x)) => x,
+              none => 0u64
            }
         "#;
 
@@ -1319,7 +1318,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(1));
+            assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(0));
         }
 
         #[tokio::test]
