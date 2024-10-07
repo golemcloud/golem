@@ -261,11 +261,17 @@ mod tests {
                     vec![
                         MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar")),
                         MatchArm::new(
-                            ArmPattern::Constructor("ok".to_string(), vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]),
+                            ArmPattern::Constructor(
+                                "ok".to_string(),
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
+                            ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Constructor("err".to_string(), vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]),
+                            ArmPattern::Constructor(
+                                "err".to_string(),
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
+                            ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
@@ -273,7 +279,10 @@ mod tests {
                             Expr::identifier("foo"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Constructor("some".to_string(), vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]),
+                            ArmPattern::Constructor(
+                                "some".to_string(),
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
+                            ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
@@ -281,8 +290,7 @@ mod tests {
                             Expr::select_field(Expr::identifier("foo"), "bar"),
                         ),
                     ]
-                )
-                ,
+                ),
                 ""
             ))
         );

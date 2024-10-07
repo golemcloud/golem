@@ -260,19 +260,25 @@ mod pattern_match_bindings {
 
         pub(crate) fn expected_match(index: usize) -> Expr {
             Expr::PatternMatch(
-                Box::new(Expr::option(Some(Expr::identifier("x")))), // x is still global
+                Box::new(Expr::Option(
+                    Some(Box::new(Expr::Identifier(
+                        VariableId::Global("x".to_string()),
+                        InferredType::Unknown,
+                    ))),
+                    InferredType::Option(Box::new(InferredType::Unknown)),
+                )),
                 vec![
                     MatchArm {
-                        arm_pattern: ArmPattern::Literal(Box::new(Expr::Option(
-                            Some(Box::new(Expr::Identifier(
+                        arm_pattern: ArmPattern::constructor(
+                            "some",
+                            vec![ArmPattern::literal(Expr::Identifier(
                                 VariableId::MatchIdentifier(MatchIdentifier::new(
                                     "x".to_string(),
                                     index,
                                 )),
                                 InferredType::Unknown,
-                            ))),
-                            InferredType::Option(Box::new(InferredType::Unknown)),
-                        ))),
+                            ))],
+                        ),
                         arm_resolution_expr: Box::new(Expr::Identifier(
                             VariableId::MatchIdentifier(MatchIdentifier::new(
                                 "x".to_string(),
@@ -300,16 +306,16 @@ mod pattern_match_bindings {
                 Box::new(Expr::option(Some(Expr::identifier("x")))), // x is still global
                 vec![
                     MatchArm {
-                        arm_pattern: ArmPattern::Literal(Box::new(Expr::Option(
-                            Some(Box::new(Expr::Identifier(
+                        arm_pattern: ArmPattern::constructor(
+                            "some",
+                            vec![ArmPattern::literal(Expr::Identifier(
                                 VariableId::MatchIdentifier(MatchIdentifier::new(
                                     "x".to_string(),
                                     index,
                                 )),
                                 InferredType::Unknown,
-                            ))),
-                            InferredType::Option(Box::new(InferredType::Unknown)),
-                        ))),
+                            ))],
+                        ),
                         arm_resolution_expr: Box::new(block),
                     },
                     MatchArm {
@@ -340,12 +346,16 @@ mod pattern_match_bindings {
                 )),
                 vec![
                     MatchArm {
-                        arm_pattern: ArmPattern::constructor("ok", vec![
-                            ArmPattern::literal(Expr::Identifier(
-                                VariableId::MatchIdentifier(MatchIdentifier::new("x".to_string(), 1)),
+                        arm_pattern: ArmPattern::constructor(
+                            "ok",
+                            vec![ArmPattern::literal(Expr::Identifier(
+                                VariableId::MatchIdentifier(MatchIdentifier::new(
+                                    "x".to_string(),
+                                    1,
+                                )),
                                 InferredType::Unknown,
-                            )),
-                        ]),
+                            ))],
+                        ),
                         arm_resolution_expr: Box::new(Expr::PatternMatch(
                             Box::new(Expr::Identifier(
                                 VariableId::MatchIdentifier(MatchIdentifier::new(
@@ -356,15 +366,16 @@ mod pattern_match_bindings {
                             )),
                             vec![
                                 MatchArm {
-                                    arm_pattern: ArmPattern::constructor("some", vec![
-                                        ArmPattern::literal(Expr::Identifier(
+                                    arm_pattern: ArmPattern::constructor(
+                                        "some",
+                                        vec![ArmPattern::literal(Expr::Identifier(
                                             VariableId::MatchIdentifier(MatchIdentifier::new(
                                                 "x".to_string(),
                                                 2,
                                             )),
                                             InferredType::Unknown,
-                                        )),
-                                    ]),
+                                        ))],
+                                    ),
                                     arm_resolution_expr: Box::new(Expr::Identifier(
                                         VariableId::MatchIdentifier(MatchIdentifier::new(
                                             "x".to_string(),
@@ -382,12 +393,16 @@ mod pattern_match_bindings {
                         )),
                     },
                     MatchArm {
-                        arm_pattern: ArmPattern::constructor("err", vec![
-                            ArmPattern::literal(Expr::Identifier(
-                                VariableId::MatchIdentifier(MatchIdentifier::new("x".to_string(), 4)),
+                        arm_pattern: ArmPattern::constructor(
+                            "err",
+                            vec![ArmPattern::literal(Expr::Identifier(
+                                VariableId::MatchIdentifier(MatchIdentifier::new(
+                                    "x".to_string(),
+                                    4,
+                                )),
                                 InferredType::Unknown,
-                            )),
-                        ]),
+                            ))],
+                        ),
                         arm_resolution_expr: Box::new(Expr::number(0f64)),
                     },
                 ],

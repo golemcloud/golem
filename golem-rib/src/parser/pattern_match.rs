@@ -432,8 +432,7 @@ mod tests {
                             Expr::identifier("x"),
                         ),
                     ]
-                )
-                ,
+                ),
                 ""
             ))
         );

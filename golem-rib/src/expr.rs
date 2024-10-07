@@ -706,7 +706,6 @@ pub enum ArmPattern {
 }
 
 impl ArmPattern {
-
     pub fn constructor(name: &str, patterns: Vec<ArmPattern>) -> ArmPattern {
         ArmPattern::Constructor(name.to_string(), patterns)
     }

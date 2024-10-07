@@ -338,11 +338,17 @@ mod record_tests {
                     Expr::identifier("request"),
                     vec![
                         MatchArm::new(
-                            ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),  // Use Constructor for ok
+                            ArmPattern::constructor(
+                                "ok",
+                                vec![ArmPattern::literal(Expr::identifier("foo"))],
+                            ), // Use Constructor for ok
                             Expr::literal("success"),
                         ),
                         MatchArm::new(
-                            ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),  // Use Constructor for err
+                            ArmPattern::constructor(
+                                "err",
+                                vec![ArmPattern::literal(Expr::identifier("msg"))],
+                            ), // Use Constructor for err
                             Expr::literal("failure"),
                         ),
                     ],
@@ -354,20 +360,32 @@ mod record_tests {
                     Expr::identifier("request"),
                     vec![
                         MatchArm::new(
-                            ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),  // Use Constructor for ok
+                            ArmPattern::constructor(
+                                "ok",
+                                vec![ArmPattern::literal(Expr::identifier("foo"))],
+                            ), // Use Constructor for ok
                             Expr::literal("success"),
                         ),
                         MatchArm::new(
-                            ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),  // Use Constructor for err
+                            ArmPattern::constructor(
+                                "err",
+                                vec![ArmPattern::literal(Expr::identifier("msg"))],
+                            ), // Use Constructor for err
                             Expr::pattern_match(
                                 Expr::identifier("request"),
                                 vec![
                                     MatchArm::new(
-                                        ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),  // Use Constructor for ok
+                                        ArmPattern::constructor(
+                                            "ok",
+                                            vec![ArmPattern::literal(Expr::identifier("foo"))],
+                                        ), // Use Constructor for ok
                                         Expr::literal("success"),
                                     ),
                                     MatchArm::new(
-                                        ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),  // Use Constructor for err
+                                        ArmPattern::constructor(
+                                            "err",
+                                            vec![ArmPattern::literal(Expr::identifier("msg"))],
+                                        ), // Use Constructor for err
                                         Expr::literal("failure"),
                                     ),
                                 ],
@@ -612,11 +630,17 @@ mod sequence_tests {
                 Expr::identifier("request"),
                 vec![
                     MatchArm::new(
-                        ArmPattern::Constructor("ok".to_string(), vec![ArmPattern::literal(Expr::identifier("foo"))]),  // Use Constructor for ok
+                        ArmPattern::Constructor(
+                            "ok".to_string(),
+                            vec![ArmPattern::literal(Expr::identifier("foo"))],
+                        ), // Use Constructor for ok
                         Expr::literal("success"),
                     ),
                     MatchArm::new(
-                        ArmPattern::Constructor("err".to_string(), vec![ArmPattern::literal(Expr::identifier("msg"))]),  // Use Constructor for err
+                        ArmPattern::Constructor(
+                            "err".to_string(),
+                            vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        ), // Use Constructor for err
                         Expr::literal("failure"),
                     ),
                 ],
@@ -625,20 +649,32 @@ mod sequence_tests {
                 Expr::identifier("request"),
                 vec![
                     MatchArm::new(
-                        ArmPattern::Constructor("ok".to_string(), vec![ArmPattern::literal(Expr::identifier("foo"))]),  // Use Constructor for ok
+                        ArmPattern::Constructor(
+                            "ok".to_string(),
+                            vec![ArmPattern::literal(Expr::identifier("foo"))],
+                        ), // Use Constructor for ok
                         Expr::literal("success"),
                     ),
                     MatchArm::new(
-                        ArmPattern::Constructor("err".to_string(), vec![ArmPattern::literal(Expr::identifier("msg"))]),  // Use Constructor for err
+                        ArmPattern::Constructor(
+                            "err".to_string(),
+                            vec![ArmPattern::literal(Expr::identifier("msg"))],
+                        ), // Use Constructor for err
                         Expr::pattern_match(
                             Expr::identifier("request"),
                             vec![
                                 MatchArm::new(
-                                    ArmPattern::Constructor("ok".to_string(), vec![ArmPattern::literal(Expr::identifier("foo"))]),  // Use Constructor for ok
+                                    ArmPattern::Constructor(
+                                        "ok".to_string(),
+                                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                                    ), // Use Constructor for ok
                                     Expr::literal("success"),
                                 ),
                                 MatchArm::new(
-                                    ArmPattern::Constructor("err".to_string(), vec![ArmPattern::literal(Expr::identifier("msg"))]),  // Use Constructor for err
+                                    ArmPattern::Constructor(
+                                        "err".to_string(),
+                                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                                    ), // Use Constructor for err
                                     Expr::literal("failure"),
                                 ),
                             ],
@@ -1192,16 +1228,21 @@ mod match_tests {
             Expr::identifier("request"),
             vec![
                 MatchArm::new(
-                    ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),
+                    ArmPattern::constructor(
+                        "ok",
+                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                    ),
                     Expr::literal("success"),
                 ),
                 MatchArm::new(
-                    ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),
+                    ArmPattern::constructor(
+                        "err",
+                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                    ),
                     Expr::literal("failure"),
                 ),
             ],
         );
-
 
         input_expr.reset_type();
 
@@ -1215,20 +1256,25 @@ mod match_tests {
 
     #[test]
     fn test_round_trip_match_expr_of_flags() {
-        let input_expr =Expr::pattern_match(
+        let input_expr = Expr::pattern_match(
             Expr::identifier("request"),
             vec![
                 MatchArm::new(
-                    ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),
+                    ArmPattern::constructor(
+                        "ok",
+                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                    ),
                     Expr::flags(vec!["flag1".to_string(), "flag2".to_string()]),
                 ),
                 MatchArm::new(
-                    ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),
+                    ArmPattern::constructor(
+                        "err",
+                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                    ),
                     Expr::literal("failure"),
                 ),
             ],
         );
-
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =
@@ -1243,14 +1289,20 @@ mod match_tests {
             Expr::identifier("request"),
             vec![
                 MatchArm::new(
-                    ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),
+                    ArmPattern::constructor(
+                        "ok",
+                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                    ),
                     Expr::tuple(vec![
                         Expr::identifier("request"),
                         Expr::identifier("request"),
                     ]),
                 ),
                 MatchArm::new(
-                    ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),
+                    ArmPattern::constructor(
+                        "err",
+                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                    ),
                     Expr::literal("failure"),
                 ),
             ],
@@ -1270,14 +1322,20 @@ mod match_tests {
             Expr::identifier("request"),
             vec![
                 MatchArm::new(
-                    ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),
+                    ArmPattern::constructor(
+                        "ok",
+                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                    ),
                     Expr::sequence(vec![
                         Expr::identifier("request"),
                         Expr::identifier("request"),
                     ]),
                 ),
                 MatchArm::new(
-                    ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),
+                    ArmPattern::constructor(
+                        "err",
+                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                    ),
                     Expr::literal("failure"),
                 ),
             ],
@@ -1297,11 +1355,17 @@ mod match_tests {
             Expr::identifier("request"),
             vec![
                 MatchArm::new(
-                    ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),
+                    ArmPattern::constructor(
+                        "ok",
+                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                    ),
                     Expr::record(vec![("field".to_string(), Expr::identifier("request"))]),
                 ),
                 MatchArm::new(
-                    ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),
+                    ArmPattern::constructor(
+                        "err",
+                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                    ),
                     Expr::literal("failure"),
                 ),
             ],
@@ -1316,15 +1380,21 @@ mod match_tests {
 
     #[test]
     fn test_round_trip_match_expr_of_math_op() {
-        let input_expr =Expr::pattern_match(
+        let input_expr = Expr::pattern_match(
             Expr::identifier("request"),
             vec![
                 MatchArm::new(
-                    ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),  // Use Constructor for ok
+                    ArmPattern::constructor(
+                        "ok",
+                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                    ), // Use Constructor for ok
                     Expr::greater_than(Expr::number(1.0), Expr::number(2.0)),
                 ),
                 MatchArm::new(
-                    ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),  // Use Constructor for err
+                    ArmPattern::constructor(
+                        "err",
+                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                    ), // Use Constructor for err
                     Expr::less_than(Expr::number(1.0), Expr::number(2.0)),
                 ),
             ],
@@ -1342,7 +1412,10 @@ mod match_tests {
             Expr::identifier("request"),
             vec![
                 MatchArm::new(
-                    ArmPattern::constructor("ok", vec![ArmPattern::literal(Expr::identifier("foo"))]),
+                    ArmPattern::constructor(
+                        "ok",
+                        vec![ArmPattern::literal(Expr::identifier("foo"))],
+                    ),
                     Expr::cond(
                         Expr::equal_to(
                             Expr::select_field(Expr::identifier("request"), "foo"),
@@ -1353,12 +1426,14 @@ mod match_tests {
                     ),
                 ),
                 MatchArm::new(
-                    ArmPattern::constructor("err", vec![ArmPattern::literal(Expr::identifier("msg"))]),
+                    ArmPattern::constructor(
+                        "err",
+                        vec![ArmPattern::literal(Expr::identifier("msg"))],
+                    ),
                     Expr::literal("failure"),
                 ),
             ],
         );
-
 
         let expr_str = to_string(&input_expr).unwrap();
         let expected_str =

@@ -1228,7 +1228,6 @@ mod type_inference_tests {
                 InferredType::Str,
             );
 
-
             assert_eq!(expr, expected)
         }
 
@@ -1288,7 +1287,6 @@ mod type_inference_tests {
                 ],
                 InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
             );
-
 
             assert_eq!(expr, expected)
         }
@@ -1418,16 +1416,23 @@ mod type_inference_tests {
                             )]))),
                         )),
                         vec![MatchArm::new(
-                            ArmPattern::Constructor("some".to_string(), vec![ArmPattern::Literal(
-                                Box::new(Expr::Identifier(
+                            ArmPattern::Constructor(
+                                "some".to_string(),
+                                vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                                     VariableId::match_identifier("x".to_string(), 1),
-                                    InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
-                                )),
-                            )]),
+                                    InferredType::Record(vec![(
+                                        "foo".to_string(),
+                                        InferredType::Str,
+                                    )]),
+                                )))],
+                            ),
                             Expr::SelectField(
                                 Box::new(Expr::Identifier(
                                     VariableId::match_identifier("x".to_string(), 1),
-                                    InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
+                                    InferredType::Record(vec![(
+                                        "foo".to_string(),
+                                        InferredType::Str,
+                                    )]),
                                 )),
                                 "foo".to_string(),
                                 InferredType::Str,
@@ -1441,15 +1446,18 @@ mod type_inference_tests {
                                 VariableId::local("y", 0),
                                 InferredType::List(Box::new(InferredType::U64)),
                             ))),
-                            InferredType::Option(Box::new(InferredType::List(Box::new(InferredType::U64)))),
+                            InferredType::Option(Box::new(InferredType::List(Box::new(
+                                InferredType::U64,
+                            )))),
                         )),
                         vec![MatchArm::new(
-                            ArmPattern::Constructor("some".to_string(), vec![ArmPattern::Literal(
-                                Box::new(Expr::Identifier(
+                            ArmPattern::Constructor(
+                                "some".to_string(),
+                                vec![ArmPattern::Literal(Box::new(Expr::Identifier(
                                     VariableId::match_identifier("y".to_string(), 2),
                                     InferredType::List(Box::new(InferredType::U64)),
-                                )),
-                            )]),
+                                )))],
+                            ),
                             Expr::SelectIndex(
                                 Box::new(Expr::Identifier(
                                     VariableId::match_identifier("y".to_string(), 2),
@@ -1464,7 +1472,6 @@ mod type_inference_tests {
                 ],
                 InferredType::U64,
             );
-
 
             assert_eq!(expr, expected)
         }

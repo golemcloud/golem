@@ -189,10 +189,7 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let expected = Expr::multiple(vec![
-            Expr::let_binding(
-                "foo",
-                Expr::option(Some(Expr::number(1f64))),
-            ),
+            Expr::let_binding("foo", Expr::option(Some(Expr::number(1f64)))),
             Expr::pattern_match(
                 Expr::identifier("foo"),
                 vec![MatchArm::new(
@@ -215,7 +212,6 @@ mod tests {
                 )],
             ),
         ]);
-
 
         assert_eq!(expr, expected);
     }
