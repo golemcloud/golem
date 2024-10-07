@@ -46,7 +46,7 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -Dwarnings
       - name: Unit Tests
-        run: cargo test --exclude wasm-rpc-stubgen-tests-integration
+        run: cargo test --workspace --exclude wasm-rpc-stubgen-tests-integration
       - name: WASM RPC stubgen integration tests
         run: cargo test --package wasm-rpc-stubgen-tests-integration -- --test-threads=1
       - name: Build in stub mode
