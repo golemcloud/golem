@@ -85,6 +85,16 @@ impl TryFrom<crate::protobuf::TypeAnnotatedValue> for ValueAndType {
     }
 }
 
+impl TryFrom<ValueAndType> for crate::protobuf::TypeAnnotatedValue {
+    type Error = Vec<String>;
+
+    fn try_from(value_and_type: ValueAndType) -> Result<Self, Self::Error> {
+        Ok(crate::protobuf::TypeAnnotatedValue {
+            type_annotated_value: Some(value_and_type.try_into()?),
+        })
+    }
+}
+
 /// Specific trait to convert a type into a `ValueAndType` type.
 pub trait IntoValue {
     fn into_value(self) -> Value;
