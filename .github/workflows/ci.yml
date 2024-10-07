@@ -8,6 +8,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  checks: write
+
 env:
   CARGO_TERM_COLOR: always
 
