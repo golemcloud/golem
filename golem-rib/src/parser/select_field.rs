@@ -261,29 +261,28 @@ mod tests {
                     vec![
                         MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar")),
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier("x")))),
-                            Expr::identifier("x")
+                            ArmPattern::Constructor("ok".to_string(), vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]),
+                            Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::err(Expr::identifier("x")))),
-                            Expr::identifier("x")
+                            ArmPattern::Constructor("err".to_string(), vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]),
+                            Expr::identifier("x"),
                         ),
                         MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::option(None))),
-                            Expr::identifier("foo")
+                            Expr::identifier("foo"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
-                                "x"
-                            ))))),
-                            Expr::identifier("x")
+                            ArmPattern::Constructor("some".to_string(), vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]),
+                            Expr::identifier("x"),
                         ),
                         MatchArm::new(
                             ArmPattern::Literal(Box::new(Expr::identifier("foo"))),
-                            Expr::select_field(Expr::identifier("foo"), "bar")
+                            Expr::select_field(Expr::identifier("foo"), "bar"),
                         ),
                     ]
-                ),
+                )
+                ,
                 ""
             ))
         );

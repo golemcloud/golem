@@ -706,6 +706,15 @@ pub enum ArmPattern {
 }
 
 impl ArmPattern {
+
+    pub fn constructor(name: &str, patterns: Vec<ArmPattern>) -> ArmPattern {
+        ArmPattern::Constructor(name.to_string(), patterns)
+    }
+
+    pub fn literal(expr: Expr) -> ArmPattern {
+        ArmPattern::Literal(Box::new(expr))
+    }
+
     pub fn get_expr_literals_mut(&mut self) -> Vec<&mut Box<Expr>> {
         match self {
             ArmPattern::Literal(expr) => vec![expr],

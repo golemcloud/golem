@@ -150,7 +150,10 @@ mod tests {
         let expected = Expr::pattern_match(
             Expr::identifier("foo"),
             vec![MatchArm::new(
-                ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier("x"))))),
+                ArmPattern::Constructor(
+                    "some".to_string(),
+                    vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                ),
                 Expr::multiple(vec![
                     Expr::let_binding("x", Expr::number(1f64)),
                     Expr::let_binding("y", Expr::number(2f64)),
@@ -186,11 +189,17 @@ mod tests {
         let expr = Expr::from_text(rib_expr).unwrap();
 
         let expected = Expr::multiple(vec![
-            Expr::let_binding("foo", Expr::option(Some(Expr::number(1f64)))),
+            Expr::let_binding(
+                "foo",
+                Expr::option(Some(Expr::number(1f64))),
+            ),
             Expr::pattern_match(
                 Expr::identifier("foo"),
                 vec![MatchArm::new(
-                    ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier("x"))))),
+                    ArmPattern::Constructor(
+                        "some".to_string(),
+                        vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                    ),
                     Expr::multiple(vec![
                         Expr::let_binding("x", Expr::number(1f64)),
                         Expr::let_binding("y", Expr::number(2f64)),
@@ -206,6 +215,7 @@ mod tests {
                 )],
             ),
         ]);
+
 
         assert_eq!(expr, expected);
     }
