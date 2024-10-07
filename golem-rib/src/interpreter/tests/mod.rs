@@ -157,10 +157,67 @@ mod comprehensive_test {
                 _ => "not found"
               };
 
-              let list_tuple_response_processed = match list_tuple_response {
+              let list_tuple_response_processed1 = match list_tuple_response {
                 [(text, _, _, _, _, _, _, _, _, _, _, _)] => text,
                 _ => "not found"
               };
+
+
+              let list_tuple_response_processed2 = match list_tuple_response {
+                [(_, number, _, _, _, _, _, _, _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed3 = match list_tuple_response {
+                [(_, _, number, _, _, _, _, _, _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed4 = match list_tuple_response {
+                [(_, _, _, number, _, _, _, _, _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed5 = match list_tuple_response {
+                [(_, _, _, _, number, _, _, _, _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed6 = match list_tuple_response {
+                [(_, _, _, _, _, boolean, _, _, _, _, _, _)] => boolean,
+                _ => false
+              };
+
+              let list_tuple_response_processed7 = match list_tuple_response {
+                [(_, _, _, _, _, _, char, _, _, _, _, _)] => "${char}",
+                _ => "not found"
+              };
+
+              let list_tuple_response_processed8 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, some(number), _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed9 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, _, ok(number), _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed10 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, _, _, [boolean], _, _)] => boolean,
+                _ => false
+              };
+
+              let list_tuple_response_processed11 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, _, _, _, case-hello(number), _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed12 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, _, _, _, _, {field-one: boolean, field-two: text})] => "${boolean}-${text}",
+                _ => "not found"
+              };
+
 
               let list_record_response_processed = match list_record_response {
                 [{data-body: {list-of-str : [text]}}] => text,
@@ -238,7 +295,7 @@ mod comprehensive_test {
                  l: list_list_response_processed,
                  m: list_variant_response_processed,
                  n: list_enum_response_processed,
-                 o: list_tuple_response_processed,
+                 o: list_tuple_response_processed1,
                  p: list_record_response_processed,
                  q: result_of_str_response_processed,
                  r: result_of_number_response_processed,
