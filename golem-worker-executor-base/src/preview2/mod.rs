@@ -12,9 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_wasm_rpc::ValueAndType;
+use std::mem;
+
 include!(concat!(env!("OUT_DIR"), "/preview2_mod.rs"));
 
 pub type InputStream = wasmtime_wasi::InputStream;
 pub type OutputStream = wasmtime_wasi::OutputStream;
 
 pub type Pollable = wasmtime_wasi::Pollable;
+
+impl From<golem_wasm_rpc::WitValue> for golem::rpc::types::WitValue {
+    fn from(value: golem_wasm_rpc::WitValue) -> Self {
+        unsafe { mem::transmute(value) }
+    }
+}
+
+impl From<golem_wasm_rpc::Value> for golem::rpc::types::WitValue {
+    fn from(value: golem_wasm_rpc::Value) -> Self {
+        let wit_value: golem_wasm_rpc::WitValue = value.into();
+        wit_value.into()
+    }
+}
+
+impl From<ValueAndType> for golem::rpc::types::WitValue {
+    fn from(value: ValueAndType) -> Self {
+        let wit_value: golem_wasm_rpc::WitValue = value.into();
+        wit_value.into()
+    }
+}

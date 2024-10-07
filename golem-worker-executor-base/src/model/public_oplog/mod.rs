@@ -35,10 +35,10 @@ use crate::services::worker_proxy::WorkerProxyError;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::config::RetryConfig;
-use golem_common::model::exports::function_by_name;
+use golem_common::model::exports::{find_resource_site, function_by_name};
 use golem_common::model::oplog::{
-    IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError,
-    WorkerResourceId, WrappedFunctionType,
+    LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError, WorkerResourceId,
+    WrappedFunctionType,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
@@ -52,7 +52,10 @@ use golem_wasm_ast::analysis::analysed_type::{
 };
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, TypeVariant};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
+use golem_wasm_rpc::{
+    type_annotated_value_from_str, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
+};
+use rib::{ParsedFunctionName, ParsedFunctionReference};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -102,6 +105,12 @@ pub async fn get_public_oplog_chunk(
         next_oplog_index,
         current_component_version,
     })
+}
+
+#[derive(Clone, Debug)]
+pub enum PublicUpdateDescription {
+    Automatic,
+    SnapshotBased { payload: Vec<u8> },
 }
 
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -201,7 +210,8 @@ pub enum PublicOplogEntry {
     /// An update request arrived and will be applied as soon the worker restarts
     PendingUpdate {
         timestamp: Timestamp,
-        description: UpdateDescription,
+        target_version: ComponentVersion,
+        description: PublicUpdateDescription,
     },
     /// An update was successfully applied
     SuccessfulUpdate {
@@ -231,7 +241,8 @@ pub enum PublicOplogEntry {
     DescribeResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
-        indexed_resource: IndexedResourceKey,
+        resource_name: String,
+        resource_params: Vec<ValueAndType>,
     },
     /// The worker emitted a log message
     Log {
@@ -430,10 +441,25 @@ impl PublicOplogEntry {
             OplogEntry::PendingUpdate {
                 timestamp,
                 description,
-            } => Ok(PublicOplogEntry::PendingUpdate {
-                timestamp,
-                description,
-            }),
+            } => {
+                let target_version = *description.target_version();
+                let public_description = match description {
+                    UpdateDescription::Automatic { .. } => PublicUpdateDescription::Automatic,
+                    UpdateDescription::SnapshotBased { payload, .. } => {
+                        let bytes = oplog_service
+                            .download_payload(owned_worker_id, &payload)
+                            .await?;
+                        PublicUpdateDescription::SnapshotBased {
+                            payload: bytes.to_vec(),
+                        }
+                    }
+                };
+                Ok(PublicOplogEntry::PendingUpdate {
+                    timestamp,
+                    target_version,
+                    description: public_description,
+                })
+            }
             OplogEntry::SuccessfulUpdate {
                 timestamp,
                 target_version,
@@ -465,11 +491,50 @@ impl PublicOplogEntry {
                 timestamp,
                 id,
                 indexed_resource,
-            } => Ok(PublicOplogEntry::DescribeResource {
-                timestamp,
-                id,
-                indexed_resource,
-            }),
+            } => {
+                let metadata = components
+                    .get_metadata(
+                        &owned_worker_id.worker_id.component_id,
+                        Some(component_version),
+                    )
+                    .await
+                    .map_err(|err| err.to_string())?;
+
+                let resource_name = indexed_resource.resource_name.clone();
+                let resource_constructor_name = ParsedFunctionName::new(
+                    find_resource_site(&metadata.exports, &resource_name).ok_or(format!(
+                        "Resource site for resource {} not found in component {} version {}",
+                        resource_name,
+                        owned_worker_id.component_id(),
+                        component_version
+                    ))?,
+                    ParsedFunctionReference::RawResourceConstructor {
+                        resource: resource_name.clone(),
+                    },
+                );
+                let constructor_def = function_by_name(&metadata.exports, &resource_constructor_name.to_string())?.ok_or(
+                    format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
+                )?;
+
+                let mut resource_params = Vec::new();
+                for (value_str, param) in indexed_resource
+                    .resource_params
+                    .iter()
+                    .zip(constructor_def.parameters)
+                {
+                    let type_annotated_value: TypeAnnotatedValue =
+                        type_annotated_value_from_str(&param.typ, value_str)?;
+                    let value = type_annotated_value.try_into()?;
+                    let value_and_type = ValueAndType::new(value, param.typ.clone());
+                    resource_params.push(value_and_type);
+                }
+                Ok(PublicOplogEntry::DescribeResource {
+                    timestamp,
+                    id,
+                    resource_name,
+                    resource_params,
+                })
+            }
             OplogEntry::Log {
                 timestamp,
                 level,

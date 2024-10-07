@@ -3857,7 +3857,7 @@ dependencies = [
 [[package]]
 name = "golem-wasm-rpc"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/improvements#c0a353c516f451cf03271853c0e134d911f7c61f"
+source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/improvements#32834ae278c82bea6413718c912728ed94232064"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -3938,7 +3938,7 @@ dependencies = [
 [[package]]
 name = "golem-wit"
 version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wit?branch=oplog-enumeration#08c33001d2280e26429db1422e360f0c9a65a4f6"
+source = "git+https://github.com/golemcloud/golem-wit?branch=oplog-enumeration#080a8cff9d102b900b040be29321d95ebe0140d0"
 
 [[package]]
 name = "golem-wit"

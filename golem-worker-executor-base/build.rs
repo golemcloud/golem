@@ -7,10 +7,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = var_os("OUT_DIR").unwrap();
     let target_file = Path::new(&out_dir).join("preview2_mod.rs");
 
-    std::fs::write(target_file, preview2_mod_gen(&golem_wit_root)).unwrap();
+    std::fs::write(target_file.clone(), preview2_mod_gen(&golem_wit_root)).unwrap();
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed={target_file:?}");
 
     Ok(())
 }

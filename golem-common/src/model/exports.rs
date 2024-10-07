@@ -1,6 +1,6 @@
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
 
-use rib::ParsedFunctionName;
+use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite};
 
 pub trait AnalysedExportExtensions {
     fn function_names(&self) -> Vec<String>;
@@ -76,5 +76,61 @@ pub fn function_by_name(
                 Ok(exported_function)
             }
         }
+    }
+}
+
+pub fn find_resource_site(
+    exports: &[AnalysedExport],
+    resource_name: &str,
+) -> Option<ParsedFunctionSite> {
+    fn find_resource_site_impl(
+        site: ParsedFunctionSite,
+        functions: &[AnalysedFunction],
+        resource_name: &str,
+    ) -> Option<ParsedFunctionSite> {
+        let constructor = ParsedFunctionName::new(
+            site.clone(),
+            ParsedFunctionReference::RawResourceConstructor {
+                resource: resource_name.to_string(),
+            },
+        );
+        if functions.iter().any(|f| f.name == constructor.to_string()) {
+            Some(site)
+        } else {
+            None
+        }
+    }
+
+    let global_functions = exports
+        .iter()
+        .filter_map(|export| {
+            if let AnalysedExport::Function(f) = export {
+                Some(f.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<AnalysedFunction>>();
+
+    if let Some(result) =
+        find_resource_site_impl(ParsedFunctionSite::Global, &global_functions, resource_name)
+    {
+        Some(result)
+    } else {
+        for export in exports {
+            if let AnalysedExport::Instance(instance) = export {
+                if let Some(result) = find_resource_site_impl(
+                    ParsedFunctionSite::Interface {
+                        name: instance.name.clone(),
+                    },
+                    &instance.functions,
+                    resource_name,
+                ) {
+                    return Some(result);
+                }
+            }
+        }
+
+        None
     }
 }
