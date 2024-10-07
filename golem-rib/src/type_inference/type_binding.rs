@@ -71,6 +71,7 @@ mod internal {
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
+            | Expr::Or(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 *inferred_type = new_type;
             }

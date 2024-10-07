@@ -150,7 +150,10 @@ mod tests {
         let expected = Expr::pattern_match(
             Expr::identifier("foo"),
             vec![MatchArm::new(
-                ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier("x"))))),
+                ArmPattern::Constructor(
+                    "some".to_string(),
+                    vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                ),
                 Expr::multiple(vec![
                     Expr::let_binding("x", Expr::number(1f64)),
                     Expr::let_binding("y", Expr::number(2f64)),
@@ -190,7 +193,10 @@ mod tests {
             Expr::pattern_match(
                 Expr::identifier("foo"),
                 vec![MatchArm::new(
-                    ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier("x"))))),
+                    ArmPattern::Constructor(
+                        "some".to_string(),
+                        vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                    ),
                     Expr::multiple(vec![
                         Expr::let_binding("x", Expr::number(1f64)),
                         Expr::let_binding("y", Expr::number(2f64)),

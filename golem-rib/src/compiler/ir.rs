@@ -17,7 +17,7 @@ use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
 use golem_api_grpc::proto::golem::rib::{
     And, CallInstruction, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag,
-    GreaterThan, GreaterThanOrEqualTo, JumpInstruction, LessThan, LessThanOrEqualTo, Negate,
+    GreaterThan, GreaterThanOrEqualTo, JumpInstruction, LessThan, LessThanOrEqualTo, Negate, Or,
     PushListInstruction, PushNoneInstruction, PushTupleInstruction, RibIr as ProtoRibIR,
 };
 use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
@@ -44,6 +44,7 @@ pub enum RibIR {
     EqualTo,
     GreaterThan,
     And,
+    Or,
     LessThan,
     GreaterThanOrEqualTo,
     LessThanOrEqualTo,
@@ -318,6 +319,7 @@ impl TryFrom<ProtoRibIR> for RibIR {
             Instruction::GreaterThanOrEqualTo(_) => Ok(RibIR::GreaterThanOrEqualTo),
             Instruction::LessThanOrEqualTo(_) => Ok(RibIR::LessThanOrEqualTo),
             Instruction::And(_) => Ok(RibIR::And),
+            Instruction::Or(_) => Ok(RibIR::Or),
             Instruction::JumpIfFalse(value) => Ok(RibIR::JumpIfFalse(InstructionId::from(
                 value.instruction_id as usize,
             ))),
@@ -424,6 +426,7 @@ impl From<RibIR> for ProtoRibIR {
                 })
             }
             RibIR::And => Instruction::And(And {}),
+            RibIR::Or => Instruction::Or(Or {}),
             RibIR::AssignVar(value) => Instruction::AssignVar(value.into()),
             RibIR::LoadVar(value) => Instruction::LoadVar(value.into()),
             RibIR::CreateAndPushRecord(value) => Instruction::CreateAndPushRecord((&value).into()),

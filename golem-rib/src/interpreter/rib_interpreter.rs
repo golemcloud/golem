@@ -202,6 +202,10 @@ impl Interpreter {
                 RibIR::And => {
                     internal::run_and_instruction(&mut self.stack)?;
                 }
+
+                RibIR::Or => {
+                    internal::run_or_instruction(&mut self.stack)?;
+                }
             }
         }
 
@@ -365,7 +369,6 @@ mod internal {
                     .pop_n(list_size)
                     .ok_or(format!("Expected {} value on the stack", list_size))?;
 
-                dbg!(last_list.clone());
                 let type_annotated_values = last_list
                     .iter()
                     .map(|interpreter_result| {
@@ -403,15 +406,35 @@ mod internal {
     pub(crate) fn run_and_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let left = interpreter_stack.pop().ok_or(
-            "Empty stack and failed to get a value to do the comparison operation".to_string(),
-        )?;
-        let right = interpreter_stack.pop().ok_or(
-            "Failed to get a value from the stack to do the comparison operation".to_string(),
-        )?;
+        let left = interpreter_stack
+            .pop()
+            .ok_or("Internal Error: Failed to get LHS &&".to_string())?;
+        let right = interpreter_stack
+            .pop()
+            .ok_or("Internal Error: Failed to get RHS of &&".to_string())?;
 
         let result = left.compare(&right, |a, b| match (a.get_bool(), b.get_bool()) {
             (Some(a), Some(b)) => a && b,
+            _ => false,
+        })?;
+
+        interpreter_stack.push(result);
+
+        Ok(())
+    }
+
+    pub(crate) fn run_or_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let left = interpreter_stack
+            .pop()
+            .ok_or("Internal Error: Failed to get LHS &&".to_string())?;
+        let right = interpreter_stack
+            .pop()
+            .ok_or("Internal Error: Failed to get RHS of &&".to_string())?;
+
+        let result = left.compare(&right, |a, b| match (a.get_bool(), b.get_bool()) {
+            (Some(a), Some(b)) => a || b,
             _ => false,
         })?;
 
@@ -837,8 +860,9 @@ mod internal {
             .ok_or("Failed to get a value from the stack to unwrap".to_string())?;
 
         let unwrapped_value = value
+            .clone()
             .unwrap()
-            .ok_or("Failed to unwrap the value".to_string())?;
+            .ok_or(format!("Failed to unwrap the value {:?}", value))?;
 
         interpreter_stack.push_val(unwrapped_value);
         Ok(())
@@ -864,6 +888,7 @@ mod internal {
                 },
                 None => "err".to_string(),
             },
+            TypeAnnotatedValue::Enum(enum_) => enum_.value,
             _ => "untagged".to_string(),
         };
 
@@ -1282,12 +1307,11 @@ mod interpreter_tests {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
-           let x = some(some(1u64));
+           let x: option<option<u64>> = none;
 
            match x {
-              some(x) => match x {
-                some(x) => x
-              }
+              some(some(x)) => x,
+              none => 0u64
            }
         "#;
 
@@ -1296,7 +1320,7 @@ mod interpreter_tests {
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
-            assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(1));
+            assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(0));
         }
 
         #[tokio::test]
@@ -1515,7 +1539,6 @@ mod interpreter_tests {
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            dbg!(expr.clone());
             let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 

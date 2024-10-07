@@ -896,6 +896,14 @@ pub struct ParsedFunctionName {
     pub function: ParsedFunctionReference,
 }
 
+// DynamicParsedFunctionName is different from ParsedFunctionName.
+// In `DynamicParsedFunctionName` the resource parameters are `Expr` (Rib) while they are `String`
+// in `ParsedFunctionName`.
+// `Expr` implies the real values are yet to be computed, while `String`
+// in ParsedFunctionName is a textual representation of the "real" values.
+// `Examples`:
+// `DynamicParsedFunctionName` : ns:name/interface.{resource1(identifier1, { field-a: some(identifier2) }).new}
+// `ParsedFunctionName` : ns:name/interface.{resource1("foo", { field-a: some("bar") }).new}
 #[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
 pub struct DynamicParsedFunctionName {
     pub site: ParsedFunctionSite,

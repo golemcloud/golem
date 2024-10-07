@@ -42,6 +42,7 @@ message RibIR {
         EnumConstructionInstruction enum_construction = 30;
         And and = 31;
         CreateFunctionNameInstruction create_function_name = 32;
+        Or or = 33;
     }
 }
 
@@ -114,6 +115,7 @@ message LessThanOrEqualTo {}
 message GetTag {}
 message Negate {}
 message And {}
+message Or {}
 
 message FunctionReferenceType {
   oneof type {

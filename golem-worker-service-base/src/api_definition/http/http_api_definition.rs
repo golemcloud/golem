@@ -682,7 +682,6 @@ mod tests {
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
 
-            dbg!(original.clone());
             let proto: grpc_apidefinition::ApiDefinition = original.clone().try_into().unwrap();
             let decoded: HttpApiDefinition = proto.try_into().unwrap();
             assert_eq!(original, decoded);
