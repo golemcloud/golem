@@ -341,14 +341,14 @@ mod record_tests {
                             ArmPattern::constructor(
                                 "ok",
                                 vec![ArmPattern::literal(Expr::identifier("foo"))],
-                            ), // Use Constructor for ok
+                            ),
                             Expr::literal("success"),
                         ),
                         MatchArm::new(
                             ArmPattern::constructor(
                                 "err",
                                 vec![ArmPattern::literal(Expr::identifier("msg"))],
-                            ), // Use Constructor for err
+                            ),
                             Expr::literal("failure"),
                         ),
                     ],
@@ -370,7 +370,7 @@ mod record_tests {
                             ArmPattern::constructor(
                                 "err",
                                 vec![ArmPattern::literal(Expr::identifier("msg"))],
-                            ), // Use Constructor for err
+                            ),
                             Expr::pattern_match(
                                 Expr::identifier("request"),
                                 vec![
@@ -378,14 +378,14 @@ mod record_tests {
                                         ArmPattern::constructor(
                                             "ok",
                                             vec![ArmPattern::literal(Expr::identifier("foo"))],
-                                        ), // Use Constructor for ok
+                                        ),
                                         Expr::literal("success"),
                                     ),
                                     MatchArm::new(
                                         ArmPattern::constructor(
                                             "err",
                                             vec![ArmPattern::literal(Expr::identifier("msg"))],
-                                        ), // Use Constructor for err
+                                        ),
                                         Expr::literal("failure"),
                                     ),
                                 ],
@@ -633,14 +633,14 @@ mod sequence_tests {
                         ArmPattern::Constructor(
                             "ok".to_string(),
                             vec![ArmPattern::literal(Expr::identifier("foo"))],
-                        ), // Use Constructor for ok
+                        ),
                         Expr::literal("success"),
                     ),
                     MatchArm::new(
                         ArmPattern::Constructor(
                             "err".to_string(),
                             vec![ArmPattern::literal(Expr::identifier("msg"))],
-                        ), // Use Constructor for err
+                        ),
                         Expr::literal("failure"),
                     ),
                 ],
@@ -652,14 +652,14 @@ mod sequence_tests {
                         ArmPattern::Constructor(
                             "ok".to_string(),
                             vec![ArmPattern::literal(Expr::identifier("foo"))],
-                        ), // Use Constructor for ok
+                        ),
                         Expr::literal("success"),
                     ),
                     MatchArm::new(
                         ArmPattern::Constructor(
                             "err".to_string(),
                             vec![ArmPattern::literal(Expr::identifier("msg"))],
-                        ), // Use Constructor for err
+                        ),
                         Expr::pattern_match(
                             Expr::identifier("request"),
                             vec![
@@ -674,7 +674,7 @@ mod sequence_tests {
                                     ArmPattern::Constructor(
                                         "err".to_string(),
                                         vec![ArmPattern::literal(Expr::identifier("msg"))],
-                                    ), // Use Constructor for err
+                                    ),
                                     Expr::literal("failure"),
                                 ),
                             ],
@@ -1387,14 +1387,14 @@ mod match_tests {
                     ArmPattern::constructor(
                         "ok",
                         vec![ArmPattern::literal(Expr::identifier("foo"))],
-                    ), // Use Constructor for ok
+                    ),
                     Expr::greater_than(Expr::number(1.0), Expr::number(2.0)),
                 ),
                 MatchArm::new(
                     ArmPattern::constructor(
                         "err",
                         vec![ArmPattern::literal(Expr::identifier("msg"))],
-                    ), // Use Constructor for err
+                    ),
                     Expr::less_than(Expr::number(1.0), Expr::number(2.0)),
                 ),
             ],
