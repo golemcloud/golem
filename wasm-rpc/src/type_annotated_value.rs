@@ -54,6 +54,14 @@ impl TryFrom<ValueAndType> for TypeAnnotatedValue {
     }
 }
 
+impl TryFrom<&ValueAndType> for TypeAnnotatedValue {
+    type Error = Vec<String>;
+
+    fn try_from(value_and_type: &ValueAndType) -> Result<Self, Self::Error> {
+        TypeAnnotatedValue::create(&value_and_type.value, &value_and_type.typ)
+    }
+}
+
 impl TryFrom<TypeAnnotatedValue> for ValueAndType {
     type Error = String;
 

@@ -15,6 +15,7 @@
 mod r#impl;
 
 use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
+use crate::ValueAndType;
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as JsonValue;
@@ -63,6 +64,33 @@ impl<'de> Deserialize<'de> for TypeAnnotatedValue {
             ))
         })?;
         Ok(value)
+    }
+}
+
+impl Serialize for ValueAndType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let tav: TypeAnnotatedValue = self.try_into().map_err(|err: Vec<String>| {
+            serde::ser::Error::custom(format!(
+                "Invalid type-annotated JSON value: {}",
+                err.join(", ")
+            ))
+        })?;
+        tav.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ValueAndType {
+    fn deserialize<D>(deserializer: D) -> Result<ValueAndType, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let tav = TypeAnnotatedValue::deserialize(deserializer)?;
+        Ok(tav.try_into().map_err(|err| {
+            serde::de::Error::custom(format!("Invalid type-annotated JSON value: {err}",))
+        })?)
     }
 }
 
