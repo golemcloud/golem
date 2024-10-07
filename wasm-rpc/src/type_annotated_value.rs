@@ -72,6 +72,19 @@ impl TryFrom<TypeAnnotatedValue> for ValueAndType {
     }
 }
 
+impl TryFrom<crate::protobuf::TypeAnnotatedValue> for ValueAndType {
+    type Error = String;
+
+    fn try_from(value: crate::protobuf::TypeAnnotatedValue) -> Result<Self, Self::Error> {
+        let inner = value
+            .type_annotated_value
+            .ok_or("Missing type_annotated_value field")?;
+        let typ: AnalysedType = (&inner).try_into()?;
+        let value: Value = inner.try_into()?;
+        Ok(Self::new(value, typ))
+    }
+}
+
 /// Specific trait to convert a type into a `ValueAndType` type.
 pub trait IntoValue {
     fn into_value(self) -> Value;
