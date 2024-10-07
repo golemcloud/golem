@@ -887,7 +887,8 @@ mod internal {
                 },
                 None => "err".to_string(),
             },
-            _ => "untagged".to_string(),
+            TypeAnnotatedValue::Enum(enum_) => enum_.value,
+            _ => "untagged".to_string()
         };
 
         interpreter_stack.push_val(TypeAnnotatedValue::Str(tag));

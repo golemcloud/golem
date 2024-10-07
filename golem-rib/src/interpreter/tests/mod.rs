@@ -12,6 +12,17 @@ mod comprehensive_test {
 
         let expr = r#"
 
+          let str2: str = request.headers.name;
+          let none_str_response = function-some-enum-response(str2);
+
+          match none_str_response {
+            some(enum-a) => "a",
+            none => "not found"
+          }
+
+        "#;
+        let expr2 = r#"
+
               let str1: str = request.body.name;
               let str2: str = request.headers.name;
               let str3: str = request.path.name;

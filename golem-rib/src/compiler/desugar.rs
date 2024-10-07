@@ -27,11 +27,14 @@ pub fn desugar_pattern_match(
         }
     }
 
-    internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
+    let str = internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type));
+    dbg!(str.clone().unwrap().to_string());
+    str
 }
 
 mod internal {
     use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
+    use crate::call_type::CallType;
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfThenBranch>) -> Option<Expr> {
         if let Some(branch) = if_branches.first() {
@@ -154,6 +157,8 @@ mod internal {
         resolution: &Expr,
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
+        dbg!(tag.clone());
+        dbg!(arm_pattern_expr.clone());
         match arm_pattern_expr {
             Expr::Identifier(identifier, inferred_type) => {
                 let assign_var = Expr::Let(
@@ -172,6 +177,35 @@ mod internal {
                 Some(branch)
             }
 
+            Expr::Call(CallType::EnumConstructor(name), _, _) => {
+                let cond = if let Some(t) = tag {
+                    Expr::and(t, Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(name)),
+                    )
+                } else {
+                    Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(name),
+                    )
+                };
+
+                let branch = IfThenBranch {
+                    condition: cond,
+                    body: resolution.clone(),
+                };
+                Some(branch)
+            }
+
+
+            Expr::Call(CallType::EnumConstructor(name), _, _) => {
+                dbg!("here??");
+                let branch = IfThenBranch {
+                    condition: Expr::equal_to(pred_expr.clone(), arm_pattern_expr.clone()),
+                    body: resolution.clone(),
+                };
+                Some(branch)
+            }
 
             _ => {
                 let branch = IfThenBranch {
@@ -279,6 +313,33 @@ mod internal {
                     ),
                     _ => None, // Probably fail here
                 }
+            }
+
+            InferredType::Enum(enum_cases) => {
+                let arg_pattern_opt = bind_patterns.first();
+
+                let inner_type = &enum_cases
+                    .iter()
+                    .find(|case_name| *case_name == constructor_name);
+
+
+                let cond = if let Some(t) = tag {
+                    Expr::and(t, Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    ))
+                } else {
+                    Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    )
+                };
+
+                Some(IfThenBranch {
+                    condition:cond,
+                    body: resolution.clone(),
+                })
+
             }
 
             // some(some(x)) =>
