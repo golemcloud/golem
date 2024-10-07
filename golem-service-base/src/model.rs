@@ -1136,6 +1136,7 @@ pub struct InvokeResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, thiserror::Error)]
 #[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
 pub enum GolemError {
     #[error(transparent)]
     InvalidRequest(GolemErrorInvalidRequest),

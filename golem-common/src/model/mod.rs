@@ -1459,6 +1459,7 @@ impl Display for WorkerNotFilter {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
 pub enum WorkerFilter {
     Name(WorkerNameFilter),
     Status(WorkerStatusFilter),
@@ -2461,6 +2462,7 @@ mod tests {
         WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
+    use poem_openapi::types::ToJSON;
     use rand::{thread_rng, Rng};
     use serde::{Deserialize, Serialize};
 
@@ -2778,5 +2780,13 @@ mod tests {
         assert_ne!(derived12a, derived32);
         assert_ne!(derived22a, derived32);
         assert_ne!(derived31, derived32);
+    }
+
+    #[test]
+    fn worker_status_serialization_poem_serde_equivalence() {
+        let status = WorkerStatus::Retrying;
+        let serialized = status.to_json_string();
+        let deserialized: WorkerStatus = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(status, deserialized);
     }
 }
