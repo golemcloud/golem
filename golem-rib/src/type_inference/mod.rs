@@ -1208,10 +1208,7 @@ mod type_inference_tests {
                                 ),
                             ),
                             MatchArm::new(
-                                ArmPattern::Literal(Box::new(Expr::Option(
-                                    None,
-                                    InferredType::Option(Box::new(InferredType::U64)),
-                                ))),
+                                ArmPattern::constructor("none", vec![]),
                                 Expr::Option(
                                     Some(Box::new(Expr::Option(
                                         Some(Box::new(Expr::Identifier(
@@ -2591,12 +2588,7 @@ mod type_inference_tests {
                                 arm_resolution_expr: Box::new(Expr::literal("personal-id")),
                             },
                             MatchArm {
-                                arm_pattern: ArmPattern::Literal(Box::new(Expr::Option(
-                                    None,
-                                    InferredType::Option(Box::new(InferredType::Option(Box::new(
-                                        InferredType::Str,
-                                    )))),
-                                ))),
+                                arm_pattern: ArmPattern::constructor("none", vec![]),
                                 arm_resolution_expr: Box::new(Expr::SelectIndex(
                                     Box::new(Expr::SelectField(
                                         Box::new(Expr::SelectField(

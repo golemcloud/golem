@@ -363,7 +363,7 @@ impl Expr {
         Expr::SelectIndex(Box::new(expr), index, InferredType::Unknown)
     }
 
-    pub fn tag(expr: Expr) -> Self {
+    pub fn get_tag(expr: Expr) -> Self {
         Expr::GetTag(Box::new(expr), InferredType::Unknown)
     }
 
@@ -999,7 +999,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Tag(expr) => {
                 let expr = expr.expr.ok_or("Missing expr in tag")?;
-                Expr::tag((*expr).try_into()?)
+                Expr::get_tag((*expr).try_into()?)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Unwrap(expr) => {
@@ -1589,14 +1589,14 @@ mod tests {
                     Expr::identifier("foo"),
                     vec![
                         MatchArm::new(
-                            ArmPattern::Constructor(
-                                "some".to_string(),
+                            ArmPattern::constructor(
+                                "some",
                                 vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                             ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::option(None))),
+                            ArmPattern::constructor("none", vec![]),
                             Expr::boolean(false),
                         ),
                     ],
@@ -1608,15 +1608,15 @@ mod tests {
                     Expr::identifier("bar"),
                     vec![
                         MatchArm::new(
-                            ArmPattern::Constructor(
-                                "ok".to_string(),
+                            ArmPattern::constructor(
+                                "ok",
                                 vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                             ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Constructor(
-                                "err".to_string(),
+                            ArmPattern::constructor(
+                                "err",
                                 vec![ArmPattern::Literal(Box::new(Expr::identifier("msg")))],
                             ),
                             Expr::boolean(false),

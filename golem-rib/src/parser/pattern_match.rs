@@ -140,7 +140,7 @@ mod internal {
         >,
     {
         choice((
-            attempt(custom_arm_pattern_constructor()),
+            attempt(arm_pattern_constructor_with_name()),
             attempt(tuple_arm_pattern_constructor()),
             attempt(list_arm_pattern_constructor()),
             attempt(record_arm_pattern_constructor()),
@@ -169,20 +169,32 @@ mod internal {
             .message("Unable to parse alias name")
     }
 
-    fn custom_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
+    fn arm_pattern_constructor_with_name<Input>() -> impl Parser<Input, Output = ArmPattern>
     where
         Input: combine::Stream<Token = char>,
         RibParseError: Into<
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
     {
-        (
+        let custom = (
             constructor_type_name().skip(spaces()),
             string("(").skip(spaces()),
             sep_by(arm_pattern().skip(spaces()), char_(',').skip(spaces())),
             string(")").skip(spaces()),
         )
-            .map(|(name, _, patterns, _)| ArmPattern::Constructor(name, patterns))
+            .map(|(name, _, patterns, _)| ArmPattern::Constructor(name, patterns));
+
+        attempt(none_constructor()).or(custom)
+    }
+
+    fn none_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
+    where
+        Input: combine::Stream<Token = char>,
+        RibParseError: Into<
+            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+        >,
+    {
+        string("none").map(|_| ArmPattern::constructor("none", vec![]))
     }
 
     fn tuple_arm_pattern_constructor<Input>() -> impl Parser<Input, Output = ArmPattern>
@@ -407,26 +419,26 @@ mod tests {
                     vec![
                         MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar")),
                         MatchArm::new(
-                            ArmPattern::Constructor(
-                                "ok".to_string(),
+                            ArmPattern::constructor(
+                                "ok",
                                 vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                             ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Constructor(
-                                "err".to_string(),
+                            ArmPattern::constructor(
+                                "err",
                                 vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                             ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::option(None))),
+                            ArmPattern::constructor("none", vec![]),
                             Expr::identifier("foo"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Constructor(
-                                "some".to_string(),
+                            ArmPattern::constructor(
+                                "some",
                                 vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                             ),
                             Expr::identifier("x"),

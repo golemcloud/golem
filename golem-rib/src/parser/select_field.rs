@@ -261,26 +261,26 @@ mod tests {
                     vec![
                         MatchArm::new(ArmPattern::WildCard, Expr::identifier("bar")),
                         MatchArm::new(
-                            ArmPattern::Constructor(
-                                "ok".to_string(),
+                            ArmPattern::constructor(
+                                "ok",
                                 vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
                             ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Constructor(
-                                "err".to_string(),
+                            ArmPattern::constructor(
+                                "err",
                                 vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
                             ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::option(None))),
+                            ArmPattern::constructor("none", vec![]),
                             Expr::identifier("foo"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Constructor(
-                                "some".to_string(),
+                            ArmPattern::constructor(
+                                "some",
                                 vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))]
                             ),
                             Expr::identifier("x"),

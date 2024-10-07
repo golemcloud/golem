@@ -89,13 +89,9 @@ mod internal {
         // some(some(x)) => "hello"
         // }
         match arm_pattern {
-            ArmPattern::Literal(arm_pattern_expr) => handle_literal(
-                arm_pattern_expr,
-                pred_expr,
-                resolution,
-                tag,
-                inferred_type_of_pred,
-            ),
+            ArmPattern::Literal(arm_pattern_expr) => {
+                handle_literal(arm_pattern_expr, pred_expr, resolution, tag)
+            }
 
             ArmPattern::Constructor(constructor_name, arm_patterns) => hande_constructor(
                 pred_expr,
@@ -121,12 +117,14 @@ mod internal {
                 inferred_type_of_pred,
             ),
 
-            ArmPattern::RecordConstructor(field_arm_pattern_collection) => handle_record(
-                pred_expr,
-                field_arm_pattern_collection,
-                resolution,
-                inferred_type_of_pred,
-            ),
+            ArmPattern::RecordConstructor(field_arm_pattern_collection) => {
+                handle_record_constructor(
+                    pred_expr,
+                    field_arm_pattern_collection,
+                    resolution,
+                    inferred_type_of_pred,
+                )
+            }
 
             ArmPattern::As(name, inner_pattern) => handle_as_pattern(
                 name,
@@ -152,96 +150,8 @@ mod internal {
         pred_expr: &Expr,
         resolution: &Expr,
         tag: Option<Expr>,
-        pred_expr_inferred_type: InferredType,
     ) -> Option<IfThenBranch> {
         match arm_pattern_expr {
-            // This condition is kept for backward compatibility
-            // If the arm pattern some(x), then it is parsed as Constructor("some", args)
-            // and never be Expr::Option
-            // This condition (which is never used anymore) also has limitations that the pattern inside `some` has to be
-            // Expr, resulting in not handling the possibility of another constructor pattern.
-            Expr::Option(Some(inner_pattern), _) => {
-                let unwrapped_inferred_type = match pred_expr_inferred_type {
-                    InferredType::Option(inner) => *inner,
-                    _ => InferredType::Unknown,
-                };
-
-                get_conditions(
-                    &MatchArm::new(
-                        ArmPattern::Literal(inner_pattern.clone()),
-                        resolution.clone(),
-                    ),
-                    &pred_expr.unwrap(),
-                    Some(Expr::equal_to(
-                        Expr::tag(pred_expr.clone()),
-                        Expr::literal("some"),
-                    )),
-                    unwrapped_inferred_type,
-                )
-            }
-
-            Expr::Option(None, _) => {
-                let branch = IfThenBranch {
-                    condition: Expr::equal_to(Expr::tag(pred_expr.clone()), Expr::literal("none")),
-                    body: resolution.clone(),
-                };
-                Some(branch)
-            }
-
-            // This condition is kept for backward compatibility.
-            // If the arm pattern ok(x), then it is ArmPattern::Constructor("ok", args)
-            // and never be Expr::Result
-            // This condition (which is never used anymore) also has limitations that the pattern inside `ok` has to be
-            // Expr, resulting in not handling the possibility of another constructor pattern.
-            Expr::Result(Ok(inner_pattern), _) => {
-                let unwrapped_inferred_type = match pred_expr_inferred_type {
-                    InferredType::Result { ok, .. } => {
-                        ok.unwrap_or(Box::new(InferredType::Unknown))
-                    }
-                    _ => Box::new(InferredType::Unknown),
-                };
-
-                get_conditions(
-                    &MatchArm::new(
-                        ArmPattern::Literal(inner_pattern.clone()),
-                        resolution.clone(),
-                    ),
-                    &pred_expr.unwrap(),
-                    Some(Expr::equal_to(
-                        Expr::tag(pred_expr.clone()),
-                        Expr::literal("ok"),
-                    )),
-                    *unwrapped_inferred_type,
-                )
-            }
-
-            // This condition is kept for backward compatibility.
-            // If the arm pattern ok(x), then it is ArmPattern::Constructor("err", args)
-            // and never be Expr::Result
-            // This condition (which is never used anymore) also has limitations that the pattern inside `err` has to be
-            // Expr, resulting in not handling the possibility of another constructor pattern.
-            Expr::Result(Err(inner_pattern), _) => {
-                let unwrapped_inferred_type = match pred_expr_inferred_type {
-                    InferredType::Result { error, .. } => {
-                        error.unwrap_or(Box::new(InferredType::Unknown))
-                    }
-                    _ => Box::new(InferredType::Unknown),
-                };
-
-                get_conditions(
-                    &MatchArm::new(
-                        ArmPattern::Literal(inner_pattern.clone()),
-                        resolution.clone(),
-                    ),
-                    &pred_expr.unwrap(),
-                    Some(Expr::equal_to(
-                        Expr::tag(pred_expr.clone()),
-                        Expr::literal("err"),
-                    )),
-                    *unwrapped_inferred_type,
-                )
-            }
-
             Expr::Identifier(identifier, inferred_type) => {
                 let assign_var = Expr::Let(
                     identifier.clone(),
@@ -259,7 +169,6 @@ mod internal {
             }
 
             _ => {
-                // use tag lookup
                 let branch = IfThenBranch {
                     condition: Expr::equal_to(pred_expr.clone(), arm_pattern_expr.clone()),
                     body: resolution.clone(),
@@ -270,7 +179,7 @@ mod internal {
         }
     }
 
-    fn handle_record(
+    fn handle_record_constructor(
         pred_expr: &Expr,
         bind_patterns: &[(String, ArmPattern)],
         resolution: &Expr,
@@ -349,7 +258,7 @@ mod internal {
                         &MatchArm::new(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
                         Some(Expr::equal_to(
-                            Expr::tag(pred_expr.clone()),
+                            Expr::get_tag(pred_expr.clone()),
                             Expr::literal(constructor_name),
                         )),
                         inferred_type,
@@ -357,29 +266,36 @@ mod internal {
                     _ => None, // Probably fail here
                 }
             }
-            InferredType::Option(inner) => match bind_patterns.first() {
-                Some(pattern) => get_conditions(
-                    &MatchArm::new(pattern.clone(), resolution.clone()),
-                    &pred_expr.unwrap(),
-                    Some(Expr::equal_to(
-                        Expr::tag(pred_expr.clone()),
-                        Expr::literal(constructor_name),
-                    )),
-                    *inner,
-                ),
-                _ => Some(IfThenBranch {
-                    condition: Expr::equal_to(
-                        Expr::tag(pred_expr.clone()),
-                        Expr::literal(constructor_name),
+            InferredType::Option(inner) if constructor_name == "some" => {
+                match bind_patterns.first() {
+                    Some(pattern) => get_conditions(
+                        &MatchArm::new(pattern.clone(), resolution.clone()),
+                        &pred_expr.unwrap(),
+                        Some(Expr::equal_to(
+                            Expr::get_tag(pred_expr.clone()),
+                            Expr::literal(constructor_name),
+                        )),
+                        *inner,
                     ),
-                    body: resolution.clone(),
-                }),
-            },
+                    _ => None,
+                }
+            }
+
+            InferredType::Option(_) if constructor_name == "none" => Some(IfThenBranch {
+                condition: Expr::equal_to(
+                    Expr::get_tag(pred_expr.clone()),
+                    Expr::literal(constructor_name),
+                ),
+                body: resolution.clone(),
+            }),
+
             InferredType::Result { ok, error } => {
                 let inner_variant_arg_type = if constructor_name == "ok" {
                     ok.as_deref()
-                } else {
+                } else if constructor_name == "err" {
                     error.as_deref()
+                } else {
+                    return None;
                 };
 
                 match bind_patterns.first() {
@@ -387,7 +303,7 @@ mod internal {
                         &MatchArm::new(pattern.clone(), resolution.clone()),
                         &pred_expr.unwrap(),
                         Some(Expr::equal_to(
-                            Expr::tag(pred_expr.clone()),
+                            Expr::get_tag(pred_expr.clone()),
                             Expr::literal(constructor_name),
                         )),
                         inner_variant_arg_type

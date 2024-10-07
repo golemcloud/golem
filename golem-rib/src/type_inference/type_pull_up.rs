@@ -1129,7 +1129,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_tag() {
         let mut number = Expr::number(1f64);
         number.override_type_type_mut(InferredType::F64);
-        let expr = Expr::tag(Expr::option(Some(number)));
+        let expr = Expr::get_tag(Expr::option(Some(number)));
         let expr = expr.pull_types_up().unwrap();
         assert_eq!(
             expr.inferred_type(),

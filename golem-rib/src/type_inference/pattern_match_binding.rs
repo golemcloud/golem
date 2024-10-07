@@ -288,7 +288,7 @@ mod pattern_match_bindings {
                         )),
                     },
                     MatchArm {
-                        arm_pattern: ArmPattern::Literal(Box::new(Expr::option(None))),
+                        arm_pattern: ArmPattern::constructor("none", vec![]),
                         arm_resolution_expr: Box::new(Expr::number(0f64)),
                     },
                 ],
@@ -319,7 +319,7 @@ mod pattern_match_bindings {
                         arm_resolution_expr: Box::new(block),
                     },
                     MatchArm {
-                        arm_pattern: ArmPattern::Literal(Box::new(Expr::option(None))),
+                        arm_pattern: ArmPattern::constructor("none", vec![]),
                         arm_resolution_expr: Box::new(Expr::number(0f64)),
                     },
                 ],
@@ -385,7 +385,7 @@ mod pattern_match_bindings {
                                     )),
                                 },
                                 MatchArm {
-                                    arm_pattern: ArmPattern::literal(Expr::option(None)),
+                                    arm_pattern: ArmPattern::constructor("none", vec![]),
                                     arm_resolution_expr: Box::new(Expr::number(0f64)),
                                 },
                             ],
