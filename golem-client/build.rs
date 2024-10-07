@@ -60,6 +60,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("WorkerFilter", "golem_common::model::WorkerFilter"),
             ("WorkerId", "golem_common::model::WorkerId"),
             ("WorkerStatus", "golem_common::model::WorkerStatus"),
+            (
+                "PublicOplogEntry",
+                "golem_common::model::public_oplog::PublicOplogEntry",
+            ),
         ],
     )
     .expect("Failed to generate client code from OpenAPI spec.");

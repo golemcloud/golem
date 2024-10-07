@@ -49,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/worker/invoke_result.proto",
                 "proto/golem/worker/log_event.proto",
                 "proto/golem/worker/promise_id.proto",
+                "proto/golem/worker/public_oplog.proto",
                 "proto/golem/worker/update_mode.proto",
                 "proto/golem/worker/worker_id.proto",
                 "proto/golem/worker/worker_metadata.proto",

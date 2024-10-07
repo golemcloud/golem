@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -7,7 +21,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm_ast::analysis::analysed_type::u64;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, Value};
-use poem_openapi::NewType;
+use poem_openapi::{Enum, NewType};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
@@ -184,7 +198,21 @@ impl<'de> BorrowDecode<'de> for PayloadId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Hash,
+    Encode,
+    Decode,
+    Serialize,
+    Deserialize,
+    NewType,
+)]
 pub struct WorkerResourceId(pub u64);
 
 impl WorkerResourceId {
@@ -226,7 +254,7 @@ impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for Ind
 }
 
 /// Worker log levels including the special stdout and stderr channels
-#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode)]
+#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode, Serialize, Deserialize, Enum)]
 #[repr(u8)]
 pub enum LogLevel {
     Stdout,

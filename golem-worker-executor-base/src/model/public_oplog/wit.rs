@@ -13,15 +13,24 @@
 // limitations under the License.
 
 use crate::model::public_oplog::{PublicOplogEntry, PublicUpdateDescription};
-use crate::preview2::golem::api1_1_0_rc1::oplog::*;
+use crate::preview2::golem::api1_1_0_rc1::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
-use golem_common::model::oplog::WrappedFunctionType;
+use golem_common::model::public_oplog::{
+    ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, EndRegionParameters,
+    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PublicRetryConfig,
+    PublicWorkerInvocation, PublicWrappedFunctionType, ResourceParameters,
+    SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
+    WriteRemoteBatchedParameters,
+};
 use golem_common::model::Timestamp;
 
-impl From<PublicOplogEntry> for crate::preview2::golem::api1_1_0_rc1::oplog::OplogEntry {
+impl From<PublicOplogEntry> for oplog::OplogEntry {
     fn from(value: PublicOplogEntry) -> Self {
         match value {
-            PublicOplogEntry::Create {
+            PublicOplogEntry::Create(CreateParameters {
                 timestamp,
                 worker_id,
                 component_version,
@@ -31,150 +40,162 @@ impl From<PublicOplogEntry> for crate::preview2::golem::api1_1_0_rc1::oplog::Opl
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
-            } => Self::Create(CreateParameters {
+            }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 worker_id: worker_id.into(),
                 component_version,
                 args,
-                env,
-                account_id: AccountId {
+                env: env.into_iter().collect(),
+                account_id: oplog::AccountId {
                     value: account_id.value,
                 },
                 parent: parent.map(|id| id.into()),
                 component_size,
                 initial_total_linear_memory_size,
             }),
-            PublicOplogEntry::ImportedFunctionInvoked {
+            PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
                 timestamp,
                 function_name,
                 request,
                 response,
                 wrapped_function_type,
-            } => Self::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
+            }) => Self::ImportedFunctionInvoked(oplog::ImportedFunctionInvokedParameters {
                 timestamp: timestamp.into(),
                 function_name,
                 request: request.into(),
                 response: response.into(),
                 wrapped_function_type: wrapped_function_type.into(),
             }),
-            PublicOplogEntry::ExportedFunctionInvoked {
+            PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParameters {
                 timestamp,
                 function_name,
                 request,
                 idempotency_key,
-            } => Self::ExportedFunctionInvoked(ExportedFunctionInvokedParameters {
+            }) => Self::ExportedFunctionInvoked(oplog::ExportedFunctionInvokedParameters {
                 timestamp: timestamp.into(),
                 function_name,
                 request: request.into_iter().map(|v| v.into()).collect(),
                 idempotency_key: idempotency_key.value,
             }),
-            PublicOplogEntry::ExportedFunctionCompleted {
+            PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
                 timestamp,
                 response,
                 consumed_fuel,
-            } => Self::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
+            }) => Self::ExportedFunctionCompleted(oplog::ExportedFunctionCompletedParameters {
                 timestamp: timestamp.into(),
                 response: response.into(),
                 consumed_fuel,
             }),
-            PublicOplogEntry::Suspend { timestamp } => Self::Suspend(timestamp.into()),
-            PublicOplogEntry::Error { timestamp, error } => Self::Error(ErrorParameters {
-                timestamp: timestamp.into(),
-                error: error.to_string(""),
-            }),
-            PublicOplogEntry::NoOp { timestamp } => Self::NoOp(timestamp.into()),
-            PublicOplogEntry::Jump { timestamp, jump } => Self::Jump(JumpParameters {
-                timestamp: timestamp.into(),
-                start: jump.start.into(),
-                end: jump.end.into(),
-            }),
-            PublicOplogEntry::Interrupted { timestamp } => Self::Interrupted(timestamp.into()),
-            PublicOplogEntry::Exited { timestamp } => Self::Exited(timestamp.into()),
-            PublicOplogEntry::ChangeRetryPolicy {
+            PublicOplogEntry::Suspend(TimestampParameter { timestamp }) => {
+                Self::Suspend(timestamp.into())
+            }
+            PublicOplogEntry::Error(ErrorParameters { timestamp, error }) => {
+                Self::Error(oplog::ErrorParameters {
+                    timestamp: timestamp.into(),
+                    error: error.to_string(),
+                })
+            }
+            PublicOplogEntry::NoOp(TimestampParameter { timestamp }) => {
+                Self::NoOp(timestamp.into())
+            }
+            PublicOplogEntry::Jump(JumpParameters { timestamp, jump }) => {
+                Self::Jump(oplog::JumpParameters {
+                    timestamp: timestamp.into(),
+                    start: jump.start.into(),
+                    end: jump.end.into(),
+                })
+            }
+            PublicOplogEntry::Interrupted(TimestampParameter { timestamp }) => {
+                Self::Interrupted(timestamp.into())
+            }
+            PublicOplogEntry::Exited(TimestampParameter { timestamp }) => {
+                Self::Exited(timestamp.into())
+            }
+            PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParameters {
                 timestamp,
                 new_policy,
-            } => Self::ChangeRetryPolicy(ChangeRetryPolicyParameters {
+            }) => Self::ChangeRetryPolicy(oplog::ChangeRetryPolicyParameters {
                 timestamp: timestamp.into(),
-                retry_policy: (&new_policy).into(),
+                retry_policy: new_policy.into(),
             }),
-            PublicOplogEntry::BeginAtomicRegion { timestamp } => {
+            PublicOplogEntry::BeginAtomicRegion(TimestampParameter { timestamp }) => {
                 Self::BeginAtomicRegion(timestamp.into())
             }
-            PublicOplogEntry::EndAtomicRegion {
+            PublicOplogEntry::EndAtomicRegion(EndRegionParameters {
                 timestamp,
                 begin_index,
-            } => Self::EndAtomicRegion(EndAtomicRegionParameters {
+            }) => Self::EndAtomicRegion(oplog::EndAtomicRegionParameters {
                 timestamp: timestamp.into(),
                 begin_index: begin_index.into(),
             }),
-            PublicOplogEntry::BeginRemoteWrite { timestamp } => {
+            PublicOplogEntry::BeginRemoteWrite(TimestampParameter { timestamp }) => {
                 Self::BeginRemoteWrite(timestamp.into())
             }
-            PublicOplogEntry::EndRemoteWrite {
+            PublicOplogEntry::EndRemoteWrite(EndRegionParameters {
                 timestamp,
                 begin_index,
-            } => Self::EndRemoteWrite(EndRemoteWriteParameters {
+            }) => Self::EndRemoteWrite(oplog::EndRemoteWriteParameters {
                 timestamp: timestamp.into(),
                 begin_index: begin_index.into(),
             }),
-            PublicOplogEntry::PendingWorkerInvocation {
+            PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParameters {
                 timestamp,
                 invocation,
-            } => Self::PendingWorkerInvocation(PendingWorkerInvocationParameters {
+            }) => Self::PendingWorkerInvocation(oplog::PendingWorkerInvocationParameters {
                 timestamp: timestamp.into(),
                 invocation: invocation.into(),
             }),
-            PublicOplogEntry::PendingUpdate {
+            PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
                 timestamp,
                 target_version,
                 description,
-            } => Self::PendingUpdate(PendingUpdateParameters {
+            }) => Self::PendingUpdate(oplog::PendingUpdateParameters {
                 timestamp: timestamp.into(),
                 target_version,
                 update_description: description.into(),
             }),
-            PublicOplogEntry::SuccessfulUpdate {
+            PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
                 timestamp,
                 target_version,
                 new_component_size,
-            } => Self::SuccessfulUpdate(SuccessfulUpdateParameters {
+            }) => Self::SuccessfulUpdate(oplog::SuccessfulUpdateParameters {
                 timestamp: timestamp.into(),
                 target_version,
                 new_component_size,
             }),
-            PublicOplogEntry::FailedUpdate {
+            PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
                 timestamp,
                 target_version,
                 details,
-            } => Self::FailedUpdate(FailedUpdateParameters {
+            }) => Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
                 target_version,
                 details,
             }),
-            PublicOplogEntry::GrowMemory { timestamp, delta } => {
-                Self::GrowMemory(GrowMemoryParameters {
+            PublicOplogEntry::GrowMemory(GrowMemoryParameters { timestamp, delta }) => {
+                Self::GrowMemory(oplog::GrowMemoryParameters {
                     timestamp: timestamp.into(),
                     delta,
                 })
             }
-            PublicOplogEntry::CreateResource { timestamp, id } => {
-                Self::CreateResource(CreateResourceParameters {
+            PublicOplogEntry::CreateResource(ResourceParameters { timestamp, id }) => {
+                Self::CreateResource(oplog::CreateResourceParameters {
                     timestamp: timestamp.into(),
                     resource_id: id.0,
                 })
             }
-            PublicOplogEntry::DropResource { timestamp, id } => {
-                Self::DropResource(DropResourceParameters {
+            PublicOplogEntry::DropResource(ResourceParameters { timestamp, id }) => {
+                Self::DropResource(oplog::DropResourceParameters {
                     timestamp: timestamp.into(),
                     resource_id: id.0,
                 })
             }
-            PublicOplogEntry::DescribeResource {
+            PublicOplogEntry::DescribeResource(DescribeResourceParameters {
                 timestamp,
                 id,
                 resource_name,
                 resource_params,
-            } => Self::DescribeResource(DescribeResourceParameters {
+            }) => Self::DescribeResource(oplog::DescribeResourceParameters {
                 timestamp: timestamp.into(),
                 resource_id: id.0,
                 resource_name,
@@ -183,18 +204,20 @@ impl From<PublicOplogEntry> for crate::preview2::golem::api1_1_0_rc1::oplog::Opl
                     .map(|value| value.into())
                     .collect(),
             }),
-            PublicOplogEntry::Log {
+            PublicOplogEntry::Log(LogParameters {
                 timestamp,
                 level,
                 context,
                 message,
-            } => Self::Log(LogParameters {
+            }) => Self::Log(oplog::LogParameters {
                 timestamp: timestamp.into(),
                 level: level.into(),
                 context,
                 message,
             }),
-            PublicOplogEntry::Restart { timestamp } => Self::Restart(timestamp.into()),
+            PublicOplogEntry::Restart(TimestampParameter { timestamp }) => {
+                Self::Restart(timestamp.into())
+            }
         }
     }
 }
@@ -209,32 +232,32 @@ impl From<Timestamp> for Datetime {
     }
 }
 
-impl From<WrappedFunctionType>
-    for crate::preview2::golem::api1_1_0_rc1::oplog::WrappedFunctionType
-{
-    fn from(value: WrappedFunctionType) -> Self {
+impl From<PublicWrappedFunctionType> for oplog::WrappedFunctionType {
+    fn from(value: PublicWrappedFunctionType) -> Self {
         match value {
-            WrappedFunctionType::WriteLocal => Self::WriteLocal,
-            WrappedFunctionType::ReadLocal => Self::ReadLocal,
-            WrappedFunctionType::WriteRemote => Self::WriteRemote,
-            WrappedFunctionType::ReadRemote => Self::ReadRemote,
-            WrappedFunctionType::WriteRemoteBatched(idx) => {
-                Self::WriteRemoteBatched(idx.map(|idx| idx.into()))
+            PublicWrappedFunctionType::WriteLocal(_) => Self::WriteLocal,
+            PublicWrappedFunctionType::ReadLocal(_) => Self::ReadLocal,
+            PublicWrappedFunctionType::WriteRemote(_) => Self::WriteRemote,
+            PublicWrappedFunctionType::ReadRemote(_) => Self::ReadRemote,
+            PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
+                index: idx,
+            }) => Self::WriteRemoteBatched(idx.map(|idx| idx.into())),
+        }
+    }
+}
+
+impl From<PublicUpdateDescription> for oplog::UpdateDescription {
+    fn from(value: PublicUpdateDescription) -> Self {
+        match value {
+            PublicUpdateDescription::Automatic(_) => Self::AutoUpdate,
+            PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters { payload }) => {
+                Self::SnapshotBased(payload)
             }
         }
     }
 }
 
-impl From<PublicUpdateDescription> for UpdateDescription {
-    fn from(value: PublicUpdateDescription) -> Self {
-        match value {
-            PublicUpdateDescription::Automatic => Self::AutoUpdate,
-            PublicUpdateDescription::SnapshotBased { payload } => Self::SnapshotBased(payload),
-        }
-    }
-}
-
-impl From<golem_common::model::oplog::LogLevel> for LogLevel {
+impl From<golem_common::model::oplog::LogLevel> for oplog::LogLevel {
     fn from(value: golem_common::model::oplog::LogLevel) -> Self {
         match value {
             golem_common::model::oplog::LogLevel::Trace => Self::Trace,
@@ -249,21 +272,33 @@ impl From<golem_common::model::oplog::LogLevel> for LogLevel {
     }
 }
 
-impl From<golem_common::model::WorkerInvocation> for WorkerInvocation {
-    fn from(value: golem_common::model::WorkerInvocation) -> Self {
+impl From<PublicWorkerInvocation> for oplog::WorkerInvocation {
+    fn from(value: PublicWorkerInvocation) -> Self {
         match value {
-            golem_common::model::WorkerInvocation::ExportedFunction {
+            PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
                 idempotency_key,
                 full_function_name,
                 function_input,
-            } => Self::ExportedFunction(ExportedFunctionInvocationParameters {
+            }) => Self::ExportedFunction(oplog::ExportedFunctionInvocationParameters {
                 function_name: full_function_name,
-                input: function_input.into_iter().map(|v| v.into()).collect(),
+                input: function_input.map(|input| input.into_iter().map(|v| v.into()).collect()),
                 idempotency_key: idempotency_key.value,
             }),
-            golem_common::model::WorkerInvocation::ManualUpdate { target_version } => {
+            PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_version }) => {
                 Self::ManualUpdate(target_version)
             }
+        }
+    }
+}
+
+impl From<PublicRetryConfig> for oplog::RetryPolicy {
+    fn from(value: PublicRetryConfig) -> Self {
+        Self {
+            max_attempts: value.max_attempts,
+            min_delay: value.min_delay.as_nanos() as u64,
+            max_delay: value.max_delay.as_nanos() as u64,
+            multiplier: value.multiplier,
+            max_jitter_factor: value.max_jitter_factor,
         }
     }
 }

@@ -549,7 +549,7 @@ impl From<golem::api0_2_0::host::RetryPolicy> for RetryPolicy {
             min_delay: value.min_delay,
             max_delay: value.max_delay,
             multiplier: value.multiplier,
-            max_jitter_factory: None,
+            max_jitter_factor: None,
         }
     }
 }
@@ -831,7 +831,7 @@ impl From<&RetryConfig> for crate::preview2::golem::api1_1_0_rc1::host::RetryPol
             min_delay: value.min_delay.as_nanos() as u64,
             max_delay: value.max_delay.as_nanos() as u64,
             multiplier: value.multiplier,
-            max_jitter_factory: value.max_jitter_factor,
+            max_jitter_factor: value.max_jitter_factor,
         }
     }
 }
@@ -843,7 +843,7 @@ impl From<RetryPolicy> for RetryConfig {
             min_delay: Duration::from_nanos(value.min_delay),
             max_delay: Duration::from_nanos(value.max_delay),
             multiplier: value.multiplier,
-            max_jitter_factor: value.max_jitter_factory,
+            max_jitter_factor: value.max_jitter_factor,
         }
     }
 }
