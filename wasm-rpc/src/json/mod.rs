@@ -88,9 +88,9 @@ impl<'de> Deserialize<'de> for ValueAndType {
         D: serde::Deserializer<'de>,
     {
         let tav = TypeAnnotatedValue::deserialize(deserializer)?;
-        Ok(tav.try_into().map_err(|err| {
+        tav.try_into().map_err(|err| {
             serde::de::Error::custom(format!("Invalid type-annotated JSON value: {err}",))
-        })?)
+        })
     }
 }
 
