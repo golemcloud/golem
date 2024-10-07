@@ -191,6 +191,17 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                     Expr::And,
                 );
             }
+
+            Expr::Or(left, right, _) => {
+                internal::handle_binary(
+                    left,
+                    right,
+                    &InferredType::Bool,
+                    &mut inferred_type_stack,
+                    Expr::Or,
+                );
+            }
+
             Expr::Call(call_type, exprs, inferred_type) => {
                 internal::handle_call(call_type, exprs, inferred_type, &mut inferred_type_stack);
             }
@@ -395,7 +406,7 @@ mod internal {
 
     pub fn handle_pattern_match(
         predicate: &Expr,
-        current_match_arms: &Vec<MatchArm>,
+        current_match_arms: &[MatchArm],
         current_inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
@@ -539,7 +550,7 @@ mod internal {
 
     pub(crate) fn handle_call(
         call_type: &CallType,
-        arguments: &Vec<Expr>,
+        arguments: &[Expr],
         inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
@@ -649,7 +660,7 @@ mod internal {
     }
 
     pub(crate) fn handle_sequence(
-        current_expr_list: &Vec<Expr>,
+        current_expr_list: &[Expr],
         current_inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
@@ -679,7 +690,7 @@ mod internal {
     }
 
     pub(crate) fn handle_record(
-        current_expr_list: &Vec<(String, Box<Expr>)>,
+        current_expr_list: &[(String, Box<Expr>)],
         current_inferred_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
     ) {
@@ -701,7 +712,7 @@ mod internal {
 
         let merged_record_type = current_inferred_type.merge(new_record_type);
 
-        let new_record = Expr::Record(new_exprs.iter().cloned().collect(), merged_record_type);
+        let new_record = Expr::Record(new_exprs.to_vec(), merged_record_type);
         inferred_type_stack.push_front(new_record);
     }
 

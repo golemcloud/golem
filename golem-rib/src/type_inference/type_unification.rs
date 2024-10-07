@@ -330,6 +330,11 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 queue.push(left);
                 queue.push(right);
             }
+            Expr::Or(left, right, _) => {
+                queue.push(left);
+                queue.push(right);
+            }
+
             Expr::GreaterThanOrEqualTo(left, right, _) => {
                 queue.push(left);
                 queue.push(right);

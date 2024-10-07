@@ -276,6 +276,11 @@ impl<W: Write> Writer<W> {
                 self.write_str(" && ")?;
                 self.write_expr(right)
             }
+            Expr::Or(left, right, _) => {
+                self.write_expr(left)?;
+                self.write_str(" || ")?;
+                self.write_expr(right)
+            }
         }
     }
 

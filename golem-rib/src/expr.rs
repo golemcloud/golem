@@ -50,6 +50,7 @@ pub enum Expr {
     Not(Box<Expr>, InferredType),
     GreaterThan(Box<Expr>, Box<Expr>, InferredType),
     And(Box<Expr>, Box<Expr>, InferredType),
+    Or(Box<Expr>, Box<Expr>, InferredType),
     GreaterThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
     LessThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
     EqualTo(Box<Expr>, Box<Expr>, InferredType),
@@ -325,6 +326,10 @@ impl Expr {
         )
     }
 
+    pub fn or(left: Expr, right: Expr) -> Self {
+        Expr::Or(Box::new(left), Box::new(right), InferredType::Bool).unwrap()
+    }
+
     pub fn pattern_match(expr: Expr, match_arms: Vec<MatchArm>) -> Self {
         Expr::PatternMatch(Box::new(expr), match_arms, InferredType::Unknown)
     }
@@ -412,6 +417,7 @@ impl Expr {
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
+            | Expr::Or(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => inferred_type.clone(),
         }
     }
@@ -540,6 +546,7 @@ impl Expr {
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
+            | Expr::Or(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -580,6 +587,7 @@ impl Expr {
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::And(_, _, inferred_type)
+            | Expr::Or(_, _, inferred_type)
             | Expr::GetTag(_, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
@@ -983,6 +991,12 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 Expr::and((*left).try_into()?, (*right).try_into()?)
             }
 
+            golem_api_grpc::proto::golem::rib::expr::Expr::Or(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::or((*left).try_into()?, (*right).try_into()?)
+            }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Tag(expr) => {
                 let expr = expr.expr.ok_or("Missing expr in tag")?;
                 Expr::tag((*expr).try_into()?)
@@ -1291,6 +1305,13 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
             )),
             Expr::And(left, right, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::And(
                 Box::new(golem_api_grpc::proto::golem::rib::AndExpr {
+                    left: Some(Box::new((*left).into())),
+                    right: Some(Box::new((*right).into())),
+                }),
+            )),
+
+            Expr::Or(left, right, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Or(
+                Box::new(golem_api_grpc::proto::golem::rib::OrExpr {
                     left: Some(Box::new((*left).into())),
                     right: Some(Box::new((*right).into())),
                 }),

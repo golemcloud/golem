@@ -29,6 +29,8 @@ where
         attempt(string("==")),
         string("<"),
         string(">"),
+        string("&&"),
+        string("||"),
     ))
     .and_then(|str| match str {
         ">" => Ok(BinaryOp::GreaterThan),
@@ -36,6 +38,8 @@ where
         "==" => Ok(BinaryOp::EqualTo),
         ">=" => Ok(BinaryOp::GreaterThanOrEqualTo),
         "<=" => Ok(BinaryOp::LessThanOrEqualTo),
+        "&&" => Ok(BinaryOp::And),
+        "||" => Ok(BinaryOp::Or),
         _ => Err(RibParseError::Message(
             "Invalid binary operator".to_string(),
         )),
@@ -48,6 +52,8 @@ pub enum BinaryOp {
     LessThanOrEqualTo,
     GreaterThanOrEqualTo,
     EqualTo,
+    And,
+    Or,
 }
 
 #[cfg(test)]

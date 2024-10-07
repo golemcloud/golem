@@ -202,6 +202,10 @@ impl Interpreter {
                 RibIR::And => {
                     internal::run_and_instruction(&mut self.stack)?;
                 }
+
+                RibIR::Or => {
+                    internal::run_or_instruction(&mut self.stack)?;
+                }
             }
         }
 
@@ -402,15 +406,35 @@ mod internal {
     pub(crate) fn run_and_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let left = interpreter_stack.pop().ok_or(
-            "Empty stack and failed to get a value to do the comparison operation".to_string(),
-        )?;
-        let right = interpreter_stack.pop().ok_or(
-            "Failed to get a value from the stack to do the comparison operation".to_string(),
-        )?;
+        let left = interpreter_stack
+            .pop()
+            .ok_or("Internal Error: Failed to get LHS &&".to_string())?;
+        let right = interpreter_stack
+            .pop()
+            .ok_or("Internal Error: Failed to get RHS of &&".to_string())?;
 
         let result = left.compare(&right, |a, b| match (a.get_bool(), b.get_bool()) {
             (Some(a), Some(b)) => a && b,
+            _ => false,
+        })?;
+
+        interpreter_stack.push(result);
+
+        Ok(())
+    }
+
+    pub(crate) fn run_or_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let left = interpreter_stack
+            .pop()
+            .ok_or("Internal Error: Failed to get LHS &&".to_string())?;
+        let right = interpreter_stack
+            .pop()
+            .ok_or("Internal Error: Failed to get RHS of &&".to_string())?;
+
+        let result = left.compare(&right, |a, b| match (a.get_bool(), b.get_bool()) {
+            (Some(a), Some(b)) => a || b,
             _ => false,
         })?;
 

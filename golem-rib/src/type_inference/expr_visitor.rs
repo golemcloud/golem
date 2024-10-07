@@ -63,6 +63,12 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             queue.push_back(&mut *expr1);
             queue.push_back(&mut *expr2)
         }
+
+        Expr::Or(expr1, expr2, _) => {
+            queue.push_back(&mut *expr1);
+            queue.push_back(&mut *expr2)
+        }
+
         Expr::GetTag(exr, _) => {
             queue.push_back(&mut *exr);
         }
@@ -134,6 +140,10 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         }
         Expr::Unwrap(expr, _) => queue.push_back(expr),
         Expr::And(expr1, expr2, _) => {
+            queue.push_back(expr1);
+            queue.push_back(expr2);
+        }
+        Expr::Or(expr1, expr2, _) => {
             queue.push_back(expr1);
             queue.push_back(expr2);
         }
@@ -209,6 +219,10 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             queue.push_front(&mut *else_);
         }
         Expr::And(expr1, expr2, _) => {
+            queue.push_front(&mut *expr1);
+            queue.push_front(&mut *expr2)
+        }
+        Expr::Or(expr1, expr2, _) => {
             queue.push_front(&mut *expr1);
             queue.push_front(&mut *expr2)
         }
