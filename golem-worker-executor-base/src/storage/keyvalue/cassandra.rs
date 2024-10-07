@@ -19,7 +19,7 @@ use crate::storage::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use scylla::{
-    prepared_statement::PreparedStatement, serialize::row::SerializeRow,
+    prepared_statement::PreparedStatement, query::Query, serialize::row::SerializeRow,
     transport::errors::QueryError, FromRow,
 };
 use serde::Deserialize;
@@ -32,6 +32,72 @@ pub struct CassandraKeyValueStorage {
 }
 
 impl CassandraKeyValueStorage {
+    pub async fn create_schema(&self) -> Result<(), String> {
+        self.session.session.query_unpaged(
+            Query::new(
+                format!("CREATE KEYSPACE IF NOT EXISTS {} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }};", self.session.keyspace),
+            ),
+            &[],
+        ).await
+            .map_err(|e| e.to_string())?;
+
+        self.session
+            .session
+            .query_unpaged(
+                Query::new(format!(
+                    r#"
+                CREATE TABLE IF NOT EXISTS {}.kv_store (
+                    namespace TEXT,
+                    key TEXT,
+                    value BLOB,
+                    PRIMARY KEY (namespace, key)
+                );"#,
+                    self.session.keyspace
+                )),
+                &[],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        self.session
+            .session
+            .query_unpaged(
+                Query::new(format!(
+                    r#"
+                CREATE TABLE IF NOT EXISTS {}.kv_sets (
+                    namespace TEXT,
+                    key TEXT,
+                    value BLOB,
+                    PRIMARY KEY ((namespace, key), value)
+                );"#,
+                    self.session.keyspace
+                )),
+                &[],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+        self.session
+            .session
+            .query_unpaged(
+                Query::new(format!(
+                    r#"
+                CREATE TABLE IF NOT EXISTS {}.kv_sorted_sets (
+                    namespace TEXT,
+                    key TEXT,
+                    score DOUBLE,
+                    value BLOB,
+                    PRIMARY KEY ((namespace, key), score, value)
+                );"#,
+                    self.session.keyspace
+                )),
+                &[],
+            )
+            .await
+            .map_err(|e| e.to_string())
+            .map(|_| ())
+    }
+
     pub fn new(session: CassandraSession) -> Self {
         Self { session }
     }

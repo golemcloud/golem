@@ -129,12 +129,13 @@ pub(crate) async fn cassandra_storage() -> impl GetKeyValueStorage {
         let test_keyspace = format!("golem_test_{}", &Uuid::new_v4().to_string()[..8]);
         let session = cassandra.get_session(None).await;
         let cassandra_session = CassandraSession::new(session, true, &test_keyspace);
-        if let Err(err_msg) = cassandra_session.create_schema().await {
+
+        let kvs = CassandraKeyValueStorage::new(cassandra_session);
+        if let Err(err_msg) = kvs.create_schema().await {
             cassandra.kill();
             panic!("Cannot create schema : {}", err_msg);
         }
 
-        let kvs = CassandraKeyValueStorage::new(cassandra_session);
         CassandraKeyValueStorageWrapper { kvs }
     } else {
         panic!("Cassandra is not configured");

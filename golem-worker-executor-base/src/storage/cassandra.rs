@@ -17,7 +17,6 @@ use golem_common::config::CassandraConfig;
 use golem_common::metrics::db::{record_db_failure, record_db_success};
 use scylla::batch::{Batch, BatchType};
 use scylla::prepared_statement::PreparedStatement;
-use scylla::query::Query;
 use scylla::serialize::row::SerializeRow;
 use scylla::transport::errors::QueryError;
 use scylla::FromRow;
@@ -63,69 +62,6 @@ impl CassandraSession {
             keyspace: config.keyspace.clone(),
             set_tracing: config.tracing,
         })
-    }
-
-    pub async fn create_schema(&self) -> Result<(), String> {
-        self.session.query_unpaged(
-            Query::new(
-                format!("CREATE KEYSPACE IF NOT EXISTS {} WITH REPLICATION = {{ 'class' : 'SimpleStrategy', 'replication_factor' : 1 }};", self.keyspace),
-            ),
-            &[],
-        ).await
-            .map_err(|e| e.to_string())?;
-
-        self.session
-            .query_unpaged(
-                Query::new(format!(
-                    r#"
-                CREATE TABLE IF NOT EXISTS {}.kv_store (
-                    namespace TEXT,
-                    key TEXT,
-                    value BLOB,
-                    PRIMARY KEY (namespace, key)
-                );"#,
-                    self.keyspace
-                )),
-                &[],
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-
-        self.session
-            .query_unpaged(
-                Query::new(format!(
-                    r#"
-                CREATE TABLE IF NOT EXISTS {}.kv_sets (
-                    namespace TEXT,
-                    key TEXT,
-                    value BLOB,
-                    PRIMARY KEY ((namespace, key), value)
-                );"#,
-                    self.keyspace
-                )),
-                &[],
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-
-        self.session
-            .query_unpaged(
-                Query::new(format!(
-                    r#"
-                CREATE TABLE IF NOT EXISTS {}.kv_sorted_sets (
-                    namespace TEXT,
-                    key TEXT,
-                    score DOUBLE,
-                    value BLOB,
-                    PRIMARY KEY ((namespace, key), score, value)
-                );"#,
-                    self.keyspace
-                )),
-                &[],
-            )
-            .await
-            .map_err(|e| e.to_string())
-            .map(|_| ())
     }
 
     pub fn with(&self, svc_name: &'static str, api_name: &'static str) -> CassandraLabelledApi {
