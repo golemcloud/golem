@@ -155,6 +155,11 @@ mod internal {
         pred_expr_inferred_type: InferredType,
     ) -> Option<IfThenBranch> {
         match arm_pattern_expr {
+            // This condition is kept for backward compatibility
+            // If the arm pattern some(x), then it is parsed as Constructor("some", args)
+            // and never be Expr::Option
+            // This condition (which is never used anymore) also has limitations that the pattern inside `some` has to be
+            // Expr, resulting in not handling the possibility of another constructor pattern.
             Expr::Option(Some(inner_pattern), _) => {
                 let unwrapped_inferred_type = match pred_expr_inferred_type {
                     InferredType::Option(inner) => *inner,
@@ -183,6 +188,11 @@ mod internal {
                 Some(branch)
             }
 
+            // This condition is kept for backward compatibility.
+            // If the arm pattern ok(x), then it is ArmPattern::Constructor("ok", args)
+            // and never be Expr::Result
+            // This condition (which is never used anymore) also has limitations that the pattern inside `ok` has to be
+            // Expr, resulting in not handling the possibility of another constructor pattern.
             Expr::Result(Ok(inner_pattern), _) => {
                 let unwrapped_inferred_type = match pred_expr_inferred_type {
                     InferredType::Result { ok, .. } => {
@@ -204,6 +214,12 @@ mod internal {
                     *unwrapped_inferred_type,
                 )
             }
+
+            // This condition is kept for backward compatibility.
+            // If the arm pattern ok(x), then it is ArmPattern::Constructor("err", args)
+            // and never be Expr::Result
+            // This condition (which is never used anymore) also has limitations that the pattern inside `err` has to be
+            // Expr, resulting in not handling the possibility of another constructor pattern.
             Expr::Result(Err(inner_pattern), _) => {
                 let unwrapped_inferred_type = match pred_expr_inferred_type {
                     InferredType::Result { error, .. } => {
