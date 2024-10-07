@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod comprehensive_test {
     use crate::{compiler, Expr};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU64};
+    use golem_wasm_ast::analysis::{
+        AnalysedType, NameTypePair, TypeBool, TypeF32, TypeF64, TypeRecord, TypeS16, TypeS32,
+        TypeStr, TypeU64, TypeU8,
+    };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     #[tokio::test]
@@ -282,6 +285,17 @@ mod comprehensive_test {
 
               {
                  a : option_str_response_processed,
+                 aa: list_tuple_response_processed2,
+                 ab: list_tuple_response_processed3,
+                 ac: list_tuple_response_processed4,
+                 ad: list_tuple_response_processed5,
+                 ae: list_tuple_response_processed6,
+                 af: list_tuple_response_processed7,
+                 ag: list_tuple_response_processed8,
+                 ah: list_tuple_response_processed9,
+                 ai: list_tuple_response_processed10,
+                 aj: list_tuple_response_processed11,
+                 ak: list_tuple_response_processed12,
                  b: option_number_response_processed,
                  c: option_option_response_processed,
                  d: option_variant_response_processed,
@@ -319,24 +333,149 @@ mod comprehensive_test {
         let mut rib_executor = mock_interpreter::interpreter();
         let result = rib_executor.run(compiled_expr).await.unwrap();
 
-        dbg!(test_utils::convert_type_annotated_value_to_str(
-            &result.get_val().unwrap()
-        ));
-
         assert_eq!(result.get_val().unwrap(), expected_type_annotated_value());
     }
 
     fn expected_type_annotated_value() -> TypeAnnotatedValue {
-        let wasm_wave_str = "{a: \"foo\", b: 42, c: \"foo\", d: \"found\", e: \"a\", f: \"foo\", g: \"foo\", h: \"foo\", i: \"greater\", j: \"foo\", k: \"foo\", l: \"foo\", m: \"foo\", n: \"a\", o: \"foo\", p: \"foo\", q: \"foo\", r: 42, s: \"foo\", t: \"a\", u: \"foo\", v: \"found x\", w: \"foo\", x: \"42\", y: \"a\", z: \"foo\"}";
+        let wasm_wave_str = r#"
+          {
+            a: "foo",
+            b: 42,
+            c: "foo",
+            d: "found",
+            e: "a",
+            f: "foo",
+            g: "foo",
+            h: "foo",
+            i: "greater",
+            j: "foo",
+            k: "foo",
+            l: "foo",
+            m: "foo",
+            n: "a",
+            o: "foo",
+            p: "foo",
+            q: "foo",
+            r: 42,
+            s: "foo",
+            t: "a",
+            u: "foo",
+            v: "found x",
+            w: "foo",
+            x: "42",
+            y: "a",
+            z: "foo",
+            aa: 42,
+            ab: 42,
+            ac: 42,
+            ad: 42,
+            ae: true,
+            af: "a",
+            ag: 42,
+            ah: 42,
+            ai: true,
+            aj: 42,
+            ak: "true-foo"
+          }
+        "#;
 
         test_utils::get_type_annotated_value(&expected_analysed_type(), wasm_wave_str)
     }
+
+    //
+    //            AnalysedType::Str(TypeStr),
+    //                     AnalysedType::U64(TypeU64),
+    //                     AnalysedType::S32(TypeS32),
+    //                     AnalysedType::F32(TypeF32),
+    //                     AnalysedType::F64(TypeF64),
+    //                     AnalysedType::Bool(TypeBool),
+    //                     AnalysedType::Chr(TypeChr),
+    //                     AnalysedType::Option(TypeOption {
+    //                         inner: Box::new(AnalysedType::S16(TypeS16)),
+    //                     }),
+    //                     AnalysedType::Result(TypeResult {
+    //                         ok: Some(Box::new(AnalysedType::U8(TypeU8))),
+    //                         err: Some(Box::new(AnalysedType::S8(TypeS8))),
+    //                     }),
+    //                     AnalysedType::List(TypeList {
+    //                         inner: Box::new(AnalysedType::Bool(TypeBool)),
+    //                     }),
+    //                     AnalysedType::Variant(TypeVariant {
+    //                         cases: vec![
+    //                             NameOptionTypePair {
+    //                                 name: "case-hello".to_string(),
+    //                                 typ: Some(AnalysedType::F64(TypeF64)),
+    //                             },
+    //                             NameOptionTypePair {
+    //                                 name: "case-none".to_string(),
+    //                                 typ: None,
+    //                             },
+    //                         ],
+    //                     }),
+    //                     AnalysedType::Record(TypeRecord {
+    //                         // Option<Record>
+    //                         fields: vec![
+    //                             NameTypePair {
+    //                                 name: "field-one".to_string(),
+    //                                 typ: AnalysedType::Bool(TypeBool),
+    //                             },
+    //                             NameTypePair {
+    //                                 name: "field-two".to_string(),
+    //                                 typ: AnalysedType::Str(TypeStr),
+    //                             },
+    //                         ],
+    //                     }),
+    //
 
     fn expected_analysed_type() -> AnalysedType {
         AnalysedType::Record(TypeRecord {
             fields: vec![
                 NameTypePair {
                     name: "a".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "aa".to_string(),
+                    typ: AnalysedType::U64(TypeU64),
+                },
+                NameTypePair {
+                    name: "ab".to_string(),
+                    typ: AnalysedType::S32(TypeS32),
+                },
+                NameTypePair {
+                    name: "ac".to_string(),
+                    typ: AnalysedType::F32(TypeF32),
+                },
+                NameTypePair {
+                    name: "ad".to_string(),
+                    typ: AnalysedType::F64(TypeF64),
+                },
+                NameTypePair {
+                    name: "ae".to_string(),
+                    typ: AnalysedType::Bool(TypeBool),
+                },
+                NameTypePair {
+                    name: "af".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "ag".to_string(),
+                    typ: AnalysedType::S16(TypeS16),
+                },
+                NameTypePair {
+                    name: "ah".to_string(),
+                    typ: AnalysedType::U8(TypeU8),
+                },
+                NameTypePair {
+                    name: "ai".to_string(),
+                    typ: AnalysedType::Bool(TypeBool),
+                },
+                NameTypePair {
+                    name: "aj".to_string(),
+                    typ: AnalysedType::F64(TypeF64),
+                },
+                NameTypePair {
+                    name: "ak".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
