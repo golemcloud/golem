@@ -8,6 +8,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  checks: write
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -40,7 +43,14 @@ jobs:
     - name: Clippy
       run: cargo clippy -- -Dwarnings      
     - name: Tests
-      run: cargo test --all-features
+      run: cargo test --tests --all-features -- --format junit --logfile target/report.xml
+    - name: Publish Test Report
+      uses: mikepenz/action-junit-report@v4
+      if: success() || failure() # always run even if the previous step fails
+      with:
+        report_paths: '**/target/report-*.xml'
+        detailed_summary: true
+        include_passed: true
 
   publish:
     needs: [ build ]

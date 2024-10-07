@@ -696,6 +696,7 @@ mod tests {
         AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
         AnalysedResourceMode,
     };
+    use test_r::test;
 
     #[test]
     fn analysed_function_kind() {
