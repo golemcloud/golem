@@ -20,6 +20,7 @@ use crate::component::{ComponentExternalKind, PrimitiveValueType};
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "json", serde(tag = "type"))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Union))]
 #[cfg_attr(
@@ -520,5 +521,40 @@ impl AnalysisFailure {
                 description.as_ref()
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::analysed_type::{bool, list, str};
+    use crate::analysis::{
+        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+        AnalysedInstance,
+    };
+    use poem_openapi::types::ToJSON;
+    use pretty_assertions::assert_eq;
+
+    #[cfg(feature = "poem_openapi")]
+    #[cfg(feature = "json")]
+    #[test]
+    fn analysed_export_poem_and_serde_are_compatible() {
+        let export1 = AnalysedExport::Instance(AnalysedInstance {
+            name: "inst1".to_string(),
+            functions: vec![AnalysedFunction {
+                name: "func1".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "param1".to_string(),
+                    typ: bool(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: list(str()),
+                }],
+            }],
+        });
+        let poem_serialized = export1.to_json_string();
+        let serde_deserialized: AnalysedExport = serde_json::from_str(&poem_serialized).unwrap();
+
+        assert_eq!(export1, serde_deserialized);
     }
 }
