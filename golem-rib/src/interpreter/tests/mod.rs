@@ -9,19 +9,7 @@ mod comprehensive_test {
 
     #[tokio::test]
     async fn test_interpreter_complex_rib() {
-
         let expr = r#"
-
-          let str2: str = request.headers.name;
-          let none_str_response = function-some-enum-response(str2);
-
-          match none_str_response {
-            some(enum-a) => "a",
-            none => "not found"
-          }
-
-        "#;
-        let expr2 = r#"
 
               let str1: str = request.body.name;
               let str2: str = request.headers.name;
@@ -1659,10 +1647,7 @@ mod comprehensive_test {
         }
 
         pub(crate) fn none_of_some() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
-                &data_types::option_of_option_type(),
-                "none",
-            )
+            test_utils::get_type_annotated_value(&data_types::option_of_option_type(), "none")
         }
 
         pub(crate) fn some_of_variant() -> TypeAnnotatedValue {
@@ -1673,10 +1658,7 @@ mod comprehensive_test {
         }
 
         pub(crate) fn none_of_variant() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
-                &data_types::option_of_variant_type(),
-                "none",
-            )
+            test_utils::get_type_annotated_value(&data_types::option_of_variant_type(), "none")
         }
 
         pub(crate) fn some_of_enum() -> TypeAnnotatedValue {
@@ -1697,7 +1679,6 @@ mod comprehensive_test {
             test_utils::get_type_annotated_value(&data_types::option_of_tuple(), "none")
         }
 
-
         pub(crate) fn some_of_record() -> TypeAnnotatedValue {
             let record_str = test_utils::convert_type_annotated_value_to_str(&record());
             let wave_str = format!("some({})", &record_str);
@@ -1708,10 +1689,7 @@ mod comprehensive_test {
         }
 
         pub(crate) fn none_of_record() -> TypeAnnotatedValue {
-            test_utils::get_type_annotated_value(
-                &data_types::option_of_record_type(),
-                "none"
-            )
+            test_utils::get_type_annotated_value(&data_types::option_of_record_type(), "none")
         }
 
         pub(crate) fn some_of_list() -> TypeAnnotatedValue {
@@ -1838,14 +1816,8 @@ mod comprehensive_test {
                 ("function-no-arg-unit", None),
                 ("function-str-response", Some(mock_data::str_data())),
                 ("function-number-response", Some(mock_data::number_data())),
-                (
-                    "function-some-str-response",
-                    Some(mock_data::some_of_str()),
-                ),
-                (
-                    "function-none-str-response",
-                    Some(mock_data::none_of_str()),
-                ),
+                ("function-some-str-response", Some(mock_data::some_of_str())),
+                ("function-none-str-response", Some(mock_data::none_of_str())),
                 (
                     "function-some-number-response",
                     Some(mock_data::some_of_number()),

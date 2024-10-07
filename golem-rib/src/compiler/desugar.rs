@@ -27,14 +27,12 @@ pub fn desugar_pattern_match(
         }
     }
 
-    let str = internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type));
-    dbg!(str.clone().unwrap().to_string());
-    str
+    internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
 }
 
 mod internal {
-    use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
     use crate::call_type::CallType;
+    use crate::{ArmPattern, Expr, InferredType, MatchArm, VariableId};
 
     pub(crate) fn build_expr_from(if_branches: Vec<IfThenBranch>) -> Option<Expr> {
         if let Some(branch) = if_branches.first() {
@@ -102,7 +100,7 @@ mod internal {
                 arm_patterns,
                 resolution,
                 inferred_type_of_pred,
-                tag
+                tag,
             ),
 
             ArmPattern::TupleConstructor(arm_patterns) => hande_constructor(
@@ -111,7 +109,7 @@ mod internal {
                 arm_patterns,
                 resolution,
                 inferred_type_of_pred,
-                tag
+                tag,
             ),
 
             ArmPattern::ListConstructor(arm_patterns) => hande_constructor(
@@ -120,7 +118,7 @@ mod internal {
                 arm_patterns,
                 resolution,
                 inferred_type_of_pred,
-                tag
+                tag,
             ),
 
             ArmPattern::RecordConstructor(field_arm_pattern_collection) => {
@@ -129,6 +127,7 @@ mod internal {
                     field_arm_pattern_collection,
                     resolution,
                     inferred_type_of_pred,
+                    tag,
                 )
             }
 
@@ -157,8 +156,6 @@ mod internal {
         resolution: &Expr,
         tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
-        dbg!(tag.clone());
-        dbg!(arm_pattern_expr.clone());
         match arm_pattern_expr {
             Expr::Identifier(identifier, inferred_type) => {
                 let assign_var = Expr::Let(
@@ -179,29 +176,16 @@ mod internal {
 
             Expr::Call(CallType::EnumConstructor(name), _, _) => {
                 let cond = if let Some(t) = tag {
-                    Expr::and(t, Expr::equal_to(
-                        Expr::get_tag(pred_expr.clone()),
-                        Expr::literal(name)),
+                    Expr::and(
+                        t,
+                        Expr::equal_to(Expr::get_tag(pred_expr.clone()), Expr::literal(name)),
                     )
                 } else {
-                    Expr::equal_to(
-                        Expr::get_tag(pred_expr.clone()),
-                        Expr::literal(name),
-                    )
+                    Expr::equal_to(Expr::get_tag(pred_expr.clone()), Expr::literal(name))
                 };
 
                 let branch = IfThenBranch {
                     condition: cond,
-                    body: resolution.clone(),
-                };
-                Some(branch)
-            }
-
-
-            Expr::Call(CallType::EnumConstructor(name), _, _) => {
-                dbg!("here??");
-                let branch = IfThenBranch {
-                    condition: Expr::equal_to(pred_expr.clone(), arm_pattern_expr.clone()),
                     body: resolution.clone(),
                 };
                 Some(branch)
@@ -223,6 +207,7 @@ mod internal {
         bind_patterns: &[(String, ArmPattern)],
         resolution: &Expr,
         pred_expr_inferred_type: InferredType,
+        tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
         match pred_expr_inferred_type {
             InferredType::Record(field_and_types) => {
@@ -266,7 +251,13 @@ mod internal {
                 let and_cond = Expr::and_combine(conditions);
 
                 and_cond.map(|c| IfThenBranch {
-                    condition: c,
+                    condition: {
+                        if let Some(t) = tag {
+                            Expr::and(t, c)
+                        } else {
+                            c
+                        }
+                    },
                     body: Expr::multiple(resolution_body),
                 })
             }
@@ -281,7 +272,7 @@ mod internal {
         bind_patterns: &[ArmPattern],
         resolution: &Expr,
         pred_expr_inferred_type: InferredType,
-        tag: Option<Expr>
+        tag: Option<Expr>,
     ) -> Option<IfThenBranch> {
         match pred_expr_inferred_type {
             InferredType::Variant(variant) => {
@@ -293,10 +284,13 @@ mod internal {
                 let inner_variant_arg_type = inner_type.and_then(|(_, typ)| typ.clone());
 
                 let cond = if let Some(t) = tag {
-                    Expr::and(t, Expr::equal_to(
-                        Expr::get_tag(pred_expr.clone()),
-                        Expr::literal(constructor_name),
-                    ))
+                    Expr::and(
+                        t,
+                        Expr::equal_to(
+                            Expr::get_tag(pred_expr.clone()),
+                            Expr::literal(constructor_name),
+                        ),
+                    )
                 } else {
                     Expr::equal_to(
                         Expr::get_tag(pred_expr.clone()),
@@ -311,45 +305,19 @@ mod internal {
                         Some(cond),
                         inferred_type,
                     ),
-                    _ => None, // Probably fail here
+                    _ => None,
                 }
             }
 
-            InferredType::Enum(enum_cases) => {
-                let arg_pattern_opt = bind_patterns.first();
-
-                let inner_type = &enum_cases
-                    .iter()
-                    .find(|case_name| *case_name == constructor_name);
-
-
-                let cond = if let Some(t) = tag {
-                    Expr::and(t, Expr::equal_to(
-                        Expr::get_tag(pred_expr.clone()),
-                        Expr::literal(constructor_name),
-                    ))
-                } else {
-                    Expr::equal_to(
-                        Expr::get_tag(pred_expr.clone()),
-                        Expr::literal(constructor_name),
-                    )
-                };
-
-                Some(IfThenBranch {
-                    condition:cond,
-                    body: resolution.clone(),
-                })
-
-            }
-
-            // some(some(x)) =>
             InferredType::Option(inner) if constructor_name == "some" => {
-
                 let cond = if let Some(t) = tag {
-                    Expr::and(t, Expr::equal_to(
-                        Expr::get_tag(pred_expr.clone()),
-                        Expr::literal(constructor_name),
-                    ))
+                    Expr::and(
+                        t,
+                        Expr::equal_to(
+                            Expr::get_tag(pred_expr.clone()),
+                            Expr::literal(constructor_name),
+                        ),
+                    )
                 } else {
                     Expr::equal_to(
                         Expr::get_tag(pred_expr.clone()),
@@ -368,15 +336,13 @@ mod internal {
                 }
             }
 
-            InferredType::Option(_) if constructor_name == "none" => {
-                Some(IfThenBranch {
-                    condition: Expr::equal_to(
-                        Expr::get_tag(pred_expr.clone()),
-                        Expr::literal(constructor_name),
-                    ),
-                    body: resolution.clone(),
-                })
-            },
+            InferredType::Option(_) if constructor_name == "none" => Some(IfThenBranch {
+                condition: Expr::equal_to(
+                    Expr::get_tag(pred_expr.clone()),
+                    Expr::literal(constructor_name),
+                ),
+                body: resolution.clone(),
+            }),
 
             InferredType::Result { ok, error } => {
                 let inner_variant_arg_type = if constructor_name == "ok" {
@@ -388,10 +354,13 @@ mod internal {
                 };
 
                 let cond = if let Some(t) = tag {
-                    Expr::and(t, Expr::equal_to(
-                        Expr::get_tag(pred_expr.clone()),
-                        Expr::literal(constructor_name),
-                    ))
+                    Expr::and(
+                        t,
+                        Expr::equal_to(
+                            Expr::get_tag(pred_expr.clone()),
+                            Expr::literal(constructor_name),
+                        ),
+                    )
                 } else {
                     Expr::equal_to(
                         Expr::get_tag(pred_expr.clone()),
@@ -450,7 +419,13 @@ mod internal {
                 let and_cond = Expr::and_combine(conditions);
 
                 and_cond.map(|c| IfThenBranch {
-                    condition: c,
+                    condition: {
+                        if let Some(t) = tag {
+                            Expr::and(t, c)
+                        } else {
+                            c
+                        }
+                    },
                     body: Expr::multiple(resolution_body),
                 })
             }
@@ -492,7 +467,13 @@ mod internal {
                 let and_cond = Expr::and_combine(conditions);
 
                 and_cond.map(|c| IfThenBranch {
-                    condition: c,
+                    condition: {
+                        if let Some(t) = tag {
+                            Expr::and(t, c)
+                        } else {
+                            c
+                        }
+                    },
                     body: Expr::multiple(resolution_body),
                 })
             }

@@ -152,9 +152,17 @@ mod internal {
             }
             Expr::And(lhs, rhs, _) => {
                 // This optimization isn't optional, it's required for the correct functioning of the interpreter
-                let optimised_expr  = Expr::cond(
-                    Expr::EqualTo(lhs.clone(), Box::new(Expr::Boolean(true, InferredType::Bool)), InferredType::Bool),
-                    Expr::EqualTo(rhs.clone(), Box::new(Expr::Boolean(true, InferredType::Bool)), InferredType::Bool),
+                let optimised_expr = Expr::cond(
+                    Expr::EqualTo(
+                        lhs.clone(),
+                        Box::new(Expr::Boolean(true, InferredType::Bool)),
+                        InferredType::Bool,
+                    ),
+                    Expr::EqualTo(
+                        rhs.clone(),
+                        Box::new(Expr::Boolean(true, InferredType::Bool)),
+                        InferredType::Bool,
+                    ),
                     Expr::Boolean(false, InferredType::Bool),
                 );
 

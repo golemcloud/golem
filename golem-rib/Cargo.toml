@@ -25,7 +25,3 @@ wasm-wave = { workspace = true }
 [lib]
 name = "rib"
 path = "src/lib.rs"
-
-[[bin]]
-name = "ribc"
-path = "src/main.rs"

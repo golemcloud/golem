@@ -860,8 +860,9 @@ mod internal {
             .ok_or("Failed to get a value from the stack to unwrap".to_string())?;
 
         let unwrapped_value = value
+            .clone()
             .unwrap()
-            .ok_or("Failed to unwrap the value".to_string())?;
+            .ok_or(format!("Failed to unwrap the value {:?}", value))?;
 
         interpreter_stack.push_val(unwrapped_value);
         Ok(())
@@ -888,7 +889,7 @@ mod internal {
                 None => "err".to_string(),
             },
             TypeAnnotatedValue::Enum(enum_) => enum_.value,
-            _ => "untagged".to_string()
+            _ => "untagged".to_string(),
         };
 
         interpreter_stack.push_val(TypeAnnotatedValue::Str(tag));
@@ -1538,7 +1539,6 @@ mod interpreter_tests {
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            dbg!(expr.clone());
             let compiled = compiler::compile(&expr, &analysed_exports).unwrap();
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
