@@ -5,7 +5,7 @@ use crate::protobuf::{TypeAnnotatedValue as RootTypeAnnotatedValue, TypedResult}
 use crate::protobuf::{
     TypedEnum, TypedFlags, TypedHandle, TypedList, TypedRecord, TypedTuple, TypedVariant,
 };
-use crate::Value;
+use crate::{Value, WitValue};
 use golem_wasm_ast::analysis::analysed_type::{
     bool, chr, f32, f64, list, option, result, result_err, result_ok, s16, s32, s64, s8, str,
     tuple, u16, u32, u64, u8,
@@ -37,6 +37,12 @@ impl From<ValueAndType> for Value {
 impl From<ValueAndType> for AnalysedType {
     fn from(value_and_type: ValueAndType) -> Self {
         value_and_type.typ
+    }
+}
+
+impl From<ValueAndType> for WitValue {
+    fn from(value_and_type: ValueAndType) -> Self {
+        value_and_type.value.into()
     }
 }
 
