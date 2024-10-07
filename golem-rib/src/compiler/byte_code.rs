@@ -170,9 +170,23 @@ mod internal {
             }
 
             Expr::Or(lhs, rhs, _) => {
-                stack.push(ExprState::from_expr(rhs.deref()));
-                stack.push(ExprState::from_expr(lhs.deref()));
-                instructions.push(RibIR::Or);
+                let optimised_expr = Expr::cond(
+                    Expr::EqualTo(
+                        lhs.clone(),
+                        Box::new(Expr::Boolean(true, InferredType::Bool)),
+                        InferredType::Bool,
+                    ),
+                    Expr::Boolean(true, InferredType::Bool),
+                    Expr::EqualTo(
+                        rhs.clone(),
+                        Box::new(Expr::Boolean(true, InferredType::Bool)),
+                        InferredType::Bool,
+                    ),
+
+                );
+
+                stack.push(ExprState::from_expr(&optimised_expr));
+
             }
 
             Expr::Record(fields, inferred_type) => {
