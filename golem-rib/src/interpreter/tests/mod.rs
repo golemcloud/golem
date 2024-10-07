@@ -381,7 +381,7 @@ mod comprehensive_test {
 
         test_utils::get_type_annotated_value(&expected_analysed_type(), wasm_wave_str)
     }
-    
+
     fn expected_analysed_type() -> AnalysedType {
         AnalysedType::Record(TypeRecord {
             fields: vec![
