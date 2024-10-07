@@ -182,11 +182,9 @@ mod internal {
                         Box::new(Expr::Boolean(true, InferredType::Bool)),
                         InferredType::Bool,
                     ),
-
                 );
 
                 stack.push(ExprState::from_expr(&optimised_expr));
-
             }
 
             Expr::Record(fields, inferred_type) => {
