@@ -14,6 +14,7 @@
 
 use crate::cargo::generate_cargo_toml;
 use crate::compilation::compile;
+use crate::copy::copy;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
 use crate::wit::{copy_wit_files, generate_stub_wit};
@@ -38,11 +39,7 @@ pub async fn build(
 ) -> anyhow::Result<()> {
     let wasm_path = generate_and_build_stub(stub_def).await?;
 
-    if let Some(parent) = dest_wasm.parent() {
-        fs::create_dir_all(parent)
-            .context("Failed to create parent directory of the target WASM file")?;
-    }
-    fs::copy(wasm_path, dest_wasm).context("Failed to copy the WASM file to the destination")?;
+    copy(wasm_path, dest_wasm).context("Failed to copy the WASM file to the destination")?;
 
     fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
 

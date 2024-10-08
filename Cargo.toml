@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "wasm-rpc",
     "wasm-rpc-stubgen",
+    "wasm-rpc-stubgen/tests-integration"
 ]
 
 exclude = [
@@ -15,3 +16,8 @@ debug = false
 lto = true
 opt-level = 's'
 
+[workspace.dependencies]
+fs_extra = "1.3.0"
+golem-wasm-ast = "1.0.0"
+tempfile = "3.12.0"
+tokio = "1.38.0"

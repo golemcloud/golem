@@ -13,41 +13,33 @@
 // limitations under the License.
 
 use clap::Parser;
+use colored::Colorize;
 use golem_wasm_rpc_stubgen::*;
+use std::process::ExitCode;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     pretty_env_logger::init();
 
-    match Command::parse() {
-        Command::Generate(generate_args) => {
-            let _ = render_error(generate(generate_args));
-        }
-        Command::Build(build_args) => {
-            let _ = render_error(build(build_args).await);
-        }
+    let result = match Command::parse() {
+        Command::Generate(generate_args) => generate(generate_args),
+        Command::Build(build_args) => build(build_args).await,
         Command::AddStubDependency(add_stub_dependency_args) => {
-            let _ = render_error(add_stub_dependency(add_stub_dependency_args));
+            add_stub_dependency(add_stub_dependency_args)
         }
-        Command::Compose(compose_args) => {
-            let _ = render_error(compose(compose_args));
-        }
+        Command::Compose(compose_args) => compose(compose_args).await,
         Command::InitializeWorkspace(init_workspace_args) => {
-            let _ = render_error(initialize_workspace(
-                init_workspace_args,
-                "wasm-rpc-stubgen",
-                &[],
-            ));
+            initialize_workspace(init_workspace_args, "wasm-rpc-stubgen", &[])
         }
-    }
-}
+        #[cfg(feature = "unstable-dec-dep")]
+        Command::App { subcommand } => run_declarative_command(subcommand).await,
+    };
 
-fn render_error<T>(result: anyhow::Result<T>) -> Option<T> {
     match result {
-        Ok(value) => Some(value),
+        Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("Error: {:#}", err);
-            None
+            eprintln!("{}", format!("Error: {:#}", err).yellow());
+            ExitCode::FAILURE
         }
     }
 }
