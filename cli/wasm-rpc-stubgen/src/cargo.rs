@@ -24,10 +24,10 @@ use cargo_toml::{
 use serde::{Deserialize, Serialize};
 use toml::Value;
 
-use golem_wasm_rpc::WASM_RPC_VERSION;
-
+use crate::commands::log::{log_action, log_warn_action};
 use crate::stub::StubDefinition;
 use crate::wit;
+use golem_wasm_rpc::WASM_RPC_VERSION;
 
 #[derive(Serialize, Deserialize, Default)]
 struct MetadataRoot {
@@ -101,7 +101,10 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         let stub_package_name = format!("{}-stub", def.root_package_name);
 
         if dep_package.to_string() == stub_package_name {
-            println!("Skipping updating WIT dependency for {}", dep_package);
+            log_warn_action(
+                "Skipping",
+                format!("updating WIT dependency for {}", dep_package),
+            );
         } else {
             let mut dirs = BTreeSet::new();
             for source in dep.source_files() {
@@ -200,9 +203,12 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
 
     let cargo_toml = toml::to_string(&manifest)?;
 
-    println!(
-        "Generating Cargo.toml to {}",
-        def.target_cargo_path().to_string_lossy()
+    log_action(
+        "Generating",
+        format!(
+            "Cargo.toml to {}",
+            def.target_cargo_path().to_string_lossy()
+        ),
     );
     fs::write(def.target_cargo_path(), cargo_toml)?;
     Ok(())
@@ -247,7 +253,7 @@ pub fn add_workspace_members(path: &Path, members: &[String]) -> anyhow::Result<
 
     let cargo_toml = toml::to_string(&manifest)?;
 
-    println!("Writing updated Cargo.toml to {:?}", path);
+    log_action("Writing", format!("updated Cargo.toml to {:?}", path));
     fs::write(path, cargo_toml)?;
     Ok(())
 }
@@ -286,7 +292,7 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
 
                 let cargo_toml = toml::to_string(&manifest)?;
 
-                println!("Writing updated Cargo.toml to {:?}", cargo_path);
+                log_warn_action("Updating", format!("Cargo.toml at {:?}", cargo_path));
                 fs::write(cargo_path, cargo_toml)?;
             }
         }

@@ -1,0 +1,19 @@
+[package]
+name = "wasm-rpc-stubgen-tests-integration"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/wasm-rpc"
+description = "Golem WASM RPC stub generator - integration tests"
+
+[lib]
+name = "wasm_rpc_stubgen_tests_integration"
+path = "src/lib.rs"
+
+[dependencies]
+fs_extra = { workspace = true }
+golem-wasm-ast = { workspace = true }
+golem-wasm-rpc-stubgen = { path = "../../wasm-rpc-stubgen", version = "0.0.0" }
+tempfile = { workspace = true }
+tokio = { workspace = true }
