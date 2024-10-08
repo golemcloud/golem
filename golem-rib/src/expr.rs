@@ -327,7 +327,7 @@ impl Expr {
     }
 
     pub fn or(left: Expr, right: Expr) -> Self {
-        Expr::Or(Box::new(left), Box::new(right), InferredType::Bool).unwrap()
+        Expr::Or(Box::new(left), Box::new(right), InferredType::Bool)
     }
 
     pub fn pattern_match(expr: Expr, match_arms: Vec<MatchArm>) -> Self {
