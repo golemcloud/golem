@@ -4401,9 +4401,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "0.0.4"
+version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bad477b0d018c940d364f2e70ea8689593a521dfbd9e7c309217688726857e2"
+checksum = "30b1c70326f0c257f1fd7ccc5866fdd2ca30c51b30d60578e70c5997e46a8858"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -4413,9 +4413,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "0.0.4"
+version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd651c3af250419259b284686e07a241fe3842e0a7bf326d1c37df56adf231cf"
+checksum = "ce3aa57ee33b864082413adc62416aa90ba9f440b5f25800857436eb32f5abd9"
 dependencies = [
  "anstream",
  "anstyle",
@@ -4428,16 +4428,15 @@ dependencies = [
  "quick-xml",
  "rand",
  "tokio",
- "tokio-scoped",
  "topological-sort",
  "uuid",
 ]
 
 [[package]]
 name = "test-r-macro"
-version = "0.0.4"
+version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f8784d6d59130d5ca1d15f26249f421c2a24178c432dc0d3b12e980b74d4aeb"
+checksum = "f2ccf771e1000e8b4910334be9cb022e182d167c0510b41f651e755eb65610f4"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -4569,16 +4568,6 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "tokio",
-]
-
-[[package]]
-name = "tokio-scoped"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4beb8ba13bc53ac53ce1d52b42f02e5d8060f0f42138862869beb769722b256"
-dependencies = [
- "tokio",
- "tokio-stream",
 ]
 
 [[package]]
