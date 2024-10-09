@@ -1119,9 +1119,9 @@ dependencies = [
 
 [[package]]
 name = "bindgen"
-version = "0.69.4"
+version = "0.69.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a00dc851838a2120612785d195287475a3ac45514741da670b735818822129a0"
+checksum = "271383c67ccabffb7381723dea0672a673f292304fcb45c01cc648c7a8d58088"
 dependencies = [
  "bitflags 2.6.0",
  "cexpr",
@@ -1368,7 +1368,7 @@ dependencies = [
  "cargo-component-core",
  "cargo-config2",
  "cargo_metadata",
- "clap 4.5.19",
+ "clap 4.5.20",
  "futures",
  "heck 0.5.0",
  "indexmap 2.6.0",
@@ -1407,7 +1407,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf60eee7916f926d079ac6dc1851bfd8e2869bbdfc3ff997013cf7b802565f86"
 dependencies = [
  "anyhow",
- "clap 4.5.19",
+ "clap 4.5.20",
  "futures",
  "indexmap 2.6.0",
  "libc",
@@ -1568,9 +1568,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.19"
+version = "4.5.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7be5744db7978a28d9df86a214130d106a89ce49644cbc4e3f0c22c3fba30615"
+checksum = "b97f376d85a664d5837dbae44bf546e6477a679ff6610010f17276f686d867e8"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -1582,15 +1582,15 @@ version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e099138e1807662ff75e2cebe4ae2287add879245574489f9b1588eb5e5564ed"
 dependencies = [
- "clap 4.5.19",
+ "clap 4.5.20",
  "log",
 ]
 
 [[package]]
 name = "clap_builder"
-version = "4.5.19"
+version = "4.5.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5fbc17d3ef8278f55b282b2a2e75ae6f6c7d4bb70ed3d0382375104bfafdb4b"
+checksum = "19bc80abd44e4bed93ca373a0704ccbd1b710dc5749406201bb018272808dc54"
 dependencies = [
  "anstream",
  "anstyle",
@@ -1600,11 +1600,11 @@ dependencies = [
 
 [[package]]
 name = "clap_complete"
-version = "4.5.32"
+version = "4.5.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74a01f4f9ee6c066d42a1c8dedf0dcddad16c72a8981a309d6398de3a75b0c39"
+checksum = "9646e2e245bf62f45d39a0f3f36f1171ad1ea0d6967fd114bca72cb02a8fcdfb"
 dependencies = [
- "clap 4.5.19",
+ "clap 4.5.20",
 ]
 
 [[package]]
@@ -2532,9 +2532,9 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dwrote"
-version = "0.11.1"
+version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2da3498378ed373237bdef1eddcc64e7be2d3ba4841f4c22a998e81cadeea83c"
+checksum = "70182709525a3632b2ba96b6569225467b18ecb4a77f46d255f713a6bebf05fd"
 dependencies = [
  "lazy_static 1.5.0",
  "libc",
@@ -3398,8 +3398,8 @@ dependencies = [
  "bytes 1.7.2",
  "cargo_metadata",
  "futures-core",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "prost",
  "prost-types",
  "serde 1.0.210",
@@ -3420,7 +3420,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
- "clap 4.5.19",
+ "clap 4.5.20",
  "clap-verbosity-flag",
  "clap_complete",
  "cli-table",
@@ -3434,8 +3434,8 @@ dependencies = [
  "golem-examples",
  "golem-rib",
  "golem-test-framework",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "golem-wasm-rpc-stubgen",
  "h2 0.3.26",
  "http 1.1.0",
@@ -3492,8 +3492,8 @@ dependencies = [
  "futures-core",
  "golem-common",
  "golem-openapi-client-generator",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "http 1.1.0",
  "relative-path",
  "reqwest",
@@ -3520,8 +3520,8 @@ dependencies = [
  "git-version",
  "golem-api-grpc",
  "golem-rib",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "http 0.2.12",
  "humantime-serde",
  "iso8601-timestamp",
@@ -3589,8 +3589,8 @@ dependencies = [
  "golem-common",
  "golem-component-service-base",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "http 0.2.12",
  "humantime-serde",
  "lazy_static 1.5.0",
@@ -3631,7 +3631,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
+ "golem-wasm-ast",
  "http 0.2.12",
  "prost",
  "prost-types",
@@ -3657,13 +3657,13 @@ checksum = "31f5befbcc7d078f904ac2b62a7e97eafaddfcabe053c0de975919053ed4a87c"
 dependencies = [
  "Inflector",
  "cargo_metadata",
- "clap 4.5.19",
+ "clap 4.5.20",
  "colored",
  "copy_dir",
  "derive_more 0.99.18",
  "dir-diff",
  "fancy-regex",
- "golem-wit 1.0.0",
+ "golem-wit",
  "include_dir",
  "once_cell",
  "regex",
@@ -3675,10 +3675,11 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-openapi-client-generator?branch=vigoo/type-mappings#858e9bc03e20df5125dcec8c3d2c05f552694410"
+version = "0.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "430154af3448f9b904f0fabd64ea2946100d9fea6fc04ef76533b836b6115321"
 dependencies = [
- "clap 4.5.19",
+ "clap 4.5.20",
  "convert_case 0.6.0",
  "fmt",
  "indexmap 2.6.0",
@@ -3697,8 +3698,8 @@ dependencies = [
  "bincode",
  "combine",
  "golem-api-grpc",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "poem-openapi",
  "semver",
  "serde 1.0.210",
@@ -3721,8 +3722,8 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "http 0.2.12",
  "http 1.1.0",
  "humantime-serde",
@@ -3789,15 +3790,15 @@ dependencies = [
  "async-scoped",
  "async-trait",
  "chrono",
- "clap 4.5.19",
+ "clap 4.5.20",
  "cli-table",
  "colored",
  "console-subscriber",
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "itertools 0.13.0",
  "k8s-openapi",
  "kill_tree",
@@ -3824,28 +3825,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-ast"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wasm-ast?branch=vigoo/type-constructors#a6465e53f0f67693ff92625108c961357c5774e2"
-dependencies = [
- "bincode",
- "leb128",
- "mappable-rc",
- "poem-openapi",
- "prost",
- "prost-build",
- "serde 1.0.210",
- "serde_json",
- "wasm-encoder 0.207.0",
- "wasm-metadata 0.207.0",
- "wasm-wave",
- "wasmparser 0.207.0",
-]
-
-[[package]]
-name = "golem-wasm-ast"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eb5a7ea3b63c2b1bc04c7de835d1c74bb40343211879af4d1d866cb8a7b51a61"
+checksum = "01e3d202f10d115066f6b2840127d7ab3a9b9f61ecc5e64ab69cab21e6d7960d"
 dependencies = [
  "bincode",
  "leb128",
@@ -3863,8 +3845,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/wasm-rpc?branch=vigoo/improvements#e0ec424472068e8b5b13b7f5fba81b9a94203789"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2ce77190d1320c82eafc074cfd20aaf62374a93c346a540dad888f86899629f"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -3872,7 +3855,8 @@ dependencies = [
  "bigdecimal",
  "bincode",
  "cargo_metadata",
- "golem-wasm-ast 0.0.0",
+ "git-version",
+ "golem-wasm-ast",
  "poem-openapi",
  "prost",
  "prost-build",
@@ -3886,72 +3870,50 @@ dependencies = [
 ]
 
 [[package]]
-name = "golem-wasm-rpc"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e5137fe5950679be704177c8fec9ef5d4c195bb874707d6d35035a892a9183f"
-dependencies = [
- "arbitrary",
- "async-recursion",
- "async-trait",
- "bigdecimal",
- "bincode",
- "cargo_metadata",
- "golem-wasm-ast 1.0.0",
- "poem-openapi",
- "prost",
- "prost-build",
- "serde 1.0.210",
- "serde_json",
- "wasm-wave",
- "wasmtime",
- "wasmtime-wasi",
- "wit-bindgen-rt",
-]
-
-[[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5be1bfec5496fc4f5e913abe3ff49e78ce78b6065977ab73c9b2b0b662426542"
+checksum = "b0039e0fd157a22e8b9987b0e6a44f064bc19fd2a7dc5b3fc84ca60b04d4720b"
 dependencies = [
  "anyhow",
+ "assert2",
  "cargo-component",
  "cargo-component-core",
  "cargo_toml",
- "clap 4.5.19",
+ "clap 4.5.20",
+ "colored",
  "dir-diff",
  "fs_extra",
- "golem-wasm-ast 1.0.0",
- "golem-wasm-rpc 1.0.3",
+ "glob",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.6.0",
+ "itertools 0.12.1",
  "pretty_env_logger",
  "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
  "serde 1.0.210",
+ "serde_json",
+ "serde_yaml",
  "syn 2.0.79",
  "tempfile",
  "tokio",
  "toml 0.8.19",
- "wasm-compose 0.207.0",
+ "wac-graph",
+ "walkdir",
  "wit-bindgen-rust 0.26.0",
  "wit-parser 0.207.0",
 ]
 
 [[package]]
 name = "golem-wit"
-version = "0.0.0"
-source = "git+https://github.com/golemcloud/golem-wit?branch=oplog-enumeration#2fb8190645b8e98c25d3f8191edce4319da989b2"
-
-[[package]]
-name = "golem-wit"
-version = "1.0.0"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "419a91ba9038ca4b0d18378d5f3d4631377df436b3982dae0891503b86b2914e"
+checksum = "d3776df51174cedd18e812910146622e23c641f247f3ae460d2e90007e05887e"
 
 [[package]]
 name = "golem-worker-executor"
@@ -3964,7 +3926,7 @@ dependencies = [
  "figment",
  "golem-api-grpc",
  "golem-common",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc",
  "golem-worker-executor-base",
  "humantime-serde",
  "prometheus",
@@ -4019,9 +3981,9 @@ dependencies = [
  "golem-common",
  "golem-rib",
  "golem-test-framework",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
- "golem-wit 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
+ "golem-wit",
  "hex",
  "http 0.2.12",
  "http 1.1.0",
@@ -4087,8 +4049,8 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "golem-worker-service-base",
  "http 0.2.12",
  "http 1.1.0",
@@ -4141,8 +4103,8 @@ dependencies = [
  "golem-common",
  "golem-rib",
  "golem-service-base",
- "golem-wasm-ast 0.0.0",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-ast",
+ "golem-wasm-rpc",
  "http 0.2.12",
  "http 1.1.0",
  "humantime-serde",
@@ -4847,13 +4809,13 @@ dependencies = [
  "anyhow",
  "assert2",
  "async-trait",
- "clap 4.5.19",
+ "clap 4.5.20",
  "console-subscriber",
  "ctor",
  "golem-api-grpc",
  "golem-common",
  "golem-test-framework",
- "golem-wasm-rpc 0.0.0",
+ "golem-wasm-rpc",
  "plotters",
  "poem",
  "rand",
@@ -5309,7 +5271,7 @@ name = "libtest-mimic"
 version = "0.7.0"
 source = "git+https://github.com/senia-psm/libtest-mimic.git?branch=async_and_context_tests#904a9367691b7eb47dc25a876391ee4a958c0319"
 dependencies = [
- "clap 4.5.19",
+ "clap 4.5.20",
  "escape8259",
  "termcolor",
  "threadpool",
@@ -9526,6 +9488,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "wac-graph"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86f708c892ce0ebc06de9915f3da2da9b4e482a8b7d417fa447263b110d0a244"
+dependencies = [
+ "anyhow",
+ "id-arena",
+ "indexmap 2.6.0",
+ "log",
+ "petgraph",
+ "semver",
+ "thiserror",
+ "wac-types",
+ "wasm-encoder 0.202.0",
+ "wasm-metadata 0.202.0",
+ "wasmparser 0.202.0",
+]
+
+[[package]]
+name = "wac-types"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b96fe715180f72ab776d90e8c4f47f8e4297e0e61ab263567a31f73c77d45d8d"
+dependencies = [
+ "anyhow",
+ "id-arena",
+ "indexmap 2.6.0",
+ "semver",
+ "wasm-encoder 0.202.0",
+ "wasmparser 0.202.0",
+]
+
+[[package]]
 name = "wait-timeout"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9584,7 +9579,7 @@ dependencies = [
  "async-recursion",
  "async-trait",
  "bytes 1.7.2",
- "clap 4.5.19",
+ "clap 4.5.20",
  "dialoguer",
  "dirs 5.0.1",
  "futures-util",
@@ -9613,7 +9608,7 @@ dependencies = [
  "warg-crypto",
  "warg-protocol",
  "warg-transparency",
- "wasm-compose 0.5.5",
+ "wasm-compose",
  "wasm-encoder 0.41.2",
  "wasmparser 0.121.2",
  "wasmprinter 0.2.80",
@@ -9827,27 +9822,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasm-compose"
-version = "0.207.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef991fbc1344f90e4742ea2f9f200fdefec5f4ff993e5b3573b6311825619ead"
-dependencies = [
- "anyhow",
- "heck 0.4.1",
- "im-rc",
- "indexmap 2.6.0",
- "log",
- "petgraph",
- "serde 1.0.210",
- "serde_derive",
- "serde_yaml",
- "smallvec",
- "wasm-encoder 0.207.0",
- "wasmparser 0.207.0",
- "wat",
-]
-
-[[package]]
 name = "wasm-encoder"
 version = "0.41.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9859,12 +9833,20 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
+version = "0.202.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfd106365a7f5f7aa3c1916a98cbb3ad477f5ff96ddb130285a91c6e7429e67a"
+dependencies = [
+ "leb128",
+]
+
+[[package]]
+name = "wasm-encoder"
 version = "0.207.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d996306fb3aeaee0d9157adbe2f670df0236caf19f6728b221e92d0f27b3fe17"
 dependencies = [
  "leb128",
- "wasmparser 0.207.0",
 ]
 
 [[package]]
@@ -9887,11 +9869,28 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.218.0"
+version = "0.219.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22b896fa8ceb71091ace9bcb81e853f54043183a1c9667cf93422c40252ffa0a"
+checksum = "e2b1b95711b3ad655656a341e301cc64e33cbee94de9a99a1c5a2ab88efab79d"
 dependencies = [
  "leb128",
+ "wasmparser 0.219.0",
+]
+
+[[package]]
+name = "wasm-metadata"
+version = "0.202.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "094aea3cb90e09f16ee25a4c0e324b3e8c934e7fd838bfa039aef5352f44a917"
+dependencies = [
+ "anyhow",
+ "indexmap 2.6.0",
+ "serde 1.0.210",
+ "serde_derive",
+ "serde_json",
+ "spdx",
+ "wasm-encoder 0.202.0",
+ "wasmparser 0.202.0",
 ]
 
 [[package]]
@@ -9981,6 +9980,17 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
+version = "0.202.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6998515d3cf3f8b980ef7c11b29a9b1017d4cf86b99ae93b546992df9931413"
+dependencies = [
+ "bitflags 2.6.0",
+ "indexmap 2.6.0",
+ "semver",
+]
+
+[[package]]
+name = "wasmparser"
 version = "0.207.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e19bb9f8ab07616da582ef8adb24c54f1424c7ec876720b7da9db8ec0626c92c"
@@ -10017,6 +10027,16 @@ dependencies = [
  "hashbrown 0.14.5",
  "indexmap 2.6.0",
  "semver",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.219.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "324b4e56d24439495b88cd81439dad5e97f3c7b1eedc3c7e10455ed1e045e9a2"
+dependencies = [
+ "bitflags 2.6.0",
+ "indexmap 2.6.0",
 ]
 
 [[package]]
@@ -10340,24 +10360,24 @@ dependencies = [
 
 [[package]]
 name = "wast"
-version = "218.0.0"
+version = "219.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a53cd1f0fa505df97557e36a58bddb8296e2fcdcd089529545ebfdb18a1b9d7"
+checksum = "06880ecb25662bc21db6a83f4fcc27c41f71fbcba4f1980b650c88ada92728e1"
 dependencies = [
  "bumpalo",
  "leb128",
  "memchr",
  "unicode-width",
- "wasm-encoder 0.218.0",
+ "wasm-encoder 0.219.0",
 ]
 
 [[package]]
 name = "wat"
-version = "1.218.0"
+version = "1.219.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f87f8e14e776762e07927c27c2054d2cf678aab9aae2d431a79b3e31e4dd391"
+checksum = "11e56dbf9fc89111b0d97c91e683d7895b1a6e5633a729f2ccad2303724005b6"
 dependencies = [
- "wast 218.0.0",
+ "wast 219.0.0",
 ]
 
 [[package]]

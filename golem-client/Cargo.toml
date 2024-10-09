@@ -28,6 +28,5 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [build-dependencies]
-#golem-openapi-client-generator = "0.0.8"
-golem-openapi-client-generator = { git = "https://github.com/golemcloud/golem-openapi-client-generator", branch = "vigoo/type-mappings" }
+golem-openapi-client-generator = "0.0.10"
 relative-path = "1.9.2"
