@@ -21,6 +21,7 @@ use std::process::ExitCode;
 test_r::enable!();
 
 #[tokio::main]
+#[cfg(not(test))]
 async fn main() -> ExitCode {
     pretty_env_logger::init();
 
