@@ -343,11 +343,11 @@ impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
 
 impl IntoValue for Uuid {
     fn into_value(self) -> Value {
-        todo!()
+        Value::String(self.to_string())
     }
 
     fn get_type() -> AnalysedType {
-        todo!()
+        str()
     }
 }
 
