@@ -15,12 +15,11 @@
 //! Tests in this module are verifying the STUB WASM created by the stub generator
 //! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
 
+use golem_wasm_ast::analysis::analysed_type::*;
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId,
-    AnalysedResourceMode, AnalysedType, AnalysisContext, NameOptionTypePair, NameTypePair,
-    TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
-    TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16,
-    TypeU32, TypeU64, TypeU8, TypeVariant,
+    AnalysedResourceMode, AnalysedType, AnalysisContext, NameTypePair, TypeHandle, TypeOption,
+    TypeRecord, TypeStr,
 };
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
@@ -326,138 +325,6 @@ async fn all_wit_types() {
         vec![permissions.clone()],
         Some(permissions.clone()),
     );
-}
-
-// TODO: move these helpers to golem-wasm-ast
-
-fn field(name: &str, typ: AnalysedType) -> NameTypePair {
-    NameTypePair {
-        name: name.to_string(),
-        typ,
-    }
-}
-
-fn case(name: &str, typ: AnalysedType) -> NameOptionTypePair {
-    NameOptionTypePair {
-        name: name.to_string(),
-        typ: Some(typ),
-    }
-}
-
-fn unit_case(name: &str) -> NameOptionTypePair {
-    NameOptionTypePair {
-        name: name.to_string(),
-        typ: None,
-    }
-}
-
-fn bool() -> AnalysedType {
-    AnalysedType::Bool(TypeBool)
-}
-
-fn s8() -> AnalysedType {
-    AnalysedType::S8(TypeS8)
-}
-
-fn s16() -> AnalysedType {
-    AnalysedType::S16(TypeS16)
-}
-
-fn s32() -> AnalysedType {
-    AnalysedType::S32(TypeS32)
-}
-
-fn s64() -> AnalysedType {
-    AnalysedType::S64(TypeS64)
-}
-
-fn u8() -> AnalysedType {
-    AnalysedType::U8(TypeU8)
-}
-
-fn u16() -> AnalysedType {
-    AnalysedType::U16(TypeU16)
-}
-
-fn u32() -> AnalysedType {
-    AnalysedType::U32(TypeU32)
-}
-
-fn u64() -> AnalysedType {
-    AnalysedType::U64(TypeU64)
-}
-
-fn f32() -> AnalysedType {
-    AnalysedType::F32(TypeF32)
-}
-
-fn f64() -> AnalysedType {
-    AnalysedType::F64(TypeF64)
-}
-
-fn chr() -> AnalysedType {
-    AnalysedType::Chr(TypeChr)
-}
-
-fn str() -> AnalysedType {
-    AnalysedType::Str(TypeStr)
-}
-
-fn list(inner: AnalysedType) -> AnalysedType {
-    AnalysedType::List(TypeList {
-        inner: Box::new(inner),
-    })
-}
-
-fn option(inner: AnalysedType) -> AnalysedType {
-    AnalysedType::Option(TypeOption {
-        inner: Box::new(inner),
-    })
-}
-
-fn flags(names: &[&str]) -> AnalysedType {
-    AnalysedType::Flags(TypeFlags {
-        names: names.iter().map(|n| n.to_string()).collect(),
-    })
-}
-
-fn r#enum(cases: &[&str]) -> AnalysedType {
-    AnalysedType::Enum(TypeEnum {
-        cases: cases.iter().map(|n| n.to_string()).collect(),
-    })
-}
-
-fn tuple(items: Vec<AnalysedType>) -> AnalysedType {
-    AnalysedType::Tuple(TypeTuple { items })
-}
-
-fn result(ok: AnalysedType, err: AnalysedType) -> AnalysedType {
-    AnalysedType::Result(TypeResult {
-        ok: Some(Box::new(ok)),
-        err: Some(Box::new(err)),
-    })
-}
-
-fn result_ok(ok: AnalysedType) -> AnalysedType {
-    AnalysedType::Result(TypeResult {
-        ok: Some(Box::new(ok)),
-        err: None,
-    })
-}
-
-fn result_err(err: AnalysedType) -> AnalysedType {
-    AnalysedType::Result(TypeResult {
-        ok: None,
-        err: Some(Box::new(err)),
-    })
-}
-
-fn record(fields: Vec<NameTypePair>) -> AnalysedType {
-    AnalysedType::Record(TypeRecord { fields })
-}
-
-fn variant(cases: Vec<NameOptionTypePair>) -> AnalysedType {
-    AnalysedType::Variant(TypeVariant { cases })
 }
 
 fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, name: &str) {
