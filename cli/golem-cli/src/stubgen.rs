@@ -20,7 +20,7 @@ pub async fn handle_stubgen(command: Command) -> Result<GolemResult, GolemError>
         Command::Generate(args) => golem_wasm_rpc_stubgen::generate(args),
         Command::Build(args) => golem_wasm_rpc_stubgen::build(args).await,
         Command::AddStubDependency(args) => golem_wasm_rpc_stubgen::add_stub_dependency(args),
-        Command::Compose(args) => golem_wasm_rpc_stubgen::compose(args),
+        Command::Compose(args) => golem_wasm_rpc_stubgen::compose(args).await,
         Command::InitializeWorkspace(args) => {
             golem_wasm_rpc_stubgen::initialize_workspace(args, "golem-cli", &["stubgen"])
         }

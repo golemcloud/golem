@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod component;
-pub mod conversions;
 pub mod deploy;
 pub mod invoke_result_view;
 pub mod text;
@@ -35,7 +34,6 @@ use clap_verbosity_flag::Verbosity;
 use derive_more::{Display, FromStr};
 use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
 use golem_common::model::trim_date::TrimDateTime;
-use golem_common::model::{ComponentId, TargetWorkerId};
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_common::uri::oss::urn::WorkerUrn;
@@ -480,7 +478,7 @@ impl FromStr for WorkerUpdateMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkerMetadataView {
     #[serde(rename = "workerUrn")]
     pub worker_urn: WorkerUrn,
@@ -540,10 +538,7 @@ impl From<WorkerMetadata> for WorkerMetadataView {
 
         WorkerMetadataView {
             worker_urn: WorkerUrn {
-                id: TargetWorkerId {
-                    component_id: ComponentId(worker_id.component_id),
-                    worker_name: Some(worker_id.worker_name),
-                },
+                id: worker_id.into_target_worker_id(),
             },
             account_id,
             args,
@@ -562,7 +557,7 @@ impl From<WorkerMetadata> for WorkerMetadataView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkerMetadata {
     pub worker_id: golem_client::model::WorkerId,
     pub account_id: Option<AccountId>,
@@ -617,7 +612,7 @@ impl From<golem_client::model::WorkerMetadata> for WorkerMetadata {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkersMetadataResponseView {
     pub workers: Vec<WorkerMetadataView>,
     pub cursor: Option<ScanCursor>,
@@ -643,7 +638,7 @@ impl From<WorkersMetadataResponse> for WorkersMetadataResponseView {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkersMetadataResponse {
     pub workers: Vec<WorkerMetadata>,
     pub cursor: Option<ScanCursor>,
@@ -658,7 +653,7 @@ impl From<golem_client::model::WorkersMetadataResponse> for WorkersMetadataRespo
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApiDeployment {
     #[serde(rename = "apiDefinitions")]
     pub api_definitions: Vec<ApiDefinitionInfo>,

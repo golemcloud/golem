@@ -1,22 +1,36 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::cloud::ProjectId;
-use crate::model::conversions::analysed_function_client_to_model;
 use crate::model::wave::function_wave_compatible;
 use crate::model::GolemError;
 use chrono::{DateTime, Utc};
-use golem_client::model::{
-    AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedInstance,
-    AnalysedResourceMode, AnalysedType, ComponentMetadata, ComponentType, NameOptionTypePair,
-    NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant, VersionedComponentId,
-};
+use golem_client::model::{AnalysedType, ComponentMetadata, ComponentType, VersionedComponentId};
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::ComponentUrn;
 use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
+use golem_wasm_ast::analysis::{
+    AnalysedExport, AnalysedFunction, AnalysedFunctionResult, AnalysedInstance,
+    AnalysedResourceMode, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeRecord,
+    TypeTuple, TypeVariant,
+};
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Component {
     pub versioned_component_id: VersionedComponentId,
     pub component_name: String,
@@ -24,7 +38,7 @@ pub struct Component {
     pub component_type: ComponentType,
     pub metadata: ComponentMetadata,
     pub project_id: Option<ProjectId>,
-    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 impl From<golem_client::model::Component> for Component {
@@ -125,8 +139,8 @@ fn render_type(typ: &AnalysedType) -> String {
             format!("variant {{ {cases_str} }}")
         }
         AnalysedType::Result(boxed) => {
-            let ok_str = boxed.ok.as_ref().map(render_type);
-            let err_str = boxed.err.as_ref().map(render_type);
+            let ok_str = boxed.ok.as_ref().map(|t| render_type(t));
+            let err_str = boxed.err.as_ref().map(|t| render_type(t));
 
             if let Some(ok) = ok_str {
                 if let Some(err) = err_str {
@@ -170,8 +184,8 @@ fn render_type(typ: &AnalysedType) -> String {
         AnalysedType::S8 { .. } => "s8".to_string(),
         AnalysedType::Bool { .. } => "bool".to_string(),
         AnalysedType::Handle(handle) => match handle.mode {
-            AnalysedResourceMode::Borrowed => format!("&handle<{}>", handle.resource_id),
-            AnalysedResourceMode::Owned => format!("handle<{}>", handle.resource_id),
+            AnalysedResourceMode::Borrowed => format!("&handle<{}>", handle.resource_id.0),
+            AnalysedResourceMode::Owned => format!("handle<{}>", handle.resource_id.0),
         },
     }
 }
@@ -184,7 +198,7 @@ pub fn show_exported_function(prefix: Option<&str>, f: &AnalysedFunction) -> Str
     if function_wave_compatible(f) {
         DisplayNamedFunc {
             name: format_function_name(prefix, &f.name),
-            func: analysed_function_client_to_model(f),
+            func: f.clone(),
         }
         .to_string()
     } else {
@@ -289,12 +303,14 @@ pub fn function_params_types<'t>(
 #[cfg(test)]
 mod tests {
     use crate::model::component::show_exported_function;
-    use golem_client::model::{
-        AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceMode,
-        AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
-        TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption, TypeRecord, TypeResult, TypeS16,
-        TypeS32, TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8,
-        TypeVariant,
+    use golem_wasm_ast::analysis::analysed_type::{
+        bool, case, chr, f32, f64, field, flags, handle, list, option, r#enum, record, result,
+        result_err, result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case,
+        variant,
+    };
+    use golem_wasm_ast::analysis::{
+        AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
+        AnalysedResourceMode, AnalysedType,
     };
 
     #[test]
@@ -304,10 +320,7 @@ mod tests {
             parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Handle(TypeHandle {
-                    resource_id: 1,
-                    mode: AnalysedResourceMode::Borrowed,
-                }),
+                typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Borrowed),
             }],
         };
         let repr = show_exported_function(None, &f);
@@ -334,10 +347,7 @@ mod tests {
             name: "abc".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "n".to_string(),
-                typ: AnalysedType::Handle(TypeHandle {
-                    resource_id: 1,
-                    mode: AnalysedResourceMode::Owned,
-                }),
+                typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
             }],
             results: vec![],
         };
@@ -354,7 +364,7 @@ mod tests {
             parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: type_bool(),
+                typ: bool(),
             }],
         };
 
@@ -370,10 +380,7 @@ mod tests {
             parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Handle(TypeHandle {
-                    resource_id: 1,
-                    mode: AnalysedResourceMode::Owned,
-                }),
+                typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
             }],
         };
 
@@ -389,21 +396,21 @@ mod tests {
             parameters: vec![
                 AnalysedFunctionParameter {
                     name: "n1".to_string(),
-                    typ: type_bool(),
+                    typ: bool(),
                 },
                 AnalysedFunctionParameter {
                     name: "n2".to_string(),
-                    typ: type_bool(),
+                    typ: bool(),
                 },
             ],
             results: vec![
                 AnalysedFunctionResult {
                     name: Some("r1".to_string()),
-                    typ: type_bool(),
+                    typ: bool(),
                 },
                 AnalysedFunctionResult {
                     name: None,
-                    typ: type_bool(),
+                    typ: bool(),
                 },
             ],
         };
@@ -420,24 +427,21 @@ mod tests {
             parameters: vec![
                 AnalysedFunctionParameter {
                     name: "n1".to_string(),
-                    typ: type_bool(),
+                    typ: bool(),
                 },
                 AnalysedFunctionParameter {
                     name: "n2".to_string(),
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: 1,
-                        mode: AnalysedResourceMode::Owned,
-                    }),
+                    typ: handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
                 },
             ],
             results: vec![
                 AnalysedFunctionResult {
                     name: Some("r1".to_string()),
-                    typ: type_bool(),
+                    typ: bool(),
                 },
                 AnalysedFunctionResult {
                     name: None,
-                    typ: type_bool(),
+                    typ: bool(),
                 },
             ],
         };
@@ -467,15 +471,10 @@ mod tests {
             parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Tuple(TypeTuple {
-                    items: vec![
-                        AnalysedType::Handle(TypeHandle {
-                            resource_id: 1,
-                            mode: AnalysedResourceMode::Owned,
-                        }),
-                        typ,
-                    ],
-                }),
+                typ: tuple(vec![
+                    handle(AnalysedResourceId(1), AnalysedResourceMode::Owned),
+                    typ,
+                ]),
             }],
         };
         let custom_res = show_exported_function(None, &custom_f);
@@ -484,236 +483,124 @@ mod tests {
 
     #[test]
     fn same_export_for_variant() {
+        ensure_same_export(variant(vec![]), "variant {  }");
+        ensure_same_export(variant(vec![case("v1", bool())]), "variant { v1(bool) }");
         ensure_same_export(
-            AnalysedType::Variant(TypeVariant { cases: vec![] }),
-            "variant {  }",
-        );
-        ensure_same_export(
-            AnalysedType::Variant(TypeVariant {
-                cases: vec![NameOptionTypePair {
-                    name: "v1".to_string(),
-                    typ: Some(type_bool()),
-                }],
-            }),
-            "variant { v1(bool) }",
-        );
-        ensure_same_export(
-            AnalysedType::Variant(TypeVariant {
-                cases: vec![
-                    NameOptionTypePair {
-                        name: "v1".to_string(),
-                        typ: Some(AnalysedType::Bool(TypeBool {})),
-                    },
-                    NameOptionTypePair {
-                        name: "v2".to_string(),
-                        typ: None,
-                    },
-                ],
-            }),
+            variant(vec![case("v1", bool()), unit_case("v2")]),
             "variant { v1(bool), v2 }",
         );
     }
 
-    fn type_bool() -> AnalysedType {
-        AnalysedType::Bool(TypeBool {})
-    }
-
     #[test]
     fn same_export_for_result() {
-        ensure_same_export(
-            AnalysedType::Result(Box::new(TypeResult {
-                ok: None,
-                err: None,
-            })),
-            "result",
-        );
-        ensure_same_export(
-            AnalysedType::Result(Box::new(TypeResult {
-                ok: Some(type_bool()),
-                err: None,
-            })),
-            "result<bool>",
-        );
-        ensure_same_export(
-            AnalysedType::Result(Box::new(TypeResult {
-                ok: None,
-                err: Some(type_bool()),
-            })),
-            "result<_, bool>",
-        );
-        ensure_same_export(
-            AnalysedType::Result(Box::new(TypeResult {
-                ok: Some(type_bool()),
-                err: Some(type_bool()),
-            })),
-            "result<bool, bool>",
-        );
+        ensure_same_export(result_ok(bool()), "result<bool>");
+        ensure_same_export(result_err(bool()), "result<_, bool>");
+        ensure_same_export(result(bool(), bool()), "result<bool, bool>");
     }
 
     #[test]
     fn same_export_for_option() {
-        ensure_same_export(
-            AnalysedType::Option(Box::new(TypeOption { inner: type_bool() })),
-            "option<bool>",
-        )
+        ensure_same_export(option(bool()), "option<bool>")
     }
 
     #[test]
     fn same_export_for_enum() {
-        ensure_same_export(AnalysedType::Enum(TypeEnum { cases: vec![] }), "enum {  }");
-        ensure_same_export(
-            AnalysedType::Enum(TypeEnum {
-                cases: vec!["a".to_string()],
-            }),
-            "enum { a }",
-        );
-        ensure_same_export(
-            AnalysedType::Enum(TypeEnum {
-                cases: vec!["a".to_string(), "b".to_string()],
-            }),
-            "enum { a, b }",
-        );
+        ensure_same_export(r#enum(&[]), "enum {  }");
+        ensure_same_export(r#enum(&["a"]), "enum { a }");
+        ensure_same_export(r#enum(&["a", "b"]), "enum { a, b }");
     }
 
     #[test]
     fn same_export_for_flags() {
-        ensure_same_export(
-            AnalysedType::Flags(TypeFlags { names: vec![] }),
-            "flags {  }",
-        );
-        ensure_same_export(
-            AnalysedType::Flags(TypeFlags {
-                names: vec!["a".to_string()],
-            }),
-            "flags { a }",
-        );
-        ensure_same_export(
-            AnalysedType::Flags(TypeFlags {
-                names: vec!["a".to_string(), "b".to_string()],
-            }),
-            "flags { a, b }",
-        );
+        ensure_same_export(flags(&[]), "flags {  }");
+        ensure_same_export(flags(&["a"]), "flags { a }");
+        ensure_same_export(flags(&["a", "b"]), "flags { a, b }");
     }
 
     #[test]
     fn same_export_for_record() {
+        ensure_same_export(record(vec![]), "record {  }");
+        ensure_same_export(record(vec![field("n1", bool())]), "record { n1: bool }");
         ensure_same_export(
-            AnalysedType::Record(TypeRecord { fields: vec![] }),
-            "record {  }",
-        );
-        ensure_same_export(
-            AnalysedType::Record(TypeRecord {
-                fields: vec![NameTypePair {
-                    name: "n1".to_string(),
-                    typ: type_bool(),
-                }],
-            }),
-            "record { n1: bool }",
-        );
-        ensure_same_export(
-            AnalysedType::Record(TypeRecord {
-                fields: vec![
-                    NameTypePair {
-                        name: "n1".to_string(),
-                        typ: type_bool(),
-                    },
-                    NameTypePair {
-                        name: "n2".to_string(),
-                        typ: type_bool(),
-                    },
-                ],
-            }),
+            record(vec![field("n1", bool()), field("n2", bool())]),
             "record { n1: bool, n2: bool }",
         );
     }
 
     #[test]
     fn same_export_for_tuple() {
-        ensure_same_export(AnalysedType::Tuple(TypeTuple { items: vec![] }), "tuple<>");
-        ensure_same_export(
-            AnalysedType::Tuple(TypeTuple {
-                items: vec![type_bool()],
-            }),
-            "tuple<bool>",
-        );
-        ensure_same_export(
-            AnalysedType::Tuple(TypeTuple {
-                items: vec![type_bool(), type_bool()],
-            }),
-            "tuple<bool, bool>",
-        );
+        ensure_same_export(tuple(vec![]), "tuple<>");
+        ensure_same_export(tuple(vec![bool()]), "tuple<bool>");
+        ensure_same_export(tuple(vec![bool(), bool()]), "tuple<bool, bool>");
     }
 
     #[test]
     fn same_export_for_list() {
-        ensure_same_export(
-            AnalysedType::List(Box::new(TypeList { inner: type_bool() })),
-            "list<bool>",
-        )
+        ensure_same_export(list(bool()), "list<bool>")
     }
 
     #[test]
     fn same_export_for_str() {
-        ensure_same_export(AnalysedType::Str(TypeStr {}), "string")
+        ensure_same_export(str(), "string")
     }
 
     #[test]
     fn same_export_for_chr() {
-        ensure_same_export(AnalysedType::Chr(TypeChr {}), "char")
+        ensure_same_export(chr(), "char")
     }
 
     #[test]
     fn same_export_for_f64() {
-        ensure_same_export(AnalysedType::F64(TypeF64 {}), "float64")
+        ensure_same_export(f64(), "float64")
     }
 
     #[test]
     fn same_export_for_f32() {
-        ensure_same_export(AnalysedType::F32(TypeF32 {}), "float32")
+        ensure_same_export(f32(), "float32")
     }
 
     #[test]
     fn same_export_for_u64() {
-        ensure_same_export(AnalysedType::U64(TypeU64 {}), "u64")
+        ensure_same_export(u64(), "u64")
     }
 
     #[test]
     fn same_export_for_s64() {
-        ensure_same_export(AnalysedType::S64(TypeS64 {}), "s64")
+        ensure_same_export(s64(), "s64")
     }
 
     #[test]
     fn same_export_for_u32() {
-        ensure_same_export(AnalysedType::U32(TypeU32 {}), "u32")
+        ensure_same_export(u32(), "u32")
     }
 
     #[test]
     fn same_export_for_s32() {
-        ensure_same_export(AnalysedType::S32(TypeS32 {}), "s32")
+        ensure_same_export(s32(), "s32")
     }
 
     #[test]
     fn same_export_for_u16() {
-        ensure_same_export(AnalysedType::U16(TypeU16 {}), "u16")
+        ensure_same_export(u16(), "u16")
     }
 
     #[test]
     fn same_export_for_s16() {
-        ensure_same_export(AnalysedType::S16(TypeS16 {}), "s16")
+        ensure_same_export(s16(), "s16")
     }
 
     #[test]
     fn same_export_for_u8() {
-        ensure_same_export(AnalysedType::U8(TypeU8 {}), "u8")
+        ensure_same_export(u8(), "u8")
     }
 
     #[test]
     fn same_export_for_s8() {
-        ensure_same_export(AnalysedType::S8(TypeS8 {}), "s8")
+        ensure_same_export(s8(), "s8")
     }
 
     #[test]
     fn same_export_for_bool() {
-        ensure_same_export(type_bool(), "bool")
+        ensure_same_export(bool(), "bool")
     }
 }

@@ -85,7 +85,7 @@ impl ResponseContentErrorMapper for ApiDeploymentError {
     }
 }
 
-fn display_golem_error(error: golem_client::model::GolemError) -> String {
+fn display_golem_error(error: GolemError) -> String {
     match error {
         GolemError::InvalidRequest(GolemErrorInvalidRequest { details }) => {
             format!("Invalid request: {details}")
@@ -178,8 +178,8 @@ fn display_golem_error(error: golem_client::model::GolemError) -> String {
         }) => {
             format!(
                 "Invalid shard id: {} not in [{}]",
-                shard_id.value,
-                shard_ids.iter().map(|id| id.value).join(", ")
+                shard_id,
+                shard_ids.iter().join(", ")
             )
         }
         GolemError::PreviousInvocationFailed(_) => {

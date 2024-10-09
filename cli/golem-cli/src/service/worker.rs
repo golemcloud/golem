@@ -17,10 +17,6 @@ use crate::command::worker::WorkerConnectOptions;
 use crate::model::component::{
     format_function_name, function_params_types, show_exported_function, Component,
 };
-use crate::model::conversions::{
-    analysed_type_client_to_model, decode_type_annotated_value_json,
-    encode_type_annotated_value_json,
-};
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::worker::{WorkerAddView, WorkerGetView};
@@ -30,14 +26,12 @@ use crate::model::{
 };
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
-use golem_client::model::{
-    AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedType, InvokeParameters,
-    InvokeResult, ScanCursor, StringFilterComparator, WorkerFilter, WorkerNameFilter,
-};
-use golem_common::model::{ComponentId, TargetWorkerId};
+use golem_client::model::{AnalysedType, InvokeParameters, InvokeResult, ScanCursor, WorkerFilter};
+use golem_common::model::{StringFilterComparator, TargetWorkerId, WorkerNameFilter};
 use golem_common::uri::oss::uri::{ComponentUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
@@ -196,6 +190,13 @@ pub trait WorkerService {
         filter: Option<Vec<String>>,
         precise: Option<bool>,
     ) -> Result<Vec<WorkerMetadata>, GolemError>;
+
+    async fn get_oplog(
+        &self,
+        worker_uri: WorkerUri,
+        from: u64,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct WorkerServiceLive<ProjectContext: Send + Sync> {
@@ -249,7 +250,7 @@ async fn resolve_worker_component_version<ProjectContext: Send + Sync>(
 
 fn parse_parameter(wave: &str, typ: &AnalysedType) -> Result<TypeAnnotatedValue, GolemError> {
     // Avoid converting from typ to AnalysedType
-    match type_annotated_value_from_str(&analysed_type_client_to_model(typ), wave) {
+    match type_annotated_value_from_str(typ, wave) {
         Ok(value) => Ok(value),
         Err(err) => Err(GolemError(format!(
             "Failed to parse wave parameter {wave}: {err:?}"
@@ -307,13 +308,7 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
 
         if let Ok(type_annotated_values) = attempt1 {
             // All elements were valid TypeAnnotatedValues, we don't need component metadata to do the invocation
-            Ok((
-                type_annotated_values
-                    .into_iter()
-                    .map(encode_type_annotated_value_json)
-                    .collect::<Result<Vec<_>, _>>()?,
-                None,
-            ))
+            Ok((type_annotated_values, None))
         } else {
             // Some elements were not valid TypeAnnotatedValues, we need component metadata to interpret them
             let component =
@@ -330,10 +325,7 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
 
             let mut type_annotated_values = Vec::new();
             for (json_param, typ) in parameters.iter().zip(types) {
-                match TypeAnnotatedValue::parse_with_type(
-                    json_param,
-                    &analysed_type_client_to_model(typ),
-                ) {
+                match TypeAnnotatedValue::parse_with_type(json_param, typ) {
                     Ok(tav) => type_annotated_values.push(tav),
                     Err(err) => {
                         return Err(GolemError(format!(
@@ -344,13 +336,7 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
                 }
             }
 
-            Ok((
-                type_annotated_values
-                    .into_iter()
-                    .map(encode_type_annotated_value_json)
-                    .collect::<Result<Vec<_>, _>>()?,
-                Some(component),
-            ))
+            Ok((type_annotated_values, Some(component)))
         }
     } else {
         // No JSON parameters, we use the WAVE ones
@@ -371,13 +357,7 @@ async fn resolve_parameters<ProjectContext: Send + Sync>(
             .map(|(wave, typ)| parse_parameter(wave, typ))
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok((
-            type_annotated_values
-                .into_iter()
-                .map(encode_type_annotated_value_json)
-                .collect::<Result<Vec<_>, _>>()?,
-            Some(component),
-        ))
+        Ok((type_annotated_values, Some(component)))
     }
 }
 
@@ -405,9 +385,8 @@ async fn to_invoke_result_view<ProjectContext: Send + Sync>(
                 _ => {
                     error!("Failed to get worker metadata after successful call.");
 
-                    let result = decode_type_annotated_value_json(res.result)?;
-                    let json =
-                        serde_json::to_value(&result).map_err(|err| GolemError(err.to_string()))?;
+                    let json = serde_json::to_value(&res.result)
+                        .map_err(|err| GolemError(err.to_string()))?;
                     return Ok(InvokeResultView::Json(json));
                 }
             }
@@ -447,16 +426,13 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         env: Vec<(String, String)>,
         args: Vec<String>,
     ) -> Result<GolemResult, GolemError> {
-        let inst = self
+        let worker_id = self
             .client
             .new_worker(worker_name, component_urn, args, env)
             .await?;
 
         Ok(GolemResult::Ok(Box::new(WorkerAddView(WorkerUrn {
-            id: TargetWorkerId {
-                component_id: ComponentId(inst.component_id),
-                worker_name: Some(inst.worker_name),
-            },
+            id: worker_id.into_target_worker_id(),
         }))))
     }
 
@@ -550,8 +526,8 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
             Ok(GolemResult::Ok(Box::new(view)))
         } else {
-            let result = decode_type_annotated_value_json(res.result)?;
-            let json = serde_json::to_value(&result).map_err(|err| GolemError(err.to_string()))?;
+            let json =
+                serde_json::to_value(&res.result).map_err(|err| GolemError(err.to_string()))?;
             Ok(GolemResult::Json(json))
         }
     }
@@ -801,10 +777,7 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         let mut failed = Vec::new();
         for worker in to_update {
             let worker_urn = WorkerUrn {
-                id: TargetWorkerId {
-                    component_id: ComponentId(worker.worker_id.component_id),
-                    worker_name: Some(worker.worker_id.worker_name),
-                },
+                id: worker.worker_id.clone().into_target_worker_id(),
             };
             let result = self
                 .update_by_urn(worker_urn.clone(), target_version, mode.clone())
@@ -854,5 +827,17 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         }
 
         Ok(workers)
+    }
+
+    async fn get_oplog(
+        &self,
+        worker_uri: WorkerUri,
+        from: u64,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+
+        let entries = self.client.get_oplog(worker_urn, from).await?;
+        Ok(GolemResult::Ok(Box::new(entries)))
     }
 }
