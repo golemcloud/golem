@@ -18,20 +18,23 @@ use crate::model::regions::OplogRegion;
 use crate::model::{AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId};
 use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
 use golem_wasm_rpc::ValueAndType;
+use poem_openapi::types::{ParseFromParameter, ParseResult};
 use poem_openapi::{Object, Union};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct Empty;
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct SnapshotBasedUpdateParameters {
     pub payload: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Union)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicUpdateDescription {
@@ -39,12 +42,12 @@ pub enum PublicUpdateDescription {
     SnapshotBased(SnapshotBasedUpdateParameters),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct WriteRemoteBatchedParameters {
     pub index: Option<OplogIndex>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Union)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicWrappedFunctionType {
@@ -83,12 +86,12 @@ impl From<WrappedFunctionType> for PublicWrappedFunctionType {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct DetailsParameter {
     pub details: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct PublicRetryConfig {
     pub max_attempts: u32,
     pub min_delay: Duration,
@@ -109,19 +112,19 @@ impl From<RetryConfig> for PublicRetryConfig {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ExportedFunctionParameters {
     pub idempotency_key: IdempotencyKey,
     pub full_function_name: String,
     pub function_input: Option<Vec<ValueAndType>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ManualUpdateParameters {
     pub target_version: ComponentVersion,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Union)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicWorkerInvocation {
@@ -129,7 +132,7 @@ pub enum PublicWorkerInvocation {
     ManualUpdate(ManualUpdateParameters),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct CreateParameters {
     pub timestamp: Timestamp,
     pub worker_id: WorkerId,
@@ -142,7 +145,7 @@ pub struct CreateParameters {
     pub initial_total_linear_memory_size: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ImportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
     pub function_name: String,
@@ -151,7 +154,7 @@ pub struct ImportedFunctionInvokedParameters {
     pub wrapped_function_type: PublicWrappedFunctionType,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ExportedFunctionInvokedParameters {
     pub timestamp: Timestamp,
     pub function_name: String,
@@ -159,82 +162,82 @@ pub struct ExportedFunctionInvokedParameters {
     pub idempotency_key: IdempotencyKey,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ExportedFunctionCompletedParameters {
     pub timestamp: Timestamp,
     pub response: ValueAndType,
     pub consumed_fuel: i64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct TimestampParameter {
     pub timestamp: Timestamp,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ErrorParameters {
     pub timestamp: Timestamp,
     pub error: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct JumpParameters {
     pub timestamp: Timestamp,
     pub jump: OplogRegion,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ChangeRetryPolicyParameters {
     pub timestamp: Timestamp,
     pub new_policy: PublicRetryConfig,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct EndRegionParameters {
     pub timestamp: Timestamp,
     pub begin_index: OplogIndex,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct PendingWorkerInvocationParameters {
     pub timestamp: Timestamp,
     pub invocation: PublicWorkerInvocation,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct PendingUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub description: PublicUpdateDescription,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct SuccessfulUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub new_component_size: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct FailedUpdateParameters {
     pub timestamp: Timestamp,
     pub target_version: ComponentVersion,
     pub details: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct GrowMemoryParameters {
     pub timestamp: Timestamp,
     pub delta: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct ResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct DescribeResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
@@ -242,7 +245,7 @@ pub struct DescribeResourceParameters {
     pub resource_params: Vec<ValueAndType>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct LogParameters {
     pub timestamp: Timestamp,
     pub level: LogLevel,
@@ -258,7 +261,7 @@ pub struct LogParameters {
 /// The rest of the system will always use `OplogEntry` internally - the only point where the
 /// oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
 /// before exposing an oplog entry through a public API.
-#[derive(Clone, Debug, Serialize, Deserialize, Union)]
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PublicOplogEntry {
@@ -1113,6 +1116,59 @@ impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::Upd
                     ),
                 }
             }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+pub struct OplogCursor {
+    pub next_oplog_index: u64,
+    pub current_component_version: u64,
+}
+
+impl ParseFromParameter for OplogCursor {
+    fn parse_from_parameter(value: &str) -> ParseResult<Self> {
+        let parts: Vec<&str> = value.split('-').collect();
+        if parts.len() != 2 {
+            return Err("Invalid oplog cursor".into());
+        }
+        let next_oplog_index = parts[0]
+            .parse()
+            .map_err(|_| "Invalid index in the oplog cursor")?;
+        let current_component_version = parts[1]
+            .parse()
+            .map_err(|_| "Invalid component version in the oplog cursor")?;
+        Ok(OplogCursor {
+            next_oplog_index,
+            current_component_version,
+        })
+    }
+}
+
+impl Display for OplogCursor {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}-{}",
+            self.next_oplog_index, self.current_component_version
+        )
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::OplogCursor> for OplogCursor {
+    fn from(value: golem_api_grpc::proto::golem::worker::OplogCursor) -> Self {
+        Self {
+            next_oplog_index: value.next_oplog_index,
+            current_component_version: value.current_component_version,
+        }
+    }
+}
+
+impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
+    fn from(value: OplogCursor) -> Self {
+        Self {
+            next_oplog_index: value.next_oplog_index,
+            current_component_version: value.current_component_version,
         }
     }
 }

@@ -14,13 +14,12 @@
 
 use bincode::{Decode, Encode};
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::public_oplog::PublicOplogEntry;
+use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
     WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use poem_openapi::types::{ParseFromParameter, ParseResult};
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -840,23 +839,11 @@ pub struct ResumeResponse {}
 pub struct UpdateWorkerResponse {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
-pub struct OplogCursor {
-    next_oplog_index: u64,
-    current_component_version: u64,
-}
-
-impl ParseFromParameter for OplogCursor {
-    fn parse_from_parameter(_value: &str) -> ParseResult<Self> {
-        todo!()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Object)]
 pub struct GetOplogResponse {
-    entries: Vec<PublicOplogEntry>,
-    next: Option<OplogCursor>,
-    first_index_in_chunk: u64,
-    last_index: u64,
+    pub entries: Vec<PublicOplogEntry>,
+    pub next: Option<OplogCursor>,
+    pub first_index_in_chunk: u64,
+    pub last_index: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]

@@ -190,6 +190,13 @@ pub trait WorkerService {
         filter: Option<Vec<String>>,
         precise: Option<bool>,
     ) -> Result<Vec<WorkerMetadata>, GolemError>;
+
+    async fn get_oplog(
+        &self,
+        worker_uri: WorkerUri,
+        from: u64,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct WorkerServiceLive<ProjectContext: Send + Sync> {
@@ -820,5 +827,17 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         }
 
         Ok(workers)
+    }
+
+    async fn get_oplog(
+        &self,
+        worker_uri: WorkerUri,
+        from: u64,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+
+        let entries = self.client.get_oplog(worker_urn, from).await?;
+        Ok(GolemResult::Ok(Box::new(entries)))
     }
 }

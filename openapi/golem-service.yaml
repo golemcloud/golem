@@ -1067,7 +1067,7 @@ paths:
       operationId: get_oplog
       parameters:
       - in: path
-        name: _component_id
+        name: component_id
         required: true
         deprecated: false
         schema:
@@ -1076,7 +1076,7 @@ paths:
         explode: true
         style: simple
       - in: path
-        name: _worker_name
+        name: worker_name
         required: true
         deprecated: false
         schema:
@@ -1084,7 +1084,7 @@ paths:
         explode: true
         style: simple
       - in: query
-        name: _from
+        name: from
         required: true
         deprecated: false
         schema:
@@ -1093,7 +1093,7 @@ paths:
         explode: true
         style: form
       - in: query
-        name: _count
+        name: count
         required: true
         deprecated: false
         schema:
@@ -1102,8 +1102,7 @@ paths:
         explode: true
         style: form
       - in: query
-        name: _cursor
-        required: true
+        name: cursor
         deprecated: false
         schema:
           $ref: '#/components/schemas/OplogCursor'

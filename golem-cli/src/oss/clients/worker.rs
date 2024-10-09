@@ -29,6 +29,7 @@ use golem_client::model::{
     WorkerFilter, WorkerId, WorkersMetadataRequest,
 };
 use golem_client::{Context, Error};
+use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::WorkerEvent;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use native_tls::TlsConnector;
@@ -476,6 +477,50 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             )
             .await?;
         Ok(())
+    }
+
+    async fn get_oplog(
+        &self,
+        worker_urn: WorkerUrn,
+        from: u64,
+    ) -> Result<Vec<(u64, PublicOplogEntry)>, GolemError> {
+        let mut entries = Vec::new();
+        let mut cursor: Option<OplogCursor> = None;
+
+        loop {
+            let chunk = self
+                .client
+                .get_oplog(
+                    &worker_urn.id.component_id.0,
+                    &worker_name_required(&worker_urn)?,
+                    from,
+                    100,
+                    cursor.as_ref(),
+                )
+                .await?;
+
+            trace!(
+                "Got {} oplog entries starting from {}, last index is {}",
+                chunk.entries.len(),
+                chunk.first_index_in_chunk,
+                chunk.last_index
+            );
+
+            if chunk.entries.is_empty() {
+                break;
+            } else {
+                entries.extend(
+                    chunk
+                        .entries
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, e)| (chunk.first_index_in_chunk + i as u64, e)),
+                );
+                cursor = chunk.next;
+            }
+        }
+
+        Ok(entries)
     }
 }
 

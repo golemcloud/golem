@@ -14,6 +14,8 @@ use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
 
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::OplogCursor;
 use tracing::Instrument;
 
 pub struct WorkerApi {
@@ -616,13 +618,32 @@ impl WorkerApi {
     )]
     async fn get_oplog(
         &self,
-        _component_id: Path<ComponentId>,
-        _worker_name: Path<String>,
-        _from: Query<u64>,
-        _count: Query<u64>,
-        _cursor: Query<OplogCursor>,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        from: Query<u64>,
+        count: Query<u64>,
+        cursor: Query<Option<OplogCursor>>,
     ) -> Result<Json<GetOplogResponse>> {
-        todo!()
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_oplog(
+                &worker_id,
+                OplogIndex::from_u64(from.0),
+                cursor.0,
+                count.0,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
     }
 }
 

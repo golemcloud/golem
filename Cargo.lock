@@ -3418,6 +3418,7 @@ dependencies = [
  "assert2",
  "async-recursion",
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "clap 4.5.19",
  "clap-verbosity-flag",

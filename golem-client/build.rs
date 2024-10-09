@@ -51,6 +51,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::component_metadata::ComponentMetadata",
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
+            (
+                "OplogCursor",
+                "golem_common::model::public_oplog::OplogCursor",
+            ),
             ("PromiseId", "golem_common::model::PromiseId"),
             ("ShardId", "golem_common::model::ShardId"),
             (

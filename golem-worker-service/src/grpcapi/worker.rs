@@ -20,20 +20,20 @@ use tracing::Instrument;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response, delete_worker_response, get_worker_metadata_response,
-    get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response,
-    invoke_and_await_response, invoke_and_await_typed_response, invoke_response,
-    launch_new_worker_response, resume_worker_response, update_worker_response, worker_error,
-    worker_execution_error, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest,
-    DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest, GetOplogResponse,
-    GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
-    WorkerExecutionError,
+    complete_promise_response, delete_worker_response, get_oplog_response,
+    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
+    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
+    invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
+    worker_error, worker_execution_error, CompletePromiseRequest, CompletePromiseResponse,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest,
+    GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, UnknownError, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
 use golem_common::grpc::{
@@ -41,6 +41,7 @@ use golem_common::grpc::{
     proto_invocation_context_parent_worker_id_string, proto_target_worker_id_string,
     proto_worker_id_string,
 };
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{ComponentVersion, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::EmptyAuthCtx;
@@ -471,9 +472,29 @@ impl GrpcWorkerService for WorkerGrpcApi {
 
     async fn get_oplog(
         &self,
-        _request: Request<GetOplogRequest>,
+        request: Request<GetOplogRequest>,
     ) -> Result<Response<GetOplogResponse>, Status> {
-        todo!()
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_oplog",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .get_oplog(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(response) => record.succeed(get_oplog_response::Result::Success(response)),
+            Err(error) => record.fail(
+                get_oplog_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetOplogResponse {
+            result: Some(response),
+        }))
     }
 }
 
@@ -810,6 +831,47 @@ impl WorkerGrpcApi {
             .await?;
 
         Ok(())
+    }
+
+    async fn get_oplog(
+        &self,
+        request: GetOplogRequest,
+    ) -> Result<GetOplogSuccessResponse, GrpcWorkerError> {
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+
+        let result = self
+            .worker_service
+            .get_oplog(
+                &worker_id,
+                OplogIndex::from_u64(request.from_oplog_index),
+                request.cursor.map(|cursor| cursor.into()),
+                request.count,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        Ok(GetOplogSuccessResponse {
+            entries: result
+                .entries
+                .into_iter()
+                .map(|e| {
+                    let entry: Result<golem_api_grpc::proto::golem::worker::OplogEntry, String> =
+                        e.try_into();
+                    entry
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| GrpcWorkerError {
+                    error: Some(worker_error::Error::InternalError(WorkerExecutionError {
+                        error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                            details: format!("Failed to convert oplog entry: {err:?}"),
+                        })),
+                    })),
+                })?,
+            next: result.next.map(|c| c.into()),
+            first_index_in_chunk: result.first_index_in_chunk,
+            last_index: result.last_index,
+        })
     }
 }
 

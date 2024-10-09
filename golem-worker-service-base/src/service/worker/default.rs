@@ -33,11 +33,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
     ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
-use golem_service_base::model::{GolemErrorUnknown, ResourceLimits, WorkerMetadata};
+use golem_service_base::model::{
+    GetOplogResponse, GolemErrorUnknown, ResourceLimits, WorkerMetadata,
+};
 use golem_service_base::routing_table::HasRoutingTableService;
 use golem_service_base::{
     model::{Component, GolemError},
@@ -223,6 +226,16 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<Component, WorkerServiceError>;
+
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from_oplog_index: OplogIndex,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> Result<GetOplogResponse, WorkerServiceError>;
 }
 
 pub struct TypedResult {
@@ -820,6 +833,66 @@ where
         self.try_get_component_for_worker(worker_id, metadata, auth_ctx)
             .await
     }
+
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from_oplog_index: OplogIndex,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<GetOplogResponse, WorkerServiceError> {
+        let worker_id = worker_id.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                info!("Get oplog");
+                let worker_id = worker_id.clone();
+                Box::pin(
+                    worker_executor_client.get_oplog(workerexecutor::v1::GetOplogRequest {
+                        worker_id: Some(worker_id.into()),
+                        from_oplog_index: from_oplog_index.into(),
+                        cursor: cursor.clone().map(|c| c.into()),
+                        count,
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::GetOplogResponse {
+                    result:
+                        Some(workerexecutor::v1::get_oplog_response::Result::Success(
+                            workerexecutor::v1::GetOplogSuccessResponse {
+                                entries,
+                                next,
+                                first_index_in_chunk,
+                                last_index,
+                            },
+                        )),
+                } => Ok(GetOplogResponse {
+                    entries: entries
+                        .into_iter()
+                        .map(|e| e.try_into())
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|err| {
+                            GolemError::Unknown(GolemErrorUnknown {
+                                details: format!("Unexpected oplog entries in error: {err}"),
+                            })
+                        })?,
+                    next: next.map(|c| c.into()),
+                    first_index_in_chunk,
+                    last_index,
+                }),
+                workerexecutor::v1::GetOplogResponse {
+                    result: Some(workerexecutor::v1::get_oplog_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::GetOplogResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::internal,
+        )
+        .await
+    }
 }
 
 impl<AuthCtx> WorkerServiceDefault<AuthCtx>
@@ -952,9 +1025,11 @@ where
                             .into_iter()
                             .map(|w| w.try_into())
                             .collect::<Result<Vec<_>, _>>()
-                            .map_err(|_| {
+                            .map_err(|err| {
                                 GolemError::Unknown(GolemErrorUnknown {
-                                    details: "Convert response error".to_string(),
+                                    details: format!(
+                                        "Unexpected worker metadata in response: {err}"
+                                    ),
                                 })
                             })?;
                         Ok((cursor.map(|c| c.into()), workers))
