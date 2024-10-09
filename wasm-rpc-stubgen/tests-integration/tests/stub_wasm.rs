@@ -25,33 +25,21 @@ use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
 use golem_wasm_rpc_stubgen::stub::StubDefinition;
-use golem_wasm_rpc_stubgen::WasmRpcOverride;
-use std::path::Path;
 use tempfile::tempdir;
+use wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
 
 #[tokio::test]
 async fn all_wit_types() {
-    let source_wit_root = Path::new("test-data/all-wit-types");
+    let source_wit_root = test_data_path().join("all-wit-types");
     let target_root = tempdir().unwrap();
     let canonical_target_root = target_root.path().canonicalize().unwrap();
 
     let def = StubDefinition::new(
-        source_wit_root,
+        &source_wit_root,
         &canonical_target_root,
         &None,
         "1.0.0",
-        &WasmRpcOverride {
-            wasm_rpc_version_override: None,
-            wasm_rpc_path_override: Some(
-                std::env::current_dir()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .join("wasm-rpc")
-                    .to_string_lossy()
-                    .to_string(),
-            ),
-        },
+        &wasm_rpc_override(),
         false,
     )
     .unwrap();

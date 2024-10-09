@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::commands::log::log_warn_action;
 use crate::stub::StubDefinition;
 use crate::wit::{get_stub_wit, verify_action, StubTypeGen, WitAction};
 use crate::{cargo, wit, WasmRpcOverride};
@@ -22,11 +23,18 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use wit_parser::{PackageName, UnresolvedPackage};
 
+#[derive(PartialEq, Eq)]
+pub enum UpdateCargoToml {
+    Update,
+    UpdateIfExists,
+    NoUpdate,
+}
+
 pub fn add_stub_dependency(
     stub_wit_root: &Path,
     dest_wit_root: &Path,
     overwrite: bool,
-    update_cargo_toml: bool,
+    update_cargo_toml: UpdateCargoToml,
 ) -> anyhow::Result<()> {
     // Parsing the destination WIT root
     let parsed_dest = UnresolvedPackage::parse_dir(dest_wit_root)?;
@@ -101,9 +109,9 @@ pub fn add_stub_dependency(
             let parsed_dep = UnresolvedPackage::parse_dir(&source_dir)?;
 
             if is_package_same_or_stub(&parsed_dest, &parsed_dep) {
-                println!(
-                    "Skipping the copy of cyclic dependencies {}",
-                    parsed_dep.name
+                log_warn_action(
+                    "Skipping",
+                    format!("copying cyclic dependencies {}", parsed_dep.name),
                 );
             } else {
                 let entries = fs::read_dir(&source_dir)?;
@@ -147,7 +155,7 @@ pub fn add_stub_dependency(
     if let Some(target_parent) = dest_wit_root.parent() {
         let target_cargo_toml = target_parent.join("Cargo.toml");
         if target_cargo_toml.exists() && target_cargo_toml.is_file() {
-            if !update_cargo_toml {
+            if update_cargo_toml == UpdateCargoToml::NoUpdate {
                 eprintln!("Warning: the newly copied dependencies have to be added to {}. Use the --update-cargo-toml flag to update it automatically.", target_cargo_toml.to_string_lossy());
             } else {
                 cargo::is_cargo_component_toml(&target_cargo_toml).context(format!(
@@ -159,13 +167,13 @@ pub fn add_stub_dependency(
                 }
                 cargo::add_dependencies_to_cargo_toml(&target_cargo_toml, &names)?;
             }
-        } else if update_cargo_toml {
+        } else if update_cargo_toml == UpdateCargoToml::Update {
             return Err(anyhow!(
                 "Cannot update {:?} file because it does not exist or is not a file",
                 target_cargo_toml
             ));
         }
-    } else if update_cargo_toml {
+    } else if update_cargo_toml == UpdateCargoToml::Update {
         return Err(anyhow!("Cannot update the Cargo.toml file because parent directory of the destination WIT root does not exist."));
     }
 
@@ -199,9 +207,9 @@ fn find_if_same_package(dep_dir: &Path, target_wit: &UnresolvedPackage) -> anyho
     if dep_package_name != dest_package {
         Ok(true)
     } else {
-        println!(
-            "Skipping the copy of cyclic dependencies {}",
-            dep_package_name
+        log_warn_action(
+            "Skipping",
+            format!("copying cyclic dependencies {}", dep_package_name),
         );
         Ok(false)
     }

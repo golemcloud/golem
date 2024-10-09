@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::commands::log::{log_action, log_warn_action};
+use crate::copy::copy;
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
     InterfaceStubTypeDef, StubDefinition,
@@ -29,6 +31,11 @@ use wit_parser::{
 };
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
+    log_action(
+        "Generating",
+        format!("stub WIT to {}", def.target_wit_path().to_string_lossy()),
+    );
+
     let type_gen_strategy = if def.always_inline_types {
         StubTypeGen::InlineRootTypes
     } else {
@@ -36,11 +43,6 @@ pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     };
 
     let out = get_stub_wit(def, type_gen_strategy)?;
-    println!("{out}");
-    println!(
-        "Generating stub WIT to {}",
-        def.target_wit_path().to_string_lossy()
-    );
     fs::create_dir_all(def.target_wit_root())?;
     fs::write(def.target_wit_path(), out)?;
     Ok(())
@@ -517,7 +519,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
 
     for unresolved in all {
         if unresolved.name == def.root_package_name {
-            println!("Copying root package {}", unresolved.name);
+            log_action("Copying", format!("root package {}", unresolved.name));
             let dep_dir = dest_wit_root
                 .join(Path::new("deps"))
                 .join(Path::new(&format!(
@@ -549,39 +551,39 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
                 let new_data = re.replace_all(&read_data, "");
 
                 let dest = dep_dir.join(source.file_name().unwrap());
-                println!(
-                    "  .. {} to {}",
-                    source.to_string_lossy(),
-                    dest.to_string_lossy()
+                log_action(
+                    "  Copying",
+                    format!("{} to {}", source.to_string_lossy(), dest.to_string_lossy()),
                 );
 
                 fs::create_dir_all(dest.parent().unwrap())?;
                 fs::write(&dest, new_data.to_string())?;
             }
         } else if unresolved.name.to_string() != stub_package_name {
-            println!("Copying package {}", unresolved.name);
+            log_action("Copying", format!("package {}", unresolved.name));
 
             for source in unresolved.source_files() {
                 let relative = source.strip_prefix(&def.source_wit_root)?;
                 let dest = dest_wit_root.join(relative);
-                println!(
-                    "  .. {} to {}",
-                    source.to_string_lossy(),
-                    dest.to_string_lossy()
+                log_action(
+                    "  Copying",
+                    format!("{} to {}", source.to_string_lossy(), dest.to_string_lossy()),
                 );
-                fs::create_dir_all(dest.parent().unwrap())?;
-                fs::copy(source, &dest)?;
+                copy(source, &dest)?;
             }
         } else {
-            println!("Skipping copying stub package {}", stub_package_name);
+            log_warn_action(
+                "Skipping",
+                format!("copying stub package {}", stub_package_name),
+            );
         }
     }
     let wasm_rpc_root = dest_wit_root.join(Path::new("deps/wasm-rpc"));
     fs::create_dir_all(&wasm_rpc_root)?;
 
-    println!(
-        "Writing wasm-rpc.wit to {}",
-        wasm_rpc_root.to_string_lossy()
+    log_action(
+        "Writing",
+        format!("wasm-rpc.wit to {}", wasm_rpc_root.to_string_lossy()),
     );
     fs::write(
         wasm_rpc_root.join(Path::new("wasm-rpc.wit")),
@@ -590,7 +592,10 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
 
     let wasi_poll_root = dest_wit_root.join(Path::new("deps/io"));
     fs::create_dir_all(&wasi_poll_root)?;
-    println!("Writing poll.wit to {}", wasi_poll_root.to_string_lossy());
+    log_action(
+        "Writing",
+        format!("Writing poll.wit to {}", wasi_poll_root.to_string_lossy()),
+    );
     fs::write(
         wasi_poll_root.join(Path::new("poll.wit")),
         golem_wasm_rpc::WASI_POLL_WIT,
@@ -773,7 +778,7 @@ impl WitAction {
                 if !target_path.exists() {
                     fs::create_dir_all(&target_path).context("Create target directory")?;
                 }
-                println!("Copying {source_dir:?} to {target_path:?}");
+                log_action("Copying", format!("{source_dir:?} to {target_path:?}"));
                 fs_extra::dir::copy(
                     source_dir,
                     &target_path,
@@ -788,10 +793,7 @@ impl WitAction {
                 dir_name,
             } => {
                 let target_dir = target_wit_root.join("deps").join(dir_name);
-                if !target_dir.exists() {
-                    fs::create_dir_all(&target_dir).context("Create target directory")?;
-                }
-                fs::copy(source_wit, target_dir.join(source_wit.file_name().unwrap()))
+                copy(source_wit, target_dir.join(source_wit.file_name().unwrap()))
                     .context("Copy the WIT file")?;
             }
         }
@@ -830,7 +832,7 @@ pub fn verify_action(
                 if source_wit == &target_contents {
                     Ok(true)
                 } else if overwrite {
-                    println!("Overwriting {}", target_wit.to_string_lossy());
+                    log_warn_action("Overwriting", target_wit.to_string_lossy());
                     Ok(true)
                 } else {
                     Ok(false)
@@ -849,7 +851,7 @@ pub fn verify_action(
                 if !dir_diff::is_different(source_dir, &target_path)? {
                     Ok(true)
                 } else if overwrite {
-                    println!("Overwriting {}", target_path.to_string_lossy());
+                    log_warn_action("Overwriting", target_path.to_string_lossy());
                     Ok(true)
                 } else {
                     Ok(false)
@@ -883,7 +885,7 @@ pub fn verify_action(
                     if source_contents == target_contents {
                         Ok(true)
                     } else if overwrite {
-                        println!("Overwriting {}", target_wit.to_string_lossy());
+                        log_warn_action("Overwriting", target_wit.to_string_lossy());
                         Ok(true)
                     } else {
                         Ok(false)

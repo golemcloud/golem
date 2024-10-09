@@ -51,6 +51,9 @@ mod text;
 #[cfg(feature = "typeinfo")]
 mod type_annotated_value;
 
+/// For getting current lib version from git tags or cargo
+mod version;
+
 /// Conversion to/from wasmtime's value representation
 #[cfg(feature = "wasmtime")]
 pub mod wasmtime;
@@ -403,7 +406,7 @@ pub const WASM_RPC_WIT: &str = include_str!("../wit/wasm-rpc.wit");
 #[cfg(feature = "host")]
 pub const WASI_POLL_WIT: &str = include_str!("../wit/deps/io/poll.wit");
 
-pub const WASM_RPC_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const WASM_RPC_VERSION: &str = version::lib_version!();
 
 #[cfg(test)]
 mod tests {

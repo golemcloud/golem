@@ -20,3 +20,9 @@ pub mod dependencies;
 
 /// Top level commands for composing stubs with user components
 pub mod composition;
+
+/// Declarative subcommands
+pub mod declarative;
+
+/// Logging
+pub mod log;
