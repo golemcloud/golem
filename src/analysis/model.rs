@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::analysis::analysed_type::{
+    bool, chr, f32, f64, s16, s32, s64, s8, str, u16, u32, u64, u8,
+};
 use crate::analysis::AnalysisResult;
 use crate::component::{ComponentExternalKind, PrimitiveValueType};
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "json", serde(tag = "type"))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Union))]
 #[cfg_attr(
@@ -281,6 +285,144 @@ pub enum AnalysedType {
     Handle(TypeHandle),
 }
 
+pub mod analysed_type {
+    use crate::analysis::*;
+
+    pub fn field(name: &str, typ: AnalysedType) -> NameTypePair {
+        NameTypePair {
+            name: name.to_string(),
+            typ,
+        }
+    }
+
+    pub fn case(name: &str, typ: AnalysedType) -> NameOptionTypePair {
+        NameOptionTypePair {
+            name: name.to_string(),
+            typ: Some(typ),
+        }
+    }
+
+    pub fn unit_case(name: &str) -> NameOptionTypePair {
+        NameOptionTypePair {
+            name: name.to_string(),
+            typ: None,
+        }
+    }
+
+    pub fn bool() -> AnalysedType {
+        AnalysedType::Bool(TypeBool)
+    }
+
+    pub fn s8() -> AnalysedType {
+        AnalysedType::S8(TypeS8)
+    }
+
+    pub fn s16() -> AnalysedType {
+        AnalysedType::S16(TypeS16)
+    }
+
+    pub fn s32() -> AnalysedType {
+        AnalysedType::S32(TypeS32)
+    }
+
+    pub fn s64() -> AnalysedType {
+        AnalysedType::S64(TypeS64)
+    }
+
+    pub fn u8() -> AnalysedType {
+        AnalysedType::U8(TypeU8)
+    }
+
+    pub fn u16() -> AnalysedType {
+        AnalysedType::U16(TypeU16)
+    }
+
+    pub fn u32() -> AnalysedType {
+        AnalysedType::U32(TypeU32)
+    }
+
+    pub fn u64() -> AnalysedType {
+        AnalysedType::U64(TypeU64)
+    }
+
+    pub fn f32() -> AnalysedType {
+        AnalysedType::F32(TypeF32)
+    }
+
+    pub fn f64() -> AnalysedType {
+        AnalysedType::F64(TypeF64)
+    }
+
+    pub fn chr() -> AnalysedType {
+        AnalysedType::Chr(TypeChr)
+    }
+
+    pub fn str() -> AnalysedType {
+        AnalysedType::Str(TypeStr)
+    }
+
+    pub fn list(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::List(TypeList {
+            inner: Box::new(inner),
+        })
+    }
+
+    pub fn option(inner: AnalysedType) -> AnalysedType {
+        AnalysedType::Option(TypeOption {
+            inner: Box::new(inner),
+        })
+    }
+
+    pub fn flags(names: &[&str]) -> AnalysedType {
+        AnalysedType::Flags(TypeFlags {
+            names: names.iter().map(|n| n.to_string()).collect(),
+        })
+    }
+
+    pub fn r#enum(cases: &[&str]) -> AnalysedType {
+        AnalysedType::Enum(TypeEnum {
+            cases: cases.iter().map(|n| n.to_string()).collect(),
+        })
+    }
+
+    pub fn tuple(items: Vec<AnalysedType>) -> AnalysedType {
+        AnalysedType::Tuple(TypeTuple { items })
+    }
+
+    pub fn result(ok: AnalysedType, err: AnalysedType) -> AnalysedType {
+        AnalysedType::Result(TypeResult {
+            ok: Some(Box::new(ok)),
+            err: Some(Box::new(err)),
+        })
+    }
+
+    pub fn result_ok(ok: AnalysedType) -> AnalysedType {
+        AnalysedType::Result(TypeResult {
+            ok: Some(Box::new(ok)),
+            err: None,
+        })
+    }
+
+    pub fn result_err(err: AnalysedType) -> AnalysedType {
+        AnalysedType::Result(TypeResult {
+            ok: None,
+            err: Some(Box::new(err)),
+        })
+    }
+
+    pub fn record(fields: Vec<NameTypePair>) -> AnalysedType {
+        AnalysedType::Record(TypeRecord { fields })
+    }
+
+    pub fn variant(cases: Vec<NameOptionTypePair>) -> AnalysedType {
+        AnalysedType::Variant(TypeVariant { cases })
+    }
+
+    pub fn handle(resource_id: AnalysedResourceId, mode: AnalysedResourceMode) -> AnalysedType {
+        AnalysedType::Handle(TypeHandle { resource_id, mode })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
@@ -299,19 +441,19 @@ pub struct AnalysedResourceId(pub u64);
 impl From<&PrimitiveValueType> for AnalysedType {
     fn from(value: &PrimitiveValueType) -> Self {
         match value {
-            PrimitiveValueType::Bool => AnalysedType::Bool(TypeBool),
-            PrimitiveValueType::S8 => AnalysedType::S8(TypeS8),
-            PrimitiveValueType::U8 => AnalysedType::U8(TypeU8),
-            PrimitiveValueType::S16 => AnalysedType::S16(TypeS16),
-            PrimitiveValueType::U16 => AnalysedType::U16(TypeU16),
-            PrimitiveValueType::S32 => AnalysedType::S32(TypeS32),
-            PrimitiveValueType::U32 => AnalysedType::U32(TypeU32),
-            PrimitiveValueType::S64 => AnalysedType::S64(TypeS64),
-            PrimitiveValueType::U64 => AnalysedType::U64(TypeU64),
-            PrimitiveValueType::F32 => AnalysedType::F32(TypeF32),
-            PrimitiveValueType::F64 => AnalysedType::F64(TypeF64),
-            PrimitiveValueType::Chr => AnalysedType::Chr(TypeChr),
-            PrimitiveValueType::Str => AnalysedType::Str(TypeStr),
+            PrimitiveValueType::Bool => bool(),
+            PrimitiveValueType::S8 => s8(),
+            PrimitiveValueType::U8 => u8(),
+            PrimitiveValueType::S16 => s16(),
+            PrimitiveValueType::U16 => u16(),
+            PrimitiveValueType::S32 => s32(),
+            PrimitiveValueType::U32 => u32(),
+            PrimitiveValueType::S64 => s64(),
+            PrimitiveValueType::U64 => u64(),
+            PrimitiveValueType::F32 => f32(),
+            PrimitiveValueType::F64 => f64(),
+            PrimitiveValueType::Chr => chr(),
+            PrimitiveValueType::Str => str(),
         }
     }
 }
@@ -379,5 +521,40 @@ impl AnalysisFailure {
                 description.as_ref()
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::analysed_type::{bool, list, str};
+    use crate::analysis::{
+        AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+        AnalysedInstance,
+    };
+    use poem_openapi::types::ToJSON;
+    use pretty_assertions::assert_eq;
+
+    #[cfg(feature = "poem_openapi")]
+    #[cfg(feature = "json")]
+    #[test]
+    fn analysed_export_poem_and_serde_are_compatible() {
+        let export1 = AnalysedExport::Instance(AnalysedInstance {
+            name: "inst1".to_string(),
+            functions: vec![AnalysedFunction {
+                name: "func1".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "param1".to_string(),
+                    typ: bool(),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: list(str()),
+                }],
+            }],
+        });
+        let poem_serialized = export1.to_json_string();
+        let serde_deserialized: AnalysedExport = serde_json::from_str(&poem_serialized).unwrap();
+
+        assert_eq!(export1, serde_deserialized);
     }
 }

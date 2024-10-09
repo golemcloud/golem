@@ -1,8 +1,10 @@
+use golem_wasm_ast::analysis::analysed_type::{
+    case, f32, field, handle, list, record, result, result_err, str, tuple, u32, u64, unit_case,
+    variant,
+};
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-    AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, AnalysisContext,
-    NameOptionTypePair, NameTypePair, TypeF32, TypeHandle, TypeList, TypeRecord, TypeResult,
-    TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
+    AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysisContext,
 };
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
@@ -25,7 +27,7 @@ fn exports_shopping_cart_component() {
                 name: "initialize-cart".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "user-id".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![],
             },
@@ -33,26 +35,12 @@ fn exports_shopping_cart_component() {
                 name: "add-item".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "item".to_string(),
-                    typ: AnalysedType::Record(TypeRecord {
-                        fields: vec![
-                            NameTypePair {
-                                name: "product-id".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                            NameTypePair {
-                                name: "name".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                            NameTypePair {
-                                name: "price".to_string(),
-                                typ: AnalysedType::F32(TypeF32),
-                            },
-                            NameTypePair {
-                                name: "quantity".to_string(),
-                                typ: AnalysedType::U32(TypeU32),
-                            },
-                        ],
-                    }),
+                    typ: record(vec![
+                        field("product-id", str()),
+                        field("name", str()),
+                        field("price", f32()),
+                        field("quantity", u32()),
+                    ]),
                 }],
                 results: vec![],
             },
@@ -60,7 +48,7 @@ fn exports_shopping_cart_component() {
                 name: "remove-item".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "product-id".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![],
             },
@@ -69,11 +57,11 @@ fn exports_shopping_cart_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                     AnalysedFunctionParameter {
                         name: "quantity".to_string(),
-                        typ: AnalysedType::U32(TypeU32),
+                        typ: u32(),
                     },
                 ],
                 results: vec![],
@@ -83,23 +71,10 @@ fn exports_shopping_cart_component() {
                 parameters: vec![],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Variant(TypeVariant {
-                        cases: vec![
-                            NameOptionTypePair {
-                                name: "error".to_string(),
-                                typ: Some(AnalysedType::Str(TypeStr)),
-                            },
-                            NameOptionTypePair {
-                                name: "success".to_string(),
-                                typ: Some(AnalysedType::Record(TypeRecord {
-                                    fields: vec![NameTypePair {
-                                        name: "order-id".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    }],
-                                })),
-                            },
-                        ],
-                    }),
+                    typ: variant(vec![
+                        case("error", str()),
+                        case("success", record(vec![field("order-id", str())])),
+                    ]),
                 }],
             },
             AnalysedFunction {
@@ -107,28 +82,12 @@ fn exports_shopping_cart_component() {
                 parameters: vec![],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::List(TypeList {
-                        inner: Box::new(AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "product-id".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "name".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "price".to_string(),
-                                    typ: AnalysedType::F32(TypeF32),
-                                },
-                                NameTypePair {
-                                    name: "quantity".to_string(),
-                                    typ: AnalysedType::U32(TypeU32),
-                                },
-                            ],
-                        })),
-                    }),
+                    typ: list(record(vec![
+                        field("product-id", str()),
+                        field("name", str()),
+                        field("price", f32()),
+                        field("quantity", u32()),
+                    ])),
                 }],
             },
         ],
@@ -152,14 +111,11 @@ fn exports_file_service_component() {
                 name: "read-file".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: Some(Box::new(AnalysedType::Str(TypeStr))),
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result(str(), str()),
                 }],
             },
             AnalysedFunction {
@@ -167,19 +123,16 @@ fn exports_file_service_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "path".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                     AnalysedFunctionParameter {
                         name: "contents".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                 ],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: None,
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result_err(str()),
                 }],
             },
             AnalysedFunction {
@@ -187,141 +140,84 @@ fn exports_file_service_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "path".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                     AnalysedFunctionParameter {
                         name: "contents".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                 ],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: None,
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result_err(str()),
                 }],
             },
             AnalysedFunction {
                 name: "delete-file".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: None,
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result_err(str()),
                 }],
             },
             AnalysedFunction {
                 name: "get-file-info".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: Some(Box::new(AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "last-modified".to_string(),
-                                    typ: AnalysedType::Record(TypeRecord {
-                                        fields: vec![
-                                            NameTypePair {
-                                                name: "seconds".to_string(),
-                                                typ: AnalysedType::U64(TypeU64),
-                                            },
-                                            NameTypePair {
-                                                name: "nanoseconds".to_string(),
-                                                typ: AnalysedType::U32(TypeU32),
-                                            },
-                                        ],
-                                    }),
-                                },
-                                NameTypePair {
-                                    name: "last-accessed".to_string(),
-                                    typ: AnalysedType::Record(TypeRecord {
-                                        fields: vec![
-                                            NameTypePair {
-                                                name: "seconds".to_string(),
-                                                typ: AnalysedType::U64(TypeU64),
-                                            },
-                                            NameTypePair {
-                                                name: "nanoseconds".to_string(),
-                                                typ: AnalysedType::U32(TypeU32),
-                                            },
-                                        ],
-                                    }),
-                                },
-                            ],
-                        }))),
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result(
+                        record(vec![
+                            field(
+                                "last-modified",
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                            ),
+                            field(
+                                "last-accessed",
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                            ),
+                        ]),
+                        str(),
+                    ),
                 }],
             },
             AnalysedFunction {
                 name: "get-info".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: Some(Box::new(AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "last-modified".to_string(),
-                                    typ: AnalysedType::Record(TypeRecord {
-                                        fields: vec![
-                                            NameTypePair {
-                                                name: "seconds".to_string(),
-                                                typ: AnalysedType::U64(TypeU64),
-                                            },
-                                            NameTypePair {
-                                                name: "nanoseconds".to_string(),
-                                                typ: AnalysedType::U32(TypeU32),
-                                            },
-                                        ],
-                                    }),
-                                },
-                                NameTypePair {
-                                    name: "last-accessed".to_string(),
-                                    typ: AnalysedType::Record(TypeRecord {
-                                        fields: vec![
-                                            NameTypePair {
-                                                name: "seconds".to_string(),
-                                                typ: AnalysedType::U64(TypeU64),
-                                            },
-                                            NameTypePair {
-                                                name: "nanoseconds".to_string(),
-                                                typ: AnalysedType::U32(TypeU32),
-                                            },
-                                        ],
-                                    }),
-                                },
-                            ],
-                        }))),
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result(
+                        record(vec![
+                            field(
+                                "last-modified",
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                            ),
+                            field(
+                                "last-accessed",
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                            ),
+                        ]),
+                        str(),
+                    ),
                 }],
             },
             AnalysedFunction {
                 name: "create-directory".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: None,
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result_err(str()),
                 }],
             },
             AnalysedFunction {
@@ -329,19 +225,16 @@ fn exports_file_service_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "source".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                     AnalysedFunctionParameter {
                         name: "destination".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                 ],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: None,
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result_err(str()),
                 }],
             },
             AnalysedFunction {
@@ -349,47 +242,38 @@ fn exports_file_service_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "source".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                     AnalysedFunctionParameter {
                         name: "destination".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                 ],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: None,
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result_err(str()),
                 }],
             },
             AnalysedFunction {
                 name: "remove-directory".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: None,
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result_err(str()),
                 }],
             },
             AnalysedFunction {
                 name: "remove-file".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: None,
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result_err(str()),
                 }],
             },
             AnalysedFunction {
@@ -397,44 +281,30 @@ fn exports_file_service_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "source".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                     AnalysedFunctionParameter {
                         name: "destination".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                 ],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: None,
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result_err(str()),
                 }],
             },
             AnalysedFunction {
                 name: "hash".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "path".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Result(TypeResult {
-                        ok: Some(Box::new(AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "lower".to_string(),
-                                    typ: AnalysedType::U64(TypeU64),
-                                },
-                                NameTypePair {
-                                    name: "upper".to_string(),
-                                    typ: AnalysedType::U64(TypeU64),
-                                },
-                            ],
-                        }))),
-                        err: Some(Box::new(AnalysedType::Str(TypeStr))),
-                    }),
+                    typ: result(
+                        record(vec![field("lower", u64()), field("upper", u64())]),
+                        str(),
+                    ),
                 }],
             },
         ],
@@ -464,23 +334,16 @@ fn exports_auction_registry_composed_component() {
                     parameters: vec![
                         AnalysedFunctionParameter {
                             name: "name".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
+                            typ: str(),
                         },
                         AnalysedFunctionParameter {
                             name: "address".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
+                            typ: str(),
                         },
                     ],
                     results: vec![AnalysedFunctionResult {
                         name: None,
-                        typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                (NameTypePair {
-                                    name: "bidder-id".to_string(),
-                                    typ: AnalysedType::Str(TypeStr)
-                                })
-                            ]
-                        }),
+                        typ: record(vec![field("bidder-id", str())]),
                     }],
                 },
                 AnalysedFunction {
@@ -488,29 +351,24 @@ fn exports_auction_registry_composed_component() {
                     parameters: vec![
                         AnalysedFunctionParameter {
                             name: "name".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
+                            typ: str(),
                         },
                         AnalysedFunctionParameter {
                             name: "description".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
+                            typ: str(),
                         },
                         AnalysedFunctionParameter {
                             name: "limit-price".to_string(),
-                            typ: AnalysedType::F32(TypeF32),
+                            typ: f32(),
                         },
                         AnalysedFunctionParameter {
                             name: "expiration".to_string(),
-                            typ: AnalysedType::U64(TypeU64),
+                            typ: u64(),
                         },
                     ],
                     results: vec![AnalysedFunctionResult {
                         name: None,
-                        typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![NameTypePair {
-                                name: "auction-id".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            }]
-                        }),
+                        typ: record(vec![field("auction-id", str())]),
                     }],
                 },
                 AnalysedFunction {
@@ -518,37 +376,13 @@ fn exports_auction_registry_composed_component() {
                     parameters: vec![],
                     results: vec![AnalysedFunctionResult {
                         name: None,
-                        typ: AnalysedType::List(TypeList {
-                            inner: Box::new(AnalysedType::Record(TypeRecord {
-                                fields: vec![
-                                    NameTypePair {
-                                        name: "auction-id".to_string(),
-                                        typ: AnalysedType::Record(TypeRecord {
-                                            fields: vec![NameTypePair {
-                                                name: "auction-id".to_string(),
-                                                typ: AnalysedType::Str(TypeStr),
-                                            }]
-                                        }),
-                                    },
-                                    NameTypePair {
-                                        name: "name".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    },
-                                    NameTypePair {
-                                        name: "description".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    },
-                                    NameTypePair {
-                                        name: "limit-price".to_string(),
-                                        typ: AnalysedType::F32(TypeF32),
-                                    },
-                                    NameTypePair {
-                                        name: "expiration".to_string(),
-                                        typ: AnalysedType::U64(TypeU64),
-                                    },
-                                ],
-                            }))
-                        }),
+                        typ: list(record(vec![
+                            field("auction-id", record(vec![field("auction-id", str())])),
+                            field("name", str()),
+                            field("description", str()),
+                            field("limit-price", f32()),
+                            field("expiration", u64()),
+                        ],))
                     }],
                 },
             ],
@@ -571,14 +405,11 @@ fn exports_shopping_cart_resource_component() {
                 name: "[constructor]cart".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "user-id".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: AnalysedResourceId(0),
-                        mode: AnalysedResourceMode::Owned,
-                    }),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
                 }],
             },
             AnalysedFunction {
@@ -586,33 +417,16 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                     AnalysedFunctionParameter {
                         name: "item".to_string(),
-                        typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "product-id".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "name".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "price".to_string(),
-                                    typ: AnalysedType::F32(TypeF32),
-                                },
-                                NameTypePair {
-                                    name: "quantity".to_string(),
-                                    typ: AnalysedType::U32(TypeU32),
-                                },
-                            ],
-                        }),
+                        typ: record(vec![
+                            field("product-id", str()),
+                            field("name", str()),
+                            field("price", f32()),
+                            field("quantity", u32()),
+                        ]),
                     },
                 ],
                 results: vec![],
@@ -622,14 +436,11 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                 ],
                 results: vec![],
@@ -639,18 +450,15 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                     AnalysedFunctionParameter {
                         name: "quantity".to_string(),
-                        typ: AnalysedType::U32(TypeU32),
+                        typ: u32(),
                     },
                 ],
                 results: vec![],
@@ -659,65 +467,30 @@ fn exports_shopping_cart_resource_component() {
                 name: "[method]cart.checkout".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: AnalysedResourceId(0),
-                        mode: AnalysedResourceMode::Borrowed,
-                    }),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Variant(TypeVariant {
-                        cases: vec![
-                            NameOptionTypePair {
-                                name: "error".to_string(),
-                                typ: Some(AnalysedType::Str(TypeStr)),
-                            },
-                            NameOptionTypePair {
-                                name: "success".to_string(),
-                                typ: Some(AnalysedType::Record(TypeRecord {
-                                    fields: vec![NameTypePair {
-                                        name: "order-id".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    }],
-                                })),
-                            },
-                        ],
-                    }),
+                    typ: variant(vec![
+                        case("error", str()),
+                        case("success", record(vec![field("order-id", str())])),
+                    ]),
                 }],
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: AnalysedResourceId(0),
-                        mode: AnalysedResourceMode::Borrowed,
-                    }),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::List(TypeList {
-                        inner: Box::new(AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "product-id".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "name".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "price".to_string(),
-                                    typ: AnalysedType::F32(TypeF32),
-                                },
-                                NameTypePair {
-                                    name: "quantity".to_string(),
-                                    typ: AnalysedType::U32(TypeU32),
-                                },
-                            ],
-                        })),
-                    }),
+                    typ: list(record(vec![
+                        field("product-id", str()),
+                        field("name", str()),
+                        field("price", f32()),
+                        field("quantity", u32()),
+                    ])),
                 }],
             },
             AnalysedFunction {
@@ -725,17 +498,11 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                     AnalysedFunctionParameter {
                         name: "other-cart".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                 ],
                 results: vec![],
@@ -761,14 +528,11 @@ fn exports_shopping_cart_resource_versioned_component() {
                 name: "[constructor]cart".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "user-id".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
+                    typ: str(),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: AnalysedResourceId(0),
-                        mode: AnalysedResourceMode::Owned,
-                    }),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
                 }],
             },
             AnalysedFunction {
@@ -776,33 +540,16 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                     AnalysedFunctionParameter {
                         name: "item".to_string(),
-                        typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "product-id".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "name".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "price".to_string(),
-                                    typ: AnalysedType::F32(TypeF32),
-                                },
-                                NameTypePair {
-                                    name: "quantity".to_string(),
-                                    typ: AnalysedType::U32(TypeU32),
-                                },
-                            ],
-                        }),
+                        typ: record(vec![
+                            field("product-id", str()),
+                            field("name", str()),
+                            field("price", f32()),
+                            field("quantity", u32()),
+                        ]),
                     },
                 ],
                 results: vec![],
@@ -812,14 +559,11 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                 ],
                 results: vec![],
@@ -829,18 +573,15 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     },
                     AnalysedFunctionParameter {
                         name: "quantity".to_string(),
-                        typ: AnalysedType::U32(TypeU32),
+                        typ: u32(),
                     },
                 ],
                 results: vec![],
@@ -849,65 +590,30 @@ fn exports_shopping_cart_resource_versioned_component() {
                 name: "[method]cart.checkout".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: AnalysedResourceId(0),
-                        mode: AnalysedResourceMode::Borrowed,
-                    }),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::Variant(TypeVariant {
-                        cases: vec![
-                            NameOptionTypePair {
-                                name: "error".to_string(),
-                                typ: Some(AnalysedType::Str(TypeStr)),
-                            },
-                            NameOptionTypePair {
-                                name: "success".to_string(),
-                                typ: Some(AnalysedType::Record(TypeRecord {
-                                    fields: vec![NameTypePair {
-                                        name: "order-id".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    }],
-                                })),
-                            },
-                        ],
-                    }),
+                    typ: variant(vec![
+                        case("error", str()),
+                        case("success", record(vec![field("order-id", str())])),
+                    ]),
                 }],
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: AnalysedType::Handle(TypeHandle {
-                        resource_id: AnalysedResourceId(0),
-                        mode: AnalysedResourceMode::Borrowed,
-                    }),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                 }],
                 results: vec![AnalysedFunctionResult {
                     name: None,
-                    typ: AnalysedType::List(TypeList {
-                        inner: Box::new(AnalysedType::Record(TypeRecord {
-                            fields: vec![
-                                NameTypePair {
-                                    name: "product-id".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "name".to_string(),
-                                    typ: AnalysedType::Str(TypeStr),
-                                },
-                                NameTypePair {
-                                    name: "price".to_string(),
-                                    typ: AnalysedType::F32(TypeF32),
-                                },
-                                NameTypePair {
-                                    name: "quantity".to_string(),
-                                    typ: AnalysedType::U32(TypeU32),
-                                },
-                            ],
-                        })),
-                    }),
+                    typ: list(record(vec![
+                        field("product-id", str()),
+                        field("name", str()),
+                        field("price", f32()),
+                        field("quantity", u32()),
+                    ])),
                 }],
             },
             AnalysedFunction {
@@ -915,17 +621,11 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                     AnalysedFunctionParameter {
                         name: "other-cart".to_string(),
-                        typ: AnalysedType::Handle(TypeHandle {
-                            resource_id: AnalysedResourceId(0),
-                            mode: AnalysedResourceMode::Borrowed,
-                        }),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                     },
                 ],
                 results: vec![],
@@ -950,11 +650,7 @@ fn exports_caller_composed_component() {
             parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::List(TypeList {
-                    inner: Box::new(AnalysedType::Tuple(TypeTuple {
-                        items: vec![AnalysedType::Str(TypeStr), AnalysedType::U64(TypeU64)],
-                    })),
-                }),
+                typ: list(tuple(vec![str(), u64()])),
             }],
         }),
         AnalysedExport::Function(AnalysedFunction {
@@ -962,7 +658,7 @@ fn exports_caller_composed_component() {
             parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::U64(TypeU64),
+                typ: u64(),
             }],
         }),
         AnalysedExport::Function(AnalysedFunction {
@@ -970,7 +666,7 @@ fn exports_caller_composed_component() {
             parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::U64(TypeU64),
+                typ: u64(),
             }],
         }),
         AnalysedExport::Function(AnalysedFunction {
@@ -978,18 +674,7 @@ fn exports_caller_composed_component() {
             parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Tuple(TypeTuple {
-                    items: vec![
-                        AnalysedType::List(TypeList {
-                            inner: Box::new(AnalysedType::Str(TypeStr)),
-                        }),
-                        AnalysedType::List(TypeList {
-                            inner: Box::new(AnalysedType::Tuple(TypeTuple {
-                                items: vec![AnalysedType::Str(TypeStr), AnalysedType::Str(TypeStr)],
-                            })),
-                        }),
-                    ],
-                }),
+                typ: tuple(vec![list(str()), list(tuple(vec![str(), str()]))]),
             }],
         }),
         AnalysedExport::Function(AnalysedFunction {
@@ -997,30 +682,18 @@ fn exports_caller_composed_component() {
             parameters: vec![],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::List(TypeList {
-                    inner: Box::new(AnalysedType::U64(TypeU64)),
-                }),
+                typ: list(u64()),
             }],
         }),
         AnalysedExport::Function(AnalysedFunction {
             name: "bug-wasm-rpc-i32".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
-                typ: AnalysedType::Variant(TypeVariant {
-                    cases: vec![NameOptionTypePair {
-                        name: "leaf".to_string(),
-                        typ: None,
-                    }],
-                }),
+                typ: variant(vec![unit_case("leaf")]),
             }],
             results: vec![AnalysedFunctionResult {
                 name: None,
-                typ: AnalysedType::Variant(TypeVariant {
-                    cases: vec![NameOptionTypePair {
-                        name: "leaf".to_string(),
-                        typ: None,
-                    }],
-                }),
+                typ: variant(vec![unit_case("leaf")]),
             }],
         }),
     ];
