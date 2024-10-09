@@ -776,6 +776,8 @@ fn get_u64(value: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use std::collections::HashSet;
 
     use golem_wasm_ast::analysis::analysed_type::{

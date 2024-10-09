@@ -96,6 +96,8 @@ impl<'de> Deserialize<'de> for ValueAndType {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
     use crate::{TypeAnnotatedValueConstructors, Value};
     use golem_wasm_ast::analysis::analysed_type::{str, tuple, u32};
