@@ -29,74 +29,6 @@ use crate::protobuf;
 use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
 use crate::protobuf::typed_result::ResultValue;
 
-// pub fn function_parameters(
-//     value: &JsonValue,
-//     expected_parameters: &[AnalysedFunctionParameter],
-// ) -> Result<Vec<Value>, Vec<String>> {
-//     let typed_values = function_parameters_typed(value, expected_parameters)?;
-//
-//     let mut errors = vec![];
-//     let mut values = vec![];
-//
-//     for typed_value in typed_values {
-//         match Value::try_from(typed_value) {
-//             Ok(value) => {
-//                 values.push(value);
-//             }
-//             Err(err) => {
-//                 errors.push(err);
-//             }
-//         }
-//     }
-//
-//     if errors.is_empty() {
-//         Ok(values)
-//     } else {
-//         Err(errors)
-//     }
-// }
-//
-// pub fn function_parameters_typed(
-//     value: &JsonValue,
-//     expected_parameters: &[AnalysedFunctionParameter],
-// ) -> Result<Vec<TypeAnnotatedValue>, Vec<String>> {
-//     let parameters = value
-//         .as_array()
-//         .ok_or(vec!["Expecting an array for fn_params".to_string()])?;
-//
-//     let mut results = vec![];
-//     let mut errors = vec![];
-//
-//     if parameters.len() == expected_parameters.len() {
-//         for (json, fp) in parameters.iter().zip(expected_parameters.iter()) {
-//             match parse_json_with_type(json, &fp.typ) {
-//                 Ok(result) => results.push(result),
-//                 Err(err) => errors.extend(err),
-//             }
-//         }
-//
-//         if errors.is_empty() {
-//             Ok(results)
-//         } else {
-//             Err(errors)
-//         }
-//     } else {
-//         Err(vec![format!(
-//             "Unexpected number of parameters (got {}, expected: {})",
-//             parameters.len(),
-//             expected_parameters.len()
-//         )])
-//     }
-// }
-//
-// pub fn function_result(
-//     values: Vec<Value>,
-//     expected_types: &[AnalysedFunctionResult],
-// ) -> Result<JsonValue, Vec<String>> {
-//     function_result_typed(values, expected_types).map(|result| result.to_json_value())
-// }
-//
-
 impl TypeAnnotatedValueJsonExtensions for TypeAnnotatedValue {
     fn parse_with_type(json_val: &JsonValue, typ: &AnalysedType) -> Result<Self, Vec<String>> {
         match typ {
@@ -846,11 +778,11 @@ fn get_u64(value: &JsonValue) -> Result<TypeAnnotatedValue, Vec<String>> {
 mod tests {
     use std::collections::HashSet;
 
-    use golem_wasm_ast::analysis::{
-        AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
-        TypeF64, TypeFlags, TypeList, TypeOption, TypeRecord, TypeResult, TypeS16, TypeS32,
-        TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8, TypeVariant,
+    use golem_wasm_ast::analysis::analysed_type::{
+        bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result, s16, s32,
+        s64, s8, str, tuple, u16, u32, u64, u8, variant,
     };
+    use golem_wasm_ast::analysis::AnalysedType;
     use proptest::prelude::*;
     use serde_json::{Number, Value as JsonValue};
 
@@ -882,98 +814,98 @@ mod tests {
         #[test]
         fn test_u8_param(value: u8) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::U8(TypeU8));
+            let result = validate_function_parameter(&json, &u8());
             prop_assert_eq!(result, Ok(Value::U8(value)));
         }
 
         #[test]
         fn test_u16_param(value: u16) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::U16(TypeU16));
+            let result = validate_function_parameter(&json, &u16());
             prop_assert_eq!(result, Ok(Value::U16(value)));
         }
 
         #[test]
         fn test_u32_param(value: u32) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::U32(TypeU32));
+            let result = validate_function_parameter(&json, &u32());
             prop_assert_eq!(result, Ok(Value::U32(value)));
         }
 
         #[test]
         fn test_u64_param(value: u64) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::U64(TypeU64));
+            let result = validate_function_parameter(&json, &u64());
             prop_assert_eq!(result, Ok(Value::U64(value)));
         }
 
         #[test]
         fn test_s8_param(value: i8) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::S8(TypeS8));
+            let result = validate_function_parameter(&json, &s8());
             prop_assert_eq!(result, Ok(Value::S8(value)));
         }
 
         #[test]
         fn test_s16_param(value: i16) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::S16(TypeS16));
+            let result = validate_function_parameter(&json, &s16());
             prop_assert_eq!(result, Ok(Value::S16(value)));
         }
 
         #[test]
         fn test_s32_param(value: i32) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::S32(TypeS32));
+            let result = validate_function_parameter(&json, &s32());
             prop_assert_eq!(result, Ok(Value::S32(value)));
         }
 
         #[test]
         fn test_s64_param(value: i64) {
             let json = JsonValue::Number(Number::from(value));
-            let result = validate_function_parameter(&json, &AnalysedType::S64(TypeS64));
+            let result = validate_function_parameter(&json, &s64());
             prop_assert_eq!(result, Ok(Value::S64(value)));
         }
 
         #[test]
         fn test_f32_param(value: f32) {
             let json = JsonValue::Number(Number::from_f64(value as f64).unwrap());
-            let result = validate_function_parameter(&json, &AnalysedType::F32(TypeF32));
+            let result = validate_function_parameter(&json, &f32());
             prop_assert_eq!(result, Ok(Value::F32(value)));
         }
 
         #[test]
         fn test_f64_param(value: f64) {
             let json = JsonValue::Number(Number::from_f64(value).unwrap());
-            let result = validate_function_parameter(&json, &AnalysedType::F64(TypeF64));
+            let result = validate_function_parameter(&json, &f64());
             prop_assert_eq!(result, Ok(Value::F64(value)));
         }
 
         #[test]
         fn test_char_param(value: char) {
             let json = JsonValue::Number(Number::from(value as u32));
-            let result = validate_function_parameter(&json, &AnalysedType::Chr(TypeChr));
+            let result = validate_function_parameter(&json, &chr());
             prop_assert_eq!(result, Ok(Value::Char(value)));
         }
 
         #[test]
         fn test_string_param(value: String) {
             let json = JsonValue::String(value.clone());
-            let result = validate_function_parameter(&json, &AnalysedType::Str(TypeStr));
+            let result = validate_function_parameter(&json, &str());
             prop_assert_eq!(result, Ok(Value::String(value)));
         }
 
         #[test]
         fn test_list_u8_param(value: Vec<u8>) {
             let json = JsonValue::Array(value.iter().map(|v| JsonValue::Number(Number::from(*v))).collect());
-            let result = validate_function_parameter(&json, &AnalysedType::List(TypeList { inner: Box::new(AnalysedType::U8(TypeU8))}));
+            let result = validate_function_parameter(&json, &list(u8()));
             prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(Value::U8).collect())));
         }
 
         #[test]
         fn test_list_list_u64_param(value: Vec<Vec<u64>>) {
             let json = JsonValue::Array(value.iter().map(|v| JsonValue::Array(v.iter().map(|n| JsonValue::Number(Number::from(*n))).collect())).collect());
-            let result = validate_function_parameter(&json, &AnalysedType::List(TypeList { inner: Box::new(AnalysedType::List(TypeList { inner: Box::new(AnalysedType::U64(TypeU64)) }))}));
+            let result = validate_function_parameter(&json, &list(list(u64())));
             prop_assert_eq!(result, Ok(Value::List(value.into_iter().map(|v| Value::List(v.into_iter().map(Value::U64).collect())).collect())));
         }
 
@@ -985,11 +917,11 @@ mod tests {
                     JsonValue::Number(Number::from(value.1 as u32)),
                     JsonValue::String(value.2.clone()),
                 ]);
-            let result = validate_function_parameter(&json, &AnalysedType::Tuple(TypeTuple { items: vec![
-                AnalysedType::S32(TypeS32),
-                AnalysedType::Chr(TypeChr),
-                AnalysedType::Str(TypeStr),
-            ]}));
+            let result = validate_function_parameter(&json, &tuple(vec![
+                s32(),
+                chr(),
+                str(),
+            ]));
             prop_assert_eq!(result, Ok(Value::Tuple(
                 vec![
                     Value::S32(value.0),
@@ -1001,13 +933,13 @@ mod tests {
         #[test]
         fn test_record_bool_fields_param(value in
             any::<Vec<(String, bool)>>().prop_filter("Keys are distinct", |pairs|
-                pairs.iter().map(|(k, _)| k).collect::<std::collections::HashSet<_>>().len() == pairs.len())
+                pairs.iter().map(|(k, _)| k).collect::<HashSet<_>>().len() == pairs.len())
         ) {
             let json = JsonValue::Object(
                 value.iter().map(|(k, v)| (k.clone(), JsonValue::Bool(*v))).collect());
-            let result = validate_function_parameter(&json, &AnalysedType::Record(
-                TypeRecord { fields:
-                value.iter().map(|(k, _)| NameTypePair { name: k.clone(), typ: AnalysedType::Bool(TypeBool) }).collect()}));
+            let result = validate_function_parameter(&json, &record(
+                value.iter().map(|(k, _)| field(k, bool())).collect()
+            ));
             prop_assert_eq!(result, Ok(Value::Record(
                 value.iter().map(|(_, v)| Value::Bool(*v)).collect())));
         }
@@ -1015,12 +947,11 @@ mod tests {
         #[test]
         fn test_flags_param(value in
             any::<Vec<(String, bool)>>().prop_filter("Keys are distinct", |pairs|
-                pairs.iter().map(|(k, _)| k).collect::<std::collections::HashSet<_>>().len() == pairs.len())
+                pairs.iter().map(|(k, _)| k).collect::<HashSet<_>>().len() == pairs.len())
             ) {
             let enabled: Vec<String> = value.iter().filter(|(_, v)| *v).map(|(k, _)| k.clone()).collect();
             let json = JsonValue::Array(enabled.iter().map(|v| JsonValue::String(v.clone())).collect());
-            let result = validate_function_parameter(&json, &AnalysedType::Flags(TypeFlags{ names:
-                value.iter().map(|(k, _)| k.clone()).collect()}));
+            let result = validate_function_parameter(&json, &flags(&value.iter().map(|(k, _)| k.as_str()).collect::<Vec<&str>>()));
             prop_assert_eq!(result, Ok(Value::Flags(
                 value.iter().map(|(_, v)| *v).collect())
             ));
@@ -1031,7 +962,7 @@ mod tests {
             let names: Vec<String> = names.into_iter().collect();
             let idx = idx % names.len();
             let json = JsonValue::String(names[idx].clone());
-            let result = validate_function_parameter(&json, &AnalysedType::Enum(TypeEnum { cases: names.into_iter().collect()}));
+            let result = validate_function_parameter(&json, &r#enum(&names.iter().map(|s| s.as_str()).collect::<Vec<&str>>()));
             prop_assert_eq!(result, Ok(Value::Enum(idx as u32)));
         }
 
@@ -1041,7 +972,7 @@ mod tests {
                 Some(v) => JsonValue::String(v.clone()),
                 None => JsonValue::Null,
             };
-            let result = validate_function_parameter(&json, &AnalysedType::Option(TypeOption { inner: Box::new(AnalysedType::Str(TypeStr)) }));
+            let result = validate_function_parameter(&json, &option(str()));
             prop_assert_eq!(result, Ok(Value::Option(value.map(|v| Box::new(Value::String(v))))));
         }
 
@@ -1052,10 +983,7 @@ mod tests {
                 Ok(Some(v)) => JsonValue::Object(vec![("ok".to_string(), JsonValue::Number(Number::from(*v)))].into_iter().collect()),
                 Err(e) => JsonValue::Object(vec![("err".to_string(), JsonValue::String(e.clone()))].into_iter().collect()),
             };
-            let result = validate_function_parameter(&json, &AnalysedType::Result(TypeResult {
-                ok: Some(Box::new(AnalysedType::Option(TypeOption { inner: Box::new(AnalysedType::S32(TypeS32))}))),
-                err: Some(Box::new(AnalysedType::Str(TypeStr))),
-            }));
+            let result = validate_function_parameter(&json, &result(option(s32()), str()));
             prop_assert_eq!(result, Ok(Value::Result(
                 match value {
                     Ok(None) => Ok(Some(Box::new(Value::Option(None)))),
@@ -1079,10 +1007,10 @@ mod tests {
                 ].into_iter().collect()),
                 _ => panic!("Invalid discriminator value"),
             };
-            let result = validate_function_parameter(&json, &AnalysedType::Variant(TypeVariant { cases: vec![
-                NameOptionTypePair { name: "first".to_string(), typ: Some(AnalysedType::Tuple(TypeTuple { items: vec![AnalysedType::U32(TypeU32), AnalysedType::U32(TypeU32)]})) },
-                NameOptionTypePair { name: "second".to_string(), typ: Some(AnalysedType::Str(TypeStr)) },
-            ]}));
+            let result = validate_function_parameter(&json, &variant(vec![
+                case("first", tuple(vec![u32(), u32()])),
+                case("second", str()),
+            ]));
             prop_assert_eq!(result, Ok(Value::Variant {
                 case_idx: discriminator as u32,
                 case_value: match discriminator {
@@ -1096,7 +1024,7 @@ mod tests {
         #[test]
         fn test_u8_result(value: u8) {
             let result = Value::U8(value);
-            let expected_type = AnalysedType::U8(TypeU8);
+            let expected_type = u8();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1104,7 +1032,7 @@ mod tests {
         #[test]
         fn test_u16_result(value: u16) {
             let result = Value::U16(value);
-            let expected_type = AnalysedType::U16(TypeU16);
+            let expected_type = u16();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1112,7 +1040,7 @@ mod tests {
         #[test]
         fn test_u32_result(value: u32) {
             let result = Value::U32(value);
-            let expected_type = AnalysedType::U32(TypeU32);
+            let expected_type = u32();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1120,7 +1048,7 @@ mod tests {
         #[test]
         fn test_u64_result(value: u64) {
             let result = Value::U64(value);
-            let expected_type = AnalysedType::U64(TypeU64);
+            let expected_type = u64();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1128,7 +1056,7 @@ mod tests {
         #[test]
         fn test_s8_result(value: i8) {
             let result = Value::S8(value);
-            let expected_type = AnalysedType::S8(TypeS8);
+            let expected_type = s8();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1136,7 +1064,7 @@ mod tests {
         #[test]
         fn test_s16_result(value: i16) {
             let result = Value::S16(value);
-            let expected_type = AnalysedType::S16(TypeS16);
+            let expected_type = s16();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1144,7 +1072,7 @@ mod tests {
         #[test]
         fn test_s32_result(value: i32) {
             let result = Value::S32(value);
-            let expected_type = AnalysedType::S32(TypeS32);
+            let expected_type = s32();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1152,7 +1080,7 @@ mod tests {
         #[test]
         fn test_s64_result(value: i64) {
             let result = Value::S64(value);
-            let expected_type = AnalysedType::S64(TypeS64);
+            let expected_type = s64();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value))));
         }
@@ -1160,7 +1088,7 @@ mod tests {
         #[test]
         fn test_f32_result(value: f32) {
             let result = Value::F32(value);
-            let expected_type = AnalysedType::F32(TypeF32);
+            let expected_type = f32();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from_f64(value as f64).unwrap())));
         }
@@ -1168,7 +1096,7 @@ mod tests {
         #[test]
         fn test_f64_result(value: f64) {
             let result = Value::F64(value);
-            let expected_type = AnalysedType::F64(TypeF64);
+            let expected_type = f64();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from_f64(value).unwrap())));
         }
@@ -1176,7 +1104,7 @@ mod tests {
         #[test]
         fn test_char_result(value: char) {
             let result = Value::Char(value);
-            let expected_type = AnalysedType::Chr(TypeChr);
+            let expected_type = chr();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Number(Number::from(value as u32))));
         }
@@ -1184,7 +1112,7 @@ mod tests {
         #[test]
         fn test_string_result(value: String) {
             let result = Value::String(value.clone());
-            let expected_type = AnalysedType::Str(TypeStr);
+            let expected_type = str();
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::String(value)));
         }
@@ -1192,7 +1120,7 @@ mod tests {
         #[test]
         fn test_list_i32_result(value: Vec<i32>) {
             let result = Value::List(value.iter().map(|v| Value::S32(*v)).collect());
-            let expected_type = AnalysedType::List(TypeList { inner: Box::new(AnalysedType::S32(TypeS32))});
+            let expected_type = list(s32());
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Array(value.into_iter().map(|v| JsonValue::Number(Number::from(v))).collect())));
         }
@@ -1200,19 +1128,20 @@ mod tests {
         #[test]
         fn test_tuple_string_bool_result(value: (String, bool)) {
             let result = Value::Tuple(vec![Value::String(value.0.clone()), Value::Bool(value.1)]);
-            let expected_type = AnalysedType::Tuple(TypeTuple { items: vec![AnalysedType::Str(TypeStr), AnalysedType::Bool(TypeBool)]});
+            let expected_type = tuple(vec![str(), bool()]);
             let json = validate_function_result(result, &expected_type);
             prop_assert_eq!(json, Ok(JsonValue::Array(vec![JsonValue::String(value.0), JsonValue::Bool(value.1)])));
         }
 
         #[test]
         fn test_record_list_u8_fields(value in any::<Vec<(String, Vec<u8>)>>().prop_filter("Keys are distinct", |pairs|
-                pairs.iter().map(|(k, _)| k).collect::<std::collections::HashSet<_>>().len() == pairs.len())
+                pairs.iter().map(|(k, _)| k).collect::<HashSet<_>>().len() == pairs.len())
         ) {
             let result = Value::Record(
                 value.iter().map(|(_, v)| Value::List(v.iter().map(|n| Value::U8(*n)).collect())).collect());
-            let expected_type = AnalysedType::Record(TypeRecord { fields:
-                value.iter().map(|(k, _)| NameTypePair { name: k.clone(), typ: AnalysedType::List(TypeList { inner: Box::new(AnalysedType::U8(TypeU8))})}).collect()});
+            let expected_type = record(
+                value.iter().map(|(k, _)| field(k, list(u8()))).collect()
+            );
             let json = validate_function_result(result, &expected_type);
             let expected_json = JsonValue::Object(
                 value.iter().map(|(k, v)| (k.clone(), JsonValue::Array(v.iter().map(|n| JsonValue::Number(Number::from(*n))).collect()))).collect());
@@ -1222,12 +1151,11 @@ mod tests {
         #[test]
         fn test_flags_result(pairs in
             any::<Vec<(String, bool)>>().prop_filter("Keys are distinct", |pairs|
-                pairs.iter().map(|(k, _)| k).collect::<std::collections::HashSet<_>>().len() == pairs.len())
+                pairs.iter().map(|(k, _)| k).collect::<HashSet<_>>().len() == pairs.len())
             ) {
             let enabled: Vec<String> = pairs.iter().filter(|(_, v)| *v).map(|(k, _)| k.clone()).collect();
             let value = Value::Flags(pairs.iter().map(|(_, v)| *v).collect());
-            let result = validate_function_result(value, &AnalysedType::Flags(TypeFlags{ names:
-                pairs.iter().map(|(k, _)| k.clone()).collect()}));
+            let result = validate_function_result(value, &flags(&pairs.iter().map(|(k, _)| k.as_str()).collect::<Vec<&str>>()));
             prop_assert_eq!(result, Ok(
                 JsonValue::Array(enabled.iter().map(|v| JsonValue::String(v.clone())).collect())
             ));
@@ -1238,14 +1166,14 @@ mod tests {
             let names: Vec<String> = names.into_iter().collect();
             let idx = idx % names.len();
             let value = Value::Enum(idx as u32);
-            let result = validate_function_result(value, &AnalysedType::Enum(TypeEnum { cases: names.clone()}));
+            let result = validate_function_result(value, &r#enum(&names.iter().map(|s| s.as_str()).collect::<Vec<&str>>()));
             prop_assert_eq!(result, Ok(JsonValue::String(names[idx].clone())));
         }
 
         #[test]
         fn test_option_string_result(opt: Option<String>) {
             let value = Value::Option(opt.clone().map(|v| Box::new(Value::String(v))));
-            let result = validate_function_result(value, &AnalysedType::Option(TypeOption { inner: Box::new(AnalysedType::Str(TypeStr))}));
+            let result = validate_function_result(value, &option(str()));
             let json = match opt {
                 Some(str) => Ok(JsonValue::String(str)),
                 None => Ok(JsonValue::Null),
@@ -1263,10 +1191,10 @@ mod tests {
                     _ => panic!("Invalid discriminator value"),
                 }
             };
-            let result = validate_function_result(value, &AnalysedType::Variant(TypeVariant{ cases: vec![
-                NameOptionTypePair { name: "first".to_string(), typ: Some(AnalysedType::Tuple(TypeTuple { items: vec![AnalysedType::U32(TypeU32), AnalysedType::U32(TypeU32)]}))},
-                NameOptionTypePair { name: "second".to_string(), typ: Some(AnalysedType::Str(TypeStr))},
-            ]}));
+            let result = validate_function_result(value, &variant(vec![
+                case("first", tuple(vec![u32(), u32()])),
+                case("second", str()),
+            ]));
             let json = match discriminator {
                 0 => JsonValue::Object(vec![
                     ("first".to_string(), JsonValue::Array(vec![
@@ -1286,12 +1214,7 @@ mod tests {
     #[test]
     fn json_null_works_as_none() {
         let json = JsonValue::Null;
-        let result = validate_function_parameter(
-            &json,
-            &AnalysedType::Option(TypeOption {
-                inner: Box::new(AnalysedType::Str(TypeStr)),
-            }),
-        );
+        let result = validate_function_parameter(&json, &option(str()));
         assert_eq!(result, Ok(Value::Option(None)));
     }
 
@@ -1304,20 +1227,7 @@ mod tests {
         );
         let result = validate_function_parameter(
             &json,
-            &AnalysedType::Record(TypeRecord {
-                fields: vec![
-                    NameTypePair {
-                        name: "x".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
-                    },
-                    NameTypePair {
-                        name: "y".to_string(),
-                        typ: AnalysedType::Option(TypeOption {
-                            inner: Box::new(AnalysedType::Str(TypeStr)),
-                        }),
-                    },
-                ],
-            }),
+            &record(vec![field("x", str()), field("y", option(str()))]),
         );
         assert_eq!(
             result,

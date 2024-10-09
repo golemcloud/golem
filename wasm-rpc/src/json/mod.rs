@@ -15,6 +15,7 @@
 mod r#impl;
 
 use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
+use crate::ValueAndType;
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as JsonValue;
@@ -66,20 +67,46 @@ impl<'de> Deserialize<'de> for TypeAnnotatedValue {
     }
 }
 
+impl Serialize for ValueAndType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let tav: TypeAnnotatedValue = self.try_into().map_err(|err: Vec<String>| {
+            serde::ser::Error::custom(format!(
+                "Invalid type-annotated JSON value: {}",
+                err.join(", ")
+            ))
+        })?;
+        tav.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ValueAndType {
+    fn deserialize<D>(deserializer: D) -> Result<ValueAndType, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let tav = TypeAnnotatedValue::deserialize(deserializer)?;
+        tav.try_into().map_err(|err| {
+            serde::de::Error::custom(format!("Invalid type-annotated JSON value: {err}",))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
     use crate::{TypeAnnotatedValueConstructors, Value};
-    use golem_wasm_ast::analysis::{AnalysedType, TypeStr, TypeTuple, TypeU32};
+    use golem_wasm_ast::analysis::analysed_type::{str, tuple, u32};
+
     use serde_json::json;
 
     #[test]
     fn example1() {
         let tav = TypeAnnotatedValue::create(
             &Value::Tuple(vec![Value::U32(10), Value::String("hello".to_string())]),
-            &AnalysedType::Tuple(TypeTuple {
-                items: vec![AnalysedType::U32(TypeU32), AnalysedType::Str(TypeStr)],
-            }),
+            &tuple(vec![u32(), str()]),
         )
         .unwrap();
         let json = serde_json::to_value(&tav).unwrap();
@@ -97,8 +124,7 @@ mod tests {
             })
         );
 
-        let tav2: crate::protobuf::type_annotated_value::TypeAnnotatedValue =
-            serde_json::from_value(json).unwrap();
+        let tav2: TypeAnnotatedValue = serde_json::from_value(json).unwrap();
         assert_eq!(tav, tav2);
     }
 }
