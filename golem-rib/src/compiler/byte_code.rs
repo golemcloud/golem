@@ -151,10 +151,42 @@ mod internal {
                 instructions.push(RibIR::LessThanOrEqualTo);
             }
             Expr::And(lhs, rhs, _) => {
-                stack.push(ExprState::from_expr(rhs.deref()));
-                stack.push(ExprState::from_expr(lhs.deref()));
-                instructions.push(RibIR::And);
+                // This optimization isn't optional, it's required for the correct functioning of the interpreter
+                let optimised_expr = Expr::cond(
+                    Expr::EqualTo(
+                        lhs.clone(),
+                        Box::new(Expr::Boolean(true, InferredType::Bool)),
+                        InferredType::Bool,
+                    ),
+                    Expr::EqualTo(
+                        rhs.clone(),
+                        Box::new(Expr::Boolean(true, InferredType::Bool)),
+                        InferredType::Bool,
+                    ),
+                    Expr::Boolean(false, InferredType::Bool),
+                );
+
+                stack.push(ExprState::from_expr(&optimised_expr));
             }
+
+            Expr::Or(lhs, rhs, _) => {
+                let optimised_expr = Expr::cond(
+                    Expr::EqualTo(
+                        lhs.clone(),
+                        Box::new(Expr::Boolean(true, InferredType::Bool)),
+                        InferredType::Bool,
+                    ),
+                    Expr::Boolean(true, InferredType::Bool),
+                    Expr::EqualTo(
+                        rhs.clone(),
+                        Box::new(Expr::Boolean(true, InferredType::Bool)),
+                        InferredType::Bool,
+                    ),
+                );
+
+                stack.push(ExprState::from_expr(&optimised_expr));
+            }
+
             Expr::Record(fields, inferred_type) => {
                 // Push field instructions in reverse order
                 for (field_name, field_expr) in fields.iter().rev() {

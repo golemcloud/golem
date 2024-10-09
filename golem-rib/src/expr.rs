@@ -50,6 +50,7 @@ pub enum Expr {
     Not(Box<Expr>, InferredType),
     GreaterThan(Box<Expr>, Box<Expr>, InferredType),
     And(Box<Expr>, Box<Expr>, InferredType),
+    Or(Box<Expr>, Box<Expr>, InferredType),
     GreaterThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
     LessThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
     EqualTo(Box<Expr>, Box<Expr>, InferredType),
@@ -325,6 +326,10 @@ impl Expr {
         )
     }
 
+    pub fn or(left: Expr, right: Expr) -> Self {
+        Expr::Or(Box::new(left), Box::new(right), InferredType::Bool)
+    }
+
     pub fn pattern_match(expr: Expr, match_arms: Vec<MatchArm>) -> Self {
         Expr::PatternMatch(Box::new(expr), match_arms, InferredType::Unknown)
     }
@@ -358,7 +363,7 @@ impl Expr {
         Expr::SelectIndex(Box::new(expr), index, InferredType::Unknown)
     }
 
-    pub fn tag(expr: Expr) -> Self {
+    pub fn get_tag(expr: Expr) -> Self {
         Expr::GetTag(Box::new(expr), InferredType::Unknown)
     }
 
@@ -412,6 +417,7 @@ impl Expr {
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
+            | Expr::Or(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => inferred_type.clone(),
         }
     }
@@ -420,16 +426,25 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), Vec<String>> {
-        self.bind_types();
-        self.name_binding_pattern_match_variables();
-        self.name_binding_local_variables();
-        self.infer_variants(function_type_registry);
-        self.infer_enums(function_type_registry);
+        self.infer_types_initial_phase(function_type_registry)?;
         self.infer_call_arguments_type(function_type_registry)
             .map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
         self.unify_types()?;
+        Ok(())
+    }
+
+    pub fn infer_types_initial_phase(
+        &mut self,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> Result<(), Vec<String>> {
+        self.bind_types();
+        self.name_binding_pattern_match_variables();
+        self.name_binding_local_variables();
+        self.infer_variants(function_type_registry);
+        self.infer_enums(function_type_registry);
+
         Ok(())
     }
 
@@ -439,23 +454,28 @@ impl Expr {
         self.infer_all_identifiers()?;
         self.push_types_down()?;
         self.infer_all_identifiers()?;
-        self.pull_types_up()?;
+        let expr = self.pull_types_up()?;
+        *self = expr;
         self.unify_types().unwrap_or(());
         self.infer_global_inputs();
 
         Ok(())
     }
 
+    // Make sure the bindings in the arm pattern of a pattern match are given variable-ids.
+    // The same variable-ids will be tagged to the corresponding identifiers in the arm resolution
+    // to avoid conflicts.
     pub fn name_binding_pattern_match_variables(&mut self) {
         type_inference::name_binding_pattern_matches(self);
     }
-    // We make sure the let bindings name are properly
-    // bound to the named identifiers.
+
+    // Make sure the variable assignment (let binding) are given variable ids,
+    // which will be tagged to the corresponding identifiers to avoid conflicts.
+    // This is done only for local variables and not global variables
     pub fn name_binding_local_variables(&mut self) {
         type_inference::name_binding_local_variables(self);
     }
 
-    // At this point we simply update the types to the parameter type expressions and the call expression itself.
     pub fn infer_call_arguments_type(
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
@@ -471,8 +491,8 @@ impl Expr {
         type_inference::infer_all_identifiers(self)
     }
 
-    pub fn pull_types_up(&mut self) -> Result<(), String> {
-        type_inference::pull_types_up(self)
+    pub fn pull_types_up(&self) -> Result<Expr, String> {
+        type_inference::type_pull_up(self)
     }
 
     pub fn infer_global_inputs(&mut self) {
@@ -526,6 +546,7 @@ impl Expr {
             | Expr::Throw(_, inferred_type)
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
+            | Expr::Or(_, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -566,6 +587,7 @@ impl Expr {
             | Expr::Unwrap(_, inferred_type)
             | Expr::Throw(_, inferred_type)
             | Expr::And(_, _, inferred_type)
+            | Expr::Or(_, _, inferred_type)
             | Expr::GetTag(_, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
@@ -692,6 +714,14 @@ pub enum ArmPattern {
 }
 
 impl ArmPattern {
+    pub fn constructor(name: &str, patterns: Vec<ArmPattern>) -> ArmPattern {
+        ArmPattern::Constructor(name.to_string(), patterns)
+    }
+
+    pub fn literal(expr: Expr) -> ArmPattern {
+        ArmPattern::Literal(Box::new(expr))
+    }
+
     pub fn get_expr_literals_mut(&mut self) -> Vec<&mut Box<Expr>> {
         match self {
             ArmPattern::Literal(expr) => vec![expr],
@@ -961,9 +991,15 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 Expr::and((*left).try_into()?, (*right).try_into()?)
             }
 
+            golem_api_grpc::proto::golem::rib::expr::Expr::Or(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::or((*left).try_into()?, (*right).try_into()?)
+            }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Tag(expr) => {
                 let expr = expr.expr.ok_or("Missing expr in tag")?;
-                Expr::tag((*expr).try_into()?)
+                Expr::get_tag((*expr).try_into()?)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Unwrap(expr) => {
@@ -1273,6 +1309,13 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     right: Some(Box::new((*right).into())),
                 }),
             )),
+
+            Expr::Or(left, right, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Or(
+                Box::new(golem_api_grpc::proto::golem::rib::OrExpr {
+                    left: Some(Box::new((*left).into())),
+                    right: Some(Box::new((*right).into())),
+                }),
+            )),
         };
 
         golem_api_grpc::proto::golem::rib::Expr { expr }
@@ -1546,13 +1589,14 @@ mod tests {
                     Expr::identifier("foo"),
                     vec![
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::option(Some(Expr::identifier(
-                                "x",
-                            ))))),
+                            ArmPattern::constructor(
+                                "some",
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                            ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::option(None))),
+                            ArmPattern::constructor("none", vec![]),
                             Expr::boolean(false),
                         ),
                     ],
@@ -1564,11 +1608,17 @@ mod tests {
                     Expr::identifier("bar"),
                     vec![
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::ok(Expr::identifier("x")))),
+                            ArmPattern::constructor(
+                                "ok",
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
+                            ),
                             Expr::identifier("x"),
                         ),
                         MatchArm::new(
-                            ArmPattern::Literal(Box::new(Expr::err(Expr::identifier("msg")))),
+                            ArmPattern::constructor(
+                                "err",
+                                vec![ArmPattern::Literal(Box::new(Expr::identifier("msg")))],
+                            ),
                             Expr::boolean(false),
                         ),
                     ],

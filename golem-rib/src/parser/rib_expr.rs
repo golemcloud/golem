@@ -70,6 +70,8 @@ where
                     BinaryOp::LessThanOrEqualTo => Expr::less_than_or_equal_to(acc, next),
                     BinaryOp::GreaterThanOrEqualTo => Expr::greater_than_or_equal_to(acc, next),
                     BinaryOp::EqualTo => Expr::equal_to(acc, next),
+                    BinaryOp::And => Expr::and(acc, next),
+                    BinaryOp::Or => Expr::or(acc, next),
                 })
             }),
         )

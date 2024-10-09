@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod comprehensive_test {
     use crate::{compiler, Expr};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU64};
+    use golem_wasm_ast::analysis::{
+        AnalysedType, NameTypePair, TypeBool, TypeF32, TypeF64, TypeRecord, TypeS16, TypeS32,
+        TypeStr, TypeU64, TypeU8,
+    };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     #[tokio::test]
@@ -22,21 +25,37 @@ mod comprehensive_test {
 
               let number_response = function-number-response(str1);
 
-              let option_str_response = function-option-str-response(str2);
+              let some_str_response = function-some-str-response(str2);
 
-              let option_number_response = function-option-number-response(str1);
+              let none_str_response = function-none-str-response(str2);
 
-              let option_option_response = function-option-option-response(str1);
+              let some_number_response = function-some-number-response(str1);
 
-              let option_variant_response = function-option-variant-response(str1);
+              let none_number_response = function-none-number-response(str1);
 
-              let option_enum_response = function-option-enum-response(str1);
+              let some_option_response = function-some-option-response(str1);
 
-              let option_tuple_response = function-option-tuple-response(str1);
+              let none_option_response = function-none-option-response(str1);
 
-              let option_record_response = function-option-record-response(str1);
+              let some_variant_response = function-some-variant-response(str1);
 
-              let option_list_response = function-option-list-response(str1);
+              let none_variant_response = function-none-variant-response(str1);
+
+              let some_enum_response = function-some-enum-response(str1);
+
+              let none_enum_response = function-none-enum-response(str1);
+
+              let some_tuple_response = function-some-tuple-response(str1);
+
+              let none_tuple_response = function-none-tuple-response(str1);
+
+              let some_record_response = function-some-record-response(str1);
+
+              let none_record_response = function-none-record-response(str1);
+
+              let some_list_response = function-some-list-response(str1);
+
+              let none_list_response = function-none-list-response(str1);
 
               let list_number_response = function-list-number-response(str1);
 
@@ -54,21 +73,37 @@ mod comprehensive_test {
 
               let list_record_response = function-list-record-response(str1);
 
-              let result_of_str_response = function-result-str-response(str1);
+              let ok_of_str_response = function-ok-str-response(str1);
 
-              let result_of_number_response = function-result-number-response(str1);
+              let err_of_str_response = function-err-str-response(str1);
 
-              let result_of_variant_response = function-result-variant-response(str1);
+              let ok_of_number_response = function-ok-number-response(str1);
 
-              let result_of_enum_response = function-result-enum-response(str1);
+              let err_of_number_response = function-err-number-response(str1);
 
-              let result_of_tuple_response = function-result-tuple-response(str1);
+              let ok_of_variant_response = function-ok-variant-response(str1);
 
-              let result_of_flag_response = function-result-flag-response(str1);
+              let err_of_variant_response = function-err-variant-response(str1);
 
-              let result_of_record_response = function-result-record-response(str1);
+              let ok_of_enum_response = function-ok-enum-response(str1);
 
-              let result_of_list_response = function-result-list-response(str1);
+              let err_of_enum_response = function-err-enum-response(str1);
+
+              let ok_of_tuple_response = function-ok-tuple-response(str1);
+
+              let err_of_tuple_response = function-err-tuple-response(str1);
+
+              let ok_of_flag_response = function-ok-flag-response(str1);
+
+              let err_of_flag_response = function-err-flag-response(str1);
+
+              let ok_of_record_response = function-ok-record-response(str1);
+
+              let err_of_record_response = function-err-record-response(str1);
+
+              let ok_of_list_response = function-ok-list-response(str1);
+
+              let err_of_list_response = function-err-list-response(str1);
 
               let tuple_response = function-tuple-response(str1);
 
@@ -82,44 +117,87 @@ mod comprehensive_test {
 
               let number_response_processed = if number_response == 42u64 then "foo" else "bar";
 
-              let option_str_response_processed = match option_str_response {
+              let some_str_response_processed = match some_str_response {
                 some(text) => text,
                 none => "not found"
               };
 
-              let option_number_response_processed = match option_number_response {
+              let none_str_response_processed = match none_str_response {
+                some(text) => text,
+                none => "not found"
+              };
+
+
+              let some_number_response_processed = match some_number_response {
                 some(number) => number,
                 none => 0
               };
 
-              let option_option_response_processed = match option_option_response {
+               let none_number_response_processed = match none_number_response {
+                some(number) => number,
+                none => 0
+              };
+
+              let some_option_response_processed = match some_option_response {
                  some(some(x)) => x,
                  none => "not found"
               };
 
-              let option_variant_response_processed = match option_variant_response {
+              let none_option_response_processed = match none_option_response {
+                 some(some(x)) => x,
+                 none => "not found"
+              };
+
+              let some_variant_response_processed = match some_variant_response {
                  some(case-str(_)) => "found",
                  _ => "not found"
               };
 
-              let option_enum_response_processed = match option_enum_response {
+               let none_variant_response_processed = match none_variant_response {
+                 some(case-str(_)) => "found",
+                 _ => "not found"
+              };
+
+              let some_enum_response_processed = match some_enum_response {
                  some(enum-a) => "a",
                  some(enum-b) => "b",
                  _ => "not found"
               };
 
-              let option_tuple_response_processed = match option_tuple_response {
+              let none_enum_response_processed = match none_enum_response {
+                 some(enum-a) => "a",
+                 some(enum-b) => "b",
+                 _ => "not found"
+              };
+
+              let some_tuple_response_processed = match some_tuple_response {
                     some((text, _, _, _, _, _, _, _, _, _, _, _)) => text,
                      _ => "not found"
                 };
 
-              let option_record_response_processed = match option_record_response {
-                  some({data-body: {list-of-str : _}}) => "found list",
+               let none_tuple_response_processed = match none_tuple_response {
+                    some((text, _, _, _, _, _, _, _, _, _, _, _)) => text,
+                     _ => "not found"
+                };
+
+
+              let some_record_response_processed = match some_record_response {
+                  some({data-body: {list-of-str : mylist}}) => mylist[0],
                    _ => "not found"
               };
 
-              let option_list_response_processed = match option_list_response {
-                    some([_]) => "found list",
+              let none_record_response_processed = match none_record_response {
+                  some({data-body: {list-of-str : mylist}}) => mylist[0],
+                   _ => "not found"
+              };
+
+              let some_list_response_processed = match some_list_response {
+                    some([foo]) => foo,
+                     _ => "not found"
+                };
+
+               let none_list_response_processed = match none_list_response {
+                    some([foo]) => foo,
                      _ => "not found"
                 };
 
@@ -157,54 +235,160 @@ mod comprehensive_test {
                 _ => "not found"
               };
 
-              let list_tuple_response_processed = match list_tuple_response {
+              let list_tuple_response_processed1 = match list_tuple_response {
                 [(text, _, _, _, _, _, _, _, _, _, _, _)] => text,
                 _ => "not found"
               };
+
+
+              let list_tuple_response_processed2 = match list_tuple_response {
+                [(_, number, _, _, _, _, _, _, _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed3 = match list_tuple_response {
+                [(_, _, number, _, _, _, _, _, _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed4 = match list_tuple_response {
+                [(_, _, _, number, _, _, _, _, _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed5 = match list_tuple_response {
+                [(_, _, _, _, number, _, _, _, _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed6 = match list_tuple_response {
+                [(_, _, _, _, _, boolean, _, _, _, _, _, _)] => boolean,
+                _ => false
+              };
+
+              let list_tuple_response_processed7 = match list_tuple_response {
+                [(_, _, _, _, _, _, char, _, _, _, _, _)] => "${char}",
+                _ => "not found"
+              };
+
+              let list_tuple_response_processed8 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, some(number), _, _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed9 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, _, ok(number), _, _, _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed10 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, _, _, [boolean], _, _)] => boolean,
+                _ => false
+              };
+
+              let list_tuple_response_processed11 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, _, _, _, case-hello(number), _)] => number,
+                _ => 0
+              };
+
+              let list_tuple_response_processed12 = match list_tuple_response {
+                [(_, _, _, _, _, _, _, _, _, _, _, {field-one: boolean, field-two: text})] => "${boolean}-${text}",
+                _ => "not found"
+              };
+
 
               let list_record_response_processed = match list_record_response {
                 [{data-body: {list-of-str : [text]}}] => text,
                 _ => "not found"
               };
 
-              let result_of_str_response_processed = match result_of_str_response {
+              let ok_of_str_response_processed = match ok_of_str_response {
                 ok(text) => text,
-                err(msg) => "not found"
+                err(msg) => msg
               };
 
-              let result_of_number_response_processed = match result_of_number_response {
+              let err_of_str_response_processed = match err_of_str_response {
+                ok(text) => text,
+                err(msg) => msg
+              };
+
+              let ok_of_number_response_processed = match ok_of_number_response {
                 ok(number) => number,
-                err(msg) => 0
+                err(number) => number
               };
 
-              let result_of_variant_response_processed = match result_of_variant_response {
-                ok(case-str(_)) => "found",
-                err(msg) => "not found"
+              let err_of_number_response_processed = match err_of_number_response {
+                  ok(number) => number,
+                  err(number) => number
+               };
+
+              let ok_of_variant_response_processed = match ok_of_variant_response {
+                ok(case-str(a)) => a,
+                err(case-str(b)) => b
               };
 
-              let result_of_enum_response_processed = match result_of_enum_response {
+                let err_of_variant_response_processed = match err_of_variant_response {
+                    ok(case-str(a)) => a,
+                    err(case-str(b)) => b
+                };
+
+              let ok_of_enum_response_processed = match ok_of_enum_response {
                 ok(enum-a) => "a",
                 ok(enum-b) => "b",
                 ok(enum-c) => "c",
                 err(msg) => "not found"
               };
 
-              let result_of_tuple_response_processed = match result_of_tuple_response {
+                let err_of_enum_response_processed = match err_of_enum_response {
+                    ok(enum-a) => "a",
+                    ok(enum-b) => "b",
+                    ok(enum-c) => "c",
+                    err(enum-a) => "error-a",
+                    err(enum-b) => "error-b",
+                    err(enum-c) => "error-c"
+                };
+
+              let ok_of_tuple_response_processed = match ok_of_tuple_response {
                 ok((text, _, _, _, _, _, _, _, _, _, _, _)) => text,
                 err(msg) => "not found"
               };
 
-              let result_of_flag_response_processed = match result_of_flag_response {
+               let err_of_tuple_response_processed = match err_of_tuple_response {
+                ok((text, _, _, _, _, _, _, _, _, _, _, _)) => text,
+                err((text, _, _, _, _, _, _, _, _, _, _, _)) => text
+              };
+
+
+              let ok_of_flag_response_processed = match ok_of_flag_response {
                 ok({featurex, featurey, featurez}) => "found all flags",
                 ok({featurex}) => "found x",
                 ok({featurey}) => "found x",
                 ok({featurex, featurey}) => "found x and y",
-                _ => "not found"
+                err({featurex, featurey, featurez}) => "found all flags",
+                err({featurex}) => "found x",
+                err({featurey}) => "found x",
+                err({featurex, featurey}) => "found x and y"
                };
 
-              let result_of_record_response_processed = match result_of_record_response {
-                 ok({data-body: {list-of-str : _}}) => "found list",
+                let err_of_flag_response_processed = match err_of_flag_response {
+                ok({featurex, featurey, featurez}) => "found all flags",
+                ok({featurex}) => "found x",
+                ok({featurey}) => "found x",
+                ok({featurex, featurey}) => "found x and y",
+                err({featurex, featurey, featurez}) => "found all flags",
+                err({featurex}) => "found x",
+                err({featurey}) => "found x",
+                err({featurex, featurey}) => "found x and y"
+               };
+
+              let ok_of_record_response_processed = match ok_of_record_response {
+                 ok({data-body: {list-of-str : mylist}}) => mylist[0],
                  err(msg) => "not found"
+               };
+
+               let err_of_record_response_processed = match err_of_record_response {
+                 ok({data-body: {list-of-str : mylist}}) => mylist[0],
+                 err({data-body: {list-of-str : mylist}}) => mylist[0]
                };
 
                let tuple_response_processed = match tuple_response {
@@ -224,29 +408,54 @@ mod comprehensive_test {
                };
 
               {
-                 a : option_str_response_processed,
-                 b: option_number_response_processed,
-                 c: option_option_response_processed,
-                 d: option_variant_response_processed,
-                 e: option_enum_response_processed,
-                 f: option_tuple_response_processed,
-                 g: option_record_response_processed,
-                 h: option_list_response_processed,
+                 a : some_str_response_processed,
+                 aa: list_tuple_response_processed2,
+                 ab: list_tuple_response_processed3,
+                 ac: list_tuple_response_processed4,
+                 ad: list_tuple_response_processed5,
+                 ae: list_tuple_response_processed6,
+                 af: list_tuple_response_processed7,
+                 ag: list_tuple_response_processed8,
+                 ah: list_tuple_response_processed9,
+                 ai: list_tuple_response_processed10,
+                 aj: list_tuple_response_processed11,
+                 ak: list_tuple_response_processed12,
+                 b: some_number_response_processed,
+                 bb: none_number_response_processed,
+                 c: some_option_response_processed,
+                 cc: none_option_response_processed,
+                 d: some_variant_response_processed,
+                 dd: none_variant_response_processed,
+                 e: some_enum_response_processed,
+                 ee: none_enum_response_processed,
+                 f: some_tuple_response_processed,
+                 ff: none_tuple_response_processed,
+                 g: some_record_response_processed,
+                 gg: none_record_response_processed,
+                 h: some_list_response_processed,
+                 hh: none_list_response_processed,
                  i: list_number_response_processed,
                  j: list_str_response_processed,
                  k: list_option_response_processed,
                  l: list_list_response_processed,
                  m: list_variant_response_processed,
                  n: list_enum_response_processed,
-                 o: list_tuple_response_processed,
+                 o: list_tuple_response_processed1,
                  p: list_record_response_processed,
-                 q: result_of_str_response_processed,
-                 r: result_of_number_response_processed,
-                 s: result_of_variant_response_processed,
-                 t: result_of_enum_response_processed,
-                 u: result_of_tuple_response_processed,
-                 v: result_of_flag_response_processed,
-                 w: result_of_record_response_processed,
+                 q: ok_of_str_response_processed,
+                 qq: err_of_str_response_processed,
+                 r: ok_of_number_response_processed,
+                 rr: err_of_number_response_processed,
+                 s: ok_of_variant_response_processed,
+                 ss: err_of_variant_response_processed,
+                 t: ok_of_enum_response_processed,
+                 tt: err_of_enum_response_processed,
+                 u: ok_of_tuple_response_processed,
+                 uu: err_of_tuple_response_processed,
+                 v: ok_of_flag_response_processed,
+                 vv: err_of_flag_response_processed,
+                 w: ok_of_record_response_processed,
+                 ww: err_of_record_response_processed,
                  x: tuple_response_processed,
                  y: enum_response_processed,
                  z: variant_response_processed
@@ -262,11 +471,77 @@ mod comprehensive_test {
         let mut rib_executor = mock_interpreter::interpreter();
         let result = rib_executor.run(compiled_expr).await.unwrap();
 
-        assert_eq!(result.get_val().unwrap(), expected_type_annotated_value());
+        let actual_as_text =
+            test_utils::convert_type_annotated_value_to_str(&result.get_val().unwrap());
+
+        let expected_as_text =
+            test_utils::convert_type_annotated_value_to_str(&expected_type_annotated_value());
+
+        assert_eq!(
+            result.get_val().unwrap(),
+            expected_type_annotated_value(),
+            "Assertion failed! \n\n Actual value as string  : {} \n\n Expected value as string: {}\n",
+            actual_as_text,
+            expected_as_text
+        );
     }
 
     fn expected_type_annotated_value() -> TypeAnnotatedValue {
-        let wasm_wave_str = "{a: \"foo\", b: 42, c: \"foo\", d: \"found\", e: \"a\", f: \"foo\", g: \"found list\", h: \"found list\", i: \"greater\", j: \"foo\", k: \"foo\", l: \"foo\", m: \"foo\", n: \"a\", o: \"foo\", p: \"foo\", q: \"foo\", r: 42, s: \"found\", t: \"a\", u: \"foo\", v: \"found x\", w: \"found list\", x: \"42\", y: \"a\", z: \"foo\"}";
+        let wasm_wave_str = r#"
+          {
+            a: "foo",
+            b: 42,
+            bb: 0,
+            c: "foo",
+            cc: "not found",
+            d: "found",
+            dd: "not found",
+            e: "a",
+            ee: "not found",
+            f: "foo",
+            ff: "not found",
+            g: "foo",
+            gg: "not found",
+            h: "foo",
+            hh: "not found",
+            i: "greater",
+            j: "foo",
+            k: "foo",
+            l: "foo",
+            m: "foo",
+            n: "a",
+            o: "foo",
+            p: "foo",
+            q: "foo",
+            qq: "foo",
+            r: 42,
+            rr: 42,
+            s: "foo",
+            ss: "foo",
+            t: "a",
+            tt: "error-a",
+            u: "foo",
+            uu: "foo",
+            v: "found x",
+            vv: "found x",
+            w: "foo",
+            ww: "foo",
+            x: "42",
+            y: "a",
+            z: "foo",
+            aa: 42,
+            ab: 42,
+            ac: 42,
+            ad: 42,
+            ae: true,
+            af: "a",
+            ag: 42,
+            ah: 42,
+            ai: true,
+            aj: 42,
+            ak: "true-foo"
+          }
+        "#;
 
         test_utils::get_type_annotated_value(&expected_analysed_type(), wasm_wave_str)
     }
@@ -279,7 +554,55 @@ mod comprehensive_test {
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
+                    name: "aa".to_string(),
+                    typ: AnalysedType::U64(TypeU64),
+                },
+                NameTypePair {
+                    name: "ab".to_string(),
+                    typ: AnalysedType::S32(TypeS32),
+                },
+                NameTypePair {
+                    name: "ac".to_string(),
+                    typ: AnalysedType::F32(TypeF32),
+                },
+                NameTypePair {
+                    name: "ad".to_string(),
+                    typ: AnalysedType::F64(TypeF64),
+                },
+                NameTypePair {
+                    name: "ae".to_string(),
+                    typ: AnalysedType::Bool(TypeBool),
+                },
+                NameTypePair {
+                    name: "af".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "ag".to_string(),
+                    typ: AnalysedType::S16(TypeS16),
+                },
+                NameTypePair {
+                    name: "ah".to_string(),
+                    typ: AnalysedType::U8(TypeU8),
+                },
+                NameTypePair {
+                    name: "ai".to_string(),
+                    typ: AnalysedType::Bool(TypeBool),
+                },
+                NameTypePair {
+                    name: "aj".to_string(),
+                    typ: AnalysedType::F64(TypeF64),
+                },
+                NameTypePair {
+                    name: "ak".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
                     name: "b".to_string(),
+                    typ: AnalysedType::U64(TypeU64),
+                },
+                NameTypePair {
+                    name: "bb".to_string(),
                     typ: AnalysedType::U64(TypeU64),
                 },
                 NameTypePair {
@@ -287,7 +610,15 @@ mod comprehensive_test {
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
+                    name: "cc".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
                     name: "d".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "dd".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
@@ -295,7 +626,15 @@ mod comprehensive_test {
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
+                    name: "ee".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
                     name: "f".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "ff".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
@@ -303,7 +642,15 @@ mod comprehensive_test {
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
+                    name: "gg".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
                     name: "h".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "hh".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
@@ -343,7 +690,15 @@ mod comprehensive_test {
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
+                    name: "qq".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
                     name: "r".to_string(),
+                    typ: AnalysedType::U64(TypeU64),
+                },
+                NameTypePair {
+                    name: "rr".to_string(),
                     typ: AnalysedType::U64(TypeU64),
                 },
                 NameTypePair {
@@ -351,7 +706,15 @@ mod comprehensive_test {
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
+                    name: "ss".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
                     name: "t".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "tt".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
@@ -359,11 +722,23 @@ mod comprehensive_test {
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
+                    name: "uu".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
                     name: "v".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
+                    name: "vv".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
                     name: "w".to_string(),
+                    typ: AnalysedType::Str(TypeStr),
+                },
+                NameTypePair {
+                    name: "ww".to_string(),
                     typ: AnalysedType::Str(TypeStr),
                 },
                 NameTypePair {
@@ -393,14 +768,22 @@ mod comprehensive_test {
             exports.extend(function_metadata::function_no_arg_unit());
             exports.extend(function_metadata::function_str_response());
             exports.extend(function_metadata::function_number_response());
-            exports.extend(function_metadata::function_option_of_str_response());
-            exports.extend(function_metadata::function_option_of_number_response());
-            exports.extend(function_metadata::function_option_of_option_response());
-            exports.extend(function_metadata::function_option_of_variant_response());
-            exports.extend(function_metadata::function_option_of_enum_response());
-            exports.extend(function_metadata::function_option_of_tuple_response());
-            exports.extend(function_metadata::function_option_of_record_response());
-            exports.extend(function_metadata::function_option_of_list_response());
+            exports.extend(function_metadata::function_some_of_str_response());
+            exports.extend(function_metadata::function_none_of_str_response());
+            exports.extend(function_metadata::function_some_of_number_response());
+            exports.extend(function_metadata::function_none_of_number_response());
+            exports.extend(function_metadata::function_some_of_option_response());
+            exports.extend(function_metadata::function_none_of_option_response());
+            exports.extend(function_metadata::function_some_of_variant_response());
+            exports.extend(function_metadata::function_none_of_variant_response());
+            exports.extend(function_metadata::function_some_of_enum_response());
+            exports.extend(function_metadata::function_none_of_enum_response());
+            exports.extend(function_metadata::function_some_of_tuple_response());
+            exports.extend(function_metadata::function_none_of_tuple_response());
+            exports.extend(function_metadata::function_some_of_record_response());
+            exports.extend(function_metadata::function_none_of_record_response());
+            exports.extend(function_metadata::function_some_of_list_response());
+            exports.extend(function_metadata::function_none_of_list_response());
             exports.extend(function_metadata::function_list_of_number_response());
             exports.extend(function_metadata::function_list_of_str_response());
             exports.extend(function_metadata::function_list_of_option_response());
@@ -409,15 +792,24 @@ mod comprehensive_test {
             exports.extend(function_metadata::function_list_of_enum_response());
             exports.extend(function_metadata::function_list_of_tuple_response());
             exports.extend(function_metadata::function_list_of_record_response());
-            exports.extend(function_metadata::function_result_of_str_response());
-            exports.extend(function_metadata::function_result_of_number_response());
-            exports.extend(function_metadata::function_result_of_option_response());
-            exports.extend(function_metadata::function_result_of_variant_response());
-            exports.extend(function_metadata::function_result_of_enum_response());
-            exports.extend(function_metadata::function_result_of_tuple_response());
-            exports.extend(function_metadata::function_result_of_flag_response());
-            exports.extend(function_metadata::function_result_of_record_response());
-            exports.extend(function_metadata::function_result_of_list_response());
+            exports.extend(function_metadata::function_ok_of_str_response());
+            exports.extend(function_metadata::function_err_of_str_response());
+            exports.extend(function_metadata::function_ok_of_number_response());
+            exports.extend(function_metadata::function_err_of_number_response());
+            exports.extend(function_metadata::function_ok_of_option_response());
+            exports.extend(function_metadata::function_err_of_option_response());
+            exports.extend(function_metadata::function_ok_of_variant_response());
+            exports.extend(function_metadata::function_err_of_variant_response());
+            exports.extend(function_metadata::function_ok_of_enum_response());
+            exports.extend(function_metadata::function_err_of_enum_response());
+            exports.extend(function_metadata::function_ok_of_tuple_response());
+            exports.extend(function_metadata::function_err_of_tuple_response());
+            exports.extend(function_metadata::function_ok_of_flag_response());
+            exports.extend(function_metadata::function_err_of_flag_response());
+            exports.extend(function_metadata::function_ok_of_record_response());
+            exports.extend(function_metadata::function_err_of_record_response());
+            exports.extend(function_metadata::function_ok_of_list_response());
+            exports.extend(function_metadata::function_err_of_list_response());
             exports.extend(function_metadata::function_tuple_response());
             exports.extend(function_metadata::function_enum_response());
             exports.extend(function_metadata::function_flag_response());
@@ -469,65 +861,129 @@ mod comprehensive_test {
             )
         }
 
-        pub(crate) fn function_option_of_str_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_some_of_str_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-option-str-response",
+                "function-some-str-response",
                 vec![data_types::str_type()],
                 Some(data_types::option_of_str_type()),
             )
         }
 
-        pub(crate) fn function_option_of_number_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_none_of_str_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-option-number-response",
+                "function-none-str-response",
+                vec![data_types::str_type()],
+                Some(data_types::option_of_str_type()),
+            )
+        }
+
+        pub(crate) fn function_some_of_number_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-some-number-response",
                 vec![data_types::str_type()],
                 Some(data_types::option_of_number_type()),
             )
         }
 
-        pub(crate) fn function_option_of_option_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_none_of_number_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-option-option-response",
+                "function-none-number-response",
+                vec![data_types::str_type()],
+                Some(data_types::option_of_number_type()),
+            )
+        }
+
+        pub(crate) fn function_some_of_option_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-some-option-response",
                 vec![data_types::str_type()],
                 Some(data_types::option_of_option_type()),
             )
         }
 
-        pub(crate) fn function_option_of_variant_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_none_of_option_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-option-variant-response",
+                "function-none-option-response",
+                vec![data_types::str_type()],
+                Some(data_types::option_of_option_type()),
+            )
+        }
+
+        pub(crate) fn function_some_of_variant_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-some-variant-response",
                 vec![data_types::str_type()],
                 Some(data_types::option_of_variant_type()),
             )
         }
 
-        pub(crate) fn function_option_of_enum_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_none_of_variant_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-option-enum-response",
+                "function-none-variant-response",
+                vec![data_types::str_type()],
+                Some(data_types::option_of_variant_type()),
+            )
+        }
+
+        pub(crate) fn function_some_of_enum_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-some-enum-response",
                 vec![data_types::str_type()],
                 Some(data_types::option_of_enum_type()),
             )
         }
 
-        pub(crate) fn function_option_of_tuple_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_none_of_enum_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-option-tuple-response",
+                "function-none-enum-response",
+                vec![data_types::str_type()],
+                Some(data_types::option_of_enum_type()),
+            )
+        }
+
+        pub(crate) fn function_some_of_tuple_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-some-tuple-response",
                 vec![data_types::str_type()],
                 Some(data_types::option_of_tuple()),
             )
         }
 
-        pub(crate) fn function_option_of_record_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_none_of_tuple_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-option-record-response",
+                "function-none-tuple-response",
+                vec![data_types::str_type()],
+                Some(data_types::option_of_tuple()),
+            )
+        }
+
+        pub(crate) fn function_some_of_record_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-some-record-response",
                 vec![data_types::str_type()],
                 Some(data_types::option_of_record_type()),
             )
         }
 
-        pub(crate) fn function_option_of_list_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_none_of_record_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-option-list-response",
+                "function-none-record-response",
+                vec![data_types::str_type()],
+                Some(data_types::option_of_record_type()),
+            )
+        }
+
+        pub(crate) fn function_some_of_list_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-some-list-response",
+                vec![data_types::str_type()],
+                Some(data_types::option_of_list()),
+            )
+        }
+
+        pub(crate) fn function_none_of_list_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-none-list-response",
                 vec![data_types::str_type()],
                 Some(data_types::option_of_list()),
             )
@@ -597,73 +1053,145 @@ mod comprehensive_test {
             )
         }
 
-        pub(crate) fn function_result_of_str_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_ok_of_str_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-result-str-response",
+                "function-ok-str-response",
                 vec![data_types::str_type()],
                 Some(data_types::result_of_str_type()),
             )
         }
 
-        pub(crate) fn function_result_of_number_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_err_of_str_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-result-number-response",
+                "function-err-str-response",
+                vec![data_types::str_type()],
+                Some(data_types::result_of_str_type()),
+            )
+        }
+
+        pub(crate) fn function_ok_of_number_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-ok-number-response",
                 vec![data_types::str_type()],
                 Some(data_types::result_of_number_type()),
             )
         }
 
-        pub(crate) fn function_result_of_option_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_err_of_number_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-result-option-response",
+                "function-err-number-response",
+                vec![data_types::str_type()],
+                Some(data_types::result_of_number_type()),
+            )
+        }
+
+        pub(crate) fn function_ok_of_option_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-ok-option-response",
                 vec![data_types::str_type()],
                 Some(data_types::result_of_option_type()),
             )
         }
 
-        pub(crate) fn function_result_of_variant_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_err_of_option_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-result-variant-response",
+                "function-err-option-response",
+                vec![data_types::str_type()],
+                Some(data_types::result_of_option_type()),
+            )
+        }
+
+        pub(crate) fn function_ok_of_variant_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-ok-variant-response",
                 vec![data_types::str_type()],
                 Some(data_types::result_of_variant_type()),
             )
         }
 
-        pub(crate) fn function_result_of_enum_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_err_of_variant_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-result-enum-response",
+                "function-err-variant-response",
+                vec![data_types::str_type()],
+                Some(data_types::result_of_variant_type()),
+            )
+        }
+
+        pub(crate) fn function_ok_of_enum_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-ok-enum-response",
                 vec![data_types::str_type()],
                 Some(data_types::result_of_enum_type()),
             )
         }
 
-        pub(crate) fn function_result_of_tuple_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_err_of_enum_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-result-tuple-response",
+                "function-err-enum-response",
+                vec![data_types::str_type()],
+                Some(data_types::result_of_enum_type()),
+            )
+        }
+
+        pub(crate) fn function_ok_of_tuple_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-ok-tuple-response",
                 vec![data_types::str_type()],
                 Some(data_types::result_of_tuple_type()),
             )
         }
 
-        pub(crate) fn function_result_of_flag_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_err_of_tuple_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-result-flag-response",
+                "function-err-tuple-response",
+                vec![data_types::str_type()],
+                Some(data_types::result_of_tuple_type()),
+            )
+        }
+
+        pub(crate) fn function_ok_of_flag_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-ok-flag-response",
                 vec![data_types::str_type()],
                 Some(data_types::result_of_flag_type()),
             )
         }
 
-        pub(crate) fn function_result_of_record_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_err_of_flag_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-result-record-response",
+                "function-err-flag-response",
+                vec![data_types::str_type()],
+                Some(data_types::result_of_flag_type()),
+            )
+        }
+
+        pub(crate) fn function_ok_of_record_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-ok-record-response",
                 vec![data_types::str_type()],
                 Some(data_types::result_of_record_type()),
             )
         }
 
-        pub(crate) fn function_result_of_list_response() -> Vec<AnalysedExport> {
+        pub(crate) fn function_err_of_record_response() -> Vec<AnalysedExport> {
             test_utils::get_function_component_metadata(
-                "function-result-list-response",
+                "function-err-record-response",
+                vec![data_types::str_type()],
+                Some(data_types::result_of_record_type()),
+            )
+        }
+
+        pub(crate) fn function_ok_of_list_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-ok-list-response",
+                vec![data_types::str_type()],
+                Some(data_types::result_of_list_type()),
+            )
+        }
+
+        pub(crate) fn function_err_of_list_response() -> Vec<AnalysedExport> {
+            test_utils::get_function_component_metadata(
+                "function-err-list-response",
                 vec![data_types::str_type()],
                 Some(data_types::result_of_list_type()),
             )
@@ -1192,33 +1720,59 @@ mod comprehensive_test {
         use crate::interpreter::tests::comprehensive_test::{data_types, test_utils};
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
-        pub(crate) fn result_of_str() -> TypeAnnotatedValue {
+        pub(crate) fn ok_of_str() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(&data_types::result_of_str_type(), "ok(\"foo\")")
         }
 
-        pub(crate) fn result_of_number() -> TypeAnnotatedValue {
+        pub(crate) fn err_of_str() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::result_of_str_type(), "err(\"foo\")")
+        }
+
+        pub(crate) fn ok_of_number() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(&data_types::result_of_number_type(), "ok(42)")
         }
 
-        pub(crate) fn result_of_option() -> TypeAnnotatedValue {
+        pub(crate) fn err_of_number() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::result_of_number_type(), "err(42)")
+        }
+
+        pub(crate) fn ok_of_option() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(
                 &data_types::result_of_option_type(),
                 "ok(some(\"foo\"))",
             )
         }
 
-        pub(crate) fn result_of_variant() -> TypeAnnotatedValue {
+        pub(crate) fn err_of_option() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(
+                &data_types::result_of_option_type(),
+                "err(some(\"foo\"))",
+            )
+        }
+
+        pub(crate) fn ok_of_variant() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(
                 &data_types::result_of_variant_type(),
                 "ok(case-str(\"foo\"))",
             )
         }
 
-        pub(crate) fn result_of_enum() -> TypeAnnotatedValue {
+        pub(crate) fn err_of_variant() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(
+                &data_types::result_of_variant_type(),
+                "err(case-str(\"foo\"))",
+            )
+        }
+
+        pub(crate) fn ok_of_enum() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(&data_types::result_of_enum_type(), "ok(enum-a)")
         }
 
-        pub(crate) fn result_of_tuple() -> TypeAnnotatedValue {
+        pub(crate) fn err_of_enum() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::result_of_enum_type(), "err(enum-a)")
+        }
+
+        pub(crate) fn ok_of_tuple() -> TypeAnnotatedValue {
             let tuple_str = test_utils::convert_type_annotated_value_to_str(&tuple());
             let wave_str = format!("ok({})", tuple_str);
             test_utils::get_type_annotated_value(
@@ -1227,14 +1781,30 @@ mod comprehensive_test {
             )
         }
 
-        pub(crate) fn result_of_flag() -> TypeAnnotatedValue {
+        pub(crate) fn err_of_tuple() -> TypeAnnotatedValue {
+            let tuple_str = test_utils::convert_type_annotated_value_to_str(&tuple());
+            let wave_str = format!("err({})", tuple_str);
+            test_utils::get_type_annotated_value(
+                &data_types::result_of_tuple_type(),
+                wave_str.as_str(),
+            )
+        }
+
+        pub(crate) fn ok_of_flag() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(
                 &data_types::result_of_flag_type(),
                 "ok({featurex})",
             )
         }
 
-        pub(crate) fn result_of_record() -> TypeAnnotatedValue {
+        pub(crate) fn err_of_flag() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(
+                &data_types::result_of_flag_type(),
+                "err({featurex})",
+            )
+        }
+
+        pub(crate) fn ok_of_record() -> TypeAnnotatedValue {
             let record_str = test_utils::convert_type_annotated_value_to_str(&record());
             let wave_str = format!("ok({})", &record_str);
             test_utils::get_type_annotated_value(
@@ -1243,10 +1813,26 @@ mod comprehensive_test {
             )
         }
 
-        pub(crate) fn result_of_list() -> TypeAnnotatedValue {
+        pub(crate) fn err_of_record() -> TypeAnnotatedValue {
+            let record_str = test_utils::convert_type_annotated_value_to_str(&record());
+            let wave_str = format!("err({})", &record_str);
+            test_utils::get_type_annotated_value(
+                &data_types::result_of_record_type(),
+                wave_str.as_str(),
+            )
+        }
+
+        pub(crate) fn ok_of_list() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(
                 &data_types::result_of_list_type(),
                 "ok([\"foo\"])",
+            )
+        }
+
+        pub(crate) fn err_of_list() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(
+                &data_types::result_of_list_type(),
+                "err([\"foo\"])",
             )
         }
 
@@ -1295,39 +1881,63 @@ mod comprehensive_test {
             )
         }
 
-        pub(crate) fn option_of_number() -> TypeAnnotatedValue {
+        pub(crate) fn some_of_number() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(&data_types::option_of_number_type(), "some(42)")
         }
 
-        pub(crate) fn option_of_str() -> TypeAnnotatedValue {
+        pub(crate) fn none_of_number() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::option_of_number_type(), "none")
+        }
+
+        pub(crate) fn some_of_str() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(&data_types::option_of_str_type(), "some(\"foo\")")
         }
 
-        pub(crate) fn option_of_option() -> TypeAnnotatedValue {
+        pub(crate) fn none_of_str() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::option_of_str_type(), "none")
+        }
+
+        pub(crate) fn some_of_some() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(
                 &data_types::option_of_option_type(),
                 "some(some(\"foo\"))",
             )
         }
 
-        pub(crate) fn option_of_variant() -> TypeAnnotatedValue {
+        pub(crate) fn none_of_some() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::option_of_option_type(), "none")
+        }
+
+        pub(crate) fn some_of_variant() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(
                 &data_types::option_of_variant_type(),
                 "some(case-str(\"foo\"))",
             )
         }
 
-        pub(crate) fn option_of_enum() -> TypeAnnotatedValue {
+        pub(crate) fn none_of_variant() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::option_of_variant_type(), "none")
+        }
+
+        pub(crate) fn some_of_enum() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(&data_types::option_of_enum_type(), "some(enum-a)")
         }
 
-        pub(crate) fn option_of_tuple() -> TypeAnnotatedValue {
+        pub(crate) fn none_of_enum() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::option_of_enum_type(), "none")
+        }
+
+        pub(crate) fn some_of_tuple() -> TypeAnnotatedValue {
             let tuple_str = test_utils::convert_type_annotated_value_to_str(&tuple());
             let wave_str = format!("some({})", tuple_str);
             test_utils::get_type_annotated_value(&data_types::option_of_tuple(), wave_str.as_str())
         }
 
-        pub(crate) fn option_of_record() -> TypeAnnotatedValue {
+        pub(crate) fn none_of_tuple() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::option_of_tuple(), "none")
+        }
+
+        pub(crate) fn some_of_record() -> TypeAnnotatedValue {
             let record_str = test_utils::convert_type_annotated_value_to_str(&record());
             let wave_str = format!("some({})", &record_str);
             test_utils::get_type_annotated_value(
@@ -1336,8 +1946,16 @@ mod comprehensive_test {
             )
         }
 
-        pub(crate) fn option_of_list() -> TypeAnnotatedValue {
+        pub(crate) fn none_of_record() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::option_of_record_type(), "none")
+        }
+
+        pub(crate) fn some_of_list() -> TypeAnnotatedValue {
             test_utils::get_type_annotated_value(&data_types::option_of_list(), "some([\"foo\"])")
+        }
+
+        pub(crate) fn none_of_list() -> TypeAnnotatedValue {
+            test_utils::get_type_annotated_value(&data_types::option_of_list(), "none")
         }
 
         pub(crate) fn tuple() -> TypeAnnotatedValue {
@@ -1456,37 +2074,63 @@ mod comprehensive_test {
                 ("function-no-arg-unit", None),
                 ("function-str-response", Some(mock_data::str_data())),
                 ("function-number-response", Some(mock_data::number_data())),
+                ("function-some-str-response", Some(mock_data::some_of_str())),
+                ("function-none-str-response", Some(mock_data::none_of_str())),
                 (
-                    "function-option-str-response",
-                    Some(mock_data::option_of_str()),
+                    "function-some-number-response",
+                    Some(mock_data::some_of_number()),
                 ),
                 (
-                    "function-option-number-response",
-                    Some(mock_data::option_of_number()),
+                    "function-none-number-response",
+                    Some(mock_data::none_of_number()),
                 ),
                 (
-                    "function-option-option-response",
-                    Some(mock_data::option_of_option()),
+                    "function-some-option-response",
+                    Some(mock_data::some_of_some()),
                 ),
                 (
-                    "function-option-variant-response",
-                    Some(mock_data::option_of_variant()),
+                    "function-none-option-response",
+                    Some(mock_data::none_of_some()),
                 ),
                 (
-                    "function-option-enum-response",
-                    Some(mock_data::option_of_enum()),
+                    "function-some-variant-response",
+                    Some(mock_data::some_of_variant()),
                 ),
                 (
-                    "function-option-tuple-response",
-                    Some(mock_data::option_of_tuple()),
+                    "function-none-variant-response",
+                    Some(mock_data::none_of_variant()),
                 ),
                 (
-                    "function-option-record-response",
-                    Some(mock_data::option_of_record()),
+                    "function-some-enum-response",
+                    Some(mock_data::some_of_enum()),
                 ),
                 (
-                    "function-option-list-response",
-                    Some(mock_data::option_of_list()),
+                    "function-none-enum-response",
+                    Some(mock_data::none_of_enum()),
+                ),
+                (
+                    "function-some-tuple-response",
+                    Some(mock_data::some_of_tuple()),
+                ),
+                (
+                    "function-none-tuple-response",
+                    Some(mock_data::none_of_tuple()),
+                ),
+                (
+                    "function-some-record-response",
+                    Some(mock_data::some_of_record()),
+                ),
+                (
+                    "function-none-record-response",
+                    Some(mock_data::none_of_record()),
+                ),
+                (
+                    "function-some-list-response",
+                    Some(mock_data::some_of_list()),
+                ),
+                (
+                    "function-none-list-response",
+                    Some(mock_data::none_of_list()),
                 ),
                 (
                     "function-list-number-response",
@@ -1517,42 +2161,51 @@ mod comprehensive_test {
                     "function-list-record-response",
                     Some(mock_data::list_of_record()),
                 ),
+                ("function-ok-str-response", Some(mock_data::ok_of_str())),
+                ("function-err-str-response", Some(mock_data::err_of_str())),
                 (
-                    "function-result-str-response",
-                    Some(mock_data::result_of_str()),
+                    "function-ok-number-response",
+                    Some(mock_data::ok_of_number()),
                 ),
                 (
-                    "function-result-number-response",
-                    Some(mock_data::result_of_number()),
+                    "function-err-number-response",
+                    Some(mock_data::err_of_number()),
                 ),
                 (
-                    "function-result-option-response",
-                    Some(mock_data::result_of_option()),
+                    "function-ok-option-response",
+                    Some(mock_data::ok_of_option()),
                 ),
                 (
-                    "function-result-variant-response",
-                    Some(mock_data::result_of_variant()),
+                    "function-err-option-response",
+                    Some(mock_data::err_of_option()),
                 ),
                 (
-                    "function-result-enum-response",
-                    Some(mock_data::result_of_enum()),
+                    "function-ok-variant-response",
+                    Some(mock_data::ok_of_variant()),
                 ),
                 (
-                    "function-result-tuple-response",
-                    Some(mock_data::result_of_tuple()),
+                    "function-err-variant-response",
+                    Some(mock_data::err_of_variant()),
+                ),
+                ("function-ok-enum-response", Some(mock_data::ok_of_enum())),
+                ("function-err-enum-response", Some(mock_data::err_of_enum())),
+                ("function-ok-tuple-response", Some(mock_data::ok_of_tuple())),
+                (
+                    "function-err-tuple-response",
+                    Some(mock_data::err_of_tuple()),
+                ),
+                ("function-ok-flag-response", Some(mock_data::ok_of_flag())),
+                ("function-err-flag-response", Some(mock_data::err_of_flag())),
+                (
+                    "function-ok-record-response",
+                    Some(mock_data::ok_of_record()),
                 ),
                 (
-                    "function-result-flag-response",
-                    Some(mock_data::result_of_flag()),
+                    "function-err-record-response",
+                    Some(mock_data::err_of_record()),
                 ),
-                (
-                    "function-result-record-response",
-                    Some(mock_data::result_of_record()),
-                ),
-                (
-                    "function-result-list-response",
-                    Some(mock_data::result_of_list()),
-                ),
+                ("function-ok-list-response", Some(mock_data::ok_of_list())),
+                ("function-err-list-response", Some(mock_data::err_of_list())),
                 ("function-tuple-response", Some(mock_data::tuple())),
                 ("function-enum-response", Some(mock_data::enum_data())),
                 ("function-flag-response", Some(mock_data::flag())),
