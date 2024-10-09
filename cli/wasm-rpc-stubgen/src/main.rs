@@ -17,6 +17,9 @@ use colored::Colorize;
 use golem_wasm_rpc_stubgen::*;
 use std::process::ExitCode;
 
+#[cfg(test)]
+test_r::enable!();
+
 #[tokio::main]
 async fn main() -> ExitCode {
     pretty_env_logger::init();
