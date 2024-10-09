@@ -94,7 +94,7 @@ futures-core = "0.3.29"
 futures-util = "0.3.29"
 git-version = "0.3.9"
 golem-wasm-ast = "1.0.1"
-golem-wasm-rpc = { version = "1.0.4", default-features = false, features = [
+golem-wasm-rpc = { version = "1.0.5", default-features = false, features = [
     "host",
 ] }
 
@@ -178,7 +178,7 @@ tokio-rustls = { version = "0.26.0" }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = "0.7.10"
 toml = "0.8.14"
-tonic = "0.11.0"
+tonic = { version = "0.11.0", features = ["gzip"] }
 tonic-reflection = "0.11.0"
 tonic-health = "0.11.0"
 tracing = { version = "0.1.40", features = ["log"] }

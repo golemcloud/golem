@@ -1790,14 +1790,7 @@ impl IntoValue for GolemError {
                     "FailedToResumeWorker",
                     record(vec![
                         field("worker_id", WorkerId::get_type()),
-                        field(
-                            "reason",
-                            if top_level {
-                                GolemError::get_type()
-                            } else {
-                                str()
-                            },
-                        ),
+                        field("reason", if top_level { get_type(false) } else { str() }),
                     ]),
                 ),
                 case(

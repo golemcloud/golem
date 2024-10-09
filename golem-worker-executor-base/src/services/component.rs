@@ -44,6 +44,7 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use prost::Message;
 use tokio::task::spawn_blocking;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -149,6 +150,8 @@ impl ComponentServiceGrpc {
                 move |channel| {
                     ComponentServiceClient::new(channel)
                         .max_decoding_message_size(max_component_size)
+                        .send_compressed(CompressionEncoding::Gzip)
+                        .accept_compressed(CompressionEncoding::Gzip)
                 },
                 endpoint.as_http_02(),
                 GrpcClientConfig {

@@ -21,10 +21,12 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use golem_common::model::oplog::WorkerResourceId;
+use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
+use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
-    ComponentId, FilterComparator, ScanCursor, StringFilterComparator, TargetWorkerId, Timestamp,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    ComponentId, FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator,
+    TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
+    WorkerStatus,
 };
 use rand::seq::IteratorRandom;
 use serde_json::json;
@@ -1144,4 +1146,61 @@ async fn auto_update_on_idle_via_host_function() {
     check!(metadata.last_known_status.pending_updates.is_empty());
     check!(metadata.last_known_status.failed_updates.is_empty());
     check!(metadata.last_known_status.successful_updates.len() == 1);
+}
+
+#[tokio::test]
+#[tracing::instrument]
+async fn get_oplog_1() {
+    let component_id = DEPS.store_component("runtime-service").await;
+
+    let worker_id = WorkerId {
+        component_id,
+        worker_name: "getoplog1".to_string(),
+    };
+
+    let idempotency_key1 = IdempotencyKey::fresh();
+    let idempotency_key2 = IdempotencyKey::fresh();
+
+    let _ = DEPS
+        .invoke_and_await(
+            worker_id.clone(),
+            "golem:it/api.{generate-idempotency-keys}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let _ = DEPS
+        .invoke_and_await_with_key(
+            worker_id.clone(),
+            &idempotency_key1,
+            "golem:it/api.{generate-idempotency-keys}",
+            vec![],
+        )
+        .await
+        .unwrap();
+    let _ = DEPS
+        .invoke_and_await_with_key(
+            worker_id.clone(),
+            &idempotency_key2,
+            "golem:it/api.{generate-idempotency-keys}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let oplog = DEPS.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+
+    assert_eq!(oplog.len(), 14);
+    assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(
+                |entry| matches!(entry, PublicOplogEntry::ExportedFunctionInvoked(
+        ExportedFunctionInvokedParameters { function_name, .. }
+    ) if function_name == "golem:it/api.{generate-idempotency-keys}")
+            )
+            .count(),
+        3
+    );
 }

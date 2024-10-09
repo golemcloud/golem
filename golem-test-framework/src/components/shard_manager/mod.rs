@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::Level;
 
@@ -68,6 +69,8 @@ async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Cha
     ShardManagerServiceClient::connect(format!("http://{host}:{grpc_port}"))
         .await
         .expect("Failed to connect to golem-shard-manager")
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {

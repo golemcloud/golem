@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use http::Uri;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -44,7 +45,11 @@ impl RemoteComponentService {
     pub fn new(uri: Uri, retry_config: RetryConfig) -> Self {
         Self {
             client: GrpcClient::new(
-                ComponentServiceClient::new,
+                |channel| {
+                    ComponentServiceClient::new(channel)
+                        .send_compressed(CompressionEncoding::Gzip)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                },
                 uri.as_http_02(),
                 GrpcClientConfig {
                     retries_on_unavailable: retry_config.clone(),

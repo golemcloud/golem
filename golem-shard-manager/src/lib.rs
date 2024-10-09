@@ -44,6 +44,7 @@ use persistence::{PersistenceService, PersistenceServiceDefault};
 use prometheus::{default_registry, Registry};
 use shard_management::ShardManagement;
 use shard_manager_config::ShardManagerConfig;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tonic::Response;
 use tracing::Instrument;
@@ -292,7 +293,11 @@ async fn async_main(
 
     Server::builder()
         .add_service(reflection_service)
-        .add_service(service)
+        .add_service(
+            service
+                .accept_compressed(CompressionEncoding::Gzip)
+                .send_compressed(CompressionEncoding::Gzip),
+        )
         .add_service(health_service)
         .serve(addr)
         .await?;

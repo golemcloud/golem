@@ -31,6 +31,7 @@ use http::Uri;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
@@ -150,7 +151,11 @@ impl RemoteWorkerProxy {
     pub fn new(endpoint: Uri, access_token: Uuid) -> Self {
         Self {
             client: GrpcClient::new(
-                WorkerServiceClient::new,
+                |channel| {
+                    WorkerServiceClient::new(channel)
+                        .send_compressed(CompressionEncoding::Gzip)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                },
                 endpoint.as_http_02(),
                 Default::default(), // TODO
             ),

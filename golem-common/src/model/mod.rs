@@ -828,7 +828,7 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Encode, Decode, Eq, Hash, PartialEq)]
 pub struct IdempotencyKey {
     pub value: String,
 }
@@ -867,6 +867,25 @@ impl IdempotencyKey {
         };
         let name = format!("oplog-index-{}", oplog_index);
         Self::from_uuid(Uuid::new_v5(&namespace, name.as_bytes()))
+    }
+}
+
+impl Serialize for IdempotencyKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for IdempotencyKey {
+    fn deserialize<D>(deserializer: D) -> Result<IdempotencyKey, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(IdempotencyKey { value })
     }
 }
 
@@ -2789,5 +2808,13 @@ mod tests {
         let serialized = status.to_json_string();
         let deserialized: WorkerStatus = serde_json::from_str(&serialized).unwrap();
         assert_eq!(status, deserialized);
+    }
+
+    #[test]
+    fn idempotency_key_serialization_poem_serde_equivalence() {
+        let key = IdempotencyKey::fresh();
+        let serialized = key.to_json_string();
+        let deserialized: IdempotencyKey = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(key, deserialized);
     }
 }
