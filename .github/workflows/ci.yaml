@@ -51,7 +51,7 @@ jobs:
       - name: Unit Tests
         run: cargo test --tests --workspace --exclude wasm-rpc-stubgen-tests-integration -- --format junit --logfile target/report.xml
       - name: WASM RPC stubgen integration tests
-        run: cargo test --tests --package wasm-rpc-stubgen-tests-integration -- --test-threads=1 -- --format junit --logfile target/report.xml
+        run: cargo test --tests --package wasm-rpc-stubgen-tests-integration -- --test-threads=1 --format junit --logfile target/report.xml
       - name: Build in stub mode
         run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
       - name: Publish Test Report
