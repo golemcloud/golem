@@ -1214,6 +1214,7 @@ impl RunningWorker {
             parent.scheduler_service(),
             parent.rpc(),
             parent.worker_proxy(),
+            parent.component_service(),
             parent.extra_deps(),
             parent.config(),
             WorkerConfig::new(
@@ -1944,6 +1945,9 @@ fn calculate_latest_worker_status(
         match entry {
             OplogEntry::Create { .. } => {
                 result = WorkerStatus::Idle;
+            }
+            OplogEntry::ImportedFunctionInvokedV1 { .. } => {
+                result = WorkerStatus::Running;
             }
             OplogEntry::ImportedFunctionInvoked { .. } => {
                 result = WorkerStatus::Running;

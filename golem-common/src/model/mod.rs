@@ -35,6 +35,9 @@ use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::worker::Cursor;
+use golem_wasm_ast::analysis::analysed_type::{field, record, s64, str};
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::IntoValue;
 use poem::http::Uri;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
@@ -47,6 +50,7 @@ use uuid::{uuid, Uuid};
 pub mod component_metadata;
 pub mod exports;
 pub mod oplog;
+pub mod public_oplog;
 pub mod regions;
 pub mod trim_date;
 
@@ -309,6 +313,22 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
     }
 }
 
+impl IntoValue for WorkerId {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::Record(vec![
+            self.component_id.into_value(),
+            self.worker_name.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("component_id", ComponentId::get_type()),
+            field("worker_name", std::string::String::get_type()),
+        ])
+    }
+}
+
 /// Associates a worker-id with its owner account
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
 pub struct OwnedWorkerId {
@@ -499,6 +519,22 @@ impl Display for PromiseId {
     }
 }
 
+impl IntoValue for PromiseId {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::Record(vec![
+            self.worker_id.into_value(),
+            self.oplog_idx.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        record(vec![
+            field("worker_id", WorkerId::get_type()),
+            field("oplog_idx", OplogIndex::get_type()),
+        ])
+    }
+}
+
 /// Actions that can be scheduled to be executed at a given point in time
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Encode, Decode)]
 pub enum ScheduledAction {
@@ -630,6 +666,16 @@ impl From<ShardId> for golem_api_grpc::proto::golem::shardmanager::ShardId {
 impl From<golem_api_grpc::proto::golem::shardmanager::ShardId> for ShardId {
     fn from(proto: golem_api_grpc::proto::golem::shardmanager::ShardId) -> Self {
         Self { value: proto.value }
+    }
+}
+
+impl IntoValue for ShardId {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::S64(self.value)
+    }
+
+    fn get_type() -> AnalysedType {
+        s64()
     }
 }
 
@@ -782,7 +828,7 @@ impl Display for ShardAssignment {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Encode, Decode, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Encode, Decode, Eq, Hash, PartialEq)]
 pub struct IdempotencyKey {
     pub value: String,
 }
@@ -824,6 +870,25 @@ impl IdempotencyKey {
     }
 }
 
+impl Serialize for IdempotencyKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for IdempotencyKey {
+    fn deserialize<D>(deserializer: D) -> Result<IdempotencyKey, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(IdempotencyKey { value })
+    }
+}
+
 impl From<golem_api_grpc::proto::golem::worker::IdempotencyKey> for IdempotencyKey {
     fn from(proto: golem_api_grpc::proto::golem::worker::IdempotencyKey) -> Self {
         Self { value: proto.value }
@@ -833,6 +898,16 @@ impl From<golem_api_grpc::proto::golem::worker::IdempotencyKey> for IdempotencyK
 impl From<IdempotencyKey> for golem_api_grpc::proto::golem::worker::IdempotencyKey {
     fn from(value: IdempotencyKey) -> Self {
         Self { value: value.value }
+    }
+}
+
+impl IntoValue for IdempotencyKey {
+    fn into_value(self) -> golem_wasm_rpc::Value {
+        golem_wasm_rpc::Value::String(self.value)
+    }
+
+    fn get_type() -> AnalysedType {
+        str()
     }
 }
 
@@ -1031,6 +1106,20 @@ impl FromStr for WorkerStatus {
             "failed" => Ok(WorkerStatus::Failed),
             "exited" => Ok(WorkerStatus::Exited),
             _ => Err(format!("Unknown worker status: {}", s)),
+        }
+    }
+}
+
+impl Display for WorkerStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerStatus::Running => write!(f, "Running"),
+            WorkerStatus::Idle => write!(f, "Idle"),
+            WorkerStatus::Suspended => write!(f, "Suspended"),
+            WorkerStatus::Interrupted => write!(f, "Interrupted"),
+            WorkerStatus::Retrying => write!(f, "Retrying"),
+            WorkerStatus::Failed => write!(f, "Failed"),
+            WorkerStatus::Exited => write!(f, "Exited"),
         }
     }
 }
@@ -1390,6 +1479,7 @@ impl Display for WorkerNotFilter {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Union)]
 #[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
 pub enum WorkerFilter {
     Name(WorkerNameFilter),
     Status(WorkerStatusFilter),
@@ -2356,6 +2446,28 @@ impl From<ComponentType> for golem_api_grpc::proto::golem::component::ComponentT
     }
 }
 
+impl Display for ComponentType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ComponentType::Durable => "Durable",
+            ComponentType::Ephemeral => "Ephemeral",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl FromStr for ComponentType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Durable" => Ok(ComponentType::Durable),
+            "Ephemeral" => Ok(ComponentType::Ephemeral),
+            _ => Err(format!("Unknown Component Type: {}", s)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -2370,6 +2482,7 @@ mod tests {
         WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
+    use poem_openapi::types::ToJSON;
     use rand::{thread_rng, Rng};
     use serde::{Deserialize, Serialize};
 
@@ -2687,5 +2800,21 @@ mod tests {
         assert_ne!(derived12a, derived32);
         assert_ne!(derived22a, derived32);
         assert_ne!(derived31, derived32);
+    }
+
+    #[test]
+    fn worker_status_serialization_poem_serde_equivalence() {
+        let status = WorkerStatus::Retrying;
+        let serialized = status.to_json_string();
+        let deserialized: WorkerStatus = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(status, deserialized);
+    }
+
+    #[test]
+    fn idempotency_key_serialization_poem_serde_equivalence() {
+        let key = IdempotencyKey::fresh();
+        let serialized = key.to_json_string();
+        let deserialized: IdempotencyKey = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(key, deserialized);
     }
 }

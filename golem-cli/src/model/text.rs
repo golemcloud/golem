@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 pub mod fmt {
     use cli_table::{print_stdout, Row, Title, WithTitle};
     use colored::control::SHOULD_COLORIZE;
@@ -677,10 +691,16 @@ pub mod worker {
     use crate::model::{
         IdempotencyKey, WorkerMetadata, WorkerMetadataView, WorkersMetadataResponseView,
     };
+    use base64::prelude::BASE64_STANDARD;
+    use base64::Engine;
     use chrono::{DateTime, Utc};
     use cli_table::{format::Justify, Table};
     use colored::Colorize;
+    use golem_client::model::PublicOplogEntry;
+    use golem_common::model::public_oplog::{PublicUpdateDescription, PublicWorkerInvocation};
     use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::{type_annotated_value_to_string, ValueAndType};
     use indoc::{formatdoc, indoc, printdoc};
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
@@ -927,5 +947,267 @@ pub mod worker {
                 }
             }
         }
+    }
+
+    impl TextFormat for Vec<(u64, PublicOplogEntry)> {
+        fn print(&self) {
+            for (idx, entry) in self {
+                print!("{}: ", format_main_id(&format!("#{idx:0>5}")));
+                entry.print()
+            }
+        }
+    }
+
+    impl TextFormat for PublicOplogEntry {
+        fn print(&self) {
+            let pad = "          ";
+            match self {
+                PublicOplogEntry::Create(params) => {
+                    println!("{}", format_message_highlight("CREATE"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}component version: {}",
+                        format_id(&params.component_version)
+                    );
+                    println!(
+                        "{pad}args:              {}",
+                        format_id(&params.args.join(", "))
+                    );
+                    println!("{pad}env:");
+                    for (k, v) in &params.env {
+                        println!("{pad}  - {}: {}", k, format_id(&v));
+                    }
+                    if let Some(parent) = params.parent.as_ref() {
+                        println!("{pad}parent:            {}", format_id(parent));
+                    }
+                }
+                PublicOplogEntry::ImportedFunctionInvoked(params) => {
+                    println!(
+                        "{} {}",
+                        format_message_highlight("CALL"),
+                        format_id(&params.function_name)
+                    );
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!("{pad}input:             {}", print_value(&params.request));
+                    println!("{pad}result:            {}", print_value(&params.response));
+                }
+                PublicOplogEntry::ExportedFunctionInvoked(params) => {
+                    println!(
+                        "{} {}",
+                        format_message_highlight("INVOKE"),
+                        format_id(&params.function_name)
+                    );
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}idempotency key:   {}",
+                        format_id(&params.idempotency_key)
+                    );
+                    println!("{pad}input:");
+                    for param in &params.request {
+                        println!("{pad}  - {}", print_value(param));
+                    }
+                }
+                PublicOplogEntry::ExportedFunctionCompleted(params) => {
+                    println!("{}", format_message_highlight("INVOKE COMPLETED"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}consumed fuel:     {}",
+                        format_id(&params.consumed_fuel)
+                    );
+                    println!("{pad}result:            {}", print_value(&params.response));
+                }
+                PublicOplogEntry::Suspend(params) => {
+                    println!("{}", format_message_highlight("SUSPEND"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                }
+                PublicOplogEntry::Error(params) => {
+                    println!("{}", format_message_highlight("ERROR"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!("{pad}error:             {}", format_error(&params.error));
+                }
+                PublicOplogEntry::NoOp(params) => {
+                    println!("{}", format_message_highlight("NOP"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                }
+                PublicOplogEntry::Jump(params) => {
+                    println!("{}", format_message_highlight("JUMP"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!("{pad}from:              {}", format_id(&params.jump.start));
+                    println!("{pad}to:                {}", format_id(&params.jump.end));
+                }
+                PublicOplogEntry::Interrupted(params) => {
+                    println!("{}", format_message_highlight("INTERRUPTED"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                }
+                PublicOplogEntry::Exited(params) => {
+                    println!("{}", format_message_highlight("EXITED"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                }
+                PublicOplogEntry::ChangeRetryPolicy(params) => {
+                    println!("{}", format_message_highlight("CHANGE RETRY POLICY"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}max attempts:      {}",
+                        format_id(&params.new_policy.max_attempts)
+                    );
+                    println!(
+                        "{pad}min delay:         {} ms",
+                        format_id(&params.new_policy.min_delay.as_millis())
+                    );
+                    println!(
+                        "{pad}max delay:         {} ms",
+                        format_id(&params.new_policy.max_delay.as_millis())
+                    );
+                    println!(
+                        "{pad}multiplier:        {}",
+                        format_id(&params.new_policy.multiplier)
+                    );
+                    println!(
+                        "{pad}max jitter factor: {}",
+                        format_id(
+                            &params
+                                .new_policy
+                                .max_jitter_factor
+                                .map(|x| x.to_string())
+                                .unwrap_or("-".to_string())
+                        )
+                    );
+                }
+                PublicOplogEntry::BeginAtomicRegion(params) => {
+                    println!("{}", format_message_highlight("BEGIN ATOMIC REGION"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                }
+                PublicOplogEntry::EndAtomicRegion(params) => {
+                    println!("{}", format_message_highlight("END ATOMIC REGION"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!("{pad}begin index:       {}", format_id(&params.begin_index));
+                }
+                PublicOplogEntry::BeginRemoteWrite(params) => {
+                    println!("{}", format_message_highlight("BEGIN REMOTE WRITE"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                }
+                PublicOplogEntry::EndRemoteWrite(params) => {
+                    println!("{}", format_message_highlight("END REMOTE WRITE"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!("{pad}begin index:       {}", format_id(&params.begin_index));
+                }
+                PublicOplogEntry::PendingWorkerInvocation(params) => match &params.invocation {
+                    PublicWorkerInvocation::ExportedFunction(inner_params) => {
+                        println!(
+                            "{} {}",
+                            format_message_highlight("ENQUEUED INVOCATION"),
+                            format_id(&inner_params.full_function_name)
+                        );
+                        println!("{pad}at:                {}", format_id(&params.timestamp));
+                        println!(
+                            "{pad}idempotency key:   {}",
+                            format_id(&inner_params.idempotency_key)
+                        );
+                        if let Some(input) = &inner_params.function_input {
+                            println!("{pad}input:");
+                            for param in input {
+                                println!("{pad}  - {}", print_value(param));
+                            }
+                        }
+                    }
+                    PublicWorkerInvocation::ManualUpdate(inner_params) => {
+                        println!("{}", format_message_highlight("ENQUEUED MANUAL UPDATE"));
+                        println!("{pad}at:                {}", format_id(&params.timestamp));
+                        println!(
+                            "{pad}target version: {}",
+                            format_id(&inner_params.target_version)
+                        );
+                    }
+                },
+                PublicOplogEntry::PendingUpdate(params) => {
+                    println!("{}", format_message_highlight("ENQUEUED UPDATE"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}target version:    {}",
+                        format_id(&params.target_version)
+                    );
+                    match &params.description {
+                        PublicUpdateDescription::Automatic(_) => {
+                            println!("{pad}type:              {}", format_id("automatic"));
+                        }
+                        PublicUpdateDescription::SnapshotBased(inner_params) => {
+                            println!("{pad}type:              {}", format_id("snapshot based"));
+                            println!(
+                                "{pad}snapshot:          {}",
+                                BASE64_STANDARD.encode(&inner_params.payload)
+                            );
+                        }
+                    }
+                }
+                PublicOplogEntry::SuccessfulUpdate(params) => {
+                    println!("{}", format_message_highlight("SUCCESSFUL UPDATE"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}target version:    {}",
+                        format_id(&params.target_version)
+                    );
+                }
+                PublicOplogEntry::FailedUpdate(params) => {
+                    println!("{}", format_message_highlight("FAILED UPDATE"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}target version:    {}",
+                        format_id(&params.target_version)
+                    );
+                    if let Some(details) = &params.details {
+                        println!("{pad}error:             {}", format_error(details));
+                    }
+                }
+                PublicOplogEntry::GrowMemory(params) => {
+                    println!("{}", format_message_highlight("GROW MEMORY"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}increase:          {}",
+                        format_id(&format_binary_size(&params.delta))
+                    );
+                }
+                PublicOplogEntry::CreateResource(params) => {
+                    println!("{}", format_message_highlight("CREATE RESOURCE"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!("{pad}resource id:       {}", format_id(&params.id));
+                }
+                PublicOplogEntry::DropResource(params) => {
+                    println!("{}", format_message_highlight("DROP RESOURCE"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!("{pad}resource id:       {}", format_id(&params.id));
+                }
+                PublicOplogEntry::DescribeResource(params) => {
+                    println!("{}", format_message_highlight("DESCRIBE RESOURCE"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!("{pad}resource id:       {}", format_id(&params.id));
+                    println!(
+                        "{pad}resource name:     {}",
+                        format_id(&params.resource_name)
+                    );
+                    println!("{pad}resource parameters:");
+                    for value in &params.resource_params {
+                        println!("{pad}  - {}", print_value(value));
+                    }
+                }
+                PublicOplogEntry::Log(params) => {
+                    println!("{}", format_message_highlight("LOG"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                    println!(
+                        "{pad}level:             {}",
+                        format_id(&format!("{:?}", params.level))
+                    );
+                    println!("{pad}message:           {}", params.message);
+                }
+                PublicOplogEntry::Restart(params) => {
+                    println!("{}", format_message_highlight("RESTART"));
+                    println!("{pad}at:                {}", format_id(&params.timestamp));
+                }
+            }
+        }
+    }
+
+    fn print_value(value: &ValueAndType) -> String {
+        let tav: TypeAnnotatedValue = value.try_into().expect("Failed to convert value to string");
+        type_annotated_value_to_string(&tav).expect("Failed to convert value to string")
     }
 }

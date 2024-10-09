@@ -39,27 +39,29 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("blobstore::blobstore", "create_container");
         let account_id = self.state.owned_worker_id.account_id();
         let name_clone = name.clone();
-        let result: Result<u64, anyhow::Error> = Durability::<Ctx, u64, SerializableError>::wrap(
-            self,
-            WrappedFunctionType::WriteRemote,
-            "golem blobstore::blobstore::create_container",
-            |ctx| {
-                Box::pin(async move {
-                    let _ = ctx
-                        .state
-                        .blob_store_service
-                        .create_container(account_id.clone(), name_clone.clone())
-                        .await?;
-                    Ok(ctx
-                        .state
-                        .blob_store_service
-                        .get_container(account_id.clone(), name_clone)
-                        .await?
-                        .unwrap())
-                })
-            },
-        )
-        .await;
+        let result: Result<u64, anyhow::Error> =
+            Durability::<Ctx, String, u64, SerializableError>::wrap(
+                self,
+                WrappedFunctionType::WriteRemote,
+                "golem blobstore::blobstore::create_container",
+                name.clone(),
+                |ctx| {
+                    Box::pin(async move {
+                        let _ = ctx
+                            .state
+                            .blob_store_service
+                            .create_container(account_id.clone(), name_clone.clone())
+                            .await?;
+                        Ok(ctx
+                            .state
+                            .blob_store_service
+                            .get_container(account_id, name_clone)
+                            .await?
+                            .unwrap())
+                    })
+                },
+            )
+            .await;
         match result {
             Ok(created_at) => {
                 let container = self
@@ -79,14 +81,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "get_container");
         let account_id = self.state.owned_worker_id.account_id();
-        let result = Durability::<Ctx, Option<u64>, SerializableError>::wrap(
+        let result = Durability::<Ctx, String, Option<u64>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem blobstore::blobstore::get_container",
+            name.clone(),
             |ctx| {
                 ctx.state
                     .blob_store_service
-                    .get_container(account_id.clone(), name.clone())
+                    .get_container(account_id, name.clone())
             },
         )
         .await;
@@ -107,14 +110,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "delete_container");
         let account_id = self.state.owned_worker_id.account_id();
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
+        let result = Durability::<Ctx, String, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::blobstore::delete_container",
+            name.clone(),
             |ctx| {
                 ctx.state
                     .blob_store_service
-                    .delete_container(account_id.clone(), name.clone())
+                    .delete_container(account_id, name)
             },
         )
         .await;
@@ -131,14 +135,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "container_exists");
         let account_id = self.state.owned_worker_id.account_id();
-        let result = Durability::<Ctx, bool, SerializableError>::wrap(
+        let result = Durability::<Ctx, String, bool, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem blobstore::blobstore::container_exists",
+            name.clone(),
             |ctx| {
                 ctx.state
                     .blob_store_service
-                    .container_exists(account_id.clone(), name.clone())
+                    .container_exists(account_id, name)
             },
         )
         .await;
@@ -156,21 +161,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "copy_object");
         let account_id = self.state.owned_worker_id.account_id();
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
-            self,
-            WrappedFunctionType::WriteRemote,
-            "golem blobstore::blobstore::copy_object",
-            |ctx| {
-                ctx.state.blob_store_service.copy_object(
-                    account_id.clone(),
+        let result =
+            Durability::<Ctx, (String, String, String, String), (), SerializableError>::wrap(
+                self,
+                WrappedFunctionType::WriteRemote,
+                "golem blobstore::blobstore::copy_object",
+                (
                     src.container.clone(),
                     src.object.clone(),
                     dest.container.clone(),
                     dest.object.clone(),
-                )
-            },
-        )
-        .await;
+                ),
+                |ctx| {
+                    ctx.state.blob_store_service.copy_object(
+                        account_id,
+                        src.container,
+                        src.object,
+                        dest.container,
+                        dest.object,
+                    )
+                },
+            )
+            .await;
         match result {
             Ok(_) => Ok(Ok(())),
             Err(e) => Ok(Err(format!("{:?}", e))),
@@ -185,21 +197,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("blobstore::blobstore", "move_object");
         let account_id = self.state.owned_worker_id.account_id();
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
-            self,
-            WrappedFunctionType::WriteRemote,
-            "golem blobstore::blobstore::move_object",
-            |ctx| {
-                ctx.state.blob_store_service.move_object(
-                    account_id.clone(),
+        let result =
+            Durability::<Ctx, (String, String, String, String), (), SerializableError>::wrap(
+                self,
+                WrappedFunctionType::WriteRemote,
+                "golem blobstore::blobstore::move_object",
+                (
                     src.container.clone(),
                     src.object.clone(),
                     dest.container.clone(),
                     dest.object.clone(),
-                )
-            },
-        )
-        .await;
+                ),
+                |ctx| {
+                    ctx.state.blob_store_service.move_object(
+                        account_id,
+                        src.container,
+                        src.object,
+                        dest.container,
+                        dest.object,
+                    )
+                },
+            )
+            .await;
         match result {
             Ok(_) => Ok(Ok(())),
             Err(e) => Ok(Err(format!("{:?}", e))),

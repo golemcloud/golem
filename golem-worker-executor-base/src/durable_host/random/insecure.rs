@@ -26,10 +26,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_insecure_random_bytes(&mut self, len: u64) -> anyhow::Result<Vec<u8>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("random::insecure", "get_insecure_random_bytes");
-        Durability::<Ctx, Vec<u8>, SerializableError>::wrap(
+        Durability::<Ctx, (), Vec<u8>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "golem random::insecure::get_insecure_random_bytes",
+            (),
             |ctx| {
                 Box::pin(async move {
                     Host::get_insecure_random_bytes(&mut ctx.as_wasi_view(), len).await
@@ -42,10 +43,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn get_insecure_random_u64(&mut self) -> anyhow::Result<u64> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("random::insecure", "get_insecure_random_u64");
-        Durability::<Ctx, u64, SerializableError>::wrap(
+        Durability::<Ctx, (), u64, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "golem random::insecure::get_insecure_random_u64",
+            (),
             |ctx| Box::pin(async { Host::get_insecure_random_u64(&mut ctx.as_wasi_view()).await }),
         )
         .await

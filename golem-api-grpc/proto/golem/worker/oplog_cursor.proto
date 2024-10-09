@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package golem.worker;
+
+message OplogCursor {
+  uint64 next_oplog_index = 1;
+  uint64 current_component_version = 2;
+}

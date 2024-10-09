@@ -51,6 +51,7 @@ pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
 pub mod measure_test_component_mem;
+pub mod observability;
 pub mod rust_rpc;
 pub mod scalability;
 pub mod transactions;

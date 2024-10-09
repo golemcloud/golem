@@ -14,6 +14,8 @@ use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
 
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::OplogCursor;
 use tracing::Instrument;
 
 pub struct WorkerApi {
@@ -140,21 +142,19 @@ impl WorkerApi {
         let worker_id = make_target_worker_id(component_id.0, None)?;
 
         let record = recorded_http_api_request!(
-            "invoke_and_await_function",
+            "invoke_and_await_function_without_name",
             worker_id = worker_id.to_string(),
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
         );
 
-        let precise_jsons = params.0.params;
-
         let response = self
             .worker_service
-            .invoke_and_await_function_json(
+            .validate_and_invoke_and_await_typed(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                precise_jsons,
+                params.0.params,
                 None,
                 empty_worker_metadata(),
             )
@@ -162,6 +162,7 @@ impl WorkerApi {
             .await
             .map_err(|e| e.into())
             .map(|result| Json(InvokeResult { result }));
+
         record.result(response)
     }
 
@@ -190,15 +191,13 @@ impl WorkerApi {
             function = function.0
         );
 
-        let precise_jsons = params.0.params;
-
         let response = self
             .worker_service
-            .invoke_and_await_function_json(
+            .validate_and_invoke_and_await_typed(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                precise_jsons,
+                params.0.params,
                 None,
                 empty_worker_metadata(),
             )
@@ -228,21 +227,19 @@ impl WorkerApi {
         let worker_id = make_target_worker_id(component_id.0, None)?;
 
         let record = recorded_http_api_request!(
-            "invoke_function",
+            "invoke_function_without_name",
             worker_id = worker_id.to_string(),
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
         );
 
-        let precise_json_array = params.0.params;
-
         let response = self
             .worker_service
-            .invoke_function_json(
+            .validate_and_invoke(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                precise_json_array.clone(),
+                params.0.params,
                 None,
                 empty_worker_metadata(),
             )
@@ -279,15 +276,13 @@ impl WorkerApi {
             function = function.0
         );
 
-        let precise_json_array = params.0.params;
-
         let response = self
             .worker_service
-            .invoke_function_json(
+            .validate_and_invoke(
                 &worker_id,
                 idempotency_key.0,
                 function.0,
-                precise_json_array.clone(),
+                params.0.params,
                 None,
                 empty_worker_metadata(),
             )
@@ -611,6 +606,42 @@ impl WorkerApi {
             .await
             .map_err(|e| e.into())
             .map(|_| Json(UpdateWorkerResponse {}));
+
+        record.result(response)
+    }
+
+    /// Get the oplog of a worker
+    #[oai(
+        path = "/:component_id/workers/:worker_name/oplog",
+        method = "get",
+        operation_id = "get_oplog"
+    )]
+    async fn get_oplog(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        from: Query<u64>,
+        count: Query<u64>,
+        cursor: Query<Option<OplogCursor>>,
+    ) -> Result<Json<GetOplogResponse>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_oplog(
+                &worker_id,
+                OplogIndex::from_u64(from.0),
+                cursor.0,
+                count.0,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
 
         record.result(response)
     }

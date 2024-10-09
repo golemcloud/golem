@@ -420,6 +420,24 @@ impl OplogService for MultiLayerOplogService {
             }
         }
     }
+
+    async fn upload_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        data: &[u8],
+    ) -> Result<OplogPayload, String> {
+        self.primary.upload_payload(owned_worker_id, data).await
+    }
+
+    async fn download_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        payload: &OplogPayload,
+    ) -> Result<Bytes, String> {
+        self.primary
+            .download_payload(owned_worker_id, payload)
+            .await
+    }
 }
 
 pub struct MultiLayerOplog {

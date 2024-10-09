@@ -133,5 +133,15 @@ macro_rules! newtype_uuid {
                 write!(f, "{}", &self.0)
             }
         }
+
+        impl golem_wasm_rpc::IntoValue for $name {
+            fn into_value(self) -> golem_wasm_rpc::Value {
+                golem_wasm_rpc::Value::String(self.0.to_string())
+            }
+
+            fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
+                golem_wasm_ast::analysis::analysed_type::str()
+            }
+        }
     };
 }

@@ -31,10 +31,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
         let current_dirs1 = Host::get_directories(&mut self.as_wasi_view()).await?;
         let current_dirs2 = Host::get_directories(&mut self.as_wasi_view()).await?;
-        Durability::<Ctx, Vec<String>, SerializableError>::custom_wrap(
+        Durability::<Ctx, (), Vec<String>, SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "cli::preopens::get_directories",
+            (),
             |_ctx| Box::pin(async move { Ok(current_dirs1) }),
             |_ctx, dirs| {
                 // We can only serialize the names

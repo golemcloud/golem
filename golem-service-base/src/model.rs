@@ -14,6 +14,7 @@
 
 use bincode::{Decode, Encode};
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
     WorkerFilter, WorkerId, WorkerStatus,
@@ -837,6 +838,14 @@ pub struct ResumeResponse {}
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct UpdateWorkerResponse {}
 
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+pub struct GetOplogResponse {
+    pub entries: Vec<PublicOplogEntry>,
+    pub next: Option<OplogCursor>,
+    pub first_index_in_chunk: u64,
+    pub last_index: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
 pub enum WorkerUpdateMode {
     Automatic,
@@ -1136,6 +1145,7 @@ pub struct InvokeResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, thiserror::Error)]
 #[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
 pub enum GolemError {
     #[error(transparent)]
     InvalidRequest(GolemErrorInvalidRequest),

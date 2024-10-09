@@ -75,6 +75,7 @@ use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use storage::sqlite_types::SqlitePool;
 use tokio::runtime::Handle;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
 use tracing::info;
 use uuid::Uuid;
@@ -387,7 +388,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             WorkerExecutorImpl::<Ctx, All<Ctx>>::new(services, lazy_worker_activator, addr.port())
                 .await?;
 
-        let service = WorkerExecutorServer::new(worker_executor);
+        let service = WorkerExecutorServer::new(worker_executor)
+            .accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Gzip);
 
         info!("Starting gRPC server on port {}", addr.port());
         Server::builder()

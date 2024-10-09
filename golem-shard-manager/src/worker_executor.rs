@@ -18,6 +18,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Response;
 use tonic_health::pb::health_check_response::ServingStatus;
@@ -181,7 +182,11 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
 impl WorkerExecutorServiceDefault {
     pub fn new(config: WorkerExecutorServiceConfig) -> Self {
         let client = MultiTargetGrpcClient::new(
-            WorkerExecutorClient::new,
+            |channel| {
+                WorkerExecutorClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
             GrpcClientConfig {
                 retries_on_unavailable: config.retries.clone(),
                 ..Default::default() // TODO: configure

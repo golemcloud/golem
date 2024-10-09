@@ -96,10 +96,11 @@ mod durability;
 mod replay_state;
 mod sync_helper;
 
+use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
 use crate::function_result_interpreter::interpret_function_results;
-use crate::services::component::ComponentMetadata;
+use crate::services::component::{ComponentMetadata, ComponentService};
 use crate::services::worker_proxy::WorkerProxy;
 use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
@@ -136,6 +137,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
@@ -191,6 +193,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_enumeration_service,
                 key_value_service,
                 blob_store_service,
+                component_service,
                 config.clone(),
                 owned_worker_id.clone(),
                 rpc,
@@ -1517,6 +1520,8 @@ struct HttpRequestState {
     pub close_owner: HttpRequestCloseOwner,
     /// The handle of the FutureIncomingResponse that is registered into the open_function_table
     pub root_handle: u32,
+    /// Information about the request to be included in the oplog
+    pub request: SerializableHttpRequest,
 }
 
 pub struct PrivateDurableWorkerState {
@@ -1528,6 +1533,7 @@ pub struct PrivateDurableWorkerState {
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+    component_service: Arc<dyn ComponentService + Send + Sync>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     current_idempotency_key: Option<IdempotencyKey>,
@@ -1565,6 +1571,7 @@ impl PrivateDurableWorkerState {
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc + Send + Sync>,
@@ -1591,6 +1598,7 @@ impl PrivateDurableWorkerState {
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
+            component_service,
             config,
             owned_worker_id,
             current_idempotency_key: None,
@@ -1979,13 +1987,13 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
-    ($private_state:expr, $case:path) => {
+    ($private_state:expr, $($cases:path),+) => {
         loop {
             let (oplog_index, oplog_entry) = $private_state.get_oplog_entry().await;
             match oplog_entry {
-                $case { .. } => {
+                $($cases { .. } => {
                     break Ok((oplog_index, oplog_entry));
-                }
+                })+
                 entry if entry.is_hint() => {}
                 _ => {
                     break Err($crate::error::GolemError::unexpected_oplog_entry(

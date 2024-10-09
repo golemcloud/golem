@@ -75,14 +75,27 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
             component_size,
             initial_total_linear_memory_size,
         },
+        OplogEntry::ImportedFunctionInvokedV1 {
+            timestamp,
+            function_name,
+            response,
+            wrapped_function_type,
+        } => OplogEntry::ImportedFunctionInvokedV1 {
+            timestamp: rounded_ts(timestamp),
+            function_name,
+            response,
+            wrapped_function_type,
+        },
         OplogEntry::ImportedFunctionInvoked {
             timestamp,
             function_name,
+            request,
             response,
             wrapped_function_type,
         } => OplogEntry::ImportedFunctionInvoked {
             timestamp: rounded_ts(timestamp),
             function_name,
+            request,
             response,
             wrapped_function_type,
         },
@@ -357,6 +370,7 @@ async fn entries_with_small_payload() {
         oplog
             .add_imported_function_invoked(
                 "f1".to_string(),
+                &"request".to_string(),
                 &"response".to_string(),
                 WrappedFunctionType::ReadRemote,
             )
@@ -470,6 +484,7 @@ async fn entries_with_large_payload() {
         oplog
             .add_imported_function_invoked(
                 "f1".to_string(),
+                &"request".to_string(),
                 &large_payload1,
                 WrappedFunctionType::ReadRemote,
             )
@@ -649,6 +664,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             oplog
                 .add_imported_function_invoked(
                     "test-function".to_string(),
+                    &"request".to_string(),
                     &i,
                     WrappedFunctionType::ReadLocal,
                 )

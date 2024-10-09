@@ -43,6 +43,32 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         "0.0.0",
         false,
         true,
+        &[
+            ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
+            ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
+            (
+                "ComponentMetadata",
+                "golem_common::model::component_metadata::ComponentMetadata",
+            ),
+            ("ComponentType", "golem_common::model::ComponentType"),
+            (
+                "OplogCursor",
+                "golem_common::model::public_oplog::OplogCursor",
+            ),
+            ("PromiseId", "golem_common::model::PromiseId"),
+            ("ShardId", "golem_common::model::ShardId"),
+            (
+                "TypeAnnotatedValue",
+                "golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue",
+            ),
+            ("WorkerFilter", "golem_common::model::WorkerFilter"),
+            ("WorkerId", "golem_common::model::WorkerId"),
+            ("WorkerStatus", "golem_common::model::WorkerStatus"),
+            (
+                "PublicOplogEntry",
+                "golem_common::model::public_oplog::PublicOplogEntry",
+            ),
+        ],
     )
     .expect("Failed to generate client code from OpenAPI spec.");
 }

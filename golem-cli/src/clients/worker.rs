@@ -19,6 +19,7 @@ use crate::model::{
 };
 use async_trait::async_trait;
 use golem_client::model::{InvokeParameters, InvokeResult, ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 
 #[async_trait]
@@ -93,6 +94,12 @@ pub trait WorkerClient {
         mode: WorkerUpdateMode,
         target_version: u64,
     ) -> Result<(), GolemError>;
+
+    async fn get_oplog(
+        &self,
+        worker_urn: WorkerUrn,
+        from: u64,
+    ) -> Result<Vec<(u64, PublicOplogEntry)>, GolemError>;
 }
 
 pub fn worker_name_required(urn: &WorkerUrn) -> Result<String, GolemError> {

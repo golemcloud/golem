@@ -7,10 +7,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = var_os("OUT_DIR").unwrap();
     let target_file = Path::new(&out_dir).join("preview2_mod.rs");
 
-    std::fs::write(target_file, preview2_mod_gen(&golem_wit_root)).unwrap();
+    std::fs::write(target_file.clone(), preview2_mod_gen(&golem_wit_root)).unwrap();
 
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed={target_file:?}");
 
     Ok(())
 }
@@ -28,7 +29,17 @@ fn find_package_root(name: &str) -> String {
             if p.name == name {
                 match acc {
                     None => Some(p),
-                    Some(cp) if cp.version < p.version => Some(p),
+                    Some(cp)
+                        if (cp.version < p.version
+                            && (cp.version.major != 0
+                                || cp.version.minor != 0
+                                || cp.version.patch != 0))
+                            || (p.version.major == 0
+                                && p.version.minor == 0
+                                && p.version.patch == 0) =>
+                    {
+                        Some(p)
+                    }
                     _ => acc,
                 }
             } else {
@@ -46,6 +57,8 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
         path: "{golem_wit_path}/wit",
         interfaces: "
           import golem:api/host@0.2.0;
+          import golem:api/host@1.1.0-rc1;
+          import golem:api/oplog@1.1.0-rc1;
 
           import wasi:blobstore/blobstore;
           import wasi:blobstore/container;
@@ -74,6 +87,7 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
             "wasi:keyvalue/types/incoming-value": super::durable_host::keyvalue::types::IncomingValueEntry,
             "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
             "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
+            "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
         }},
         skip_mut_forwarding_impls: true,
     }});

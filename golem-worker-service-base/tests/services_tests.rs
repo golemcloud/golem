@@ -8,7 +8,7 @@ mod tests {
     use golem_service_base::model::Component;
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-        AnalysedInstance, AnalysedType, TypeStr,
+        AnalysedInstance,
     };
     use golem_worker_service_base::api_definition::http::HttpApiDefinition;
     use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest;
@@ -29,6 +29,7 @@ mod tests {
     };
 
     use chrono::Utc;
+    use golem_wasm_ast::analysis::analysed_type::str;
     use std::sync::Arc;
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};
@@ -153,11 +154,11 @@ mod tests {
                     name: "get-cart-contents".to_string(),
                     parameters: vec![AnalysedFunctionParameter {
                         name: "a".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     }],
                     results: vec![AnalysedFunctionResult {
                         name: None,
-                        typ: AnalysedType::Str(TypeStr),
+                        typ: str(),
                     }],
                 }],
             });

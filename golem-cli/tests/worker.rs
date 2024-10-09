@@ -1,9 +1,23 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::cli::{Cli, CliConfig, CliLive};
 use crate::RefKind;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, IdempotencyKey, WorkersMetadataResponseView};
-use golem_client::model::UpdateRecord;
+use golem_client::model::{PublicOplogEntry, UpdateRecord};
 use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::WorkerUrn;
@@ -104,6 +118,11 @@ fn make(
             format!("worker_invoke_without_name_ephemeral{suffix}"),
             ctx.clone(),
             worker_invoke_without_name_ephemeral,
+        ),
+        Trial::test_in_context(
+            format!("worker_get_oplog{suffix}"),
+            ctx.clone(),
+            worker_get_oplog,
         ),
     ]
 }
@@ -1100,6 +1119,62 @@ fn worker_invoke_without_name_ephemeral(
 
     let path = serde_json_path::JsonPath::parse("$.value[0].ok")?;
     let _node = path.query(&result).exactly_one()?;
+
+    Ok(())
+}
+
+fn worker_get_oplog(
+    (deps, name, cli, _ref_kind): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+        RefKind,
+    ),
+) -> Result<(), Failed> {
+    let component = add_component_from_file(
+        deps,
+        &format!("{name} worker_get_oplog"),
+        &cli,
+        "runtime-service.wasm",
+    )?;
+    let cfg = &cli.config;
+
+    let url = WorkerUrl {
+        component_name: component.component_name.clone(),
+        worker_name: Some("test1".to_string()),
+    };
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{generate-idempotency-keys}",
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{generate-idempotency-keys}",
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{generate-idempotency-keys}",
+    ])?;
+
+    let result: Vec<(u64, PublicOplogEntry)> =
+        cli.run(&["worker", "oplog", &cfg.arg('W', "worker"), &url.to_string()])?;
+
+    assert_eq!(result.len(), 14);
 
     Ok(())
 }

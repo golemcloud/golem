@@ -31,14 +31,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::Wo
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::RetryConfig;
 
+use golem_common::config::DbConfig;
+use golem_service_base::db;
 use golem_worker_service_base::service::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
 };
 use std::sync::Arc;
 use std::time::Duration;
-
-use golem_common::config::DbConfig;
-use golem_service_base::db;
+use tonic::codec::CompressionEncoding;
 
 #[derive(Clone)]
 pub struct Services {
@@ -69,7 +69,11 @@ impl Services {
         );
 
         let worker_executor_grpc_clients = MultiTargetGrpcClient::new(
-            WorkerExecutorClient::new,
+            |channel| {
+                WorkerExecutorClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
             GrpcClientConfig {
                 retries_on_unavailable: RetryConfig {
                     max_attempts: 0, // we want to invalidate the routing table asap

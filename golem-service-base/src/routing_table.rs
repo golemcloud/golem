@@ -22,6 +22,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::RwLock;
 use tokio::time::Instant;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
 
@@ -137,7 +138,11 @@ pub struct RoutingTableServiceDefault {
 impl RoutingTableServiceDefault {
     pub fn new(config: RoutingTableConfig) -> Self {
         let client = GrpcClient::new(
-            ShardManagerServiceClient::new,
+            |channel| {
+                ShardManagerServiceClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
             config.url(),
             Default::default(), // TODO
         );

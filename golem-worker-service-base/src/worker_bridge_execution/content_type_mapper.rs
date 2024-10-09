@@ -154,10 +154,10 @@ mod internal {
     use crate::worker_bridge_execution::content_type_mapper::{
         AcceptHeaders, ContentTypeHeaderExt, ContentTypeMapError,
     };
-    use golem_wasm_ast::analysis::{
-        AnalysedType, TypeBool, TypeChr, TypeF32, TypeF64, TypeS16, TypeS32, TypeS64, TypeS8,
-        TypeU16, TypeU32, TypeU64, TypeU8,
+    use golem_wasm_ast::analysis::analysed_type::{
+        bool, chr, f32, f64, s16, s32, s64, s8, u16, u32, u64, u8,
     };
+    use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{PrimitiveType, TypedEnum, TypedList};
@@ -189,42 +189,18 @@ mod internal {
                     .collect::<Vec<_>>();
                 handle_list(type_annotated_value, &vec, &analysed_type, content_header)
             }
-            TypeAnnotatedValue::Bool(bool) => {
-                handle_primitive(bool, &AnalysedType::Bool(TypeBool), content_header)
-            }
-            TypeAnnotatedValue::S8(s8) => {
-                handle_primitive(s8, &AnalysedType::S8(TypeS8), content_header)
-            }
-            TypeAnnotatedValue::U8(u8) => {
-                handle_primitive(u8, &AnalysedType::U8(TypeU8), content_header)
-            }
-            TypeAnnotatedValue::S16(s16) => {
-                handle_primitive(s16, &AnalysedType::S16(TypeS16), content_header)
-            }
-            TypeAnnotatedValue::U16(u16) => {
-                handle_primitive(u16, &AnalysedType::U16(TypeU16), content_header)
-            }
-            TypeAnnotatedValue::S32(s32) => {
-                handle_primitive(s32, &AnalysedType::S32(TypeS32), content_header)
-            }
-            TypeAnnotatedValue::U32(u32) => {
-                handle_primitive(u32, &AnalysedType::U32(TypeU32), content_header)
-            }
-            TypeAnnotatedValue::S64(s64) => {
-                handle_primitive(s64, &AnalysedType::S64(TypeS64), content_header)
-            }
-            TypeAnnotatedValue::U64(u64) => {
-                handle_primitive(u64, &AnalysedType::U64(TypeU64), content_header)
-            }
-            TypeAnnotatedValue::F32(f32) => {
-                handle_primitive(f32, &AnalysedType::F32(TypeF32), content_header)
-            }
-            TypeAnnotatedValue::F64(f64) => {
-                handle_primitive(f64, &AnalysedType::F64(TypeF64), content_header)
-            }
-            TypeAnnotatedValue::Char(char) => {
-                handle_primitive(char, &AnalysedType::Chr(TypeChr), content_header)
-            }
+            TypeAnnotatedValue::Bool(value) => handle_primitive(value, &bool(), content_header),
+            TypeAnnotatedValue::S8(value) => handle_primitive(value, &s8(), content_header),
+            TypeAnnotatedValue::U8(value) => handle_primitive(value, &u8(), content_header),
+            TypeAnnotatedValue::S16(value) => handle_primitive(value, &s16(), content_header),
+            TypeAnnotatedValue::U16(value) => handle_primitive(value, &u16(), content_header),
+            TypeAnnotatedValue::S32(value) => handle_primitive(value, &s32(), content_header),
+            TypeAnnotatedValue::U32(value) => handle_primitive(value, &u32(), content_header),
+            TypeAnnotatedValue::S64(value) => handle_primitive(value, &s64(), content_header),
+            TypeAnnotatedValue::U64(value) => handle_primitive(value, &u64(), content_header),
+            TypeAnnotatedValue::F32(value) => handle_primitive(value, &f32(), content_header),
+            TypeAnnotatedValue::F64(value) => handle_primitive(value, &f64(), content_header),
+            TypeAnnotatedValue::Char(value) => handle_primitive(value, &chr(), content_header),
             TypeAnnotatedValue::Str(string) => handle_string(string, content_header),
 
             TypeAnnotatedValue::Tuple { .. } => {
@@ -500,7 +476,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_wasm_ast::analysis::TypeStr;
+    use golem_wasm_ast::analysis::analysed_type::str;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedList, TypedRecord};
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
@@ -510,7 +486,7 @@ mod tests {
         TypeAnnotatedValue::Record(TypedRecord {
             typ: vec![NameTypePair {
                 name: "name".to_string(),
-                typ: Some((&AnalysedType::Str(TypeStr)).into()),
+                typ: Some((&str()).into()),
             }],
             value: vec![NameValuePair {
                 name: "name".to_string(),
@@ -565,7 +541,7 @@ mod tests {
     #[cfg(test)]
     mod no_content_type_header {
         use super::*;
-        use golem_wasm_ast::analysis::{TypeU16, TypeU8};
+        use golem_wasm_ast::analysis::analysed_type::{u16, u8};
 
         fn get_content_type_and_body(input: &TypeAnnotatedValue) -> (Option<String>, Body) {
             let response_body = internal::get_response_body(input).unwrap();
@@ -603,8 +579,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_u8_type() {
-            let type_annotated_value =
-                create_list(vec![TypeAnnotatedValue::U8(10)], &AnalysedType::U8(TypeU8));
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)], &u8());
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let result = body.into_bytes().await.unwrap();
 
@@ -619,10 +594,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_non_u8_type() {
-            let type_annotated_value = create_list(
-                vec![TypeAnnotatedValue::U16(10)],
-                &AnalysedType::U16(TypeU16),
-            );
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
 
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
             let data_as_str =
@@ -659,7 +631,7 @@ mod tests {
     #[cfg(test)]
     mod with_response_type_header {
         use super::*;
-        use golem_wasm_ast::analysis::{TypeU16, TypeU8};
+        use golem_wasm_ast::analysis::analysed_type::{u16, u8};
 
         fn get_content_type_and_body(
             input: &TypeAnnotatedValue,
@@ -730,8 +702,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_u8_type() {
-            let type_annotated_value =
-                create_list(vec![TypeAnnotatedValue::U8(10)], &AnalysedType::U8(TypeU8));
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)], &u8());
 
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
@@ -751,10 +722,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_non_u8_type() {
-            let type_annotated_value = create_list(
-                vec![TypeAnnotatedValue::U16(10)],
-                &AnalysedType::U16(TypeU16),
-            );
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
 
             let (content_type, body) =
                 get_content_type_and_body(&type_annotated_value, &ContentType::json());
@@ -792,7 +760,7 @@ mod tests {
     #[cfg(test)]
     mod with_accept_headers {
         use super::*;
-        use golem_wasm_ast::analysis::{TypeU16, TypeU8};
+        use golem_wasm_ast::analysis::analysed_type::{u16, u8};
 
         fn get_content_type_and_body(
             input: &TypeAnnotatedValue,
@@ -895,8 +863,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_u8_type_with_json() {
-            let type_annotated_value =
-                create_list(vec![TypeAnnotatedValue::U8(10)], &AnalysedType::U8(TypeU8));
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)], &u8());
 
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
@@ -918,10 +885,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_non_u8_type_with_json() {
-            let type_annotated_value = create_list(
-                vec![TypeAnnotatedValue::U16(10)],
-                &AnalysedType::U16(TypeU16),
-            );
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
 
             let (content_type, body) = get_content_type_and_body(
                 &type_annotated_value,
@@ -941,10 +905,7 @@ mod tests {
 
         #[tokio::test]
         async fn test_list_non_u8_type_with_html_fail() {
-            let type_annotated_value = create_list(
-                vec![TypeAnnotatedValue::U16(10)],
-                &AnalysedType::U16(TypeU16),
-            );
+            let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
 
             let result = internal::get_response_body_based_on_content_type(
                 &type_annotated_value,

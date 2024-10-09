@@ -89,6 +89,65 @@ impl PrimaryOplogService {
             panic!("Failed to get worker id from indexed storage key: {key}")
         }
     }
+
+    async fn upload_payload(
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        max_payload_size: usize,
+        owned_worker_id: &OwnedWorkerId,
+        data: &[u8],
+    ) -> Result<OplogPayload, String> {
+        if data.len() > max_payload_size {
+            let payload_id: PayloadId = PayloadId::new();
+            let md5_hash = md5::compute(data).to_vec();
+
+            blob_storage
+                .put_raw(
+                    "oplog",
+                    "upload_payload",
+                    BlobStorageNamespace::OplogPayload {
+                        account_id: owned_worker_id.account_id(),
+                        worker_id: owned_worker_id.worker_id(),
+                    },
+                    Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
+                    data,
+                )
+                .await?;
+
+            Ok(OplogPayload::External {
+                payload_id,
+                md5_hash,
+            })
+        } else {
+            Ok(OplogPayload::Inline(data.to_vec()))
+        }
+    }
+
+    async fn download_payload(
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        owned_worker_id: &OwnedWorkerId,
+        payload: &OplogPayload,
+    ) -> Result<Bytes, String> {
+        match payload {
+            OplogPayload::Inline(data) => Ok(Bytes::copy_from_slice(data)),
+            OplogPayload::External {
+                payload_id,
+                md5_hash,
+            } => {
+                blob_storage
+                    .get_raw(
+                        "oplog",
+                        "download_payload",
+                        BlobStorageNamespace::OplogPayload {
+                            account_id: owned_worker_id.account_id(),
+                            worker_id: owned_worker_id.worker_id(),
+                        },
+                        Path::new(&format!("{}/{}", hex::encode(md5_hash), payload_id.0)),
+                    )
+                    .await?
+                    .ok_or(format!("Payload not found (worker: {owned_worker_id}, payload_id: {payload_id}, md5 hash: {md5_hash:02X?})"))
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -261,6 +320,28 @@ impl OplogService for PrimaryOplogService {
                 })
                 .collect(),
         ))
+    }
+
+    async fn upload_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        data: &[u8],
+    ) -> Result<OplogPayload, String> {
+        Self::upload_payload(
+            self.blob_storage.clone(),
+            self.max_payload_size,
+            owned_worker_id,
+            data,
+        )
+        .await
+    }
+
+    async fn download_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        payload: &OplogPayload,
+    ) -> Result<Bytes, String> {
+        Self::download_payload(self.blob_storage.clone(), owned_worker_id, payload).await
     }
 }
 
@@ -577,56 +658,14 @@ impl Oplog for PrimaryOplog {
                 state.max_payload_size,
             )
         };
-        if data.len() > max_length {
-            let payload_id: PayloadId = PayloadId::new();
-            let md5_hash = md5::compute(data).to_vec();
-
-            blob_storage
-                .put_raw(
-                    "oplog",
-                    "upload_payload",
-                    BlobStorageNamespace::OplogPayload {
-                        account_id: owned_worker_id.account_id(),
-                        worker_id: owned_worker_id.worker_id(),
-                    },
-                    Path::new(&format!("{}/{}", hex::encode(&md5_hash), payload_id.0)),
-                    data,
-                )
-                .await?;
-
-            Ok(OplogPayload::External {
-                payload_id,
-                md5_hash,
-            })
-        } else {
-            Ok(OplogPayload::Inline(data.to_vec()))
-        }
+        PrimaryOplogService::upload_payload(blob_storage, max_length, &owned_worker_id, data).await
     }
 
     async fn download_payload(&self, payload: &OplogPayload) -> Result<Bytes, String> {
-        match payload {
-            OplogPayload::Inline(data) => Ok(Bytes::copy_from_slice(data)),
-            OplogPayload::External {
-                payload_id,
-                md5_hash,
-            } => {
-                let (blob_storage, owned_worker_id) = {
-                    let state = self.state.lock().await;
-                    (state.blob_storage.clone(), state.owned_worker_id.clone())
-                };
-                blob_storage
-                    .get_raw(
-                        "oplog",
-                        "download_payload",
-                        BlobStorageNamespace::OplogPayload {
-                            account_id: owned_worker_id.account_id(),
-                            worker_id: owned_worker_id.worker_id(),
-                        },
-                        Path::new(&format!("{}/{}", hex::encode(md5_hash), payload_id.0)),
-                    )
-                    .await?
-                    .ok_or(format!("Payload not found (worker: {owned_worker_id}, payload_id: {payload_id}, md5 hash: {md5_hash:02X?})"))
-            }
-        }
+        let (blob_storage, owned_worker_id) = {
+            let state = self.state.lock().await;
+            (state.blob_storage.clone(), state.owned_worker_id.clone())
+        };
+        PrimaryOplogService::download_payload(blob_storage, &owned_worker_id, payload).await
     }
 }
