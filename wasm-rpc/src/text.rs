@@ -526,6 +526,8 @@ impl WasmValue for TypeAnnotatedValuePrintable {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
     use crate::text::type_annotated_value_from_str;
     use crate::{type_annotated_value_to_string, TypeAnnotatedValueConstructors, Value};

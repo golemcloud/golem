@@ -901,6 +901,8 @@ impl<ParentBuilder: NodeBuilder> NodeBuilder for WitValueChildBuilder<ParentBuil
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::{NodeBuilder, Value, WitValue, WitValueBuilderExtensions};
 
     #[test]

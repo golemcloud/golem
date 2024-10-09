@@ -830,6 +830,8 @@ impl WasmRpcStubBuild {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
     use crate::model::oam;
     use assert2::assert;

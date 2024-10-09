@@ -14,12 +14,16 @@
 
 //! Tests in this module are verifying the STUB WIT created by the stub generator
 
+use test_r::test;
+
 use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
 use golem_wasm_rpc_stubgen::stub::StubDefinition;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
 use tempfile::tempdir;
 use wit_parser::{FunctionKind, Resolve, TypeDefKind, TypeOwner};
+
+test_r::enable!();
 
 #[test]
 fn all_wit_types() {

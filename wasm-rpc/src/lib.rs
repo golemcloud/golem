@@ -18,6 +18,9 @@
 #[cfg(feature = "stub")]
 mod bindings;
 
+#[cfg(test)]
+test_r::enable!();
+
 /// Implements bincode encoders and decoders for WitValue instances
 #[cfg(feature = "bincode")]
 pub mod bincode;
@@ -410,6 +413,8 @@ pub const WASM_RPC_VERSION: &str = version::lib_version!();
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::{Value, WitValue};
     use proptest::prelude::*;
     use proptest_arbitrary_interop::arb_sized;

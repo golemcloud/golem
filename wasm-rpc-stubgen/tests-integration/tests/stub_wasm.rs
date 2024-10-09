@@ -15,6 +15,8 @@
 //! Tests in this module are verifying the STUB WASM created by the stub generator
 //! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
 
+use test_r::test;
+
 use golem_wasm_ast::analysis::analysed_type::*;
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId,
@@ -28,7 +30,9 @@ use golem_wasm_rpc_stubgen::stub::StubDefinition;
 use tempfile::tempdir;
 use wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
 
-#[tokio::test]
+test_r::enable!();
+
+#[test]
 async fn all_wit_types() {
     let source_wit_root = test_data_path().join("all-wit-types");
     let target_root = tempdir().unwrap();

@@ -763,6 +763,8 @@ pub fn function_parameters(
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::{Val, WitValue};
     use crate::Value;
     use proptest::prelude::*;
