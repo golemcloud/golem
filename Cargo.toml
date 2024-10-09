@@ -20,5 +20,5 @@ opt-level = 's'
 fs_extra = "1.3.0"
 golem-wasm-ast = "1.0.1"
 tempfile = "3.12.0"
-test-r = { version = "0.0.5", default-features = false }
+test-r = { version = "0.0.6", default-features = false }
 tokio = "1.38.0"
