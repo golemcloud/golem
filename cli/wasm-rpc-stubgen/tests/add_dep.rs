@@ -14,6 +14,8 @@
 
 //! Tests for the 'add stub as a dependency' mechanism.
 
+use test_r::test;
+
 use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
@@ -23,6 +25,8 @@ use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
 use tempfile::TempDir;
 use wit_parser::Resolve;
+
+test_r::enable!();
 
 #[test]
 fn all_wit_types_no_collision() {

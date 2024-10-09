@@ -10,6 +10,15 @@ description = "Golem WASM RPC stub generator - integration tests"
 [lib]
 name = "wasm_rpc_stubgen_tests_integration"
 path = "src/lib.rs"
+harness = false
+
+[[test]]
+name = "compose"
+harness = false
+
+[[test]]
+name = "stub_wasm"
+harness = false
 
 [dependencies]
 fs_extra = { workspace = true }
@@ -17,3 +26,6 @@ golem-wasm-ast = { workspace = true }
 golem-wasm-rpc-stubgen = { path = "../../wasm-rpc-stubgen", version = "0.0.0" }
 tempfile = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true, default-features = true }

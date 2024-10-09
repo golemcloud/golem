@@ -232,6 +232,8 @@ pub trait TypedTraitProperties: Serialize + DeserializeOwned {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
     use assert2::assert;
 
