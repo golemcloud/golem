@@ -4008,8 +4008,9 @@ dependencies = [
  "rand",
  "redis",
  "ringbuf",
- "rustls 0.23.12",
- "serde 1.0.207",
+ "rustls 0.23.14",
+ "scylla",
+ "serde 1.0.210",
  "serde_json",
  "sqlx",
  "sysinfo",
@@ -7617,7 +7618,7 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "byteorder",
- "bytes 1.7.1",
+ "bytes 1.7.2",
  "chrono",
  "dashmap",
  "futures",
@@ -7647,7 +7648,7 @@ checksum = "de7020bcd1f6fdbeaed356cd426bf294b2071bd7120d48d2e8e319295e2acdcd"
 dependencies = [
  "async-trait",
  "byteorder",
- "bytes 1.7.1",
+ "bytes 1.7.2",
  "lz4_flex",
  "scylla-macros",
  "snap",
@@ -7665,7 +7666,7 @@ dependencies = [
  "darling 0.20.10",
  "proc-macro2",
  "quote",
- "syn 2.0.74",
+ "syn 2.0.79",
 ]
 
 [[package]]
