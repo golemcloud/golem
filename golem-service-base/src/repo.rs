@@ -16,7 +16,7 @@ use golem_common::SafeDisplay;
 use sqlx::error::ErrorKind;
 use std::fmt::Display;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RepoError {
     Internal(String),
     UniqueViolation(String),
