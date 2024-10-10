@@ -293,6 +293,8 @@ parser! {
 
 #[cfg(test)]
 mod type_name_parser_tests {
+    use test_r::test;
+
     use combine::EasyParser;
 
     use super::*;

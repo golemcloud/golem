@@ -1084,6 +1084,8 @@ impl From<ParsedFunctionName> for golem_api_grpc::proto::golem::rib::ParsedFunct
 
 #[cfg(test)]
 mod function_name_tests {
+    use test_r::test;
+
     use super::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 
     #[test]

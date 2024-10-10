@@ -21,3 +21,6 @@ pub mod metrics;
 pub mod service;
 
 const VERSION: &str = golem_version!();
+
+#[cfg(test)]
+test_r::enable!();

@@ -8,11 +8,13 @@ repository = "https://github.com/golemcloud/golem"
 description = "Golem worker executor service"
 
 [lib]
+harness = false
 
 # Rename to golem-worker-executor ?
 [[bin]]
 name = "worker-executor"
 path = "src/server.rs"
+harness = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
@@ -40,3 +42,6 @@ uuid = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

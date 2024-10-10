@@ -534,6 +534,8 @@ pub struct SerializableFileTimes {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::durable_host::serialized::{
         SerializableDateTime, SerializableError, SerializableIpAddress, SerializableIpAddresses,
         SerializableStreamError,

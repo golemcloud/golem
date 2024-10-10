@@ -667,6 +667,8 @@ impl Display for ResourceUrl {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::uri::cloud::url::{
         AccountUrl, ApiDefinitionUrl, ApiDeploymentUrl, ComponentOrVersionUrl, ComponentUrl,
         ComponentVersionUrl, ProjectUrl, ResourceUrl, WorkerFunctionUrl, WorkerOrFunctionUrl,

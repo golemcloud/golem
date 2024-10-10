@@ -59,6 +59,8 @@ pub mod ts_rpc1;
 pub mod ts_rpc2;
 pub mod wasi;
 
+test_r::enable!();
+
 #[derive(Clone)]
 pub(crate) struct WorkerExecutorPerTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,

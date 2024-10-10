@@ -193,6 +193,8 @@ mod internal {
 
 #[cfg(test)]
 mod type_refinement_tests {
+    use test_r::test;
+
     use crate::type_refinement::precise_types::OptionalType;
     use crate::type_refinement::{RefinedType, TypeRefinement};
     use crate::InferredType;

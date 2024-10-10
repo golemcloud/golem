@@ -64,6 +64,8 @@ pub fn infer_analysed_type(value: &Value) -> AnalysedType {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
 
     #[test]

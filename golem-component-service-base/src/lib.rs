@@ -17,3 +17,6 @@ pub mod config;
 pub mod model;
 pub mod repo;
 pub mod service;
+
+#[cfg(test)]
+test_r::enable!();

@@ -41,6 +41,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use combine::EasyParser;
 
     use super::*;
