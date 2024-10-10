@@ -572,6 +572,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::service::api_deployment::ApiDeploymentError;
+    use golem_common::SafeDisplay;
     use golem_service_base::repo::RepoError;
 
     #[test]
@@ -579,8 +580,8 @@ mod tests {
         let repo_err = RepoError::Internal("some sql error".to_string());
         let service_err: ApiDeploymentError<String> = repo_err.into();
         assert_eq!(
-            service_err.to_string(),
-            "Internal error: Repository error".to_string()
+            service_err.to_safe_string(),
+            "Internal repository error".to_string()
         );
     }
 }

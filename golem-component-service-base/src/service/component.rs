@@ -631,6 +631,7 @@ impl ComponentServiceDefault {
 #[cfg(test)]
 mod tests {
     use crate::service::component::ComponentError;
+    use golem_common::SafeDisplay;
     use golem_service_base::repo::RepoError;
 
     #[test]
@@ -638,8 +639,8 @@ mod tests {
         let repo_err = RepoError::Internal("some sql error".to_string());
         let component_err: ComponentError = repo_err.into();
         assert_eq!(
-            component_err.to_string(),
-            "Internal error: Repository error".to_string()
+            component_err.to_safe_string(),
+            "Internal repository error".to_string()
         );
     }
 }

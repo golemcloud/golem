@@ -453,15 +453,16 @@ where
 #[cfg(test)]
 mod tests {
     use crate::service::api_definition::ApiDefinitionError;
+    use golem_common::{SafeDisplay, SafeString};
     use golem_service_base::repo::RepoError;
 
     #[test]
     pub fn test_repo_error_to_service_error() {
         let repo_err = RepoError::Internal("some sql error".to_string());
-        let service_err: ApiDefinitionError<String> = repo_err.into();
+        let service_err: ApiDefinitionError<SafeString> = repo_err.into();
         assert_eq!(
-            service_err.to_string(),
-            "Internal error: Repository error".to_string()
+            service_err.to_safe_string(),
+            "Internal repository error".to_string()
         );
     }
 }
