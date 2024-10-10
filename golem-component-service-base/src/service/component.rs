@@ -13,23 +13,24 @@
 // limitations under the License.
 
 use std::fmt::{Debug, Display};
+use std::num::TryFromIntError;
 use std::sync::Arc;
 
+use crate::model::Component;
+use crate::repo::component::ComponentRepo;
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{ComponentId, ComponentType};
-use tap::TapFallible;
-use tracing::{error, info};
-
-use crate::model::Component;
-use crate::repo::component::ComponentRepo;
-use crate::repo::RepoError;
+use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
+use tap::TapFallible;
+use tracing::{error, info};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -41,23 +42,47 @@ pub enum ComponentError {
     UnknownVersionedComponentId(VersionedComponentId),
     #[error(transparent)]
     ComponentProcessingError(#[from] ComponentProcessingError),
-    #[error("Internal error: {0}")]
-    Internal(anyhow::Error),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(RepoError),
+    #[error("Internal error: failed to convert {what}: {error}")]
+    InternalConversionError { what: String, error: String },
+    #[error("Internal component store error: {message}: {error}")]
+    ComponentStoreError { message: String, error: String },
 }
 
 impl ComponentError {
-    fn internal<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        ComponentError::Internal(anyhow::Error::msg(error).context(context))
+    pub fn conversion_error(what: impl AsRef<str>, error: String) -> ComponentError {
+        Self::InternalConversionError {
+            what: what.as_ref().to_string(),
+            error,
+        }
+    }
+
+    pub fn component_store_error(message: impl AsRef<str>, error: anyhow::Error) -> ComponentError {
+        Self::ComponentStoreError {
+            message: message.as_ref().to_string(),
+            error: format!("{error}"),
+        }
+    }
+}
+
+impl SafeDisplay for ComponentError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ComponentError::AlreadyExists(_) => self.to_string(),
+            ComponentError::UnknownComponentId(_) => self.to_string(),
+            ComponentError::UnknownVersionedComponentId(_) => self.to_string(),
+            ComponentError::ComponentProcessingError(inner) => inner.to_safe_string(),
+            ComponentError::InternalRepoError(inner) => inner.to_safe_string(),
+            ComponentError::InternalConversionError { .. } => self.to_string(),
+            ComponentError::ComponentStoreError { .. } => self.to_string(),
+        }
     }
 }
 
 impl From<RepoError> for ComponentError {
     fn from(error: RepoError) -> Self {
-        ComponentError::internal(error, "Repository error")
+        ComponentError::InternalRepoError(error)
     }
 }
 
@@ -229,7 +254,7 @@ where
         let record = component
             .clone()
             .try_into()
-            .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         let result = self.component_repo.create(&record).await;
         if let Err(RepoError::UniqueViolation(_)) = result {
@@ -263,16 +288,15 @@ where
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))
             .and_then(|c| {
                 c.try_into()
-                    .map_err(|e| ComponentError::internal(e, "Failed to convert record"))
+                    .map_err(|e| ComponentError::conversion_error("record", e))
             })
             .map(Component::next_version)?;
 
         info!(namespace = %namespace, "Uploaded component - exports {:?}", metadata.exports);
 
-        let component_size: u64 = data
-            .len()
-            .try_into()
-            .map_err(|e| ComponentError::internal(e, "Failed to convert data length"))?;
+        let component_size: u64 = data.len().try_into().map_err(|e: TryFromIntError| {
+            ComponentError::conversion_error("data length", e.to_string())
+        })?;
 
         tokio::try_join!(
             self.upload_user_component(&next_component.versioned_component_id, data.clone()),
@@ -289,7 +313,7 @@ where
         let record = component
             .clone()
             .try_into()
-            .map_err(|e| ComponentError::internal(e, "Failed to convert record"))?;
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         self.component_repo.create(&record).await?;
 
@@ -319,7 +343,7 @@ where
             .tap_err(
                 |e| error!(namespace = %namespace, "Error downloading component - error: {}", e),
             )
-            .map_err(|e| ComponentError::internal(e.to_string(), "Error downloading component"))
+            .map_err(|e| ComponentError::component_store_error("Error downloading component", e))
     }
 
     async fn download_stream(
@@ -363,25 +387,12 @@ where
                     .await
                     .tap_err(|e| error!(namespace = %namespace, "Error getting component data - error: {}", e))
                     .map_err(|e| {
-                        ComponentError::internal(e.to_string(), "Error retrieving component")
+                        ComponentError::component_store_error( "Error retrieving component", e)
                     })?;
                 Ok(Some(data))
             }
             None => Ok(None),
         }
-    }
-
-    async fn find_id_by_name(
-        &self,
-        component_name: &ComponentName,
-        namespace: &Namespace,
-    ) -> Result<Option<ComponentId>, ComponentError> {
-        info!(namespace = %namespace, "Find component id by name");
-        let records = self
-            .component_repo
-            .get_id_by_name(namespace.to_string().as_str(), &component_name.0)
-            .await?;
-        Ok(records.map(ComponentId))
     }
 
     async fn find_by_name(
@@ -408,27 +419,22 @@ where
             .iter()
             .map(|c| c.clone().try_into())
             .collect::<Result<Vec<Component<Namespace>>, _>>()
-            .map_err(|e| ComponentError::internal(e, "Failed to convert record".to_string()))?;
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         Ok(values)
     }
 
-    async fn get(
+    async fn find_id_by_name(
         &self,
-        component_id: &ComponentId,
+        component_name: &ComponentName,
         namespace: &Namespace,
-    ) -> Result<Vec<Component<Namespace>>, ComponentError> {
-        info!(namespace = %namespace, "Get component");
-        let records = self.component_repo.get(&component_id.0).await?;
-
-        let values: Vec<Component<Namespace>> = records
-            .iter()
-            .filter(|d| d.namespace == namespace.to_string())
-            .map(|c| c.clone().try_into())
-            .collect::<Result<Vec<Component<Namespace>>, _>>()
-            .map_err(|e| ComponentError::internal(e, "Failed to convert record".to_string()))?;
-
-        Ok(values)
+    ) -> Result<Option<ComponentId>, ComponentError> {
+        info!(namespace = %namespace, "Find component id by name");
+        let records = self
+            .component_repo
+            .get_id_by_name(namespace.to_string().as_str(), &component_name.0)
+            .await?;
+        Ok(records.map(ComponentId))
     }
 
     async fn get_by_version(
@@ -445,9 +451,9 @@ where
 
         match result {
             Some(c) if c.namespace == namespace.to_string() => {
-                let value = c.try_into().map_err(|e| {
-                    ComponentError::internal(e, "Failed to convert record".to_string())
-                })?;
+                let value = c
+                    .try_into()
+                    .map_err(|e| ComponentError::conversion_error("record", e))?;
                 Ok(Some(value))
             }
             _ => Ok(None),
@@ -467,13 +473,31 @@ where
 
         match result {
             Some(c) if c.namespace == namespace.to_string() => {
-                let value = c.try_into().map_err(|e| {
-                    ComponentError::internal(e, "Failed to convert record".to_string())
-                })?;
+                let value = c
+                    .try_into()
+                    .map_err(|e| ComponentError::conversion_error("record", e))?;
                 Ok(Some(value))
             }
             _ => Ok(None),
         }
+    }
+
+    async fn get(
+        &self,
+        component_id: &ComponentId,
+        namespace: &Namespace,
+    ) -> Result<Vec<Component<Namespace>>, ComponentError> {
+        info!(namespace = %namespace, "Get component");
+        let records = self.component_repo.get(&component_id.0).await?;
+
+        let values: Vec<Component<Namespace>> = records
+            .iter()
+            .filter(|d| d.namespace == namespace.to_string())
+            .map(|c| c.clone().try_into())
+            .collect::<Result<Vec<Component<Namespace>>, _>>()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        Ok(values)
     }
 
     async fn get_namespace(
@@ -483,9 +507,13 @@ where
         info!("Get component namespace");
         let result = self.component_repo.get_namespace(&component_id.0).await?;
         if let Some(result) = result {
-            let value = result.clone().try_into().map_err(|e| {
-                ComponentError::internal(e, "Failed to convert namespace".to_string())
-            })?;
+            let value =
+                result
+                    .clone()
+                    .try_into()
+                    .map_err(|e: <Namespace as TryFrom<String>>::Error| {
+                        ComponentError::conversion_error("namespace", e.to_string())
+                    })?;
             Ok(Some(value))
         } else {
             Ok(None)
@@ -513,13 +541,13 @@ where
                     .delete(&self.get_protected_object_store_key(&versioned_component_id))
                     .await
                     .map_err(|e| {
-                        ComponentError::internal(e.to_string(), "Failed to delete component")
+                        ComponentError::component_store_error("Failed to delete component", e)
                     })?;
                 self.object_store
                     .delete(&self.get_user_object_store_key(&versioned_component_id))
                     .await
                     .map_err(|e| {
-                        ComponentError::internal(e.to_string(), "Failed to delete component")
+                        ComponentError::component_store_error("Failed to delete component", e)
                     })?;
             }
             self.component_repo
@@ -549,7 +577,9 @@ impl ComponentServiceDefault {
         self.object_store
             .put(&self.get_user_object_store_key(user_component_id), data)
             .await
-            .map_err(|e| ComponentError::internal(e.to_string(), "Failed to upload user component"))
+            .map_err(|e| {
+                ComponentError::component_store_error("Failed to upload user component", e)
+            })
     }
 
     async fn upload_protected_component(
@@ -564,7 +594,7 @@ impl ComponentServiceDefault {
             )
             .await
             .map_err(|e| {
-                ComponentError::internal(e.to_string(), "Failed to upload protected component")
+                ComponentError::component_store_error("Failed to upload protected component", e)
             })
     }
 
@@ -600,16 +630,17 @@ impl ComponentServiceDefault {
 
 #[cfg(test)]
 mod tests {
-    use crate::repo::RepoError;
     use crate::service::component::ComponentError;
+    use golem_common::SafeDisplay;
+    use golem_service_base::repo::RepoError;
 
     #[test]
     pub fn test_repo_error_to_service_error() {
         let repo_err = RepoError::Internal("some sql error".to_string());
         let component_err: ComponentError = repo_err.into();
         assert_eq!(
-            component_err.to_string(),
-            "Internal error: Repository error".to_string()
+            component_err.to_safe_string(),
+            "Internal repository error".to_string()
         );
     }
 }

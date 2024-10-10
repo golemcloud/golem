@@ -20,16 +20,16 @@ use crate::api_definition::http::{
     CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     HttpApiDefinitionRequest, RouteCompilationErrors,
 };
-use async_trait::async_trait;
-use chrono::Utc;
-use golem_service_base::model::{Component, VersionedComponentId};
-use tracing::{error, info};
-
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRepo;
-use crate::repo::RepoError;
+use async_trait::async_trait;
+use chrono::Utc;
+use golem_common::SafeDisplay;
+use golem_service_base::model::{Component, VersionedComponentId};
+use golem_service_base::repo::RepoError;
+use tracing::{error, info};
 
 use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use super::component::ComponentService;
@@ -60,23 +60,33 @@ pub enum ApiDefinitionError<E> {
     ApiDefinitionAlreadyExists(ApiDefinitionId),
     #[error("API definition deployed: {0}")]
     ApiDefinitionDeployed(String),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(RepoError),
     #[error("Internal error: {0}")]
-    InternalError(#[from] anyhow::Error),
+    Internal(String),
 }
 
-impl<T> ApiDefinitionError<T> {
-    fn internal<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        ApiDefinitionError::InternalError(anyhow::Error::msg(error).context(context))
-    }
-}
+impl<T> ApiDefinitionError<T> {}
 
 impl<E> From<RepoError> for ApiDefinitionError<E> {
     fn from(error: RepoError) -> Self {
-        ApiDefinitionError::internal(error, "Repository error")
+        ApiDefinitionError::InternalRepoError(error)
+    }
+}
+
+impl<E: SafeDisplay + Display> SafeDisplay for ApiDefinitionError<E> {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ApiDefinitionError::ValidationError(inner) => inner.to_safe_string(),
+            ApiDefinitionError::ComponentNotFoundError(_) => self.to_string(),
+            ApiDefinitionError::RibCompilationErrors(_) => self.to_string(),
+            ApiDefinitionError::ApiDefinitionNotFound(_) => self.to_string(),
+            ApiDefinitionError::ApiDefinitionNotDraft(_) => self.to_string(),
+            ApiDefinitionError::ApiDefinitionAlreadyExists(_) => self.to_string(),
+            ApiDefinitionError::ApiDefinitionDeployed(_) => self.to_string(),
+            ApiDefinitionError::InternalRepoError(inner) => inner.to_safe_string(),
+            ApiDefinitionError::Internal(_) => self.to_string(),
+        }
     }
 }
 
@@ -266,7 +276,9 @@ where
             compiled_http_api_definition.clone(),
             created_at,
         )
-        .map_err(|e| ApiDefinitionError::internal(e, "Failed to create API definition record"))?;
+        .map_err(|e| {
+            ApiDefinitionError::Internal(format!("Failed to create API definition record: {e}"))
+        })?;
 
         self.definition_repo.create(&record).await?;
 
@@ -319,7 +331,9 @@ where
             compiled_http_api_definition.clone(),
             created_at,
         )
-        .map_err(|e| ApiDefinitionError::internal(e, "Failed to create API definition record"))?;
+        .map_err(|e| {
+            ApiDefinitionError::Internal(format!("Failed to create API definition record: {e}"))
+        })?;
 
         self.definition_repo.update(&record).await?;
 
@@ -342,7 +356,9 @@ where
         match value {
             Some(v) => {
                 let definition = v.try_into().map_err(|e| {
-                    ApiDefinitionError::internal(e, "Failed to convert API definition record")
+                    ApiDefinitionError::Internal(format!(
+                        "Failed to convert API definition record: {e}"
+                    ))
                 })?;
                 Ok(Some(definition))
             }
@@ -399,7 +415,9 @@ where
             .map(|d| d.clone().try_into())
             .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
             .map_err(|e| {
-                ApiDefinitionError::internal(e, "Failed to convert API definition record")
+                ApiDefinitionError::Internal(format!(
+                    "Failed to convert API definition record: {e}"
+                ))
             })?;
 
         Ok(values)
@@ -423,7 +441,9 @@ where
             .map(|d| d.clone().try_into())
             .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
             .map_err(|e| {
-                ApiDefinitionError::internal(e, "Failed to convert API definition record")
+                ApiDefinitionError::Internal(format!(
+                    "Failed to convert API definition record: {e}"
+                ))
             })?;
 
         Ok(values)
@@ -432,16 +452,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::repo::RepoError;
     use crate::service::api_definition::ApiDefinitionError;
+    use golem_common::{SafeDisplay, SafeString};
+    use golem_service_base::repo::RepoError;
 
     #[test]
     pub fn test_repo_error_to_service_error() {
         let repo_err = RepoError::Internal("some sql error".to_string());
-        let service_err: ApiDefinitionError<String> = repo_err.into();
+        let service_err: ApiDefinitionError<SafeString> = repo_err.into();
         assert_eq!(
-            service_err.to_string(),
-            "Internal error: Repository error".to_string()
+            service_err.to_safe_string(),
+            "Internal repository error".to_string()
         );
     }
 }

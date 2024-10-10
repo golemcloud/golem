@@ -22,9 +22,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use bytes::Bytes;
-
 pub use blob::BlobOplogArchiveService;
+use bytes::Bytes;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::oplog::{
@@ -37,6 +36,7 @@ use golem_common::model::{
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
+use tracing::Instrument;
 
 use crate::error::GolemError;
 
@@ -375,18 +375,21 @@ impl OpenOplogs {
                     worker_id,
                     || Ok(()),
                     |_| {
-                        Box::pin(async move {
-                            let result = constructor_clone.create_oplog(close).await;
+                        Box::pin(
+                            async move {
+                                let result = constructor_clone.create_oplog(close).await;
 
-                            // Temporarily increasing ref count because we want to store a weak pointer
-                            // but not drop it before we re-gain a strong reference when got out of the cache
-                            let result = unsafe {
-                                let ptr = Arc::into_raw(result);
-                                Arc::increment_strong_count(ptr);
-                                Arc::from_raw(ptr)
-                            };
-                            Ok(OpenOplogEntry::new(result))
-                        })
+                                // Temporarily increasing ref count because we want to store a weak pointer
+                                // but not drop it before we re-gain a strong reference when got out of the cache
+                                let result = unsafe {
+                                    let ptr = Arc::into_raw(result);
+                                    Arc::increment_strong_count(ptr);
+                                    Arc::from_raw(ptr)
+                                };
+                                Ok(OpenOplogEntry::new(result))
+                            }
+                            .in_current_span(),
+                        )
                     },
                 )
                 .await
