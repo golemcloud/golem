@@ -25,7 +25,6 @@ fn check_call_args(
 mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
     use crate::call_type::CallType;
-    use crate::InferredType;
     use super::*;
 
     pub fn check_call_args(
@@ -35,12 +34,15 @@ mod internal {
     ) -> Result<(), String> {
 
         let registry_value =
-            type_registry.types.get(&RegistryKey::from_call_type(call_type))?;
+            type_registry.types.get(&RegistryKey::from_call_type(call_type)).ok_or(format!(
+                "Function {} is not defined in the registry",
+                call_type
+            ))?;
 
         let expected_arg_types = registry_value.argument_types();
 
         for (arg, expected_arg_type) in args.iter_mut().zip(expected_arg_types) {
-            let actual_arg_type = arg.inferred_type().unify();
+            let actual_arg_type = arg.inferred_type().unify()?;
 
             let actual_arg_analysed_type = AnalysedType::try_from(&actual_arg_type)?;
 

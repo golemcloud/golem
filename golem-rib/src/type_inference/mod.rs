@@ -35,7 +35,6 @@ mod identifier_inference;
 mod name_binding;
 mod pattern_match_binding;
 mod rib_input_type;
-mod type_check;
 mod type_pull_up;
 mod type_push_down;
 mod type_reset;

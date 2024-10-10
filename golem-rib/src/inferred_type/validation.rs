@@ -1,6 +1,6 @@
 use std::ops::Deref;
 use crate::inferred_type::UnificationResult;
-use crate::inferred_type::validation::internal::{validate_unified_type_and_get_err, unified, failed};
+use crate::inferred_type::validation::internal::{unified, failed};
 use crate::InferredType;
 
 pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult {
@@ -45,7 +45,8 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
             unified(InferredType::Option(Box::new(result.deref().clone())))
         }
         result @ InferredType::Result { ok, error } => {
-            // At this point we try to be flexible with types.
+            // For Result, we try to be flexible with types
+            // Example: Allow Rib script to simply return ok(x) as the final output, even if it doesn't know anything about error
             match (ok, error) {
                 (Some(ok), Some(err)) => {
                     let ok_unified = validate_unified_type(ok);
@@ -82,31 +83,28 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
             }
 
         }
-        InferredType::Variant(variant) => {
+        inferred_type @ InferredType::Variant(variant) => {
             for (_, typ) in variant {
                 if let Some(typ) = typ {
-                    if let Some(unresolved) = validate_unified_type(typ) {
-                        return Some(unresolved);
-                    }
+                    validate_unified_type(typ)?;
                 }
             }
-            None
+            unified(inferred_type.clone())
         }
-        InferredType::Resource { .. } => None,
+        resource @ InferredType::Resource { .. } => unified(resource.clone()),
         InferredType::OneOf(possibilities) => {
-            Some(format!("Cannot resolve {:?}", possibilities))
+            failed(format!("Cannot resolve {:?}", possibilities))
         }
         InferredType::AllOf(possibilities) => {
-            Some(format!("Cannot be all of {:?}", possibilities))
+            failed(format!("Cannot be all of {:?}", possibilities))
         }
         InferredType::Unknown => Some("Unknown".to_string()),
-        InferredType::Sequence(inferred_types) => {
+        inferred_type @ InferredType::Sequence(inferred_types) => {
             for typ in inferred_types {
-                if let Some(unresolved) = typ.un_resolved() {
-                    return Some(unresolved);
-                }
+                validate_unified_type(typ)?;
             }
-            None
+
+            unified(inferred_type.clone())
         }
     }
 }

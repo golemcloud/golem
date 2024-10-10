@@ -1,7 +1,7 @@
 use crate::InferredType;
 
 pub type UnificationResult = Result<Unified, String>;
-pub struct Unified(InferredType);
+pub struct Unified(pub InferredType);
 
 impl Unified {
     pub fn inferred_type(&self) -> InferredType {

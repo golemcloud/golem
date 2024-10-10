@@ -507,10 +507,6 @@ impl Expr {
         type_inference::unify_types(self)
     }
 
-    pub fn unify_types_and_verify(&mut self) -> Result<(), Vec<String>> {
-        type_inference::unify_types_and_verify(self)
-    }
-
     pub fn add_infer_type(&self, new_inferred_type: InferredType) -> Expr {
         let mut expr_copied = self.clone();
         expr_copied.add_infer_type_mut(new_inferred_type);
