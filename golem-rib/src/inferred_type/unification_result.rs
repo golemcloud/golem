@@ -1,12 +1,10 @@
 use crate::InferredType;
 
-pub enum UnificationResult {
-    Success(InferredType),
-    Failed(String)
-}
+pub type UnificationResult = Result<Unified, String>;
+pub struct Unified(InferredType);
 
-impl UnificationResult {
-    pub fn unified(inferred_type: InferredType) -> UnificationResult {
-        UnificationResult::Success(inferred_type)
+impl Unified {
+    pub fn inferred_type(&self) -> InferredType {
+        self.0.clone()
     }
 }

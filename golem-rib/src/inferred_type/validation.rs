@@ -1,79 +1,91 @@
+use std::ops::Deref;
 use crate::inferred_type::UnificationResult;
+use crate::inferred_type::validation::internal::{validate_unified_type_and_get_err, unified, failed};
 use crate::InferredType;
 
-pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult{
+pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult {
     match inferred_type {
-        InferredType::Bool => UnificationResult::unified(InferredType::Bool),
-        InferredType::S8 => UnificationResult::unified(InferredType::S8),
-        InferredType::U8 => UnificationResult::unified(InferredType::U8),
-        InferredType::S16 => UnificationResult::unified(InferredType::S16),
-        InferredType::U16 =>  UnificationResult::unified(InferredType::U16),
-        InferredType::S32 => UnificationResult::unified(InferredType::S32),
-        InferredType::U32 => UnificationResult::unified(InferredType::U32),
-        InferredType::S64 => UnificationResult::unified(InferredType::S64),
-        InferredType::U64 => UnificationResult::unified(InferredType::U64),
-        InferredType::F32 => UnificationResult::unified(InferredType::F32),
-        InferredType::F64 => UnificationResult::unified(InferredType::F64),
-        InferredType::Chr => UnificationResult::unified(InferredType::Chr),
-        InferredType::Str => UnificationResult::unified(InferredType::Str),
+        InferredType::Bool => unified(InferredType::Bool),
+        InferredType::S8 => unified(InferredType::S8),
+        InferredType::U8 => unified(InferredType::U8),
+        InferredType::S16 => unified(InferredType::S16),
+        InferredType::U16 =>  unified(InferredType::U16),
+        InferredType::S32 => unified(InferredType::S32),
+        InferredType::U32 => unified(InferredType::U32),
+        InferredType::S64 => unified(InferredType::S64),
+        InferredType::U64 => unified(InferredType::U64),
+        InferredType::F32 => unified(InferredType::F32),
+        InferredType::F64 => unified(InferredType::F64),
+        InferredType::Chr => unified(InferredType::Chr),
+        InferredType::Str => unified(InferredType::Str),
         InferredType::List(inferred_type) => validate_unified_type(inferred_type),
         InferredType::Tuple(types) => {
             for typ in types {
-                if let UnificationResult::Failed(unresolved) = validate_unified_type(typ) {
-                    return UnificationResult::Failed(unresolved);
-                }
+                validate_unified_type(typ)?;
             }
-            UnificationResult::unified(InferredType::Tuple(types.clone()))
+
+            unified(InferredType::Tuple(types.clone()))
         }
         InferredType::Record(field) => {
             for (field, typ) in field {
                 if let UnificationResult::Failed(unresolved) = validate_unified_type(typ) {
-                    return UnificationResult::Failed(format!(
+                    return UnificationResult::failed(format!(
                         "Un-inferred type for field {} in record: {}",
                         field, unresolved
                     ));
                 }
             }
-            UnificationResult::unified(InferredType::Record(field.clone()))
+
+            unified(InferredType::Record(field.clone()))
         }
-        InferredType::Flags(_) => None,
-        InferredType::Enum(_) => None,
+        InferredType::Flags(flags) => UnificationResult::success(InferredType::Flags(flags.clone())),
+        InferredType::Enum(enums) =>  UnificationResult::success(InferredType::Enum(enums.clone())),
         InferredType::Option(inferred_type) => {
-            if let Some(unresolved) = inferred_type.un_resolved() {
-                return Some(unresolved);
-            }
-            None
+            let result = validate_unified_type(inferred_type)?;
+            unified(InferredType::Option(Box::new(result.deref().clone())))
         }
-        InferredType::Result { ok, error } => {
-            // Check unresolved status for `ok` and `error`
-            let unresolved_ok = ok.clone().and_then(|o| o.un_resolved());
-            let unresolved_error = error.clone().and_then(|e| e.un_resolved());
+        result @ InferredType::Result { ok, error } => {
+            // At this point we try to be flexible with types.
+            match (ok, error) {
+                (Some(ok), Some(err)) => {
+                    let ok_unified = validate_unified_type(ok);
+                    let err_unified = validate_unified_type(err);
 
-            // If `ok` is unresolved
-            if unresolved_ok.is_some() {
-                if error.is_some() && unresolved_error.is_none() {
-                    // If `error` is known, return `None`
-                    return None;
+                    match (ok_unified, err_unified)  {
+                        // We fail only if both are unknown
+                        (Err(ok_err), Err(err_err)) => {
+                            let err = format!("Ok: {}, Error: {}", ok_err, err_err);
+                            failed(err)
+                        }
+                        (_, _) => unified(result.clone())
+                    }
+
                 }
-                return unresolved_ok;
+
+                (Some(ok), None) => {
+                    let ok_unified = validate_unified_type(ok);
+                    match ok_unified {
+                        Err(ok_err) => failed(ok_err),
+                        _ => unified(result.clone())
+                    }
+                }
+
+                (None, Some(err)) => {
+                    let err_unified = validate_unified_type(err);
+                    match err_unified {
+                        Err(err_err) => failed(err_err),
+                        _ => unified(result.clone())
+                    }
+                }
+
+                (None, None) => unified(result.clone())
             }
 
-            // If `error` is unresolved
-            if unresolved_error.is_some() {
-                if ok.is_some() && ok.as_ref().unwrap().un_resolved().is_none() {
-                    // If `ok` is known, return `None`
-                    return None;
-                }
-                return unresolved_error;
-            }
-
-            // Both `ok` and `error` are resolved or not present
-            None
         }
         InferredType::Variant(variant) => {
             for (_, typ) in variant {
                 if let Some(typ) = typ {
-                    if let Some(unresolved) = typ.un_resolved() {
+                    if let Some(unresolved) = validate_unified_type(typ) {
                         return Some(unresolved);
                     }
                 }
@@ -99,10 +111,23 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult{
     }
 }
 
-pub fn unify_types_and_verify(inferred_type: &InferredType) -> Result<InferredType, String> {
-    let unified = inferred_type.try_unify()?;
-    if let Some(unresolved) = unified.un_resolved() {
-        return Err(unresolved);
+
+mod internal {
+    use crate::inferred_type::{UnificationResult, Unified, validate_unified_type};
+    use crate::InferredType;
+
+    pub(crate) fn unified(inferred_type: InferredType) -> UnificationResult {
+        Ok(Unified(inferred_type))
     }
-    Ok(unified)
+
+    pub(crate) fn failed(unresolved: String) -> UnificationResult {
+        Err(unresolved)
+    }
+
+    pub(crate) fn validate_unified_type_and_get_err(inferred_type: &InferredType) -> Option<String> {
+        match validate_unified_type(inferred_type) {
+            Err(unresolved) => Some(unresolved),
+            Ok(_) => None,
+        }
+    }
 }

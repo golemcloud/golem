@@ -5,10 +5,7 @@ use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list, Unification
 pub fn unify(inferred_type: &InferredType) -> Result<InferredType, String> {
     let possibly_unified_type = try_unify_type(inferred_type)?;
 
-    match validate_unified_type(&possibly_unified_type) {
-        UnificationResult::Success(inferred_type) => Ok(inferred_type),
-        UnificationResult::Failed(e) => Err(e),
-    }
+    validate_unified_type(&possibly_unified_type).map(|unified| unified.inferred_type())
 
 }
 

@@ -40,7 +40,7 @@ mod internal {
         let expected_arg_types = registry_value.argument_types();
 
         for (arg, expected_arg_type) in args.iter_mut().zip(expected_arg_types) {
-            let actual_arg_type = arg.inferred_type().try_unify();
+            let actual_arg_type = arg.inferred_type().unify();
 
             let actual_arg_analysed_type = AnalysedType::try_from(&actual_arg_type)?;
 
