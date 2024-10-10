@@ -234,6 +234,8 @@ mod internal {
     ) -> Result<(), String> {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
+                dbg!(expr.clone());
+                dbg!(predicate_type.clone());
                 expr.add_infer_type_mut(predicate_type.clone());
                 expr.push_types_down()?;
             }

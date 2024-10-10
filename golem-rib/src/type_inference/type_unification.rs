@@ -242,22 +242,17 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
-            Expr::Identifier(variable_uid, inferred_type) => {
+            Expr::Identifier(_, inferred_type) => {
                 let unified_inferred_type = inferred_type.unify();
-
-                dbg!(variable_uid);
-                dbg!(&inferred_type);
 
                 match unified_inferred_type {
                     Ok(unified_type) => {
-                        dbg!(unified_type.clone());
-
                         *inferred_type = unified_type
                     }
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of identifier {}",
-                            expr_str
+                            "Unable to resolve the type of identifier {:?}",
+                            expr
                         ));
                         errors.push(e);
                     }

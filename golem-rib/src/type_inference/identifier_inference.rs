@@ -96,7 +96,7 @@ mod internal {
             match expr {
                 Expr::PatternMatch(_, arms, _) => {
                     for arm in arms {
-                        internal::process_arm(arm)
+                        process_arm(arm)
                     }
                 }
                 _ => expr.visit_children_mut_top_down(&mut queue),

@@ -942,8 +942,7 @@ mod type_inference_tests {
               let z = some(y);
 
               match z {
-                 some(z) => y,
-                 some(z) => z
+                 some(z) => y
               }
             "#;
 

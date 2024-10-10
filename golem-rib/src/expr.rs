@@ -431,7 +431,9 @@ impl Expr {
             .map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
-        self.unify_types()?;
+
+       // self.unify_types()?;
+      //  dbg!(self.clone());
         Ok(())
     }
 
@@ -456,8 +458,14 @@ impl Expr {
         self.infer_all_identifiers()?;
         let expr = self.pull_types_up()?;
         *self = expr;
-        self.unify_types().unwrap_or(());
         self.infer_global_inputs();
+
+        // dbg!(self.clone());
+        // let mut x = self.clone();
+        self.unify_types().unwrap_or(());
+        dbg!(self.clone());
+        // dbg!(self.clone());
+
 
         Ok(())
     }

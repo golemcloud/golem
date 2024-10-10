@@ -47,8 +47,6 @@ pub fn compile_with_limited_globals(
         .infer_types(&type_registry)
         .map_err(|e| e.join("\n"))?;
 
-    dbg!(&expr_cloned);
-
     let global_input_type_info =
         RibInputTypeInfo::from_expr(&mut expr_cloned).map_err(|e| format!("Error: {}", e))?;
 
