@@ -35,7 +35,7 @@ fn all_wit_types() {
         false,
     )
     .unwrap();
-    let resolve = generate_stub_wit_dir(&def).unwrap();
+    let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
 
     assert_has_package_name(&resolve, "test:main-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");
@@ -108,7 +108,7 @@ fn all_wit_types_inlined() {
         true,
     )
     .unwrap();
-    let resolve = generate_stub_wit_dir(&def).unwrap();
+    let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
 
     assert_has_package_name(&resolve, "test:main-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");
@@ -191,7 +191,7 @@ fn many_ways_to_export() {
         false,
     )
     .unwrap();
-    let resolve = generate_stub_wit_dir(&def).unwrap();
+    let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
 
     assert_has_package_name(&resolve, "test:exports-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");
@@ -218,7 +218,7 @@ fn many_ways_to_export_inlined() {
         true,
     )
     .unwrap();
-    let resolve = generate_stub_wit_dir(&def).unwrap();
+    let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
 
     assert_has_package_name(&resolve, "test:exports-stub");
     assert_has_world(&resolve, "wasm-rpc-stub-api");

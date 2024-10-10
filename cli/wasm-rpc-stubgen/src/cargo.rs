@@ -16,18 +16,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use crate::commands::log::{log_action, log_warn_action};
+use crate::stub::StubDefinition;
+use crate::wit;
 use anyhow::{anyhow, bail, Context};
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
     Profiles, StripSetting,
 };
+use golem_wasm_rpc::WASM_RPC_VERSION;
 use serde::{Deserialize, Serialize};
 use toml::Value;
-
-use crate::commands::log::{log_action, log_warn_action};
-use crate::stub::StubDefinition;
-use crate::wit;
-use golem_wasm_rpc::WASM_RPC_VERSION;
+use wit_parser::PackageName;
 
 #[derive(Serialize, Deserialize, Default)]
 struct MetadataRoot {
@@ -74,11 +74,11 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     let mut wit_dependencies = BTreeMap::new();
 
     wit_dependencies.insert(
-        def.root_package_name.to_string(),
+        def.source_package_name.name.to_string(),
         WitDependency {
             path: format!(
                 "wit/deps/{}_{}",
-                def.root_package_name.namespace, def.root_package_name.name
+                def.source_package_name.namespace, def.source_package_name.name
             ),
         },
     );
@@ -96,53 +96,56 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         },
     );
 
-    for dep in &def.unresolved_deps {
-        let dep_package = &dep.name;
-        let stub_package_name = format!("{}-stub", def.root_package_name);
+    let stub_package_name = def.stub_package_name();
+    for (dep_package, dep_package_sources) in def.dep_packages_with_sources() {
+        let dep_package_name = &dep_package.name;
 
-        if dep_package.to_string() == stub_package_name {
+        if dep_package_name.to_string() == stub_package_name {
             log_warn_action(
                 "Skipping",
-                format!("updating WIT dependency for {}", dep_package),
+                format!("updating WIT dependency for {}", dep_package_name),
             );
-        } else {
-            let mut dirs = BTreeSet::new();
-            for source in dep.source_files() {
-                let relative = source.strip_prefix(&def.source_wit_root)?;
-                let dir = relative
-                    .parent()
-                    .ok_or(anyhow!("Package source {source:?} has no parent directory"))?;
-                dirs.insert(dir);
-            }
+            continue;
+        }
 
-            if dirs.len() != 1 {
-                bail!("Package {} has multiple source directories", dep.name);
-            }
+        let mut dirs = BTreeSet::new();
+        for source in dep_package_sources {
+            let relative = source.strip_prefix(&def.source_wit_root)?;
+            let dir = relative
+                .parent()
+                .ok_or(anyhow!("Package source {source:?} has no parent directory"))?;
+            dirs.insert(dir);
+        }
 
-            wit_dependencies.insert(
-                format!("{}:{}", dep.name.namespace, dep.name.name),
-                WitDependency {
-                    path: format!("wit/{}", dirs.iter().next().unwrap().to_str().unwrap()),
-                },
+        if dirs.len() != 1 {
+            bail!(
+                "Package {} has multiple source directories",
+                dep_package_name
             );
         }
+
+        wit_dependencies.insert(
+            format_package_name_without_version(&dep_package.name),
+            WitDependency {
+                path: format!("wit/{}", dirs.iter().next().unwrap().to_str().unwrap()),
+            },
+        );
     }
 
     let metadata = MetadataRoot {
         component: Some(ComponentMetadata {
-            package: Some(format!(
-                "{}:{}",
-                def.root_package_name.namespace, def.root_package_name.name
+            package: Some(format_package_name_without_version(
+                &def.source_package_name,
             )),
             target: Some(ComponentTarget {
-                world: Some(def.target_world_name()?),
+                world: Some(def.target_world_name()),
                 path: "wit".to_string(),
                 dependencies: wit_dependencies,
             }),
         }),
     };
 
-    let mut package = cargo_toml::Package::new(def.target_crate_name()?, &def.stub_crate_version);
+    let mut package = cargo_toml::Package::new(def.target_crate_name(), &def.stub_crate_version);
     package.edition = Inheritable::Set(Edition::E2021);
     package.metadata = Some(metadata);
     manifest.package = Some(package);
@@ -278,7 +281,7 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
                         let package_name = wit::get_package_name(&path)?;
 
                         target.dependencies.insert(
-                            format!("{}:{}", package_name.namespace, package_name.name),
+                            format_package_name_without_version(&package_name),
                             WitDependency {
                                 path: relative_path,
                             },
@@ -299,4 +302,8 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
     }
 
     Ok(())
+}
+
+fn format_package_name_without_version(package_name: &PackageName) -> String {
+    format!("{}:{}", package_name.namespace, package_name.name)
 }

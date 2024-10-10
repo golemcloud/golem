@@ -18,12 +18,12 @@ use crate::copy::copy;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
 use crate::wit::{copy_wit_files, generate_stub_wit};
+use crate::wit_resolve::ResolvedWitDir;
 use anyhow::Context;
 use fs_extra::dir::CopyOptions;
 use heck::ToSnakeCase;
 use std::fs;
 use std::path::{Path, PathBuf};
-use wit_parser::Resolve;
 
 pub fn generate(stub_def: &StubDefinition) -> anyhow::Result<()> {
     let _ = generate_stub_wit_dir(stub_def)?;
@@ -53,11 +53,11 @@ pub async fn build(
     Ok(())
 }
 
-pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<Resolve> {
+pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
     generate_stub_wit(stub_def).context("Failed to generate the stub wit file")?;
     copy_wit_files(stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
-        .verify_target_wits()
+        .resolve_target_wit()
         .context("Failed to resolve the result WIT root")
 }
 
@@ -77,7 +77,7 @@ pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Resul
         .join("release")
         .join(format!(
             "{}.wasm",
-            stub_def.target_crate_name()?.to_snake_case()
+            stub_def.target_crate_name().to_snake_case()
         ));
     Ok(wasm_path)
 }
