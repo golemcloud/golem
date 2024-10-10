@@ -12,7 +12,7 @@ include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 [lib]
 
 [dependencies]
-golem-common = { path = "../golem-common" }
+golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
