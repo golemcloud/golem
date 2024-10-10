@@ -71,6 +71,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 } in match_arms
                 {
                     let predicate_type = pred.inferred_type();
+                    dbg!("calling {}, {}", arm_pattern.clone(), predicate_type.clone());
                     internal::update_arm_pattern_type(arm_pattern, &predicate_type)?;
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                     queue.push_back(arm_resolution_expr);
@@ -234,10 +235,7 @@ mod internal {
     ) -> Result<(), String> {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
-                dbg!(expr.clone());
-                dbg!(predicate_type.clone());
                 expr.add_infer_type_mut(predicate_type.clone());
-                expr.push_types_down()?;
             }
             ArmPattern::As(_, pattern) => {
                 update_arm_pattern_type(pattern, predicate_type)?;
