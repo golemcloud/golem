@@ -12,28 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::wit_resolve::{resolve_wit_dir, ResolvedWitDir};
 use crate::WasmRpcOverride;
-use anyhow::{anyhow, bail};
-use indexmap::IndexSet;
-use std::collections::{BTreeMap, HashSet};
-use std::fs;
+use anyhow::anyhow;
+use indexmap::IndexMap;
+use std::cell::OnceCell;
 use std::path::{Path, PathBuf};
 use wit_parser::{
-    Function, FunctionKind, PackageName, Resolve, Results, Type, TypeDef, TypeDefKind, TypeId,
-    TypeOwner, UnresolvedPackage, World, WorldId, WorldItem,
+    Function, FunctionKind, Interface, InterfaceId, Package, PackageId, PackageName, Resolve,
+    Results, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, World, WorldId, WorldItem, WorldKey,
 };
 
 /// All the gathered information for generating the stub crate.
 pub struct StubDefinition {
-    pub resolve: Resolve,
-    pub root_package_name: PackageName,
-    pub world_id: WorldId,
+    resolve: Resolve,
+    source_package_id: PackageId,
+    source_world_id: WorldId,
+    sources: IndexMap<PackageId, Vec<PathBuf>>,
+    source_interfaces: OnceCell<Vec<InterfaceStub>>,
+
+    pub source_package_name: PackageName,
     pub source_wit_root: PathBuf,
     pub target_root: PathBuf,
     pub stub_crate_version: String,
-    pub interfaces: Vec<InterfaceStub>,
-    pub unresolved_root: UnresolvedPackage,
-    pub unresolved_deps: Vec<UnresolvedPackage>,
     pub wasm_rpc_override: WasmRpcOverride,
     pub always_inline_types: bool,
 }
@@ -47,62 +48,104 @@ impl StubDefinition {
         wasm_rpc_override: &WasmRpcOverride,
         always_inline_types: bool,
     ) -> anyhow::Result<Self> {
-        let (root, deps) = get_unresolved_packages(source_wit_root)?;
-        let root_package = root.name.clone();
+        let resolved_source = resolve_wit_dir(source_wit_root)?;
 
-        let mut resolve = Resolve::new();
-        for unresolved in deps.iter().cloned() {
-            resolve.push(unresolved)?;
-        }
-        let root_id = resolve.push(root.clone())?;
+        let source_world_id = resolved_source
+            .resolve
+            .select_world(resolved_source.package_id, selected_world.as_deref())?;
 
-        let world_id = resolve.select_world(root_id, selected_world.as_deref())?;
-        let world = resolve
-            .worlds
-            .get(world_id)
-            .ok_or(anyhow!("world {world_id:?} not found"))?;
-        let interfaces = collect_stub_interfaces(&resolve, world)?;
+        let source_package_name = resolved_source
+            .resolve
+            .packages
+            .get(resolved_source.package_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "Failed to get package by id: {:?}",
+                    resolved_source.package_id
+                )
+            })
+            .name
+            .clone();
 
         Ok(Self {
-            resolve,
-            root_package_name: root_package,
-            world_id,
+            resolve: resolved_source.resolve,
+            source_package_id: resolved_source.package_id,
+            source_world_id,
+            sources: resolved_source.sources,
+            source_interfaces: OnceCell::new(),
+            source_package_name,
             source_wit_root: source_wit_root.to_path_buf(),
             target_root: target_root.to_path_buf(),
             stub_crate_version: stub_crate_version.to_string(),
-            interfaces,
-            unresolved_root: root,
-            unresolved_deps: deps,
             wasm_rpc_override: wasm_rpc_override.clone(),
             always_inline_types,
         })
     }
 
-    pub fn source_world(&self) -> anyhow::Result<&World> {
+    // NOTE: In the following "getters" below we trust that getting entities from the resolver
+    //       by source_package_id and world_id must always succeed, given
+    //         - they were created by using the resolver
+    //         - the resolver is private
+    //         - we do not allow mutation of the resolver or the ids
+    //
+    //       Because of the above, we panic in case they are not found in the resolver,
+    //       and similar reasoning is used when in one function we get and resolve an ID, since
+    //       these would be internal arena errors.
+
+    fn source_package(&self) -> &Package {
         self.resolve
-            .worlds
-            .get(self.world_id)
-            .ok_or(anyhow!("selected world not found"))
+            .packages
+            .get(self.source_package_id)
+            .unwrap_or_else(|| panic!("root package not found"))
     }
 
-    pub fn source_world_name(&self) -> anyhow::Result<String> {
-        Ok(self.source_world()?.name.clone())
+    pub fn dep_packages_with_sources(&self) -> impl Iterator<Item = (&Package, &Vec<PathBuf>)> {
+        self.resolve
+            .topological_packages()
+            .into_iter()
+            .filter(|package_id| *package_id != self.source_package_id)
+            .map(|package_id| {
+                (
+                    self.resolve
+                        .packages
+                        .get(package_id)
+                        .unwrap_or_else(|| panic!("package not found")),
+                    self.sources
+                        .get(&package_id)
+                        .unwrap_or_else(|| panic!("sources for package not found")),
+                )
+            })
+    }
+
+    pub fn stub_package_name(&self) -> String {
+        format!("{}-stub", self.source_package().name)
+    }
+
+    pub fn source_world(&self) -> &World {
+        self.resolve
+            .worlds
+            .get(self.source_world_id)
+            .unwrap_or_else(|| panic!("selected world not found"))
+    }
+
+    pub fn source_world_name(&self) -> String {
+        self.source_world().name.clone()
     }
 
     pub fn target_cargo_path(&self) -> PathBuf {
         self.target_root.join("Cargo.toml")
     }
 
-    pub fn target_crate_name(&self) -> anyhow::Result<String> {
-        Ok(format!("{}-stub", self.source_world_name()?))
+    pub fn target_crate_name(&self) -> String {
+        format!("{}-stub", self.source_world_name())
     }
 
     pub fn target_rust_path(&self) -> PathBuf {
         self.target_root.join("src/lib.rs")
     }
 
-    pub fn target_world_name(&self) -> anyhow::Result<String> {
-        Ok(format!("wasm-rpc-stub-{}", self.source_world_name()?))
+    pub fn target_world_name(&self) -> String {
+        format!("wasm-rpc-stub-{}", self.source_world_name())
     }
 
     pub fn target_wit_root(&self) -> PathBuf {
@@ -113,15 +156,8 @@ impl StubDefinition {
         self.target_wit_root().join("_stub.wit")
     }
 
-    pub fn verify_target_wits(&self) -> anyhow::Result<Resolve> {
-        let (final_root, final_deps) = get_unresolved_packages(&self.target_wit_root())?;
-
-        let mut final_resolve = Resolve::new();
-        for unresolved in final_deps.iter().cloned() {
-            final_resolve.push(unresolved)?;
-        }
-        final_resolve.push(final_root.clone())?;
-        Ok(final_resolve)
+    pub fn resolve_target_wit(&self) -> anyhow::Result<ResolvedWitDir> {
+        resolve_wit_dir(&self.target_wit_root())
     }
 
     pub fn fix_inlined_owner(&self, typedef: &TypeDef) -> StubTypeOwner {
@@ -140,7 +176,7 @@ impl StubDefinition {
                         self.resolve.interfaces.get(*interface_id)
                     {
                         if let Some(name) = resolved_owner_interface.name.as_ref() {
-                            self.interfaces
+                            self.source_interfaces()
                                 .iter()
                                 .any(|interface| &interface.name == name)
                         } else {
@@ -156,6 +192,302 @@ impl StubDefinition {
             TypeOwner::World(_) => true,
             TypeOwner::None => false,
         }
+    }
+
+    pub fn source_interfaces(&self) -> &Vec<InterfaceStub> {
+        self.source_interfaces.get_or_init(|| {
+            let (types, functions, interfaces) =
+                self.partition_world_items(&self.source_world().exports);
+
+            interfaces
+                .into_iter()
+                .flat_map(|(name, interface)| self.interface_to_stub_interfaces(name, interface))
+                .chain(self.global_stub_interface(types, functions))
+                .collect::<Vec<_>>()
+        })
+    }
+
+    fn partition_world_items<'a>(
+        &'a self,
+        world_items: &'a IndexMap<WorldKey, WorldItem>,
+    ) -> (
+        Vec<(String, TypeId)>,
+        Vec<&Function>,
+        Vec<(String, &Interface)>,
+    ) {
+        let mut types = Vec::<(String, TypeId)>::new();
+        let mut functions = Vec::new();
+        let mut interfaces = Vec::new();
+
+        for (world_key, world_item) in world_items {
+            match world_item {
+                WorldItem::Interface { id, stability: _ } => {
+                    let interface =
+                        self.resolve.interfaces.get(*id).unwrap_or_else(|| {
+                            panic!("failed to resolve interface by id, {:?}", id)
+                        });
+                    interfaces.push((
+                        interface
+                            .name
+                            .clone()
+                            .unwrap_or(String::from(world_key.clone())),
+                        interface,
+                    ))
+                }
+                WorldItem::Function(function) => functions.push(function),
+                WorldItem::Type(type_id) => types.push((world_key.clone().unwrap_name(), *type_id)),
+            }
+        }
+
+        (types, functions, interfaces)
+    }
+
+    fn function_to_stub(function: &Function) -> FunctionStub {
+        let name = function.name.clone();
+
+        let params = function
+            .params
+            .iter()
+            .map(|(name, typ)| FunctionParamStub {
+                name: name.clone(),
+                typ: *typ,
+            })
+            .collect();
+
+        let results = match &function.results {
+            Results::Named(params) => {
+                let mut param_stubs = Vec::new();
+                for (name, typ) in params {
+                    param_stubs.push(FunctionParamStub {
+                        name: name.clone(),
+                        typ: *typ,
+                    });
+                }
+                FunctionResultStub::Multi(param_stubs)
+            }
+            Results::Anon(single) => FunctionResultStub::Single(*single),
+        };
+
+        FunctionStub {
+            name,
+            params,
+            results,
+        }
+    }
+
+    fn functions_to_stubs<'a>(functions: impl Iterator<Item = &'a Function>) -> Vec<FunctionStub> {
+        functions.map(Self::function_to_stub).collect()
+    }
+
+    fn global_stub_interface(
+        &self,
+        types: Vec<(String, TypeId)>,
+        functions: Vec<&Function>,
+    ) -> Option<InterfaceStub> {
+        if functions.is_empty() {
+            return None;
+        }
+
+        let name = self.source_world_name();
+
+        let functions = Self::functions_to_stubs(
+            functions
+                .into_iter()
+                .filter(|function| function.kind == FunctionKind::Freestanding),
+        );
+
+        let (imported_interfaces, _) = self.extract_interface_stubs_from_types(types.into_iter());
+
+        Some(InterfaceStub {
+            name,
+            functions,
+            imports: imported_interfaces,
+            global: true,
+            constructor_params: None,
+            static_functions: vec![],
+            owner_interface: None,
+        })
+    }
+
+    fn interface_to_stub_interfaces(
+        &self,
+        name: String,
+        interface: &Interface,
+    ) -> Vec<InterfaceStub> {
+        let functions = Self::functions_to_stubs(interface.functions.values());
+
+        let (imported_interfaces, resource_interfaces) = self.extract_interface_stubs_from_types(
+            interface
+                .types
+                .iter()
+                .map(|(name, typ)| (name.clone(), *typ)),
+        );
+
+        let mut interface_stubs = Vec::<InterfaceStub>::new();
+        interface_stubs.reserve(1 + resource_interfaces.len());
+
+        interface_stubs.push(InterfaceStub {
+            name,
+            functions,
+            imports: imported_interfaces,
+            global: false,
+            constructor_params: None,
+            static_functions: vec![],
+            owner_interface: None,
+        });
+        interface_stubs.extend(resource_interfaces);
+
+        interface_stubs
+    }
+
+    fn extract_interface_stubs_from_types<'a>(
+        &self,
+        types: impl Iterator<Item = (String, TypeId)>,
+    ) -> (Vec<InterfaceStubTypeDef>, Vec<InterfaceStub>) {
+        let mut imported_interfaces = Vec::<InterfaceStubTypeDef>::new();
+        let mut resource_interfaces = Vec::<InterfaceStub>::new();
+
+        for (type_name, type_id) in types {
+            let type_def = self
+                .resolve
+                .types
+                .get(type_id)
+                .unwrap_or_else(|| panic!("type {type_id:?} not found"));
+
+            if let TypeOwner::Interface(owner_interface_id) = type_def.owner {
+                let owner_interface = self
+                    .resolve
+                    .interfaces
+                    .get(owner_interface_id)
+                    .unwrap_or_else(|| panic!("interface {owner_interface_id:?} not found"));
+
+                if type_def.kind == TypeDefKind::Resource {
+                    resource_interfaces.push(self.resource_interface_stub(
+                        owner_interface,
+                        type_name,
+                        type_id,
+                    ))
+                } else {
+                    imported_interfaces.push(self.type_def_to_stub(
+                        owner_interface,
+                        type_name,
+                        type_def.clone(),
+                    ));
+                }
+            }
+        }
+
+        (imported_interfaces, resource_interfaces)
+    }
+
+    fn type_def_to_stub(
+        &self,
+        owner_interface: &Interface,
+        type_name: String,
+        type_def: TypeDef,
+    ) -> InterfaceStubTypeDef {
+        let package = owner_interface
+            .package
+            .and_then(|id| self.resolve.packages.get(id));
+
+        // TODO: unknown?
+        let interface_name = owner_interface
+            .name
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let interface_path = package
+            .map(|p| p.name.interface_id(&interface_name))
+            .unwrap_or(interface_name);
+
+        InterfaceStubTypeDef {
+            name: type_name,
+            path: interface_path,
+            package_name: package.map(|p| p.name.clone()),
+            type_def,
+        }
+    }
+
+    fn resource_interface_stub(
+        &self,
+        owner_interface: &Interface,
+        type_name: String,
+        type_id: TypeId,
+    ) -> InterfaceStub {
+        let functions_by_kind = |kind: FunctionKind| {
+            owner_interface
+                .functions
+                .values()
+                .filter(move |function| function.kind == kind)
+        };
+
+        let function_stubs_by_kind =
+            |kind: FunctionKind| Self::functions_to_stubs(functions_by_kind(kind));
+
+        let (imported_interfaces, _) = self.extract_interface_stubs_from_types(
+            owner_interface
+                .types
+                .iter()
+                .map(|(name, type_id)| (name.clone(), *type_id)),
+        );
+
+        let constructor_params = functions_by_kind(FunctionKind::Constructor(type_id))
+            .next()
+            .map(|c| {
+                c.params
+                    .iter()
+                    .map(|(n, t)| FunctionParamStub {
+                        name: n.clone(),
+                        typ: *t,
+                    })
+                    .collect::<Vec<_>>()
+            });
+
+        InterfaceStub {
+            name: type_name,
+            functions: function_stubs_by_kind(FunctionKind::Method(type_id)),
+            imports: imported_interfaces,
+            global: false,
+            constructor_params,
+            static_functions: function_stubs_by_kind(FunctionKind::Static(type_id)),
+            owner_interface: Some(owner_interface.name.clone().unwrap_or_else(|| {
+                panic!(
+                    "failed to get interface name for interface: {:?}",
+                    owner_interface
+                )
+            })),
+        }
+    }
+
+    // NOTE: Getters below are not trusted, as they could return ids from
+    //       a different Resolver and arena, so these are returning anyhow errors
+
+    pub fn get_package(&self, package_id: PackageId) -> anyhow::Result<&Package> {
+        self.resolve
+            .packages
+            .get(package_id)
+            .ok_or_else(|| anyhow!("failed to get package by id: {:?}", package_id))
+    }
+
+    pub fn get_interface(&self, interface_id: InterfaceId) -> anyhow::Result<&Interface> {
+        self.resolve
+            .interfaces
+            .get(interface_id)
+            .ok_or_else(|| anyhow!("failed to get interface by id: {:?}", interface_id))
+    }
+
+    pub fn get_world(&self, world_id: WorldId) -> anyhow::Result<&World> {
+        self.resolve
+            .worlds
+            .get(world_id)
+            .ok_or_else(|| anyhow!("failed to get world by id: {:?}", world_id))
+    }
+
+    pub fn get_type_def(&self, type_id: TypeId) -> anyhow::Result<&TypeDef> {
+        self.resolve
+            .types
+            .get(type_id)
+            .ok_or_else(|| anyhow!("failed to get type by id: {:?}", type_id))
     }
 }
 
@@ -302,303 +634,4 @@ impl FunctionResultStub {
 pub enum StubTypeOwner {
     StubInterface,
     Source(TypeOwner),
-}
-
-fn collect_stub_imports<'a>(
-    types: impl Iterator<Item = (&'a String, &'a TypeId)>,
-    resolve: &Resolve,
-) -> anyhow::Result<Vec<InterfaceStubTypeDef>> {
-    let mut imports = Vec::new();
-
-    for (name, typ) in types {
-        let typ = resolve
-            .types
-            .get(*typ)
-            .ok_or(anyhow!("type {typ:?} not found"))?;
-        if typ.kind != TypeDefKind::Resource {
-            // We will redefine resources so no need to import them
-            match typ.owner {
-                TypeOwner::World(world_id) => {
-                    let _world = resolve
-                        .worlds
-                        .get(world_id)
-                        .ok_or(anyhow!("world {world_id:?} not found"))?;
-                }
-                TypeOwner::Interface(interface_id) => {
-                    let interface = resolve
-                        .interfaces
-                        .get(interface_id)
-                        .ok_or(anyhow!("interface {interface_id:?} not found"))?;
-                    let package = interface.package.and_then(|id| resolve.packages.get(id));
-
-                    let interface_name = interface.name.clone().unwrap_or("unknown".to_string());
-                    let interface_path = package
-                        .map(|p| p.name.interface_id(&interface_name))
-                        .unwrap_or(interface_name);
-
-                    imports.push(InterfaceStubTypeDef {
-                        name: name.clone(),
-                        path: interface_path,
-                        package_name: package.map(|p| p.name.clone()),
-                        type_def: typ.clone(),
-                    });
-                }
-                TypeOwner::None => {}
-            }
-        }
-    }
-
-    Ok(imports)
-}
-
-fn collect_stub_interfaces(resolve: &Resolve, world: &World) -> anyhow::Result<Vec<InterfaceStub>> {
-    let top_level_types = world
-        .exports
-        .iter()
-        .filter_map(|(name, item)| match item {
-            WorldItem::Type(t) => Some((name.clone().unwrap_name(), t)),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    let top_level_functions = world
-        .exports
-        .iter()
-        .filter_map(|(_, item)| match item {
-            WorldItem::Function(f) => Some(f),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    let mut interfaces = Vec::new();
-    for (name, item) in &world.exports {
-        if let WorldItem::Interface(id) = item {
-            let interface = resolve
-                .interfaces
-                .get(*id)
-                .ok_or(anyhow!("exported interface not found"))?;
-            let name = interface.name.clone().unwrap_or(String::from(name.clone()));
-            let functions = collect_stub_functions(
-                interface
-                    .functions
-                    .values()
-                    .filter(|f| f.kind == FunctionKind::Freestanding),
-            )?;
-            let imports = collect_stub_imports(interface.types.iter(), resolve)?;
-            let resource_interfaces =
-                collect_stub_resources(&name, interface.types.iter(), resolve)?;
-
-            interfaces.push(InterfaceStub {
-                name,
-                functions,
-                imports,
-                global: false,
-                constructor_params: None,
-                static_functions: vec![],
-                owner_interface: None,
-            });
-
-            interfaces.extend(resource_interfaces);
-        }
-    }
-
-    if !top_level_functions.is_empty() {
-        interfaces.push(InterfaceStub {
-            name: world.name.clone(),
-            functions: collect_stub_functions(
-                top_level_functions
-                    .into_iter()
-                    .filter(|f| f.kind == FunctionKind::Freestanding),
-            )?,
-            imports: collect_stub_imports(top_level_types.iter().map(|(k, v)| (k, *v)), resolve)?,
-            global: true,
-            constructor_params: None,
-            static_functions: vec![],
-            owner_interface: None,
-        });
-    }
-
-    Ok(interfaces)
-}
-
-fn collect_stub_functions<'a>(
-    functions: impl Iterator<Item = &'a Function>,
-) -> anyhow::Result<Vec<FunctionStub>> {
-    Ok(functions
-        .map(|f| {
-            let mut params = Vec::new();
-            for (name, typ) in &f.params {
-                params.push(FunctionParamStub {
-                    name: name.clone(),
-                    typ: *typ,
-                });
-            }
-
-            let results = match &f.results {
-                Results::Named(params) => {
-                    let mut param_stubs = Vec::new();
-                    for (name, typ) in params {
-                        param_stubs.push(FunctionParamStub {
-                            name: name.clone(),
-                            typ: *typ,
-                        });
-                    }
-                    FunctionResultStub::Multi(param_stubs)
-                }
-                Results::Anon(single) => FunctionResultStub::Single(*single),
-            };
-
-            FunctionStub {
-                name: f.name.clone(),
-                params,
-                results,
-            }
-        })
-        .collect())
-}
-
-fn collect_stub_resources<'a>(
-    owner_interface: &str,
-    types: impl Iterator<Item = (&'a String, &'a TypeId)>,
-    resolve: &'a Resolve,
-) -> anyhow::Result<Vec<InterfaceStub>> {
-    let mut interfaces = Vec::new();
-    for (_name, type_id) in types {
-        let typ = resolve
-            .types
-            .get(*type_id)
-            .ok_or(anyhow!("type {type_id:?} not found"))?;
-        if typ.kind == TypeDefKind::Resource {
-            match typ.owner {
-                TypeOwner::World(_) => {}
-                TypeOwner::Interface(iface_id) => {
-                    let iface = resolve
-                        .interfaces
-                        .get(iface_id)
-                        .ok_or(anyhow!("interface {iface_id:?} not found"))?;
-
-                    let constructors = iface
-                        .functions
-                        .values()
-                        .filter(|f| f.kind == FunctionKind::Constructor(*type_id))
-                        .collect::<Vec<_>>();
-                    let methods = iface
-                        .functions
-                        .values()
-                        .filter(|f| f.kind == FunctionKind::Method(*type_id))
-                        .collect::<Vec<_>>();
-                    let statics = iface
-                        .functions
-                        .values()
-                        .filter(|f| f.kind == FunctionKind::Static(*type_id))
-                        .collect::<Vec<_>>();
-
-                    let functions = collect_stub_functions(methods.into_iter())?
-                        .into_iter()
-                        .map(|f| {
-                            f.as_method()
-                                .ok_or(anyhow!("Non-method function found among resource methods"))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                    let static_functions = collect_stub_functions(statics.into_iter())?
-                        .into_iter()
-                        .map(|f| {
-                            f.as_static()
-                                .ok_or(anyhow!("Non-static function found among resource statics"))
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-
-                    let imports = collect_stub_imports(iface.types.iter(), resolve)?;
-
-                    let constructor_params = constructors.first().map(|c| {
-                        c.params
-                            .iter()
-                            .map(|(n, t)| FunctionParamStub {
-                                name: n.clone(),
-                                typ: *t,
-                            })
-                            .collect::<Vec<_>>()
-                    });
-
-                    let resource_name = typ
-                        .name
-                        .as_ref()
-                        .ok_or(anyhow!("Resource type has no name"))?
-                        .clone();
-
-                    interfaces.push(InterfaceStub {
-                        name: resource_name,
-                        functions,
-                        imports,
-                        global: false,
-                        constructor_params,
-                        static_functions,
-                        owner_interface: Some(owner_interface.to_string()),
-                    });
-                }
-                TypeOwner::None => {}
-            }
-        }
-    }
-    Ok(interfaces)
-}
-
-// https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md
-
-fn visit<'a>(
-    pkg: &'a UnresolvedPackage,
-    deps: &'a BTreeMap<PackageName, UnresolvedPackage>,
-    order: &mut IndexSet<PackageName>,
-    visiting: &mut HashSet<&'a PackageName>,
-) -> anyhow::Result<()> {
-    if order.contains(&pkg.name) {
-        return Ok(());
-    }
-    for (dep, _) in pkg.foreign_deps.iter() {
-        if !visiting.insert(dep) {
-            bail!("package depends on itself");
-        }
-        let dep = deps
-            .get(dep)
-            .ok_or_else(|| anyhow!("failed to find package `{dep}` in `deps` directory"))?;
-        visit(dep, deps, order, visiting)?;
-        assert!(visiting.remove(&dep.name));
-    }
-    assert!(order.insert(pkg.name.clone()));
-    Ok(())
-}
-
-// Copied and modified from `wit-parser` crate
-pub fn get_unresolved_packages(
-    root_path: &Path,
-) -> anyhow::Result<(UnresolvedPackage, Vec<UnresolvedPackage>)> {
-    let root = UnresolvedPackage::parse_dir(root_path)?;
-
-    let mut deps = BTreeMap::new();
-    let deps_path = root_path.join(Path::new("deps"));
-    if deps_path.exists() {
-        for dep_entry in fs::read_dir(deps_path)? {
-            let dep_entry = dep_entry?;
-            let dep = UnresolvedPackage::parse_path(&dep_entry.path())?;
-            deps.insert(dep.name.clone(), dep);
-        }
-    }
-
-    // Perform a simple topological sort which will bail out on cycles
-    // and otherwise determine the order that packages must be added to
-    // this `Resolve`.
-    let mut order = IndexSet::new();
-    let mut visiting = HashSet::new();
-    for pkg in deps.values().chain([&root]) {
-        visit(pkg, &deps, &mut order, &mut visiting)?;
-    }
-
-    let mut ordered_deps = Vec::new();
-    for name in order {
-        if let Some(pkg) = deps.remove(&name) {
-            ordered_deps.push(pkg);
-        }
-    }
-
-    Ok((root, ordered_deps))
 }

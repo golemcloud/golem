@@ -21,20 +21,22 @@ use quote::quote;
 use std::fs;
 use wit_bindgen_rust::to_rust_ident;
 use wit_parser::{
-    Enum, Flags, Handle, Record, Resolve, Result_, Tuple, Type, TypeDefKind, TypeId, TypeOwner,
-    Variant,
+    Enum, Flags, Handle, Record, Result_, Tuple, Type, TypeDef, TypeDefKind, TypeOwner, Variant,
 };
 
 pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let root_ns = Ident::new(
-        &def.root_package_name.namespace.to_snake_case(),
+        &def.source_package_name.namespace.to_snake_case(),
         Span::call_site(),
     );
+
+    // TODO: naming into stub def
     let root_name = Ident::new(
-        &format!("{}_stub", def.root_package_name.name.to_snake_case()),
+        &format!("{}_stub", def.source_package_name.name.to_snake_case()),
         Span::call_site(),
     );
-    let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+    // TODO: naming into stub def
+    let stub_interface_name = format!("stub-{}", def.source_world_name());
     let stub_interface_name = Ident::new(
         &to_rust_ident(&stub_interface_name).to_snake_case(),
         Span::call_site(),
@@ -44,7 +46,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let mut exports = Vec::new();
     let mut resource_type_aliases = Vec::new();
 
-    for interface in &def.interfaces {
+    for interface in def.source_interfaces() {
         let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
 
@@ -116,7 +118,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     }
 
     let mut interface_impls = Vec::new();
-    for interface in &def.interfaces {
+    for interface in def.source_interfaces() {
         let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
         let guest_interface_name =
@@ -407,21 +409,17 @@ fn generate_function_stub_source(
 
             let type_id = match &first_param.typ {
                 Type::Id(type_id) => {
-                    let typedef = def
-                        .resolve
-                        .types
-                        .get(*type_id)
-                        .ok_or(anyhow!("type not found"))?;
+                    let type_def = def.get_type_def(*type_id)?;
 
-                    match &typedef.kind {
-                        TypeDefKind::Handle(Handle::Borrow(type_id)) => Ok(type_id),
-                        TypeDefKind::Handle(Handle::Own(type_id)) => Ok(type_id),
+                    match &type_def.kind {
+                        TypeDefKind::Handle(Handle::Borrow(type_id)) => Ok(*type_id),
+                        TypeDefKind::Handle(Handle::Own(type_id)) => Ok(*type_id),
                         _ => Err(anyhow!("first parameter of static method is not a handle")),
                     }
                 }
                 _ => Err(anyhow!("first parameter of static method is not a handle")),
             }?;
-            let first_param_type = resource_type_ident(type_id, &def.resolve)?;
+            let first_param_type = resource_type_ident(def.get_type_def(type_id)?)?;
 
             quote! { #first_param_ident.get::<#first_param_type>().rpc }
         }
@@ -479,14 +477,14 @@ fn generate_function_stub_source(
             }
         } else {
             let root_ns = Ident::new(
-                &def.root_package_name.namespace.to_snake_case(),
+                &def.source_package_name.namespace.to_snake_case(),
                 Span::call_site(),
             );
             let root_name = Ident::new(
-                &format!("{}_stub", def.root_package_name.name.to_snake_case()),
+                &format!("{}_stub", def.source_package_name.name.to_snake_case()),
                 Span::call_site(),
             );
-            let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+            let stub_interface_name = format!("stub-{}", def.source_world_name());
             let stub_interface_name = Ident::new(
                 &to_rust_ident(&stub_interface_name).to_snake_case(),
                 Span::call_site(),
@@ -601,18 +599,20 @@ fn get_remote_function_name(
     resource_name: Option<&String>,
 ) -> String {
     match (interface_name, resource_name) {
-        (Some(remote_interface), None) => format!(
-            "{}:{}/{}.{{{}}}",
-            def.root_package_name.namespace,
-            def.root_package_name.name,
-            remote_interface,
-            function_name
-        ),
+        (Some(remote_interface), None) => {
+            format!(
+                "{}:{}/{}.{{{}}}",
+                def.source_package_name.namespace,
+                def.source_package_name.name,
+                remote_interface,
+                function_name
+            )
+        }
         (Some(remote_interface), Some(resource)) => {
             format!(
                 "{}:{}/{}.{{{}.{}}}",
-                def.root_package_name.namespace,
-                def.root_package_name.name,
+                def.source_package_name.namespace,
+                def.source_package_name.name,
                 remote_interface,
                 resource,
                 function_name
@@ -641,13 +641,9 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
         Type::Char => Ok(quote! { char }),
         Type::String => Ok(quote! { String }),
         Type::Id(type_id) => {
-            let typedef = def
-                .resolve
-                .types
-                .get(*type_id)
-                .ok_or(anyhow!("type not found"))?;
+            let type_def = def.get_type_def(*type_id)?;
 
-            match &typedef.kind {
+            match &type_def.kind {
                 TypeDefKind::Option(inner) => {
                     let inner = type_to_rust_ident(inner, def)?;
                     Ok(quote! { Option<#inner> })
@@ -682,20 +678,20 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                     };
 
                     let root_ns = Ident::new(
-                        &def.root_package_name.namespace.to_snake_case(),
+                        &def.source_package_name.namespace.to_snake_case(),
                         Span::call_site(),
                     );
                     let root_name = Ident::new(
-                        &format!("{}_stub", def.root_package_name.name.to_snake_case()),
+                        &format!("{}_stub", def.source_package_name.name.to_snake_case()),
                         Span::call_site(),
                     );
-                    let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+                    let stub_interface_name = format!("stub-{}", def.source_world_name());
                     let stub_interface_name = Ident::new(
                         &to_rust_ident(&stub_interface_name).to_snake_case(),
                         Span::call_site(),
                     );
 
-                    let ident = resource_type_ident(type_id, &def.resolve)?;
+                    let ident = resource_type_ident(def.get_type_def(*type_id)?)?;
                     if is_ref {
                         let borrow_ident = Ident::new(
                             &format!(
@@ -715,28 +711,20 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                 }
                 _ => {
                     let typ = Ident::new(
-                        &to_rust_ident(typedef.name.as_ref().ok_or(anyhow!("type has no name"))?)
+                        &to_rust_ident(type_def.name.as_ref().ok_or(anyhow!("type has no name"))?)
                             .to_upper_camel_case(),
                         Span::call_site(),
                     );
                     let mut path = Vec::new();
                     path.push(quote! { crate });
                     path.push(quote! { bindings });
-                    let fixed_owner = def.fix_inlined_owner(typedef);
+                    let fixed_owner = def.fix_inlined_owner(type_def);
                     match &fixed_owner {
                         StubTypeOwner::Source(TypeOwner::World(world_id)) => {
-                            let world = def
-                                .resolve
-                                .worlds
-                                .get(*world_id)
-                                .ok_or(anyhow!("type's owner world not found"))?;
+                            let world = def.get_world(*world_id)?;
                             let package_id =
                                 world.package.ok_or(anyhow!("world has no package"))?;
-                            let package = def
-                                .resolve
-                                .packages
-                                .get(package_id)
-                                .ok_or(anyhow!("package not found"))?;
+                            let package = def.get_package(package_id)?;
                             let ns_ident = Ident::new(
                                 &to_rust_ident(&package.name.namespace),
                                 Span::call_site(),
@@ -747,20 +735,11 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                             path.push(quote! { #name_ident });
                         }
                         StubTypeOwner::Source(TypeOwner::Interface(interface_id)) => {
-                            let interface = def
-                                .resolve
-                                .interfaces
-                                .get(*interface_id)
-                                .ok_or(anyhow!("type's owner interface not found"))?;
-
+                            let interface = def.get_interface(*interface_id)?;
                             let package_id = interface
                                 .package
                                 .ok_or(anyhow!("interface has no package"))?;
-                            let package = def
-                                .resolve
-                                .packages
-                                .get(package_id)
-                                .ok_or(anyhow!("package not found"))?;
+                            let package = def.get_package(package_id)?;
                             let interface_name = interface
                                 .name
                                 .as_ref()
@@ -780,14 +759,14 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
                         StubTypeOwner::Source(TypeOwner::None) => {}
                         StubTypeOwner::StubInterface => {
                             let root_ns = Ident::new(
-                                &def.root_package_name.namespace.to_snake_case(),
+                                &def.source_package_name.namespace.to_snake_case(),
                                 Span::call_site(),
                             );
                             let root_name = Ident::new(
-                                &format!("{}_stub", def.root_package_name.name.to_snake_case()),
+                                &format!("{}_stub", def.source_package_name.name.to_snake_case()),
                                 Span::call_site(),
                             );
-                            let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+                            let stub_interface_name = format!("stub-{}", def.source_world_name());
                             let stub_interface_name = Ident::new(
                                 &to_rust_ident(&stub_interface_name).to_snake_case(),
                                 Span::call_site(),
@@ -806,15 +785,10 @@ fn type_to_rust_ident(typ: &Type, def: &StubDefinition) -> anyhow::Result<TokenS
     }
 }
 
-fn resource_type_ident(type_id: &TypeId, resolve: &Resolve) -> anyhow::Result<Ident> {
-    let typedef = resolve
-        .types
-        .get(*type_id)
-        .ok_or(anyhow!("type not found"))?;
-
+fn resource_type_ident(type_def: &TypeDef) -> anyhow::Result<Ident> {
     let ident = Ident::new(
         &to_rust_ident(
-            typedef
+            type_def
                 .name
                 .as_ref()
                 .ok_or(anyhow!("Handle's inner type has no name"))?,
@@ -977,12 +951,8 @@ fn wit_value_builder(
             }
         }
         Type::Id(type_id) => {
-            let typedef = def
-                .resolve
-                .types
-                .get(*type_id)
-                .ok_or(anyhow!("type not found"))?;
-            match &typedef.kind {
+            let type_def = def.get_type_def(*type_id)?;
+            match &type_def.kind {
                 TypeDefKind::Record(record) => {
                     wit_record_value_builder(record, name, def, builder_expr)
                 }
@@ -990,9 +960,9 @@ fn wit_value_builder(
                 TypeDefKind::Handle(handle) => {
                     let ident = match handle {
                         Handle::Own(type_id) =>
-                            resource_type_ident(type_id, &def.resolve)?,
+                            resource_type_ident(def.get_type_def(*type_id)?)?,
                             Handle::Borrow(type_id) =>
-                                resource_type_ident(type_id, &def.resolve)?,
+                                resource_type_ident(def.get_type_def(*type_id)?)?,
                     };
                     Ok(quote! {
                         #builder_expr.handle(#name.get::<#ident>().uri.clone(), #name.get::<#ident>().id)
@@ -1318,12 +1288,8 @@ fn extract_from_wit_value(
             #base_expr.string().expect("string not found").to_string()
         }),
         Type::Id(type_id) => {
-            let typedef = def
-                .resolve
-                .types
-                .get(*type_id)
-                .ok_or(anyhow!("type not found"))?;
-            match &typedef.kind {
+            let type_def = def.get_type_def(*type_id)?;
+            match &type_def.kind {
                 TypeDefKind::Record(record) => {
                     extract_from_record_value(record, typ, def, base_expr)
                 }
@@ -1571,14 +1537,14 @@ fn extract_from_handle_value(
     base_expr: TokenStream,
 ) -> anyhow::Result<TokenStream> {
     let root_ns = Ident::new(
-        &def.root_package_name.namespace.to_snake_case(),
+        &def.source_package_name.namespace.to_snake_case(),
         Span::call_site(),
     );
     let root_name = Ident::new(
-        &format!("{}_stub", def.root_package_name.name.to_snake_case()),
+        &format!("{}_stub", def.source_package_name.name.to_snake_case()),
         Span::call_site(),
     );
-    let stub_interface_name = format!("stub-{}", def.source_world_name()?);
+    let stub_interface_name = format!("stub-{}", def.source_world_name());
     let stub_interface_name = Ident::new(
         &to_rust_ident(&stub_interface_name).to_snake_case(),
         Span::call_site(),
@@ -1586,7 +1552,7 @@ fn extract_from_handle_value(
 
     match handle {
         Handle::Own(type_id) => {
-            let ident = resource_type_ident(type_id, &def.resolve)?;
+            let ident = resource_type_ident(def.get_type_def(*type_id)?)?;
             Ok(quote! {
                 {
                     let (uri, id) = #base_expr.handle().expect("handle not found");
@@ -1595,7 +1561,7 @@ fn extract_from_handle_value(
             })
         }
         Handle::Borrow(type_id) => {
-            let ident = resource_type_ident(type_id, &def.resolve)?;
+            let ident = resource_type_ident(def.get_type_def(*type_id)?)?;
             let borrow_ident = Ident::new(
                 &format!(
                     "{}Borrow",

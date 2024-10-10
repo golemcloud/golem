@@ -21,7 +21,7 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use wit_parser::{PackageName, UnresolvedPackage};
+use wit_parser::{PackageName, UnresolvedPackage, UnresolvedPackageGroup};
 
 #[derive(PartialEq, Eq)]
 pub enum UpdateCargoToml {
@@ -37,24 +37,25 @@ pub fn add_stub_dependency(
     update_cargo_toml: UpdateCargoToml,
 ) -> anyhow::Result<()> {
     // Parsing the destination WIT root
-    let parsed_dest = UnresolvedPackage::parse_dir(dest_wit_root)?;
+    let parsed_dest = UnresolvedPackageGroup::parse_dir(dest_wit_root)?;
 
     // Dependencies of stub as directories
     let stub_deps = wit::get_dep_dirs(stub_wit_root)?;
 
     let stub_wit = stub_wit_root.join("_stub.wit");
-    let parsed_stub = UnresolvedPackage::parse_file(&stub_wit)?;
+    let parsed_stub = UnresolvedPackageGroup::parse_file(&stub_wit)?;
 
-    let destination_package_name = parsed_dest.name.clone();
+    let destination_package_name = parsed_dest.main.name.clone();
 
     let stub_target_package_name = PackageName {
         name: parsed_stub
+            .main
             .name
             .name
             .strip_suffix("-stub")
             .expect("Unexpected stub package name")
             .to_string(),
-        ..parsed_stub.name.clone()
+        ..parsed_stub.main.name.clone()
     };
     if destination_package_name == stub_target_package_name
         && !is_self_stub(&stub_wit, dest_wit_root)?
@@ -64,13 +65,13 @@ pub fn add_stub_dependency(
         ));
     }
 
-    let stub_package_name = parsed_stub.name.clone();
+    let stub_package_name = parsed_stub.main.name.clone();
 
     let mut actions = Vec::new();
 
     // Checking if the destination package is the same as the stub's package - if yes, then this is the case of adding a self-dependency
     // (adding A-stub to A as a dependency)
-    if is_package_same_or_stub(&parsed_dest, &parsed_stub) {
+    if is_package_same_or_stub(&parsed_dest.main, &parsed_stub.main) {
         let stub_root = &stub_wit_root
             .parent()
             .ok_or(anyhow!("Failed to get parent of stub wit root"))?;
@@ -88,7 +89,7 @@ pub fn add_stub_dependency(
         // We filter the dependencies of stub that's already existing in dest_wit_root
         let filtered_source_deps = stub_deps
             .into_iter()
-            .filter(|dep| find_if_same_package(dep, &parsed_dest).unwrap())
+            .filter(|dep| find_if_same_package(dep, &parsed_dest.main).unwrap())
             .collect::<Vec<_>>();
 
         // New stub string
@@ -106,9 +107,9 @@ pub fn add_stub_dependency(
         });
     } else {
         for source_dir in stub_deps {
-            let parsed_dep = UnresolvedPackage::parse_dir(&source_dir)?;
+            let parsed_dep = UnresolvedPackageGroup::parse_dir(&source_dir)?.main;
 
-            if is_package_same_or_stub(&parsed_dest, &parsed_dep) {
+            if is_package_same_or_stub(&parsed_dest.main, &parsed_dep) {
                 log_warn_action(
                     "Skipping",
                     format!("copying cyclic dependencies {}", parsed_dep.name),
@@ -201,7 +202,7 @@ fn is_self_stub(stub_wit: &Path, dest_wit_root: &Path) -> anyhow::Result<bool> {
 }
 
 fn find_if_same_package(dep_dir: &Path, target_wit: &UnresolvedPackage) -> anyhow::Result<bool> {
-    let dep_package_name = UnresolvedPackage::parse_dir(dep_dir)?.name;
+    let dep_package_name = UnresolvedPackageGroup::parse_dir(dep_dir)?.main.name;
     let dest_package = target_wit.name.clone();
 
     if dep_package_name != dest_package {
@@ -241,7 +242,8 @@ fn is_package_same_or_stub(
 /// which are not used when these WITs are added as dependencies.
 fn remove_stub_import(wit_file: &PathBuf, package_name: &PackageName) -> anyhow::Result<String> {
     let read_data = fs::read_to_string(wit_file)?;
-    let self_stub_package = format!("{}:{}-stub", package_name.namespace, package_name.name);
+    // TODO: naming
+    let self_stub_package =  format!("{}:{}-stub", package_name.namespace, package_name.name);
 
     let re = Regex::new(
         format!(

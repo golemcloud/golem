@@ -1904,7 +1904,8 @@ dependencies = [
  "wac-graph",
  "walkdir",
  "wit-bindgen-rust 0.26.0",
- "wit-parser 0.207.0",
+ "wit-encoder",
+ "wit-parser 0.219.0",
 ]
 
 [[package]]
@@ -3263,6 +3264,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77957b295656769bb8ad2b6a6b09d897d94f05c41b069aede1fcdaa675eaea04"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "pretty_assertions"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
+dependencies = [
+ "diff",
+ "yansi",
 ]
 
 [[package]]
@@ -5299,6 +5310,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasmparser"
+version = "0.219.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "324b4e56d24439495b88cd81439dad5e97f3c7b1eedc3c7e10455ed1e045e9a2"
+dependencies = [
+ "ahash",
+ "bitflags 2.6.0",
+ "hashbrown 0.14.5",
+ "indexmap 2.3.0",
+ "semver",
+]
+
+[[package]]
 name = "wasmprinter"
 version = "0.2.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6070,6 +6094,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wit-encoder"
+version = "0.219.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cea7f98a65dbcaac115416ed7df931686ad67a299b035bcda164cd7e335f103"
+dependencies = [
+ "id-arena",
+ "pretty_assertions",
+ "semver",
+ "serde 1.0.205",
+ "wit-parser 0.219.0",
+]
+
+[[package]]
 name = "wit-parser"
 version = "0.207.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6121,6 +6158,24 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser 0.209.1",
+]
+
+[[package]]
+name = "wit-parser"
+version = "0.219.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23102e180c0c464f36e293d31a27b524e3ece930d7b5527d2f33f9d2c963de64"
+dependencies = [
+ "anyhow",
+ "id-arena",
+ "indexmap 2.3.0",
+ "log",
+ "semver",
+ "serde 1.0.205",
+ "serde_derive",
+ "serde_json",
+ "unicode-xid",
+ "wasmparser 0.219.0",
 ]
 
 [[package]]

@@ -18,7 +18,8 @@ use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
 use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
-use golem_wasm_rpc_stubgen::stub::{get_unresolved_packages, StubDefinition};
+use golem_wasm_rpc_stubgen::stub::StubDefinition;
+use golem_wasm_rpc_stubgen::wit_resolve::resolve_wit_dir;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
 use tempfile::TempDir;
@@ -610,13 +611,7 @@ fn init_caller(name: &str) -> TempDir {
 }
 
 fn assert_valid_wit_root(wit_root: &Path) {
-    let (final_root, final_deps) = get_unresolved_packages(wit_root).unwrap();
-
-    let mut final_resolve = Resolve::new();
-    for unresolved in final_deps.iter().cloned() {
-        final_resolve.push(unresolved).unwrap();
-    }
-    final_resolve.push(final_root.clone()).unwrap();
+    resolve_wit_dir(wit_root).unwrap();
 }
 
 /// Asserts that the destination WIT root has a dependency with the given name and contents.
