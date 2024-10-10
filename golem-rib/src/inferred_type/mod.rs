@@ -301,7 +301,7 @@ impl From<AnalysedType> for InferredType {
 
 mod internal {
     use crate::InferredType;
-    use std::collections::HashMap;
+    
 
     pub(crate) fn need_update(
         current_inferred_type: &InferredType,

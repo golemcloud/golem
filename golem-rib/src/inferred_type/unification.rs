@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use crate::{InferredType};
-use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list, UnificationResult, validate_unified_type};
+use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list, validate_unified_type};
 
 pub fn unify(inferred_type: &InferredType) -> Result<InferredType, String> {
     let possibly_unified_type = try_unify_type(inferred_type)?;

@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use crate::inferred_type::UnificationResult;
 use crate::inferred_type::validation::internal::{unified, failed};
 use crate::InferredType;
@@ -122,10 +121,4 @@ mod internal {
         Err(unresolved)
     }
 
-    pub(crate) fn validate_unified_type_and_get_err(inferred_type: &InferredType) -> Option<String> {
-        match validate_unified_type(inferred_type) {
-            Err(unresolved) => Some(unresolved),
-            Ok(_) => None,
-        }
-    }
 }

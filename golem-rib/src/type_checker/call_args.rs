@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use crate::{Expr, FunctionTypeRegistry, RegistryKey};
 
-fn check_call_args(
+pub fn check_call_args(
     expr: &mut Expr,
     type_registry: &FunctionTypeRegistry,
 ) -> Result<(), String> {
@@ -27,7 +27,7 @@ mod internal {
     use crate::call_type::CallType;
     use super::*;
 
-    pub fn check_call_args(
+    pub(crate) fn check_call_args(
         call_type: &mut CallType,
         args: &mut Vec<Expr>,
         type_registry: &FunctionTypeRegistry,
