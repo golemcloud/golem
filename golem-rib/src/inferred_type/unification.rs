@@ -1,12 +1,11 @@
-use std::collections::{HashMap, HashSet};
-use crate::{InferredType};
 use crate::inferred_type::{flatten_all_of_list, flatten_one_of_list, validate_unified_type};
+use crate::InferredType;
+use std::collections::{HashMap, HashSet};
 
 pub fn unify(inferred_type: &InferredType) -> Result<InferredType, String> {
     let possibly_unified_type = try_unify_type(inferred_type)?;
 
     validate_unified_type(&possibly_unified_type).map(|unified| unified.inferred_type())
-
 }
 
 pub fn try_unify_type(inferred_type: &InferredType) -> Result<InferredType, String> {
@@ -117,7 +116,6 @@ pub fn unify_all_alternative_types(types: &Vec<InferredType>) -> InferredType {
     unified_type
 }
 
-
 pub fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredType, String> {
     let mut unified_type = InferredType::Unknown;
     for typ in types {
@@ -127,7 +125,10 @@ pub fn unify_all_required_types(types: &Vec<InferredType>) -> Result<InferredTyp
     Ok(unified_type)
 }
 
-pub fn unify_with_alternative(interred_type: &InferredType, other: &InferredType) -> Result<InferredType, String> {
+pub fn unify_with_alternative(
+    interred_type: &InferredType,
+    other: &InferredType,
+) -> Result<InferredType, String> {
     if interred_type == &InferredType::Unknown {
         Ok(other.clone())
     } else if other.is_unknown() || interred_type == other {
@@ -142,8 +143,7 @@ pub fn unify_with_alternative(interred_type: &InferredType, other: &InferredType
                 let mut fields = a_fields.clone();
 
                 for (field, typ) in fields.iter_mut() {
-                    if let Some((_, b_type)) =
-                        b_fields.iter().find(|(b_field, _)| b_field == field)
+                    if let Some((_, b_type)) = b_fields.iter().find(|(b_field, _)| b_field == field)
                     {
                         let unified_b_type = b_type.try_unify()?;
                         let unified_a_type = typ.try_unify()?;
@@ -357,8 +357,10 @@ pub fn unify_with_alternative(interred_type: &InferredType, other: &InferredType
     }
 }
 
-
-pub fn unify_with_required(inferred_type: &InferredType, other: &InferredType) -> Result<InferredType, String> {
+pub fn unify_with_required(
+    inferred_type: &InferredType,
+    other: &InferredType,
+) -> Result<InferredType, String> {
     if other.is_unknown() {
         inferred_type.try_unify()
     } else if inferred_type.is_unknown() {
@@ -371,8 +373,7 @@ pub fn unify_with_required(inferred_type: &InferredType, other: &InferredType) -
                 let mut fields: HashMap<String, InferredType> = HashMap::new();
                 // Common fields unified else kept it as it is
                 for (a_name, a_type) in a_fields {
-                    if let Some((_, b_type)) =
-                        b_fields.iter().find(|(b_name, _)| b_name == a_name)
+                    if let Some((_, b_type)) = b_fields.iter().find(|(b_name, _)| b_name == a_name)
                     {
                         fields.insert(a_name.clone(), a_type.unify_with_required(b_type)?);
                     } else {
@@ -512,9 +513,7 @@ pub fn unify_with_required(inferred_type: &InferredType, other: &InferredType) -
             (InferredType::AllOf(types), InferredType::OneOf(one_of_types)) => {
                 for typ in types {
                     if !one_of_types.contains(typ) {
-                        return Err(
-                            "AllOf types are not part of OneOf types".to_string(),
-                        );
+                        return Err("AllOf types are not part of OneOf types".to_string());
                     }
                 }
                 unify_all_required_types(types)
@@ -523,9 +522,7 @@ pub fn unify_with_required(inferred_type: &InferredType, other: &InferredType) -
             (InferredType::OneOf(one_of_types), InferredType::AllOf(all_of_types)) => {
                 for required_type in all_of_types {
                     if !one_of_types.contains(required_type) {
-                        return Err(
-                            "OneOf types are not part of AllOf types".to_string(),
-                        );
+                        return Err("OneOf types are not part of AllOf types".to_string());
                     }
                 }
                 unify_all_required_types(all_of_types)
@@ -596,8 +593,8 @@ pub fn unify_with_required(inferred_type: &InferredType, other: &InferredType) -
 }
 
 mod internal {
-    use std::collections::HashMap;
     use crate::InferredType;
+    use std::collections::HashMap;
 
     pub(crate) fn sort_and_convert(
         hashmap: HashMap<String, InferredType>,

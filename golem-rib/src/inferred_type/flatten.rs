@@ -1,6 +1,5 @@
 use crate::InferredType;
 
-
 // Convert AllOf(AllOf(x, y, z), AllOf(a, b, OneOf(c, d))) to AllOf(x, y, z, a, b, OneOf(c,d))
 // In Rib inference, there is no situation of a OneOf having AllOf
 // We have only 1 semantic type: Which is AllOf(OneOf) and not OneOf(AllOf)

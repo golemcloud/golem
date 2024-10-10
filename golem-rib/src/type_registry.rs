@@ -98,18 +98,18 @@ pub struct FunctionTypeRegistry {
 }
 
 impl FunctionTypeRegistry {
-
     pub fn get(&self, key: &CallType) -> Option<&RegistryValue> {
         match key {
-            CallType::Function(parsed_fn_name) => {
-                self.types.get(&RegistryKey::from_function_name(&parsed_fn_name.site, &parsed_fn_name.function_name()))
-            }
-            CallType::VariantConstructor(variant_name) => {
-                self.types.get(&RegistryKey::FunctionName(variant_name.clone()))
-            }
-            CallType::EnumConstructor(enum_name) => {
-                self.types.get(&RegistryKey::FunctionName(enum_name.clone()))
-            }
+            CallType::Function(parsed_fn_name) => self.types.get(&RegistryKey::from_function_name(
+                &parsed_fn_name.site,
+                &parsed_fn_name.function_name(),
+            )),
+            CallType::VariantConstructor(variant_name) => self
+                .types
+                .get(&RegistryKey::FunctionName(variant_name.clone())),
+            CallType::EnumConstructor(enum_name) => self
+                .types
+                .get(&RegistryKey::FunctionName(enum_name.clone())),
         }
     }
 

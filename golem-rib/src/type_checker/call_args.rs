@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
 use crate::{Expr, FunctionTypeRegistry, RegistryKey};
+use std::collections::VecDeque;
 
 pub fn check_call_args(
     expr: &mut Expr,
@@ -18,23 +18,23 @@ pub fn check_call_args(
         }
     }
 
-
     Ok(())
 }
 
 mod internal {
-    use golem_wasm_ast::analysis::AnalysedType;
-    use crate::call_type::CallType;
     use super::*;
+    use crate::call_type::CallType;
+    use golem_wasm_ast::analysis::AnalysedType;
 
     pub(crate) fn check_call_args(
         call_type: &mut CallType,
         args: &mut Vec<Expr>,
         type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
-
-        let registry_value =
-            type_registry.types.get(&RegistryKey::from_call_type(call_type)).ok_or(format!(
+        let registry_value = type_registry
+            .types
+            .get(&RegistryKey::from_call_type(call_type))
+            .ok_or(format!(
                 "Function {} is not defined in the registry",
                 call_type
             ))?;

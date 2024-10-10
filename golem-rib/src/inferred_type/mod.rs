@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 pub(crate) use flatten::*;
 pub(crate) use unification_result::*;
 pub(crate) use validation::*;
-mod validation;
-mod unification;
 mod flatten;
+mod unification;
 mod unification_result;
+mod validation;
 
-use std::collections::{HashSet};
+use std::collections::HashSet;
 
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::*;
@@ -139,13 +138,12 @@ impl InferredType {
         matches!(self, InferredType::Str)
     }
 
-
     pub fn flatten_all_of_inferred_types(types: &Vec<InferredType>) -> Vec<InferredType> {
         flatten_all_of_list(types)
     }
 
     pub fn flatten_one_of_inferred_types(types: &Vec<InferredType>) -> Vec<InferredType> {
-       flatten_one_of_list(types)
+        flatten_one_of_list(types)
     }
 
     // Here unification returns an inferred type, but it doesn't necessarily imply
@@ -175,7 +173,6 @@ impl InferredType {
     pub fn unify_with_alternative(&self, other: &InferredType) -> Result<InferredType, String> {
         unification::unify_with_alternative(self, other)
     }
-
 
     // There is only one way to merge types. If they are different, they are merged into AllOf
     pub fn merge(&self, new_inferred_type: InferredType) -> InferredType {
@@ -301,7 +298,6 @@ impl From<AnalysedType> for InferredType {
 
 mod internal {
     use crate::InferredType;
-    
 
     pub(crate) fn need_update(
         current_inferred_type: &InferredType,
@@ -309,7 +305,6 @@ mod internal {
     ) -> bool {
         current_inferred_type != new_inferred_type && !new_inferred_type.is_unknown()
     }
-
 }
 
 #[cfg(test)]
