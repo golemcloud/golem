@@ -16,12 +16,12 @@ use crate::api_definition::ApiSite;
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use async_trait::async_trait;
+use conditional_trait_gen::{trait_gen, when};
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
-use conditional_trait_gen::{trait_gen, when};
-use golem_service_base::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDeploymentRecord {
@@ -225,9 +225,11 @@ impl ApiDeploymentRepo for DbApiDeploymentRepo<sqlx::Postgres> {
             .map_err(|e| e.into())
     }
 
-
     #[when(sqlx::Postgres -> get_by_site)]
-    async fn get_by_site_postgres(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+    async fn get_by_site_postgres(
+        &self,
+        site: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
         sqlx::query_as::<_, ApiDeploymentRecord>(
             r#"
                 SELECT namespace, site, host, subdomain, definition_id, definition_version, created_at::timestamptz

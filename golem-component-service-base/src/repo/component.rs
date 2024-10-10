@@ -18,6 +18,7 @@ use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, Row};
 use std::fmt::Display;
 use std::ops::Deref;
@@ -25,7 +26,6 @@ use std::result::Result;
 use std::sync::Arc;
 use tracing::{debug, error};
 use uuid::Uuid;
-use golem_service_base::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord {

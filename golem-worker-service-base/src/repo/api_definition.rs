@@ -15,11 +15,11 @@
 use crate::api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, Row};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
-use golem_service_base::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDefinitionRecord {
