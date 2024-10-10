@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::components;
+use crate::components::cassandra::Cassandra;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
 use crate::components::component_compilation_service::ComponentCompilationService;
@@ -79,7 +80,7 @@ impl EnvBasedTestDependenciesConfig {
             self.keep_docker_containers = keep_docker_containers
         }
 
-        if let Some(redis_port) = opt_env_var("REDIS_KEY_PREFIX") {
+        if let Some(redis_port) = opt_env_var("REDIS_PORT") {
             self.redis_port = redis_port.parse().expect("Failed to parse REDIS_PORT");
         }
 
@@ -151,6 +152,7 @@ pub struct EnvBasedTestDependencies {
     component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
+    cassandra: RwLock<Option<Arc<dyn Cassandra + Send + Sync + 'static>>>,
 }
 
 impl EnvBasedTestDependencies {
@@ -406,6 +408,12 @@ impl EnvBasedTestDependencies {
         }
     }
 
+    fn make_cassandra(
+        _config: Arc<EnvBasedTestDependenciesConfig>,
+    ) -> RwLock<Option<Arc<dyn Cassandra + Send + Sync + 'static>>> {
+        RwLock::new(None)
+    }
+
     pub async fn new(config: EnvBasedTestDependenciesConfig) -> Self {
         let config = Arc::new(config);
 
@@ -461,6 +469,8 @@ impl EnvBasedTestDependencies {
 
         let redis_monitor = redis_monitor_join.await.expect("Failed to join");
 
+        let cassandra = Self::make_cassandra(config.clone());
+
         Self {
             config: config.clone(),
             rdb,
@@ -471,6 +481,7 @@ impl EnvBasedTestDependencies {
             component_compilation_service,
             worker_service,
             worker_executor_cluster,
+            cassandra,
         }
     }
 }
@@ -512,6 +523,13 @@ impl TestDependencies for EnvBasedTestDependencies {
 
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.worker_executor_cluster.clone()
+    }
+
+    fn cassandra(&self) -> Option<Arc<dyn Cassandra + Send + Sync + 'static>> {
+        match self.cassandra.read() {
+            Ok(cassandra) => cassandra.as_ref().map(|c| c.clone()),
+            Err(poison_err) => poison_err.into_inner().as_ref().map(|c| c.clone()),
+        }
     }
 }
 

@@ -24,7 +24,8 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use golem_common::config::{
-    ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig, RetryConfig,
+    CassandraConfig, ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
+    RetryConfig,
 };
 use golem_common::tracing::TracingConfig;
 
@@ -253,6 +254,7 @@ pub struct OplogConfig {
 pub enum KeyValueStorageConfig {
     Redis(RedisConfig),
     Sqlite(DbSqliteConfig),
+    Cassandra(CassandraConfig),
     InMemory,
 }
 
