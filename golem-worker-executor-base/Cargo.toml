@@ -12,6 +12,7 @@ autotests = false
 
 [lib]
 path = "src/lib.rs"
+harness = false
 
 [features]
 
@@ -103,6 +104,7 @@ redis = { workspace = true }
 serde_json = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+test-r = { workspace = true }
 tracing-subscriber = { workspace = true }
 warp = { workspace = true }
 
@@ -112,3 +114,4 @@ cargo_metadata = "0.18.1"
 [[test]]
 name = "integration"
 path = "tests/lib.rs"
+harness = false

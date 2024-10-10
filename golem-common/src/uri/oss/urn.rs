@@ -458,6 +458,8 @@ impl Display for ResourceUrn {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::model::{ComponentId, TargetWorkerId, WorkerId};
     use crate::uri::oss::urn::{
         ApiDefinitionUrn, ApiDeploymentUrn, ComponentOrVersionUrn, ComponentUrn,

@@ -605,6 +605,8 @@ mod test {
     }
 
     mod json_flatten_span_formatter {
+        use test_r::test;
+
         use tracing;
         use tracing::{field, info, span, Level};
         use tracing_subscriber::FmtSubscriber;

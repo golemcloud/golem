@@ -39,6 +39,8 @@ pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
 
 #[cfg(test)]
 mod interpolation_tests {
+    use test_r::test;
+
     use crate::{text, Expr};
 
     #[test]
@@ -65,6 +67,8 @@ mod interpolation_tests {
 
 #[cfg(test)]
 mod record_tests {
+    use test_r::test;
+
     use crate::expr::*;
     use crate::text::{from_string, to_string, Expr};
     use crate::MatchArm;
@@ -436,6 +440,8 @@ mod record_tests {
 
 #[cfg(test)]
 mod sequence_tests {
+    use test_r::test;
+
     use crate::expr::Expr;
     use crate::text::{from_string, to_string};
     use crate::{ArmPattern, MatchArm};
@@ -705,6 +711,8 @@ mod sequence_tests {
 
 #[cfg(test)]
 mod tuple_tests {
+    use test_r::test;
+
     use crate::expr::Expr;
     use crate::text::{from_string, to_string};
 
@@ -866,6 +874,8 @@ mod tuple_tests {
 
 #[cfg(test)]
 mod simple_values_test {
+    use test_r::test;
+
     use crate::expr::Expr;
     use crate::text::{from_string, to_string};
 
@@ -943,6 +953,8 @@ mod simple_values_test {
 
 #[cfg(test)]
 mod let_tests {
+    use test_r::test;
+
     use crate::expr::Expr;
     use crate::parser::type_name::TypeName;
     use crate::text::{from_string, to_string};
@@ -1138,6 +1150,8 @@ mod let_tests {
 
 #[cfg(test)]
 mod selection_tests {
+    use test_r::test;
+
     use crate::expr::Expr;
     use crate::text::{from_string, to_string};
 
@@ -1189,6 +1203,8 @@ mod selection_tests {
 
 #[cfg(test)]
 mod flag_tests {
+    use test_r::test;
+
     use crate::expr::Expr;
     use crate::text::{from_string, to_string};
 
@@ -1217,6 +1233,8 @@ mod flag_tests {
 
 #[cfg(test)]
 mod match_tests {
+    use test_r::test;
+
     use crate::expr::ArmPattern;
     use crate::expr::Expr;
     use crate::expr::MatchArm;
@@ -1640,6 +1658,8 @@ mod match_tests {
 
 #[cfg(test)]
 mod if_cond_tests {
+    use test_r::test;
+
     use crate::expr::Expr;
     use crate::text::{from_string, to_string};
 

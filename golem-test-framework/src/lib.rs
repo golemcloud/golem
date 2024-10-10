@@ -22,3 +22,6 @@ pub mod config;
 pub mod dsl;
 
 pub type Result<T> = anyhow::Result<T>;
+
+#[cfg(test)]
+test_r::enable!();

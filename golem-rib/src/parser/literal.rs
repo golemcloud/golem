@@ -143,6 +143,8 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use combine::stream::position;
     use combine::EasyParser;
 

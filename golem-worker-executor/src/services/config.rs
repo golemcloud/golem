@@ -14,6 +14,8 @@
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use golem_worker_executor_base::services::golem_config::{
         make_config_loader, ShardManagerServiceConfig,
     };

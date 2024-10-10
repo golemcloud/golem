@@ -426,6 +426,8 @@ mod internal {
 
 #[cfg(test)]
 mod function_parameters_inference_tests {
+    use test_r::test;
+
     use crate::call_type::CallType;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::type_registry::FunctionTypeRegistry;

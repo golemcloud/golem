@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod comprehensive_test {
+    use test_r::test;
+
     use crate::{compiler, Expr};
     use golem_wasm_ast::analysis::{
         AnalysedType, NameTypePair, TypeBool, TypeF32, TypeF64, TypeRecord, TypeS16, TypeS32,
@@ -7,7 +9,7 @@ mod comprehensive_test {
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_complex_rib() {
         let expr = r#"
 

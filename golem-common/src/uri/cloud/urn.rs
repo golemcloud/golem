@@ -171,6 +171,8 @@ impl Display for ResourceUrn {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::model::{AccountId, ProjectId};
     use crate::uri::cloud::urn::{AccountUrn, ProjectUrn, ResourceUrn};
     use crate::uri::GolemUrn;

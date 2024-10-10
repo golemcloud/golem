@@ -3,7 +3,12 @@ name = "golem-component-service-base"
 version = "0.0.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+harness = false
+
+[[test]]
+name = "services_tests"
+harness = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
@@ -39,7 +44,7 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-criterion = { version = "0.3", features = ["html_reports"] }
 fastrand = "2.0.2"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+test-r = { workspace = true }

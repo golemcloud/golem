@@ -290,6 +290,8 @@ impl SchedulerService for SchedulerServiceDefault {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::Arc;
@@ -355,7 +357,7 @@ mod tests {
         Arc::new(DefaultWorkerService::new(kvs, shard_service, oplog_service))
     }
 
-    #[tokio::test]
+    #[test]
     pub async fn promises_added_to_expected_buckets() {
         let uuid = Uuid::new_v4();
         let c1: ComponentId = ComponentId(uuid);
@@ -473,7 +475,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     pub async fn cancel_removes_entry() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
@@ -575,7 +577,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[test]
     pub async fn process_current_hours_past_schedules() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
@@ -682,7 +684,7 @@ mod tests {
         assert!(!completed_promises.contains(&p2));
     }
 
-    #[tokio::test]
+    #[test]
     pub async fn process_past_and_current_hours_past_schedules() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
@@ -783,7 +785,7 @@ mod tests {
         assert!(completed_promises.contains(&p2));
     }
 
-    #[tokio::test]
+    #[test]
     pub async fn process_past_and_current_hours_past_schedules_2() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {
@@ -898,7 +900,7 @@ mod tests {
         assert!(completed_promises.contains(&p4));
     }
 
-    #[tokio::test]
+    #[test]
     pub async fn process_past_and_current_hours_past_schedules_3() {
         let c1: ComponentId = ComponentId(Uuid::new_v4());
         let i1: WorkerId = WorkerId {

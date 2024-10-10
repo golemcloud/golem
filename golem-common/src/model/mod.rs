@@ -2470,6 +2470,8 @@ impl FromStr for ComponentType {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use std::collections::HashSet;
     use std::str::FromStr;
     use std::time::SystemTime;

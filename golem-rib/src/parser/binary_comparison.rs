@@ -58,6 +58,8 @@ pub enum BinaryOp {
 
 #[cfg(test)]
 mod test {
+    use test_r::test;
+
     use crate::parser::rib_expr::rib_expr;
     use crate::{
         DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ParsedFunctionSite,

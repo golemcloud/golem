@@ -130,6 +130,8 @@ pub fn make_config_loader() -> ConfigLoader<ShardManagerConfig> {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::shard_manager_config::make_config_loader;
 
     #[test]

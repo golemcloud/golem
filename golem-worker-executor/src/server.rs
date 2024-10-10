@@ -19,6 +19,10 @@ use golem_worker_executor::run;
 use golem_worker_executor_base::metrics;
 use golem_worker_executor_base::services::golem_config::make_config_loader;
 
+#[cfg(test)]
+test_r::enable!();
+
+#[cfg(not(test))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     match make_config_loader().load_or_dump_config() {
         Some(mut config) => {

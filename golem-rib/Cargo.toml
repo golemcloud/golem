@@ -22,6 +22,10 @@ serde_json = { workspace = true }
 tokio = {workspace = true}
 wasm-wave = { workspace = true }
 
+[dev-dependencies]
+test-r = { workspace = true }
+
 [lib]
 name = "rib"
 path = "src/lib.rs"
+harness = false

@@ -257,10 +257,12 @@ impl IndexedStorage for InMemoryIndexedStorage {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::storage::indexed::{IndexedStorageLabelledApi, IndexedStorageNamespace};
     use assert2::check;
 
-    #[tokio::test]
+    #[test]
     async fn closest_exact_match() {
         let storage = super::InMemoryIndexedStorage::new();
         let api = storage.with_entity("test", "test", "test");
@@ -287,7 +289,7 @@ mod tests {
         check!(result == Some((3, 300)));
     }
 
-    #[tokio::test]
+    #[test]
     async fn closest_no_match() {
         let storage = super::InMemoryIndexedStorage::new();
         let api = storage.with_entity("test", "test", "test");
@@ -314,7 +316,7 @@ mod tests {
         check!(result == None);
     }
 
-    #[tokio::test]
+    #[test]
     async fn closest_match() {
         let storage = super::InMemoryIndexedStorage::new();
         let api = storage.with_entity("test", "test", "test");
@@ -341,7 +343,7 @@ mod tests {
         check!(result == Some((40, 400)));
     }
 
-    #[tokio::test]
+    #[test]
     async fn read() {
         let storage = super::InMemoryIndexedStorage::new();
         let api = storage.with_entity("test", "test", "test");
@@ -368,7 +370,7 @@ mod tests {
         check!(result == vec![(20, 200), (30, 300), (40, 400)]);
     }
 
-    #[tokio::test]
+    #[test]
     async fn read_wider() {
         let storage = super::InMemoryIndexedStorage::new();
         let api = storage.with_entity("test", "test", "test");
@@ -395,7 +397,7 @@ mod tests {
         check!(result == vec![(10, 100), (20, 200), (30, 300), (40, 400)]);
     }
 
-    #[tokio::test]
+    #[test]
     async fn first() {
         let storage = super::InMemoryIndexedStorage::new();
         let api = storage.with_entity("test", "test", "test");
@@ -416,7 +418,7 @@ mod tests {
         check!(result == Some((10, 100)));
     }
 
-    #[tokio::test]
+    #[test]
     async fn last() {
         let storage = super::InMemoryIndexedStorage::new();
         let api = storage.with_entity("test", "test", "test");
@@ -434,7 +436,7 @@ mod tests {
         check!(result == Some((20, 200)));
     }
 
-    #[tokio::test]
+    #[test]
     async fn drop_prefix() {
         let storage = super::InMemoryIndexedStorage::new();
         let api = storage.with_entity("test", "test", "test");

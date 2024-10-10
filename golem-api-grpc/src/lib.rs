@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#[cfg(test)]
+test_r::enable!();
+
 #[allow(clippy::large_enum_variant)]
 pub mod proto {
     use crate::proto::golem::worker::UpdateMode;
@@ -215,6 +218,8 @@ pub mod proto {
 
     #[cfg(test)]
     mod tests {
+        use test_r::test;
+
         use crate::proto::golem;
         use prost::Message;
         use std::str::FromStr;

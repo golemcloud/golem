@@ -73,6 +73,8 @@ mod internal {
 
 #[cfg(test)]
 mod name_binding_tests {
+    use test_r::test;
+
     use crate::call_type::CallType;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::{Expr, InferredType, ParsedFunctionSite, VariableId};

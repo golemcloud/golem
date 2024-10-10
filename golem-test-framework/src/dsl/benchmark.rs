@@ -817,6 +817,8 @@ impl<B: Benchmark> BenchmarkApi for B {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::dsl::benchmark::{
         BenchmarkResult, BenchmarkRunResult, CountResult, DurationResult, ResultKey, RunConfig,
     };

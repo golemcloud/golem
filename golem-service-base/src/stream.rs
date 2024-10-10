@@ -60,11 +60,13 @@ impl ByteStream {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::stream::ByteStream;
     use anyhow::Error;
     use futures::{stream, StreamExt, TryStreamExt};
 
-    #[tokio::test]
+    #[test]
     pub async fn test_byte_stream() {
         let stream = ByteStream::new(stream::iter(vec![Ok(vec![1, 2, 3]), Ok(vec![4, 5, 6])]));
         let stream_data: Vec<u8> = stream

@@ -199,6 +199,8 @@ fn label(event: &WorkerEvent) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use std::sync::Arc;
 
     use tokio::sync::Mutex;
@@ -207,7 +209,7 @@ mod tests {
         WorkerEvent, WorkerEventService, WorkerEventServiceDefault,
     };
 
-    #[tokio::test]
+    #[test]
     pub async fn both_subscriber_gets_events_small() {
         let svc = Arc::new(WorkerEventServiceDefault::new(4, 16));
         let rx1_events = Arc::new(Mutex::new(Vec::<WorkerEvent>::new()));
@@ -283,7 +285,7 @@ mod tests {
         )
     }
 
-    #[tokio::test]
+    #[test]
     pub async fn both_subscriber_gets_events_large() {
         let svc = Arc::new(WorkerEventServiceDefault::new(4, 4));
         let rx1_events = Arc::new(Mutex::new(Vec::<WorkerEvent>::new()));

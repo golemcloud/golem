@@ -47,6 +47,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use combine::EasyParser;
 
     use crate::parser::rib_expr::rib_expr;

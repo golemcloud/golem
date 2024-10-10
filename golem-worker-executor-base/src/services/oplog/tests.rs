@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::test;
+
 use assert2::check;
 use ctor::ctor;
 use nonempty_collections::nev;
@@ -236,7 +238,7 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
     }
 }
 
-#[tokio::test]
+#[test]
 async fn open_add_and_read_back() {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -284,7 +286,7 @@ async fn open_add_and_read_back() {
     );
 }
 
-#[tokio::test]
+#[test]
 async fn open_add_and_read_back_ephemeral() {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -346,7 +348,7 @@ async fn open_add_and_read_back_ephemeral() {
     );
 }
 
-#[tokio::test]
+#[test]
 async fn entries_with_small_payload() {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -456,7 +458,7 @@ async fn entries_with_small_payload() {
     assert_eq!(p4, vec![1, 2, 3]);
 }
 
-#[tokio::test]
+#[test]
 async fn entries_with_large_payload() {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
@@ -570,32 +572,32 @@ async fn entries_with_large_payload() {
     assert_eq!(p4, large_payload4);
 }
 
-#[tokio::test]
+#[test]
 async fn multilayer_transfers_entries_after_limit_reached_1() {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, false).await;
 }
 
-#[tokio::test]
+#[test]
 async fn multilayer_transfers_entries_after_limit_reached_2() {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, false).await;
 }
 
-#[tokio::test]
+#[test]
 async fn multilayer_transfers_entries_after_limit_reached_3() {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, false).await;
 }
 
-#[tokio::test]
+#[test]
 async fn blob_multilayer_transfers_entries_after_limit_reached_1() {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, true).await;
 }
 
-#[tokio::test]
+#[test]
 async fn blob_multilayer_transfers_entries_after_limit_reached_2() {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, true).await;
 }
 
-#[tokio::test]
+#[test]
 async fn blob_multilayer_transfers_entries_after_limit_reached_3() {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, true).await;
 }
@@ -706,12 +708,12 @@ async fn multilayer_transfers_entries_after_limit_reached(
     check!(all_entries.values().cloned().collect::<Vec<_>>() == entries);
 }
 
-#[tokio::test]
+#[test]
 async fn read_from_archive() {
     read_from_archive_impl(false).await;
 }
 
-#[tokio::test]
+#[test]
 async fn blob_read_from_archive() {
     read_from_archive_impl(true).await;
 }
@@ -800,32 +802,32 @@ async fn read_from_archive_impl(use_blob: bool) {
     assert_eq!(first10.into_values().collect::<Vec<_>>(), original_first10);
 }
 
-#[tokio::test]
+#[test]
 async fn write_after_archive() {
     write_after_archive_impl(false, Reopen::No).await;
 }
 
-#[tokio::test]
+#[test]
 async fn blob_write_after_archive() {
     write_after_archive_impl(true, Reopen::No).await;
 }
 
-#[tokio::test]
+#[test]
 async fn write_after_archive_reopen() {
     write_after_archive_impl(false, Reopen::Yes).await;
 }
 
-#[tokio::test]
+#[test]
 async fn blob_write_after_archive_reopen() {
     write_after_archive_impl(true, Reopen::Yes).await;
 }
 
-#[tokio::test]
+#[test]
 async fn write_after_archive_reopen_full() {
     write_after_archive_impl(false, Reopen::Full).await;
 }
 
-#[tokio::test]
+#[test]
 async fn blob_write_after_archive_reopen_full() {
     write_after_archive_impl(true, Reopen::Full).await;
 }
@@ -1058,12 +1060,12 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     );
 }
 
-#[tokio::test]
+#[test]
 async fn empty_layer_gets_deleted() {
     empty_layer_gets_deleted_impl(false).await;
 }
 
-#[tokio::test]
+#[test]
 async fn blob_empty_layer_gets_deleted() {
     empty_layer_gets_deleted_impl(true).await;
 }
@@ -1163,12 +1165,12 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     assert!(tertiary_exists);
 }
 
-#[tokio::test]
+#[test]
 async fn scheduled_archive() {
     scheduled_archive_impl(false).await;
 }
 
-#[tokio::test]
+#[test]
 async fn blob_scheduled_archive() {
     scheduled_archive_impl(true).await;
 }

@@ -49,6 +49,9 @@ use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
+#[cfg(test)]
+test_r::enable!();
+
 struct ServerBootstrap {}
 
 #[async_trait]

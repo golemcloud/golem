@@ -169,6 +169,8 @@ mod internal {
 
 #[cfg(test)]
 mod pattern_match_bindings {
+    use test_r::test;
+
     use crate::{Expr, InferredType};
     use expectations::*;
 

@@ -8,6 +8,7 @@ repository = "https://github.com/golemcloud/golem"
 description = "GRPC API for Golem services"
 
 [lib]
+harness = false
 
 [dependencies]
 async-trait = { workspace = true }
@@ -23,6 +24,9 @@ tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
 
 [build-dependencies]
 cargo_metadata = "0.18.1"

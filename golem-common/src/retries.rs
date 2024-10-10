@@ -219,9 +219,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use test_r::test;
 
     use crate::config::RetryConfig;
+    use std::time::Duration;
 
     #[test]
     pub fn get_delay_example_without_jitter() {

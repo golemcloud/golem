@@ -527,6 +527,8 @@ mod internal {
 
 #[cfg(test)]
 mod compiler_tests {
+    use test_r::test;
+
     use super::*;
     use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
@@ -1018,6 +1020,8 @@ mod compiler_tests {
 
     #[cfg(test)]
     mod invalid_function_invoke_tests {
+        use test_r::test;
+
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
@@ -1220,6 +1224,8 @@ mod compiler_tests {
 
     #[cfg(test)]
     mod global_input_tests {
+        use test_r::test;
+
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{
@@ -1227,7 +1233,7 @@ mod compiler_tests {
             TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
         };
 
-        #[tokio::test]
+        #[test]
         async fn test_str_global_input() {
             let request_value_type = AnalysedType::Str(TypeStr);
 
@@ -1256,7 +1262,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_number_global_input() {
             let request_value_type = AnalysedType::U32(TypeU32);
 
@@ -1285,7 +1291,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_variant_type_info() {
             let request_value_type = AnalysedType::Variant(TypeVariant {
                 cases: vec![
@@ -1334,7 +1340,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_result_type_info() {
             let request_value_type = AnalysedType::Result(TypeResult {
                 ok: Some(Box::new(AnalysedType::U64(TypeU64))),
@@ -1371,7 +1377,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_option_type_info() {
             let request_value_type = AnalysedType::Option(TypeOption {
                 inner: Box::new(AnalysedType::Str(TypeStr)),
@@ -1407,7 +1413,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_enum_type_info() {
             let request_value_type = AnalysedType::Enum(TypeEnum {
                 cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()],
@@ -1444,7 +1450,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_record_global_input() {
             let request_value_type = AnalysedType::Record(TypeRecord {
                 fields: vec![NameTypePair {
@@ -1492,7 +1498,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_tuple_global_input() {
             let request_value_type = AnalysedType::Tuple(TypeTuple {
                 items: vec![
@@ -1536,7 +1542,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_list_global_input() {
             let request_value_type = AnalysedType::List(TypeList {
                 inner: Box::new(AnalysedType::Str(TypeStr)),

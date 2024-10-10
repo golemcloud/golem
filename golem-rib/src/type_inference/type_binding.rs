@@ -81,6 +81,8 @@ mod internal {
 
 #[cfg(test)]
 mod type_binding_tests {
+    use test_r::test;
+
     use super::*;
     use crate::parser::type_name::TypeName;
     use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};

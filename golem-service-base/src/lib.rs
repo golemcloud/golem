@@ -21,3 +21,6 @@ pub mod routing_table;
 pub mod service;
 pub mod stream;
 pub mod type_inference;
+
+#[cfg(test)]
+test_r::enable!();

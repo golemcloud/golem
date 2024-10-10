@@ -227,6 +227,8 @@ impl Display for DeletedRegions {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::model::oplog::OplogIndex;
     use crate::model::regions::{DeletedRegionsBuilder, OplogRegion};
 

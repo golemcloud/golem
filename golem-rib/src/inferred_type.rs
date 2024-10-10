@@ -1209,6 +1209,7 @@ mod internal {
 
 #[cfg(test)]
 mod test {
+    use test_r::test;
 
     #[test]
     fn test_flatten_one_of() {

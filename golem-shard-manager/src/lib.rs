@@ -51,6 +51,9 @@ use tracing::Instrument;
 use tracing::{debug, info, warn};
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
 
+#[cfg(test)]
+test_r::enable!();
+
 pub struct ShardManagerServiceImpl {
     shard_management: ShardManagement,
     shard_manager_config: Arc<ShardManagerConfig>,
