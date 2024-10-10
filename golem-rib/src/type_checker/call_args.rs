@@ -46,7 +46,7 @@ mod internal {
 
             let actual_arg_analysed_type = AnalysedType::try_from(&actual_arg_type)?;
 
-            if actual_arg_analysed_type != *expected_arg_type {
+            if actual_arg_analysed_type != expected_arg_type {
                 return Err(format!(
                     "Function {} expects argument of type {:?}, but argument of type {:?} was provided",
                     call_type,
@@ -55,5 +55,7 @@ mod internal {
                 ));
             }
         }
+
+        Ok(())
     }
 }

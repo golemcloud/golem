@@ -28,8 +28,8 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
         }
         InferredType::Record(field) => {
             for (field, typ) in field {
-                if let UnificationResult::Failed(unresolved) = validate_unified_type(typ) {
-                    return UnificationResult::failed(format!(
+                if let Err(unresolved) = validate_unified_type(typ) {
+                   return failed(format!(
                         "Un-inferred type for field {} in record: {}",
                         field, unresolved
                     ));
@@ -38,11 +38,11 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
 
             unified(InferredType::Record(field.clone()))
         }
-        InferredType::Flags(flags) => UnificationResult::success(InferredType::Flags(flags.clone())),
-        InferredType::Enum(enums) =>  UnificationResult::success(InferredType::Enum(enums.clone())),
+        InferredType::Flags(flags) => unified(InferredType::Flags(flags.clone())),
+        InferredType::Enum(enums) =>  unified(InferredType::Enum(enums.clone())),
         InferredType::Option(inferred_type) => {
             let result = validate_unified_type(inferred_type)?;
-            unified(InferredType::Option(Box::new(result.deref().clone())))
+            unified(InferredType::Option(Box::new(result.inferred_type())))
         }
         result @ InferredType::Result { ok, error } => {
             // For Result, we try to be flexible with types
@@ -98,7 +98,7 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
         InferredType::AllOf(possibilities) => {
             failed(format!("Cannot be all of {:?}", possibilities))
         }
-        InferredType::Unknown => Some("Unknown".to_string()),
+        InferredType::Unknown => failed("Unknown".to_string()),
         inferred_type @ InferredType::Sequence(inferred_types) => {
             for typ in inferred_types {
                 validate_unified_type(typ)?;

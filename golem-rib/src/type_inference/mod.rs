@@ -22,7 +22,6 @@ pub use name_binding::*;
 pub use pattern_match_binding::*;
 pub use rib_input_type::*;
 pub(crate) use type_binding::*;
-pub use type_check::*;
 pub use type_pull_up::*;
 pub use type_push_down::*;
 pub use type_reset::*;
