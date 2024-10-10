@@ -122,7 +122,7 @@ mod internal {
                     )
                     .map_err(|e| e.to_string())
                 } else {
-                    let registry_key = RegistryKey::from_invocation_name(call_type);
+                    let registry_key = RegistryKey::from_call_type(call_type);
                     infer_types(
                         &FunctionTypeInternal::Fqn(parsed_function_static.to_string()),
                         function_type_registry,

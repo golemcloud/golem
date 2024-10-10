@@ -35,3 +35,4 @@ mod type_inference;
 mod type_refinement;
 mod type_registry;
 mod variable_id;
+mod type_checker;

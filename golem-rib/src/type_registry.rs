@@ -46,8 +46,8 @@ impl RegistryKey {
             },
         }
     }
-    pub fn from_invocation_name(invocation_name: &CallType) -> RegistryKey {
-        match invocation_name {
+    pub fn from_call_type(call_type: &CallType) -> RegistryKey {
+        match call_type {
             CallType::VariantConstructor(variant_name) => {
                 RegistryKey::FunctionName(variant_name.clone())
             }
@@ -76,12 +76,43 @@ pub enum RegistryValue {
     },
 }
 
+impl RegistryValue {
+    pub fn argument_types(&self) -> Vec<AnalysedType> {
+        match self {
+            RegistryValue::Function {
+                parameter_types,
+                return_types: _,
+            } => parameter_types.clone(),
+            RegistryValue::Variant {
+                parameter_types,
+                variant_type: _,
+            } => parameter_types.clone(),
+            RegistryValue::Value(_) => vec![],
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
 }
 
 impl FunctionTypeRegistry {
+
+    pub fn get(&self, key: &CallType) -> Option<&RegistryValue> {
+        match key {
+            CallType::Function(parsed_fn_name) => {
+                self.types.get(&RegistryKey::from_function_name(&parsed_fn_name.site, &parsed_fn_name.function_name()))
+            }
+            CallType::VariantConstructor(variant_name) => {
+                self.types.get(&RegistryKey::FunctionName(variant_name.clone()))
+            }
+            CallType::EnumConstructor(enum_name) => {
+                self.types.get(&RegistryKey::FunctionName(enum_name.clone()))
+            }
+        }
+    }
+
     pub fn empty() -> Self {
         Self {
             types: HashMap::new(),

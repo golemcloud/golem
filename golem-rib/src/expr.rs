@@ -503,12 +503,12 @@ impl Expr {
         type_inference::bind_type(self);
     }
 
-    pub fn type_check(&self) -> Result<(), Vec<String>> {
-        type_inference::type_check(self)
-    }
-
     pub fn unify_types(&mut self) -> Result<(), Vec<String>> {
         type_inference::unify_types(self)
+    }
+
+    pub fn unify_types_and_verify(&mut self) -> Result<(), Vec<String>> {
+        type_inference::unify_types_and_verify(self)
     }
 
     pub fn add_infer_type(&self, new_inferred_type: InferredType) -> Expr {
