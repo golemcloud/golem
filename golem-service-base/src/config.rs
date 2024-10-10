@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -40,4 +41,20 @@ pub struct ComponentStoreS3Config {
 pub struct ComponentStoreLocalConfig {
     pub root_path: String,
     pub object_prefix: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkerExecutorClientCacheConfig {
+    pub max_capacity: usize,
+    #[serde(with = "humantime_serde")]
+    pub time_to_idle: Duration,
+}
+
+impl Default for WorkerExecutorClientCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_capacity: 1000,
+            time_to_idle: Duration::from_secs(60 * 60 * 4),
+        }
+    }
 }

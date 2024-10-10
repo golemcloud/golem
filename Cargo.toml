@@ -79,6 +79,7 @@ clap = { version = "4.5.4", features = [
     "help",
 ] }
 cli-table = "0.4.7"
+conditional-trait-gen = "0.4.1"
 console-subscriber = "0.3.0"
 ctor = "0.2.6"
 dashmap = "5.5.3"

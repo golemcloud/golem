@@ -31,7 +31,7 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 use golem_common::metrics::api::TraceErrorKind;
-use golem_common::recorded_http_api_request;
+use golem_common::{recorded_http_api_request, SafeDisplay};
 
 #[derive(ApiResponse, Debug, Clone)]
 pub enum ComponentError {
@@ -77,22 +77,32 @@ impl From<ComponentServiceError> for ComponentError {
             ComponentServiceError::UnknownComponentId(_)
             | ComponentServiceError::UnknownVersionedComponentId(_) => {
                 ComponentError::NotFound(Json(ErrorBody {
-                    error: error.to_string(),
+                    error: error.to_safe_string(),
                 }))
             }
             ComponentServiceError::AlreadyExists(_) => {
                 ComponentError::AlreadyExists(Json(ErrorBody {
-                    error: error.to_string(),
-                }))
-            }
-            ComponentServiceError::Internal(error) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_string(),
+                    error: error.to_safe_string(),
                 }))
             }
             ComponentServiceError::ComponentProcessingError(error) => {
                 ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_string()],
+                    errors: vec![error.to_safe_string()],
+                }))
+            }
+            ComponentServiceError::InternalRepoError(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
+            ComponentServiceError::InternalConversionError { .. } => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
+            ComponentServiceError::ComponentStoreError { .. } => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
                 }))
             }
         }

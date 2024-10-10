@@ -16,15 +16,16 @@ use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
 };
 use golem_common::model::{AccountId, ComponentId, WorkerId};
+use golem_common::SafeDisplay;
 use golem_service_base::model::{GolemError, VersionedComponentId};
 
 use crate::service::component::ComponentServiceError;
+use crate::service::worker::CallWorkerExecutorError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerServiceError {
     #[error(transparent)]
     Component(#[from] ComponentServiceError),
-    // TODO: This should prob be a vec?
     #[error("Type checker error: {0}")]
     TypeChecker(String),
     #[error("Component not found: {0}")]
@@ -36,17 +37,26 @@ pub enum WorkerServiceError {
     #[error("Worker not found: {0}")]
     WorkerNotFound(WorkerId),
     #[error("Internal error: {0}")]
-    Internal(#[from] anyhow::Error),
+    Internal(String),
     #[error(transparent)]
     Golem(GolemError),
+    #[error(transparent)]
+    InternalCallError(CallWorkerExecutorError),
 }
 
-impl WorkerServiceError {
-    pub fn internal<M>(error: M) -> Self
-    where
-        M: std::error::Error + Send + Sync + 'static,
-    {
-        Self::Internal(anyhow::Error::new(error))
+impl SafeDisplay for WorkerServiceError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            WorkerServiceError::Component(inner) => inner.to_safe_string(),
+            WorkerServiceError::TypeChecker(_) => self.to_string(),
+            WorkerServiceError::VersionedComponentIdNotFound(_) => self.to_string(),
+            WorkerServiceError::ComponentNotFound(_) => self.to_string(),
+            WorkerServiceError::AccountIdNotFound(_) => self.to_string(),
+            WorkerServiceError::WorkerNotFound(_) => self.to_string(),
+            WorkerServiceError::Internal(_) => self.to_string(),
+            WorkerServiceError::Golem(inner) => inner.to_safe_string(),
+            WorkerServiceError::InternalCallError(inner) => inner.to_safe_string(),
+        }
     }
 }
 
@@ -68,12 +78,19 @@ impl From<WorkerServiceError> for worker_error::Error {
             | WorkerServiceError::AccountIdNotFound(_)
             | WorkerServiceError::VersionedComponentIdNotFound(_)
             | WorkerServiceError::WorkerNotFound(_)) => worker_error::Error::NotFound(ErrorBody {
-                error: error.to_string(),
+                error: error.to_safe_string(),
             }),
             WorkerServiceError::Internal(_) => {
                 worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
-                        details: error.to_string(),
+                        details: error.to_safe_string(),
+                    })),
+                })
+            }
+            WorkerServiceError::InternalCallError(_) => {
+                worker_error::Error::InternalError(WorkerExecutionError {
+                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                        details: error.to_safe_string(),
                     })),
                 })
             }

@@ -31,9 +31,10 @@ use crate::http::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
-use crate::repo::RepoError;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use chrono::Utc;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use std::fmt::{Debug, Display};
 
 #[async_trait]
@@ -49,7 +50,7 @@ pub trait ApiDeploymentService<Namespace> {
     ) -> Result<(), ApiDeploymentError<Namespace>>;
 
     // Example: A newer version of API definition is in dev site, and older version of the same definition-id is in prod site.
-    // Therefore Vec<ApiDeployment>
+    // Therefore, Vec<ApiDeployment>
     async fn get_by_id(
         &self,
         namespace: &Namespace,
@@ -83,23 +84,37 @@ pub enum ApiDeploymentError<Namespace> {
     ApiDeploymentConflict(ApiSiteString),
     #[error("API deployment definitions conflict error: {0}")]
     ApiDefinitionsConflict(String),
-    #[error("Internal error: {0}")]
-    InternalError(#[from] anyhow::Error),
+    #[error("Internal repository error: {0}")]
+    InternalRepoError(RepoError),
+    #[error("Internal error: failed to convert {what}: {error}")]
+    InternalConversionError { what: String, error: String },
 }
 
 impl<T> ApiDeploymentError<T> {
-    fn internal<E, C>(error: E, context: C) -> Self
-    where
-        E: Display + Debug + Send + Sync + 'static,
-        C: Display + Send + Sync + 'static,
-    {
-        ApiDeploymentError::InternalError(anyhow::Error::msg(error).context(context))
+    pub fn conversion_error(what: impl AsRef<str>, error: String) -> Self {
+        Self::InternalConversionError {
+            what: what.as_ref().to_string(),
+            error,
+        }
     }
 }
 
 impl<Namespace> From<RepoError> for ApiDeploymentError<Namespace> {
     fn from(error: RepoError) -> Self {
-        ApiDeploymentError::internal(error, "Repository error")
+        ApiDeploymentError::InternalRepoError(error)
+    }
+}
+
+impl<Namespace: Display> SafeDisplay for ApiDeploymentError<Namespace> {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ApiDeploymentError::ApiDefinitionNotFound(_, _) => self.to_string(),
+            ApiDeploymentError::ApiDeploymentNotFound(_, _) => self.to_string(),
+            ApiDeploymentError::ApiDeploymentConflict(_) => self.to_string(),
+            ApiDeploymentError::ApiDefinitionsConflict(_) => self.to_string(),
+            ApiDeploymentError::InternalRepoError(inner) => inner.to_safe_string(),
+            ApiDeploymentError::InternalConversionError { .. } => self.to_string(),
+        }
     }
 }
 
@@ -262,10 +277,7 @@ where
                             set_not_draft.push(api_definition_key.clone());
                         }
                         let definition = record.try_into().map_err(|e| {
-                            ApiDeploymentError::internal(
-                                e,
-                                "Failed to convert API definition record",
-                            )
+                            ApiDeploymentError::conversion_error("API definition record", e)
                         })?;
                         definitions.push(definition);
                     }
@@ -405,9 +417,11 @@ where
                 subdomain: deployment_record.subdomain,
             };
 
-            let namespace: Namespace = deployment_record.namespace.try_into().map_err(|e| {
-                ApiDeploymentError::internal(e, "Failed to convert API deployment namespace")
-            })?;
+            let namespace: Namespace = deployment_record.namespace.try_into().map_err(
+                |e: <Namespace as TryFrom<String>>::Error| {
+                    ApiDeploymentError::conversion_error("API deployment namespace", e.to_string())
+                },
+            )?;
 
             let api_definition_key = ApiDefinitionIdWithVersion {
                 id: deployment_record.definition_id.into(),
@@ -451,7 +465,7 @@ where
 
         let mut namespace: Option<Namespace> = None;
 
-        let mut created_at: Option<chrono::DateTime<chrono::Utc>> = None;
+        let mut created_at: Option<chrono::DateTime<Utc>> = None;
 
         for deployment_record in existing_deployment_records {
             if site.is_none() {
@@ -462,9 +476,14 @@ where
             }
 
             if namespace.is_none() {
-                namespace = Some(deployment_record.namespace.try_into().map_err(|e| {
-                    ApiDeploymentError::internal(e, "Failed to convert API deployment namespace")
-                })?);
+                namespace = Some(deployment_record.namespace.try_into().map_err(
+                    |e: <Namespace as TryFrom<std::string::String>>::Error| {
+                        ApiDeploymentError::conversion_error(
+                            "API deployment namespace",
+                            e.to_string(),
+                        )
+                    },
+                )?);
             }
 
             if created_at.is_none() || created_at.is_some_and(|t| t > deployment_record.created_at)
@@ -502,9 +521,11 @@ where
         let mut values: Vec<CompiledHttpApiDefinition> = vec![];
 
         for record in records {
-            values.push(record.try_into().map_err(|e| {
-                ApiDeploymentError::internal(e, "Failed to convert API definition record")
-            })?);
+            values.push(
+                record.try_into().map_err(|e| {
+                    ApiDeploymentError::conversion_error("API definition record", e)
+                })?,
+            );
         }
 
         Ok(values)
@@ -550,8 +571,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::repo::RepoError;
     use crate::service::api_deployment::ApiDeploymentError;
+    use golem_service_base::repo::RepoError;
 
     #[test]
     pub fn test_repo_error_to_service_error() {

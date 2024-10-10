@@ -17,7 +17,6 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::pin::Pin;
 
-use anyhow::anyhow;
 use async_trait::async_trait;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, Instant};
@@ -32,6 +31,7 @@ use golem_common::config::RetryConfig;
 use golem_common::model::{Pod, ShardId, TargetWorkerId, WorkerId};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
+use golem_common::SafeDisplay;
 use golem_service_base::model::{GolemError, GolemErrorInvalidShardId, GolemErrorUnknown};
 use golem_service_base::routing_table::{HasRoutingTableService, RoutingTableError};
 
@@ -322,7 +322,7 @@ impl From<GolemError> for ResponseMapResult {
 
 impl From<&'static str> for ResponseMapResult {
     fn from(error: &'static str) -> Self {
-        ResponseMapResult::Other(WorkerServiceError::Internal(anyhow!(error)))
+        ResponseMapResult::Other(WorkerServiceError::Internal(error.to_string()))
     }
 }
 
@@ -427,6 +427,15 @@ pub enum CallWorkerExecutorError {
     FailedToGetRoutingTable(RoutingTableError),
     #[error("Failed to connect to pod: {} {}", .0.code(), .0.message())]
     FailedToConnectToPod(Status),
+}
+
+impl SafeDisplay for CallWorkerExecutorError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            CallWorkerExecutorError::FailedToGetRoutingTable(_) => self.to_string(),
+            CallWorkerExecutorError::FailedToConnectToPod(_) => self.to_string(),
+        }
+    }
 }
 
 pub struct CallWorkerExecutorErrorWithContext {

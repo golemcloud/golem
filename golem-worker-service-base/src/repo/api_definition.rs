@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
-use crate::repo::RepoError;
 use async_trait::async_trait;
+use conditional_trait_gen::{trait_gen, when};
 use sqlx::{Database, Pool, Row};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
+use golem_service_base::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDefinitionRecord {
@@ -121,143 +122,7 @@ impl<DB: Database> DbApiDefinitionRepo<DB> {
     }
 }
 
-#[async_trait]
-impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Sqlite> {
-    async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        sqlx::query(
-            r#"
-              INSERT INTO api_definitions
-                (namespace, id, version, draft, data, created_at)
-              VALUES
-                ($1, $2, $3, $4, $5, $6)
-               "#,
-        )
-        .bind(definition.namespace.clone())
-        .bind(definition.id.clone())
-        .bind(definition.version.clone())
-        .bind(definition.draft)
-        .bind(definition.data.clone())
-        .bind(definition.created_at)
-        .execute(self.db_pool.deref())
-        .await?;
-
-        Ok(())
-    }
-
-    async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
-        sqlx::query(
-            r#"
-              UPDATE api_definitions
-              SET draft = $4, data = $5
-              WHERE namespace = $1 AND id = $2 AND version = $3
-               "#,
-        )
-        .bind(definition.namespace.clone())
-        .bind(definition.id.clone())
-        .bind(definition.version.clone())
-        .bind(definition.draft)
-        .bind(definition.data.clone())
-        .execute(self.db_pool.deref())
-        .await?;
-
-        Ok(())
-    }
-
-    async fn set_draft(
-        &self,
-        namespace: &str,
-        id: &str,
-        version: &str,
-        draft: bool,
-    ) -> Result<(), RepoError> {
-        sqlx::query(
-            r#"
-              UPDATE api_definitions
-              SET draft = $4
-              WHERE namespace = $1 AND id = $2 AND version = $3
-               "#,
-        )
-        .bind(namespace)
-        .bind(id)
-        .bind(version)
-        .bind(draft)
-        .execute(self.db_pool.deref())
-        .await?;
-
-        Ok(())
-    }
-
-    async fn get(
-        &self,
-        namespace: &str,
-        id: &str,
-        version: &str,
-    ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
-            .bind(namespace)
-            .bind(id)
-            .bind(version)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn get_draft(
-        &self,
-        namespace: &str,
-        id: &str,
-        version: &str,
-    ) -> Result<Option<bool>, RepoError> {
-        let result = sqlx::query(
-            "SELECT draft FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
-        )
-        .bind(namespace)
-        .bind(id)
-        .bind(version)
-        .fetch_optional(self.db_pool.deref())
-        .await?;
-
-        let draft: Option<bool> = result.map(|r| r.get("draft"));
-        Ok(draft)
-    }
-
-    async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
-        let result = sqlx::query(
-            "DELETE FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3",
-        )
-        .bind(namespace)
-        .bind(id)
-        .bind(version)
-        .execute(self.db_pool.deref())
-        .await?;
-
-        Ok(result.rows_affected() > 0)
-    }
-
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>(
-            "SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1",
-        )
-        .bind(namespace)
-        .fetch_all(self.db_pool.deref())
-        .await
-        .map_err(|e| e.into())
-    }
-
-    async fn get_all_versions(
-        &self,
-        namespace: &str,
-        id: &str,
-    ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
-        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2")
-            .bind(namespace)
-            .bind(id)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
-    }
-}
-
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
     async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
@@ -325,13 +190,30 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn get(
+    #[when(sqlx::Postgres -> get)]
+    async fn get_postgres(
         &self,
         namespace: &str,
         id: &str,
         version: &str,
     ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
         sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
+            .bind(namespace)
+            .bind(id)
+            .bind(version)
+            .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Sqlite -> get)]
+    async fn get_sqlite(
+        &self,
+        namespace: &str,
+        id: &str,
+        version: &str,
+    ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2 AND version = $3")
             .bind(namespace)
             .bind(id)
             .bind(version)
@@ -372,7 +254,11 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         Ok(result.rows_affected() > 0)
     }
 
-    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
+    #[when(sqlx::Postgres -> get_all)]
+    async fn get_all_postgres(
+        &self,
+        namespace: &str,
+    ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         sqlx::query_as::<_, ApiDefinitionRecord>(
             "SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1",
         )
@@ -382,12 +268,38 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
         .map_err(|e| e.into())
     }
 
-    async fn get_all_versions(
+    #[when(sqlx::Sqlite -> get_all)]
+    async fn get_all_sqlite(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDefinitionRecord>(
+            "SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1",
+        )
+            .bind(namespace)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Postgres -> get_all_versions)]
+    async fn get_all_versions_postgres(
         &self,
         namespace: &str,
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
         sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at::timestamptz FROM api_definitions WHERE namespace = $1 AND id = $2")
+            .bind(namespace)
+            .bind(id)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Sqlite -> get_all_versions)]
+    async fn get_all_versions_sqlite(
+        &self,
+        namespace: &str,
+        id: &str,
+    ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
+        sqlx::query_as::<_, ApiDefinitionRecord>("SELECT namespace, id, version, draft, data, created_at FROM api_definitions WHERE namespace = $1 AND id = $2")
             .bind(namespace)
             .bind(id)
             .fetch_all(self.db_pool.deref())

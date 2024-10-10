@@ -1,7 +1,7 @@
 use std::result::Result;
 use std::sync::Arc;
 
-use golem_common::recorded_http_api_request;
+use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
@@ -53,7 +53,7 @@ impl RegisterApiDefinitionApi {
         let response = {
             let definition = get_api_definition(openapi.0).map_err(|e| {
                 error!("Invalid Spec {}", e);
-                ApiEndpointError::bad_request(e)
+                ApiEndpointError::bad_request(safe(e))
             })?;
 
             let result = self
@@ -87,7 +87,7 @@ impl RegisterApiDefinitionApi {
             let definition: CoreHttpApiDefinitionRequest = payload
                 .0
                 .try_into()
-                .map_err(ApiEndpointError::bad_request)?;
+                .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
 
             let result = self
                 .create_api(&definition)
@@ -125,14 +125,16 @@ impl RegisterApiDefinitionApi {
             let definition: CoreHttpApiDefinitionRequest = payload
                 .0
                 .try_into()
-                .map_err(ApiEndpointError::bad_request)?;
+                .map_err(|err| ApiEndpointError::bad_request(safe(err)))?;
 
             if id.0 != definition.id {
-                Err(ApiEndpointError::bad_request("Unmatched url and body ids."))
+                Err(ApiEndpointError::bad_request(safe(
+                    "Unmatched url and body ids.".to_string(),
+                )))
             } else if version.0 != definition.version {
-                Err(ApiEndpointError::bad_request(
-                    "Unmatched url and body versions.",
-                ))
+                Err(ApiEndpointError::bad_request(safe(
+                    "Unmatched url and body versions.".to_string(),
+                )))
             } else {
                 let result = self
                     .definition_service
@@ -186,9 +188,9 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let definition = data.ok_or(ApiEndpointError::not_found(format!(
+            let definition = data.ok_or(ApiEndpointError::not_found(safe(format!(
                 "Can't find api definition with id {api_definition_id}, and version {api_version}"
-            )))?;
+            ))))?;
 
             let result = HttpApiDefinitionWithTypeInfo::from(definition);
             Ok(Json(result))

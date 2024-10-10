@@ -4,6 +4,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
     WorkerExecutionError,
 };
+use golem_common::SafeDisplay;
 
 // The dependents of golem-worker-service-base is expected
 // to have a component service internally that can depend on this base error
@@ -19,28 +20,38 @@ pub enum ComponentServiceError {
     BadRequest(Vec<String>),
     #[error("Already Exists: {0}")]
     AlreadyExists(String),
-    #[error(transparent)]
-    Internal(#[from] anyhow::Error),
+    #[error("Internal component service error: {0}")]
+    Internal(String),
+    #[error("Internal error: {0}")]
+    FailedGrpcStatus(Status),
+    #[error("Internal error: {0}")]
+    FailedTransport(tonic::transport::Error),
 }
 
-impl ComponentServiceError {
-    pub fn internal<M>(error: M) -> Self
-    where
-        M: std::fmt::Display + std::fmt::Debug + Send + Sync + 'static,
-    {
-        Self::Internal(anyhow::Error::msg(error))
+impl SafeDisplay for ComponentServiceError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ComponentServiceError::Unauthorized(_) => self.to_string(),
+            ComponentServiceError::Forbidden(_) => self.to_string(),
+            ComponentServiceError::NotFound(_) => self.to_string(),
+            ComponentServiceError::BadRequest(_) => self.to_string(),
+            ComponentServiceError::AlreadyExists(_) => self.to_string(),
+            ComponentServiceError::Internal(_) => self.to_string(),
+            ComponentServiceError::FailedGrpcStatus(_) => self.to_string(),
+            ComponentServiceError::FailedTransport(_) => self.to_string(),
+        }
     }
 }
 
 impl From<Status> for ComponentServiceError {
     fn from(status: Status) -> Self {
-        ComponentServiceError::Internal(status.into())
+        ComponentServiceError::FailedGrpcStatus(status)
     }
 }
 
 impl From<tonic::transport::Error> for ComponentServiceError {
     fn from(error: tonic::transport::Error) -> Self {
-        ComponentServiceError::Internal(error.into())
+        ComponentServiceError::FailedTransport(error)
     }
 }
 
@@ -53,10 +64,8 @@ impl From<golem_api_grpc::proto::golem::component::v1::ComponentError> for Compo
             Some(Error::LimitExceeded(error)) => ComponentServiceError::Forbidden(error.error),
             Some(Error::NotFound(error)) => ComponentServiceError::NotFound(error.error),
             Some(Error::AlreadyExists(error)) => ComponentServiceError::AlreadyExists(error.error),
-            Some(Error::InternalError(error)) => {
-                ComponentServiceError::Internal(anyhow::Error::msg(error.error))
-            }
-            None => ComponentServiceError::Internal(anyhow::Error::msg("Unknown error")),
+            Some(Error::InternalError(error)) => ComponentServiceError::Internal(error.error),
+            None => ComponentServiceError::Internal("Unknown error".to_string()),
         }
     }
 }
@@ -90,6 +99,20 @@ impl From<ComponentServiceError> for worker_error::Error {
                 worker_error::Error::BadRequest(ErrorsBody { errors })
             }
             ComponentServiceError::Internal(error) => {
+                worker_error::Error::InternalError(WorkerExecutionError {
+                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                        details: error.to_string(),
+                    })),
+                })
+            }
+            ComponentServiceError::FailedGrpcStatus(status) => {
+                worker_error::Error::InternalError(WorkerExecutionError {
+                    error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                        details: status.to_string(),
+                    })),
+                })
+            }
+            ComponentServiceError::FailedTransport(error) => {
                 worker_error::Error::InternalError(WorkerExecutionError {
                     error: Some(worker_execution_error::Error::Unknown(UnknownError {
                         details: error.to_string(),

@@ -27,3 +27,20 @@ pub mod retries;
 pub mod serialization;
 pub mod tracing;
 pub mod uri;
+
+/// Trait to convert a value to a string which is safe to return through a public API.
+pub trait SafeDisplay {
+    fn to_safe_string(&self) -> String;
+}
+
+struct SafeString(String);
+
+impl SafeDisplay for SafeString {
+    fn to_safe_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
+pub fn safe(value: String) -> impl SafeDisplay {
+    SafeString(value)
+}
