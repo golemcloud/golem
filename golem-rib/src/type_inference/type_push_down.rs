@@ -236,6 +236,7 @@ mod internal {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
                 expr.add_infer_type_mut(predicate_type.clone());
+                expr.push_types_down()?;
             }
             ArmPattern::As(_, pattern) => {
                 update_arm_pattern_type(pattern, predicate_type)?;
