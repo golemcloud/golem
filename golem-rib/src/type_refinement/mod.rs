@@ -21,8 +21,8 @@ mod type_extraction;
 
 use crate::type_refinement::precise_types::*;
 use crate::InferredType;
-use std::ops::Deref;
 use golem_wasm_ast::analysis::TypeS32;
+use std::ops::Deref;
 
 /// # Example:
 ///
@@ -167,20 +167,18 @@ impl TypeRefinement for StringType {
 
 impl TypeRefinement for NumberType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
-        internal::refine_inferred_type(inferred_type, &|inferred_type| {
-            match inferred_type {
-                InferredType::S8 => Some(NumberType),
-                InferredType::S16 => Some(NumberType),
-                InferredType::S32 => Some(NumberType),
-                InferredType::S64 => Some(NumberType),
-                InferredType::U8 => Some(NumberType),
-                InferredType::U16 => Some(NumberType),
-                InferredType::U32 => Some(NumberType),
-                InferredType::U64 => Some(NumberType),
-                InferredType::F32 => Some(NumberType),
-                InferredType::F64 => Some(NumberType),
-                _ => None,
-            }
+        internal::refine_inferred_type(inferred_type, &|inferred_type| match inferred_type {
+            InferredType::S8 => Some(NumberType),
+            InferredType::S16 => Some(NumberType),
+            InferredType::S32 => Some(NumberType),
+            InferredType::S64 => Some(NumberType),
+            InferredType::U8 => Some(NumberType),
+            InferredType::U16 => Some(NumberType),
+            InferredType::U32 => Some(NumberType),
+            InferredType::U64 => Some(NumberType),
+            InferredType::F32 => Some(NumberType),
+            InferredType::F64 => Some(NumberType),
+            _ => None,
         })
     }
 }

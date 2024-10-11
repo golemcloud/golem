@@ -270,9 +270,12 @@ mod internal {
                             let refined_type = ErrType::refine(predicate_type);
 
                             match refined_type {
-                                Some(_) => {},
+                                Some(_) => {}
                                 None => {
-                                    return Err(format!("Invalid pattern match. Cannot match {} to ok", original_predicate));
+                                    return Err(format!(
+                                        "Invalid pattern match. Cannot match {} to ok",
+                                        original_predicate
+                                    ));
                                 }
                             }
                         }
@@ -293,9 +296,12 @@ mod internal {
                             let refined_type = OkType::refine(predicate_type);
 
                             match refined_type {
-                                Some(_) => {},
+                                Some(_) => {}
                                 None => {
-                                    return Err(format!("Invalid pattern match. Cannot match {} to err", original_predicate));
+                                    return Err(format!(
+                                        "Invalid pattern match. Cannot match {} to err",
+                                        original_predicate
+                                    ));
                                 }
                             }
                         }

@@ -118,6 +118,10 @@ impl InferredType {
         matches!(self, InferredType::OneOf(_))
     }
 
+    pub fn is_all_of(&self) -> bool {
+        matches!(self, InferredType::AllOf(_))
+    }
+
     pub fn is_number(&self) -> bool {
         matches!(
             self,
