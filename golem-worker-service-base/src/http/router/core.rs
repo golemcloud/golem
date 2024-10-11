@@ -35,22 +35,29 @@ impl<T> Router<T> {
     }
 }
 
-#[test]
-fn test_router() {
-    let mut router = Router::new();
+#[cfg(test)]
+mod tests {
+    use http::Method;
+    use test_r::test;
+    use crate::http::router::{Router, RouterPattern};
 
-    router.add_route(Method::GET, vec![RouterPattern::literal("test")], 1);
-    router.add_route(
-        Method::GET,
-        vec![RouterPattern::literal("test"), RouterPattern::Variable],
-        2,
-    );
+    #[test]
+    fn test_router() {
+        let mut router = Router::new();
 
-    assert_eq!(router.check_path(&Method::GET, &["test"]), Some(&1));
-    assert_eq!(router.check_path(&Method::GET, &["test", "123"]), Some(&2));
-    assert_eq!(router.check_path(&Method::POST, &["api"]), None);
+        router.add_route(Method::GET, vec![RouterPattern::literal("test")], 1);
+        router.add_route(
+            Method::GET,
+            vec![RouterPattern::literal("test"), RouterPattern::Variable],
+            2,
+        );
 
-    router.add_route(Method::POST, vec![RouterPattern::literal("api")], 1);
+        assert_eq!(router.check_path(&Method::GET, &["test"]), Some(&1));
+        assert_eq!(router.check_path(&Method::GET, &["test", "123"]), Some(&2));
+        assert_eq!(router.check_path(&Method::POST, &["api"]), None);
 
-    assert_eq!(router.check_path(&Method::POST, &["api"]), Some(&1));
+        router.add_route(Method::POST, vec![RouterPattern::literal("api")], 1);
+
+        assert_eq!(router.check_path(&Method::POST, &["api"]), Some(&1));
+    }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::min;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -716,11 +717,7 @@ trait BackgroundTransfer {
         match entries.last() {
             Some(last_entry) => {
                 let last_dropped_id = last_entry.0;
-
-                debug!("Writing entries to the secondary oplog");
                 self.append_target(entries).await;
-
-                debug!("Dropping transferred entries from the primary oplog");
                 self.drop_source_prefix(last_dropped_id).await;
             }
             None => {
@@ -792,7 +789,9 @@ impl OplogArchive for WrappedOplogArchive {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         self.archive.drop_prefix(last_dropped_id).await;
         let new_length = self.archive.length().await;
-        self.entry_count.set(new_length);
+        let old_entry_count = self.entry_count.get();
+        let new_entry_count = min(new_length, old_entry_count);
+        self.entry_count.set(new_entry_count);
     }
 
     async fn length(&self) -> u64 {

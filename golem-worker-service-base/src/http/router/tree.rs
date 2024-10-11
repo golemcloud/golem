@@ -338,6 +338,8 @@ impl<T> RadixNode<T> {
 
 #[cfg(test)]
 mod test {
+    use test_r::test;
+    
     use super::*;
 
     #[test]

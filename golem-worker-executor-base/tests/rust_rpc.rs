@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common;
+use test_r::{inherit_test_dep, test};
+
 use crate::common::{start, TestContext};
+use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::{worker_error_message, TestDslUnsafe};
 use golem_wasm_rpc::Value;
@@ -21,11 +23,19 @@ use std::collections::HashMap;
 use std::time::SystemTime;
 use tracing::{debug, info};
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn auction_example_1() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn auction_example_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let registry_component_id = executor.store_component("auction_registry_composed").await;
     let auction_component_id = executor.store_component("auction").await;
@@ -86,11 +96,15 @@ async fn auction_example_1() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn auction_example_2() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn auction_example_2(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let registry_component_id = executor.store_component("auction_registry_composed").await;
     let auction_component_id = executor.store_component("auction").await;
@@ -151,11 +165,15 @@ async fn auction_example_2() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_1() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn counter_resource_test_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
     let caller_component_id = executor.store_component("caller_composed").await;
@@ -185,11 +203,15 @@ async fn counter_resource_test_1() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_2() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn counter_resource_test_2(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
     let caller_component_id = executor.store_component("caller_composed").await;
@@ -216,11 +238,15 @@ async fn counter_resource_test_2() {
     check!(result2 == Ok(vec![Value::U64(2)]));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_2_with_restart() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn counter_resource_test_2_with_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
     let caller_component_id = executor.store_component("caller_composed").await;
@@ -239,7 +265,7 @@ async fn counter_resource_test_2_with_restart() {
         .await;
 
     drop(executor);
-    let executor = common::start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let result2 = executor
         .invoke_and_await(&caller_worker_id, "test2", vec![])
@@ -251,11 +277,15 @@ async fn counter_resource_test_2_with_restart() {
     check!(result2 == Ok(vec![Value::U64(2)]));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_3() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn counter_resource_test_3(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
     let caller_component_id = executor.store_component("caller_composed").await;
@@ -282,11 +312,15 @@ async fn counter_resource_test_3() {
     check!(result2 == Ok(vec![Value::U64(2)]));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_3_with_restart() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn counter_resource_test_3_with_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
     let caller_component_id = executor.store_component("caller_composed").await;
@@ -305,7 +339,7 @@ async fn counter_resource_test_3_with_restart() {
         .await;
 
     drop(executor);
-    let executor = common::start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let result2 = executor
         .invoke_and_await(&caller_worker_id, "test3", vec![])
@@ -317,11 +351,15 @@ async fn counter_resource_test_3_with_restart() {
     check!(result2 == Ok(vec![Value::U64(2)]));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn context_inheritance() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn context_inheritance(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
     let caller_component_id = executor.store_component("caller_composed").await;
@@ -399,11 +437,15 @@ async fn context_inheritance() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_5() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn counter_resource_test_5(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
     let caller_component_id = executor.store_component("caller_composed").await;
@@ -435,11 +477,15 @@ async fn counter_resource_test_5() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_5_with_restart() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn counter_resource_test_5_with_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     // using store_unique_component to avoid collision with counter_resource_test_5
     let counters_component_id = executor.store_unique_component("counters").await;
@@ -462,7 +508,7 @@ async fn counter_resource_test_5_with_restart() {
 
     drop(executor);
 
-    let executor = common::start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let result2 = executor
         .invoke_and_await(&caller_worker_id, "test5", vec![])
@@ -489,11 +535,15 @@ async fn counter_resource_test_5_with_restart() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn wasm_rpc_bug_32_test() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn wasm_rpc_bug_32_test(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component("counters").await;
     let caller_component_id = executor.store_component("caller_composed").await;
@@ -529,11 +579,15 @@ async fn wasm_rpc_bug_32_test() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn error_message_invalid_uri() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn error_message_invalid_uri(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let registry_component_id = executor.store_component("auction_registry_composed").await;
 
@@ -580,18 +634,22 @@ async fn error_message_invalid_uri() {
         .contains("Invalid URI: urn:worker:invalid-component-id"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn error_message_non_existing_target_component() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn error_message_non_existing_target_component(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let registry_component_id = executor.store_component("auction_registry_composed").await;
 
     let mut env = HashMap::new();
     env.insert(
         "AUCTION_COMPONENT_ID".to_string(),
-        "FB2F8E32-7B94-4699-B6EC-82BCE80FF9F2".to_string(), // valid UUID, but not a an existing component
+        "FB2F8E32-7B94-4699-B6EC-82BCE80FF9F2".to_string(), // valid UUID, but not an existing component
     );
     let registry_worker_id = executor
         .start_worker_with(
@@ -627,11 +685,15 @@ async fn error_message_non_existing_target_component() {
         .contains("Could not find any component with the given id"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn ephemeral_worker_invocation_via_rpc1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn ephemeral_worker_invocation_via_rpc1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let ephemeral_component_id = executor.store_ephemeral_component("ephemeral").await;
     let caller_component_id = executor.store_component("caller_composed").await;

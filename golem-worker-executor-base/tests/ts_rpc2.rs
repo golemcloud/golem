@@ -12,20 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common;
+use test_r::{inherit_test_dep, test};
+
+use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
 static COUNTER_COMPONENT_NAME: &str = "counter-ts";
 static CALLER_COMPONENT_NAME: &str = "caller-composed-ts";
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_2() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn counter_resource_test_2(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
     let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
@@ -52,11 +62,15 @@ async fn counter_resource_test_2() {
     check!(result2 == Ok(vec![Value::U64(2)]));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_2_with_restart() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn counter_resource_test_2_with_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let counters_component_id = executor.store_component(COUNTER_COMPONENT_NAME).await;
     let caller_component_id = executor.store_component(CALLER_COMPONENT_NAME).await;
@@ -75,7 +89,7 @@ async fn counter_resource_test_2_with_restart() {
         .await;
 
     drop(executor);
-    let executor = common::start(&context).await.unwrap();
+    let executor = common::start(deps, &context).await.unwrap();
 
     let result2 = executor
         .invoke_and_await(&caller_worker_id, "test2", vec![])

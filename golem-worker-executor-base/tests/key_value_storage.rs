@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::BASE_DEPS;
 use golem_common::config::RedisConfig;
 use golem_common::model::AccountId;
 use golem_common::redis::RedisPool;
@@ -26,7 +25,9 @@ use golem_worker_executor_base::storage::keyvalue::{KeyValueStorage, KeyValueSto
 use golem_worker_executor_base::storage::sqlite_types::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
+use test_r::inherit_test_dep;
 use uuid::Uuid;
+use crate::WorkerExecutorTestDependencies;
 
 pub(crate) trait GetKeyValueStorage {
     fn get_key_value_storage(&self) -> &dyn KeyValueStorage;
@@ -42,7 +43,7 @@ impl GetKeyValueStorage for InMemoryKeyValueStorageWrapper {
     }
 }
 
-pub(crate) async fn in_memory_storage() -> impl GetKeyValueStorage {
+pub(crate) async fn in_memory_storage(_deps: &WorkerExecutorTestDependencies) -> impl GetKeyValueStorage {
     let kvs = InMemoryKeyValueStorage::new();
     InMemoryKeyValueStorageWrapper { kvs }
 }
@@ -59,9 +60,9 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
     }
 }
 
-pub(crate) async fn redis_storage() -> impl GetKeyValueStorage {
-    let redis = BASE_DEPS.redis();
-    let redis_monitor = BASE_DEPS.redis_monitor();
+pub(crate) async fn redis_storage(deps: &WorkerExecutorTestDependencies) -> impl GetKeyValueStorage {
+    let redis = deps.redis();
+    let redis_monitor = deps.redis_monitor();
     redis.assert_valid();
     redis_monitor.assert_valid();
     let random_prefix = Uuid::new_v4();
@@ -96,7 +97,7 @@ impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
     }
 }
 
-pub(crate) async fn sqlite_storage() -> impl GetKeyValueStorage {
+pub(crate) async fn sqlite_storage(_deps: &WorkerExecutorTestDependencies) -> impl GetKeyValueStorage {
     let sqlx_pool_sqlite = SqlitePoolOptions::new()
         .max_connections(10)
         .connect("sqlite::memory:")
@@ -122,15 +123,23 @@ pub fn ns2() -> KeyValueStorageNamespace {
     }
 }
 
+inherit_test_dep!(WorkerExecutorTestDependencies);
+
 macro_rules! test_kv_storage {
     ( $name:ident, $init:expr, $ns:expr, $ns2:expr ) => {
         mod $name {
-            use crate::key_value_storage::GetKeyValueStorage;
+            use test_r::{inherit_test_dep, test};
 
-            #[tokio::test]
+            use crate::WorkerExecutorTestDependencies;
+            use crate::key_value_storage::GetKeyValueStorage;
+            use std::sync::Arc;
+
+            inherit_test_dep!(WorkerExecutorTestDependencies);
+
+            #[test]
             #[tracing::instrument]
-            async fn get_set_get() {
-                let test = $init().await;
+            async fn get_set_get(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -149,10 +158,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(result2, Some(value.into()));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn namespaces_are_separate() {
-                let test = $init().await;
+            async fn namespaces_are_separate(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns1 = $ns();
                 let ns2 = $ns2();
@@ -183,10 +192,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(result22, Some(value2.into()));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn get_set_get_many() {
-                let test = $init().await;
+            async fn get_set_get_many(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -232,10 +241,10 @@ macro_rules! test_kv_storage {
                 );
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn set_if_not_exists() {
-                let test = $init().await;
+            async fn set_if_not_exists(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -257,10 +266,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(result3, Some(value1.into()));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn del() {
-                let test = $init().await;
+            async fn del(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -282,10 +291,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(result2, None);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn del_many() {
-                let test = $init().await;
+            async fn del_many(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -341,10 +350,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(result4, None);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn exists_set_exists() {
-                let test = $init().await;
+            async fn exists_set_exists(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -360,10 +369,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(result2, true);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn exists_is_per_namespace() {
-                let test = $init().await;
+            async fn exists_is_per_namespace(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
                 let ns2 = $ns2();
@@ -382,10 +391,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(result3, false);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn keys() {
-                let test = $init().await;
+            async fn keys(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns2();
 
@@ -426,10 +435,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(keys3, vec![key2.to_string()]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn sets() {
-                let test = $init().await;
+            async fn sets(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -528,10 +537,10 @@ macro_rules! test_kv_storage {
                 assert2::check!(s24.contains(&value3.to_vec().into()));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn sorted_sets() {
-                let test = $init().await;
+            async fn sorted_sets(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -646,10 +655,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(s24, vec![(3.0, value3.into()), (4.0, value4.into())]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn add_to_sorted_set_updates_score() {
-                let test = $init().await;
+            async fn add_to_sorted_set_updates_score(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -676,10 +685,10 @@ macro_rules! test_kv_storage {
                 assert_eq!(result, vec![(1.0, value1.into()), (3.0, value2.into())]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn query_sorted_set() {
-                let test = $init().await;
+            async fn query_sorted_set(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let kvs = test.get_key_value_storage();
                 let ns = $ns();
 
@@ -769,7 +778,7 @@ test_kv_storage!(
     crate::key_value_storage::ns
 );
 test_kv_storage!(
-    sqllite,
+    sqlite,
     crate::key_value_storage::sqlite_storage,
     crate::key_value_storage::ns2,
     crate::key_value_storage::ns

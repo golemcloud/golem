@@ -94,7 +94,6 @@ golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
 assert2 = { workspace = true }
 console-subscriber = { workspace = true }
-ctor = { workspace = true }
 goldenfile = "1.7.1"
 golem-wasm-ast = { workspace = true }
 once_cell = { workspace = true }

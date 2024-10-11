@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::test;
+use test_r::{test, test_dep};
 
 use assert2::check;
-use ctor::ctor;
 use nonempty_collections::nev;
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -47,8 +46,10 @@ impl Tracing {
     }
 }
 
-#[ctor]
-pub static TRACING: Tracing = Tracing::init();
+#[test_dep]
+fn tracing() -> Tracing {
+    Tracing::init()
+}
 
 fn rounded_ts(ts: Timestamp) -> Timestamp {
     Timestamp::from(ts.to_millis())
@@ -239,7 +240,7 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
 }
 
 #[test]
-async fn open_add_and_read_back() {
+async fn open_add_and_read_back(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 100).await;
@@ -287,7 +288,7 @@ async fn open_add_and_read_back() {
 }
 
 #[test]
-async fn open_add_and_read_back_ephemeral() {
+async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
@@ -349,7 +350,7 @@ async fn open_add_and_read_back_ephemeral() {
 }
 
 #[test]
-async fn entries_with_small_payload() {
+async fn entries_with_small_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 100).await;
@@ -459,7 +460,7 @@ async fn entries_with_small_payload() {
 }
 
 #[test]
-async fn entries_with_large_payload() {
+async fn entries_with_large_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 100).await;
@@ -573,32 +574,32 @@ async fn entries_with_large_payload() {
 }
 
 #[test]
-async fn multilayer_transfers_entries_after_limit_reached_1() {
+async fn multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, false).await;
 }
 
 #[test]
-async fn multilayer_transfers_entries_after_limit_reached_2() {
+async fn multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, false).await;
 }
 
 #[test]
-async fn multilayer_transfers_entries_after_limit_reached_3() {
+async fn multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, false).await;
 }
 
 #[test]
-async fn blob_multilayer_transfers_entries_after_limit_reached_1() {
+async fn blob_multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, true).await;
 }
 
 #[test]
-async fn blob_multilayer_transfers_entries_after_limit_reached_2() {
+async fn blob_multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, true).await;
 }
 
 #[test]
-async fn blob_multilayer_transfers_entries_after_limit_reached_3() {
+async fn blob_multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, true).await;
 }
 
@@ -709,12 +710,12 @@ async fn multilayer_transfers_entries_after_limit_reached(
 }
 
 #[test]
-async fn read_from_archive() {
+async fn read_from_archive(_tracing: &Tracing) {
     read_from_archive_impl(false).await;
 }
 
 #[test]
-async fn blob_read_from_archive() {
+async fn blob_read_from_archive(_tracing: &Tracing) {
     read_from_archive_impl(true).await;
 }
 
@@ -803,32 +804,32 @@ async fn read_from_archive_impl(use_blob: bool) {
 }
 
 #[test]
-async fn write_after_archive() {
+async fn write_after_archive(_tracing: &Tracing) {
     write_after_archive_impl(false, Reopen::No).await;
 }
 
 #[test]
-async fn blob_write_after_archive() {
+async fn blob_write_after_archive(_tracing: &Tracing) {
     write_after_archive_impl(true, Reopen::No).await;
 }
 
 #[test]
-async fn write_after_archive_reopen() {
+async fn write_after_archive_reopen(_tracing: &Tracing) {
     write_after_archive_impl(false, Reopen::Yes).await;
 }
 
 #[test]
-async fn blob_write_after_archive_reopen() {
+async fn blob_write_after_archive_reopen(_tracing: &Tracing) {
     write_after_archive_impl(true, Reopen::Yes).await;
 }
 
 #[test]
-async fn write_after_archive_reopen_full() {
+async fn write_after_archive_reopen_full(_tracing: &Tracing) {
     write_after_archive_impl(false, Reopen::Full).await;
 }
 
 #[test]
-async fn blob_write_after_archive_reopen_full() {
+async fn blob_write_after_archive_reopen_full(_tracing: &Tracing) {
     write_after_archive_impl(true, Reopen::Full).await;
 }
 
@@ -1061,12 +1062,12 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
 }
 
 #[test]
-async fn empty_layer_gets_deleted() {
+async fn empty_layer_gets_deleted(_tracing: &Tracing) {
     empty_layer_gets_deleted_impl(false).await;
 }
 
 #[test]
-async fn blob_empty_layer_gets_deleted() {
+async fn blob_empty_layer_gets_deleted(_tracing: &Tracing) {
     empty_layer_gets_deleted_impl(true).await;
 }
 
@@ -1166,12 +1167,12 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
 }
 
 #[test]
-async fn scheduled_archive() {
+async fn scheduled_archive(_tracing: &Tracing) {
     scheduled_archive_impl(false).await;
 }
 
 #[test]
-async fn blob_scheduled_archive() {
+async fn blob_scheduled_archive(_tracing: &Tracing) {
     scheduled_archive_impl(true).await;
 }
 

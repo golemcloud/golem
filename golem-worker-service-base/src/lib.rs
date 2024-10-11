@@ -16,6 +16,9 @@ pub mod worker_bridge_execution;
 mod worker_service_rib_compiler;
 pub mod worker_service_rib_interpreter;
 
+#[cfg(test)]
+test_r::enable!();
+
 const VERSION: &str = golem_version!();
 
 pub trait UriBackConversion {

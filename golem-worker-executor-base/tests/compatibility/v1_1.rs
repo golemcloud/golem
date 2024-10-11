@@ -1,3 +1,5 @@
+use test_r::test;
+
 use goldenfile::Mint;
 use golem_worker_executor_base::error::GolemError;
 

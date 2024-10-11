@@ -84,45 +84,52 @@ fn literal_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
     })(input)
 }
 
-#[test]
-fn test_parse() {
-    use crate::api_definition::http::LiteralInfo;
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+    use crate::api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
+    use crate::parser::path_pattern_parser::parse_path_pattern;
 
-    let result = parse_path_pattern("/api/{id}/test/{name}/test2?{query1}&{query2}");
-    assert_eq!(
-        AllPathPatterns {
-            path_patterns: vec![
-                PathPattern::literal("api"),
-                PathPattern::var("id"),
-                PathPattern::literal("test"),
-                PathPattern::var("name"),
-                PathPattern::literal("test2"),
-            ],
-            query_params: vec![
-                QueryInfo {
-                    key_name: "query1".to_string()
-                },
-                QueryInfo {
-                    key_name: "query2".to_string()
-                }
-            ]
-        },
-        result.unwrap().1
-    );
+    #[test]
+    fn test_parse() {
+        use crate::api_definition::http::LiteralInfo;
 
-    let result = parse_path_pattern("/api/{id}/test/{name}/test2");
+        let result = parse_path_pattern("/api/{id}/test/{name}/test2?{query1}&{query2}");
+        assert_eq!(
+            AllPathPatterns {
+                path_patterns: vec![
+                    PathPattern::literal("api"),
+                    PathPattern::var("id"),
+                    PathPattern::literal("test"),
+                    PathPattern::var("name"),
+                    PathPattern::literal("test2"),
+                ],
+                query_params: vec![
+                    QueryInfo {
+                        key_name: "query1".to_string()
+                    },
+                    QueryInfo {
+                        key_name: "query2".to_string()
+                    }
+                ]
+            },
+            result.unwrap().1
+        );
 
-    assert_eq!(
-        AllPathPatterns {
-            path_patterns: vec![
-                PathPattern::Literal(LiteralInfo("api".to_string())),
-                PathPattern::var("id"),
-                PathPattern::Literal(LiteralInfo("test".to_string())),
-                PathPattern::var("name"),
-                PathPattern::Literal(LiteralInfo("test2".to_string())),
-            ],
-            query_params: vec![]
-        },
-        result.unwrap().1
-    );
+        let result = parse_path_pattern("/api/{id}/test/{name}/test2");
+
+        assert_eq!(
+            AllPathPatterns {
+                path_patterns: vec![
+                    PathPattern::Literal(LiteralInfo("api".to_string())),
+                    PathPattern::var("id"),
+                    PathPattern::Literal(LiteralInfo("test".to_string())),
+                    PathPattern::var("name"),
+                    PathPattern::Literal(LiteralInfo("test2".to_string())),
+                ],
+                query_params: vec![]
+            },
+            result.unwrap().1
+        );
+    }
 }

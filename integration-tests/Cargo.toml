@@ -32,13 +32,18 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 warp = { workspace = true }
 
+[dev-dependencies]
+test-r = { workspace = true }
+
 [[test]]
 name = "integration"
 path = "tests/lib.rs"
+harness = false
 
 [[test]]
 name = "sharding"
 path = "tests/sharding.rs"
+harness = false
 
 [[bin]]
 name = "benchmark_simple_worker_echo"

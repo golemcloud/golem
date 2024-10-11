@@ -1,17 +1,15 @@
 use anyhow::Error;
 use async_trait::async_trait;
-use ctor::ctor;
 
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use prometheus::Registry;
 
+use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
-
-use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 
@@ -207,12 +205,6 @@ impl TestDependencies for TestWorkerExecutor {
         self.deps.component_directory()
     }
 
-    fn component_compilation_service(
-        &self,
-    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
-        self.deps.component_compilation_service()
-    }
-
     fn component_service(
         &self,
     ) -> Arc<
@@ -222,6 +214,12 @@ impl TestDependencies for TestWorkerExecutor {
             + 'static,
     > {
         self.deps.component_service()
+    }
+
+    fn component_compilation_service(
+        &self,
+    ) -> Arc<dyn ComponentCompilationService + Send + Sync + 'static> {
+        self.deps.component_compilation_service()
     }
 
     fn worker_service(
@@ -249,12 +247,9 @@ pub struct TestContext {
     unique_id: u16,
 }
 
-#[ctor]
-pub static LAST_UNIQUE_ID: AtomicU16 = AtomicU16::new(0);
-
 impl TestContext {
-    pub fn new() -> Self {
-        let unique_id = LAST_UNIQUE_ID.fetch_add(1, Ordering::Relaxed);
+    pub fn new(last_unique_id: &LastUniqueId) -> Self {
+        let unique_id = last_unique_id.id.fetch_add(1, Ordering::Relaxed);
         Self { unique_id }
     }
 
@@ -275,16 +270,20 @@ impl TestContext {
     }
 }
 
-pub async fn start(context: &TestContext) -> anyhow::Result<TestWorkerExecutor> {
-    start_limited(context, None).await
+pub async fn start(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+) -> anyhow::Result<TestWorkerExecutor> {
+    start_limited(deps, context, None).await
 }
 
 pub async fn start_limited(
+    deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
     system_memory_override: Option<u64>,
 ) -> anyhow::Result<TestWorkerExecutor> {
-    let redis = BASE_DEPS.redis();
-    let redis_monitor = BASE_DEPS.redis_monitor();
+    let redis = deps.redis();
+    let redis_monitor = deps.redis_monitor();
     redis.assert_valid();
     redis_monitor.assert_valid();
     println!("Using Redis on port {}", redis.public_port());
@@ -340,7 +339,7 @@ pub async fn start_limited(
     loop {
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
         if client.is_ok() {
-            let deps = BASE_DEPS.per_test(
+            let deps = deps.per_test(
                 &context.redis_prefix(),
                 context.http_port(),
                 context.grpc_port(),

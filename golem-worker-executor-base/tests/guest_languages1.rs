@@ -12,27 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test};
+
 use assert2::{assert, check};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
 use chrono::Datelike;
+use golem_test_framework::dsl::{log_event_to_string, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-use golem_test_framework::dsl::{log_event_to_string, TestDslUnsafe};
 use tonic::transport::Body;
 use warp::Filter;
 
 use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn zig_example_3() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn zig_example_3(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("zig-3").await;
     let worker_id = executor.start_worker(&component_id, "zig-3").await;
@@ -52,14 +62,18 @@ async fn zig_example_3() {
 
     drop(executor);
 
-    assert!(result == vec![Value::U64(21)])
+    assert_eq!(result, vec![Value::U64(21)])
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn tinygo_example() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn tinygo_example(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("tinygo-wasi").await;
     let worker_id = executor
@@ -109,11 +123,15 @@ async fn tinygo_example() {
     check!(result == vec!(Value::S32(last_part.parse::<i32>().unwrap())));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn tinygo_http_client() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn tinygo_http_client(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
@@ -183,12 +201,16 @@ async fn tinygo_http_client() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
 #[ignore] // Building with the latest Grain compiler fails in "WebAssembly Translation error"
-async fn grain_example_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn grain_example_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("grain-1").await;
     let worker_id = executor.start_worker(&component_id, "grain-1").await;
@@ -220,11 +242,15 @@ async fn grain_example_1() {
     check!(third_line.parse::<i64>().unwrap() < (epoch + hour));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn java_example_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn java_example_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("java-1").await;
     let worker_id = executor.start_worker(&component_id, "java-1").await;
@@ -252,11 +278,15 @@ async fn java_example_1() {
     check!(result == vec![Value::U32("Hello Golem!".len() as u32)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn java_shopping_cart() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn java_shopping_cart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("java-2").await;
     let worker_id = executor.start_worker(&component_id, "java-2").await;
@@ -326,36 +356,40 @@ async fn java_shopping_cart() {
 
     drop(executor);
 
-    std::assert!(
-        contents
-            == Ok(vec![Value::List(vec![
-                Value::Record(vec![
-                    Value::String("G1000".to_string()),
-                    Value::String("Golem T-Shirt M".to_string()),
-                    Value::F32(100.0),
-                    Value::U32(5),
-                ]),
-                Value::Record(vec![
-                    Value::String("G1001".to_string()),
-                    Value::String("Golem Cloud Subscription 1y".to_string()),
-                    Value::F32(999999.0),
-                    Value::U32(1),
-                ]),
-                Value::Record(vec![
-                    Value::String("G1002".to_string()),
-                    Value::String("Mud Golem".to_string()),
-                    Value::F32(11.0),
-                    Value::U32(20),
-                ]),
-            ])])
+    assert_eq!(
+        contents,
+        Ok(vec![Value::List(vec![
+            Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
+            ]),
+            Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::F32(999999.0),
+                Value::U32(1),
+            ]),
+            Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(20),
+            ]),
+        ])])
     )
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn c_example_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn c_example_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("c-1").await;
     let worker_id = executor.start_worker(&component_id, "c-1").await;
@@ -379,11 +413,15 @@ async fn c_example_1() {
     check!(result == vec![Value::S32(100)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn c_example_2() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn c_example_2(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("c-1").await;
     let worker_id = executor.start_worker(&component_id, "c-2").await;
@@ -412,12 +450,16 @@ async fn c_example_2() {
     check!(first_line == format!("Hello C! {year}"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
 #[ignore]
-async fn c_example_3() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn c_example_3(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("large-initial-memory").await;
     let worker_id = executor
@@ -436,12 +478,16 @@ async fn c_example_3() {
     check!(result == vec![Value::U64(536870912)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
 #[ignore]
-async fn c_example_4() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn c_example_4(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("large-dynamic-memory").await;
     let worker_id = executor

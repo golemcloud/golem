@@ -540,6 +540,8 @@ mod tests {
 
     #[cfg(test)]
     mod no_content_type_header {
+        use test_r::test;
+        
         use super::*;
         use golem_wasm_ast::analysis::analysed_type::{u16, u8};
 
@@ -554,7 +556,7 @@ mod tests {
             (content_type, body)
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_string_type() {
             let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
@@ -566,7 +568,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_singleton_u8_type() {
             let type_annotated_value = TypeAnnotatedValue::U8(10);
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
@@ -577,7 +579,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_list_u8_type() {
             let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)], &u8());
             let (content_type, body) = get_content_type_and_body(&type_annotated_value);
@@ -592,7 +594,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_list_non_u8_type() {
             let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
 
@@ -609,7 +611,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_record_type() {
             let type_annotated_value = create_record(vec![(
                 "name".to_string(),
@@ -630,6 +632,8 @@ mod tests {
 
     #[cfg(test)]
     mod with_response_type_header {
+        use test_r::test;
+
         use super::*;
         use golem_wasm_ast::analysis::analysed_type::{u16, u8};
 
@@ -648,7 +652,7 @@ mod tests {
             (content_type, body)
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_string_type_as_text() {
             let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
             let (content_type, body) =
@@ -661,7 +665,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_string_type_as_json() {
             let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
             let (content_type, body) =
@@ -673,7 +677,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_json_string_type_as_json() {
             let type_annotated_value = TypeAnnotatedValue::Str("\"Hello\"".to_string());
             let (content_type, body) =
@@ -688,7 +692,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_singleton_u8_type() {
             let type_annotated_value = TypeAnnotatedValue::U8(10);
             let (content_type, body) =
@@ -700,7 +704,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_list_u8_type() {
             let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)], &u8());
 
@@ -720,7 +724,7 @@ mod tests {
             assert!(result_json.is_err()); // That we haven't jsonified this case explicitly
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_list_non_u8_type() {
             let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
 
@@ -739,7 +743,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_record_type() {
             // Record
             let type_annotated_value = sample_record();
@@ -759,6 +763,8 @@ mod tests {
 
     #[cfg(test)]
     mod with_accept_headers {
+        use test_r::test;
+
         use super::*;
         use golem_wasm_ast::analysis::analysed_type::{u16, u8};
 
@@ -777,7 +783,7 @@ mod tests {
             (content_type, body)
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_string_type_with_json() {
             let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
             let (content_type, body) = get_content_type_and_body(
@@ -791,7 +797,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_string_type_without_json() {
             let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
             let (content_type, body) = get_content_type_and_body(
@@ -805,7 +811,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_string_type_with_html() {
             let type_annotated_value = TypeAnnotatedValue::Str("Hello".to_string());
             let (content_type, body) = get_content_type_and_body(
@@ -819,7 +825,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_singleton_u8_type_text() {
             let type_annotated_value = TypeAnnotatedValue::U8(10);
             let (content_type, body) = get_content_type_and_body(
@@ -833,7 +839,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_singleton_u8_type_json() {
             let type_annotated_value = TypeAnnotatedValue::U8(10);
             let (content_type, body) = get_content_type_and_body(
@@ -847,7 +853,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_singleton_u8_failed_content_mapping() {
             let type_annotated_value = TypeAnnotatedValue::U8(10);
             let result = internal::get_response_body_based_on_content_type(
@@ -861,7 +867,7 @@ mod tests {
             ));
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_list_u8_type_with_json() {
             let type_annotated_value = create_list(vec![TypeAnnotatedValue::U8(10)], &u8());
 
@@ -883,7 +889,7 @@ mod tests {
             assert!(result_json.is_err()); // That we haven't jsonified this case explicitly
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_list_non_u8_type_with_json() {
             let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
 
@@ -903,7 +909,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_list_non_u8_type_with_html_fail() {
             let type_annotated_value = create_list(vec![TypeAnnotatedValue::U16(10)], &u16());
 
@@ -918,7 +924,7 @@ mod tests {
             ));
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_record_type_json() {
             let type_annotated_value = sample_record();
             let (content_type, body) = get_content_type_and_body(
@@ -935,7 +941,7 @@ mod tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_record_type_html() {
             let type_annotated_value = sample_record();
 

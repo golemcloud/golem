@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test};
+
 use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use bytes::Bytes;
 use golem_common::model::{IdempotencyKey, TargetWorkerId};
@@ -30,6 +33,10 @@ use tokio::task::JoinHandle;
 use tonic::transport::Body;
 use tracing::{debug, instrument};
 use warp::Filter;
+
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
 
 struct TestHttpServer {
     handle: JoinHandle<()>,
@@ -121,11 +128,15 @@ impl TestHttpServer {
     }
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn jump() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn jump(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
 
@@ -176,11 +187,15 @@ async fn jump() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[instrument]
-async fn explicit_oplog_commit() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn explicit_oplog_commit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("runtime-service").await;
 
@@ -203,11 +218,15 @@ async fn explicit_oplog_commit() {
     check!(result.is_ok());
 }
 
-#[tokio::test]
+#[test]
 #[instrument]
-async fn set_retry_policy() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn set_retry_policy(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("runtime-service").await;
     let worker_id = executor
@@ -244,11 +263,15 @@ async fn set_retry_policy() {
     check!(worker_error_message(&result2.err().unwrap()).starts_with("Previous invocation failed"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn atomic_region() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn atomic_region(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
 
@@ -276,11 +299,15 @@ async fn atomic_region() {
     check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn idempotence_on() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn idempotence_on(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
@@ -312,11 +339,15 @@ async fn idempotence_on() {
     check!(events == vec!["1", "1"]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn idempotence_off() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn idempotence_off(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
@@ -349,11 +380,15 @@ async fn idempotence_off() {
     check!(result.is_err());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn persist_nothing() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn persist_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 2);
@@ -384,11 +419,15 @@ async fn persist_nothing() {
 
 // golem-rust library tests
 
-#[tokio::test]
+#[test]
 #[instrument]
-async fn golem_rust_explicit_oplog_commit() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn golem_rust_explicit_oplog_commit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("golem-rust-tests").await;
 
@@ -411,11 +450,15 @@ async fn golem_rust_explicit_oplog_commit() {
     check!(result.is_ok());
 }
 
-#[tokio::test]
+#[test]
 #[instrument]
-async fn golem_rust_set_retry_policy() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn golem_rust_set_retry_policy(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("golem-rust-tests").await;
     let worker_id = executor
@@ -452,11 +495,15 @@ async fn golem_rust_set_retry_policy() {
     check!(worker_error_message(&result2.err().unwrap()).starts_with("Previous invocation failed"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn golem_rust_atomic_region() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn golem_rust_atomic_region(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
 
@@ -484,11 +531,15 @@ async fn golem_rust_atomic_region() {
     check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn golem_rust_idempotence_on() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn golem_rust_idempotence_on(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
@@ -525,11 +576,15 @@ async fn golem_rust_idempotence_on() {
     check!(events == vec!["1", "1"]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn golem_rust_idempotence_off() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn golem_rust_idempotence_off(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 1);
@@ -567,11 +622,15 @@ async fn golem_rust_idempotence_off() {
     check!(result.is_err());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn golem_rust_persist_nothing() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn golem_rust_persist_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port, 2);
@@ -605,11 +664,15 @@ async fn golem_rust_persist_nothing() {
     check!(result.is_ok());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn golem_rust_fallible_transaction() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn golem_rust_fallible_transaction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start_custom(
@@ -663,11 +726,15 @@ async fn golem_rust_fallible_transaction() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn golem_rust_infallible_transaction() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn golem_rust_infallible_transaction(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start_custom(
@@ -722,11 +789,15 @@ async fn golem_rust_infallible_transaction() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn idempotency_keys_in_ephemeral_workers() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn idempotency_keys_in_ephemeral_workers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_ephemeral_component("runtime-service").await;
 

@@ -12,19 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test};
+
 use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
 use chrono::Datelike;
 use golem_test_framework::dsl::{events_to_lines, log_event_to_string, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn javascript_example_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn javascript_example_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("js-1").await;
     let worker_id = executor.start_worker(&component_id, "js-1").await;
@@ -79,11 +91,15 @@ async fn javascript_example_1() {
     check!(parts[2] == "component!");
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn javascript_example_2() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn javascript_example_2(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("js-2").await;
     let worker_id = executor.start_worker(&component_id, "js-2").await;
@@ -108,11 +124,15 @@ async fn javascript_example_2() {
     check!(result == vec![Value::U64(11)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn csharp_example_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn csharp_example_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("csharp-1").await;
     let mut env = HashMap::new();

@@ -21,6 +21,10 @@ use golem_worker_service::service::Services;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use golem_worker_service_base::metrics;
 
+#[cfg(test)]
+test_r::enable!();
+
+#[cfg(not(test))]
 fn main() -> std::io::Result<()> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()

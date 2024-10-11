@@ -1,4 +1,7 @@
+use test_r::{inherit_test_dep, test};
+
 use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use anyhow::anyhow;
 use golem_common::model::ComponentType;
 use golem_test_framework::config::TestDependencies;
@@ -12,15 +15,24 @@ use rand::thread_rng;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::Path;
+use std::sync::Arc;
 use sysinfo::{Pid, System};
 use tracing::{error, info};
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[ignore]
-async fn measure() {
+async fn measure(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
     let mut system = System::new_all();
-    let ctx = TestContext::new();
-    let executor = start(&ctx).await.unwrap();
+    let ctx = TestContext::new(last_unique_id);
+    let executor = start(deps, &ctx).await.unwrap();
 
     // collect
     let mut paths = Vec::new();
