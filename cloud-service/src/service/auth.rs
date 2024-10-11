@@ -6,7 +6,7 @@ use crate::auth::AccountAuthorisation;
 use crate::service::account_grant::{AccountGrantService, AccountGrantServiceError};
 use crate::service::token::{TokenService, TokenServiceError};
 use cloud_common::model::Role;
-use cloud_common::SafeDisplay;
+use golem_common::SafeDisplay;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthServiceError {

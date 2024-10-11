@@ -7,13 +7,13 @@ use crate::repo::account::AccountRepo;
 use crate::repo::project::ProjectRepo;
 use crate::repo::project_grant::{ProjectGrantRecord, ProjectGrantRepo};
 use crate::repo::project_policy::ProjectPolicyRepo;
-use crate::repo::RepoError;
 use async_trait::async_trait;
 use cloud_common::model::Role;
 use cloud_common::model::{ProjectAction, ProjectGrantId, ProjectPolicyId};
-use cloud_common::SafeDisplay;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use tracing::info;
 use uuid::Uuid;
 

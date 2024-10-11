@@ -5,12 +5,12 @@ use crate::auth::AccountAuthorisation;
 use async_trait::async_trait;
 use cloud_common::model::{ProjectAction, ProjectActions, Role};
 use cloud_common::model::{ProjectAuthorisedActions, ProjectPolicyId};
-use cloud_common::SafeDisplay;
 use golem_common::model::{AccountId, ProjectId};
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use tracing::info;
 
 use crate::repo::project::ProjectRepo;
-use crate::repo::RepoError;
 use crate::service::project_grant::{ProjectGrantError, ProjectGrantService};
 use crate::service::project_policy::{ProjectPolicyError, ProjectPolicyService};
 

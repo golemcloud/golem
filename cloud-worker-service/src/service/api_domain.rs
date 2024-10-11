@@ -17,10 +17,10 @@ use chrono::Utc;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::model::ProjectAction;
-use cloud_common::SafeDisplay;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
-use golem_worker_service_base::repo::RepoError;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use rusoto_route53::{
     AliasTarget, Change, ChangeBatch, ChangeResourceRecordSetsRequest, CreateHostedZoneRequest,
     DeleteHostedZoneRequest, GetHostedZoneRequest, ListHostedZonesRequest, ResourceRecordSet,
@@ -58,7 +58,7 @@ impl SafeDisplay for ApiDomainServiceError {
             ApiDomainServiceError::NotFound(_) => self.to_string(),
             ApiDomainServiceError::AlreadyExists(_) => self.to_string(),
             ApiDomainServiceError::InternalAuthClientError(_) => self.to_string(),
-            ApiDomainServiceError::InternalRepoError(_) => "Internal repository error".to_string(), // TODO: inner.to_safe_string(),
+            ApiDomainServiceError::InternalRepoError(inner) => inner.to_safe_string(),
             ApiDomainServiceError::InternalAWSError { context, .. } => context.clone(),
             ApiDomainServiceError::InternalConversionError(_) => self.to_string(),
         }

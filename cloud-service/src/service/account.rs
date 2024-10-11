@@ -1,13 +1,13 @@
 use crate::auth::AccountAuthorisation;
 use crate::model::{Account, AccountData, Plan};
 use crate::repo::account::{AccountRecord, AccountRepo};
-use crate::repo::RepoError;
 use crate::service::plan::{PlanError, PlanService};
 use async_trait::async_trait;
 use cloud_common::model::PlanId;
 use cloud_common::model::Role;
-use cloud_common::SafeDisplay;
 use golem_common::model::AccountId;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{error, info};

@@ -16,12 +16,12 @@ use cloud_api_grpc::proto::golem::cloud::token::v1::{
 use cloud_api_grpc::proto::golem::cloud::token::{Token, UnsafeToken};
 use cloud_common::grpc::proto_token_id_string;
 use cloud_common::model::TokenId;
-use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_common::grpc::proto_account_id_string;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::AccountId;
 use golem_common::recorded_grpc_api_request;
+use golem_common::SafeDisplay;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;

@@ -1,6 +1,6 @@
 use crate::model::{ExternalLogin, OAuth2Provider};
 use async_trait::async_trait;
-use cloud_common::SafeDisplay;
+use golem_common::SafeDisplay;
 use std::fmt::Debug;
 
 #[async_trait]

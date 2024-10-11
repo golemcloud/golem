@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::AccountId;
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
 
 use crate::model::AccountSummary;
-use crate::repo::RepoError;
 
 #[async_trait]
 pub trait AccountSummaryRepo {

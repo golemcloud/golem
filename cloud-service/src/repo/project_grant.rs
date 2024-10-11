@@ -6,11 +6,11 @@ use async_trait::async_trait;
 use cloud_common::model::{ProjectGrantId, ProjectPolicyId};
 use conditional_trait_gen::trait_gen;
 use golem_common::model::ProjectId;
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
 use uuid::Uuid;
 
 use crate::model::{ProjectGrant, ProjectGrantData};
-use crate::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ProjectGrantRecord {

@@ -20,7 +20,7 @@ use golem_worker_executor_base::model::{
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
-use golem_worker_executor_base::services::component::ComponentMetadata;
+use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
@@ -399,6 +399,7 @@ impl WorkerCtx for Context {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -419,6 +420,7 @@ impl WorkerCtx for Context {
             scheduler_service,
             rpc,
             worker_proxy,
+            component_service,
             config.clone(),
             worker_config.clone(),
             execution_status,

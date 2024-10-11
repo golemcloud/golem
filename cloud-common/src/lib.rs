@@ -13,9 +13,3 @@ impl UriBackConversion for http::Uri {
         self.to_string().parse().unwrap()
     }
 }
-
-/// Trait to convert a value to a string which is safe to return through a public API.
-// TODO: move to golem-common
-pub trait SafeDisplay {
-    fn to_safe_string(&self) -> String;
-}

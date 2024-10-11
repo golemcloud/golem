@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use cloud_common::model::TokenId;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::AccountId;
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
 use uuid::Uuid;
 
 use crate::model::{OAuth2Provider, OAuth2Token};
-use crate::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct OAuth2TokenRecord {

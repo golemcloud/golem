@@ -9,10 +9,10 @@ use cloud_api_grpc::proto::golem::cloud::accountsummary::v1::{
     AccountSummaryError, GetAccountCountRequest, GetAccountCountResponse, GetAccountsRequest,
     GetAccountsResponse, GetAccountsSuccessResponse,
 };
-use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_grpc_api_request;
+use golem_common::SafeDisplay;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;

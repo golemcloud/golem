@@ -3,10 +3,10 @@ use std::sync::Arc;
 use crate::auth::AccountAuthorisation;
 use crate::model::AccountSummary;
 use crate::repo::account_summary::AccountSummaryRepo;
-use crate::repo::RepoError;
 use async_trait::async_trait;
 use cloud_common::model::Role;
-use cloud_common::SafeDisplay;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use tracing::error;
 
 #[derive(Debug, thiserror::Error)]

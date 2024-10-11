@@ -6,12 +6,12 @@ use crate::model::{OAuth2Provider, OAuth2Token};
 use crate::repo::account::AccountRepo;
 use crate::repo::oauth2_token::{OAuth2TokenRecord, OAuth2TokenRepo};
 use crate::repo::token::TokenRepo;
-use crate::repo::RepoError;
 use async_trait::async_trait;
 use cloud_common::model::Role;
 use cloud_common::model::TokenId;
-use cloud_common::SafeDisplay;
 use golem_common::model::AccountId;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use tracing::info;
 
 #[derive(Debug, thiserror::Error)]

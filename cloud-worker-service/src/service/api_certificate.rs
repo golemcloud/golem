@@ -11,13 +11,13 @@ use chrono::Utc;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::model::ProjectAction;
-use cloud_common::SafeDisplay;
 use derive_more::Display;
 use golem_common::config::RetryConfig;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
 use golem_common::retries::with_retries;
-use golem_worker_service_base::repo::RepoError;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use rusoto_acm::{
     Acm, AcmClient, DeleteCertificateError, DeleteCertificateRequest, DescribeCertificateRequest,
     ImportCertificateRequest, ListTagsForCertificateRequest, Tag,
@@ -63,9 +63,7 @@ impl SafeDisplay for CertificateServiceError {
             CertificateServiceError::CertificateNotAvailable(_) => self.to_string(),
             CertificateServiceError::InternalCertificateManagerError(_) => self.to_string(),
             CertificateServiceError::InternalAuthClientError(_) => self.to_string(),
-            CertificateServiceError::InternalRepoError(_) => {
-                "Internal repository error".to_string()
-            } // TODO: add SafeDisplay to RepoError
+            CertificateServiceError::InternalRepoError(inner) => inner.to_safe_string(),
             InternalConversionError(_) => self.to_string(),
         }
     }

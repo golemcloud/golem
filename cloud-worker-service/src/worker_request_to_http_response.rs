@@ -63,7 +63,7 @@ async fn execute(
     };
     let type_annotated_value = default_executor
         .worker_service
-        .invoke_and_await_function_json(
+        .validate_and_invoke_and_await_typed(
             &worker_id.into_target_worker_id(),
             worker_request_params.idempotency_key,
             worker_request_params.function_name.to_string(),

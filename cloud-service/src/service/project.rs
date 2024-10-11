@@ -1,14 +1,14 @@
 use crate::auth::AccountAuthorisation;
 use crate::model::{Project, ProjectData, ProjectType};
 use crate::repo::project::{ProjectRecord, ProjectRepo};
-use crate::repo::RepoError;
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisationService};
 use async_trait::async_trait;
 use cloud_common::model::Role;
-use cloud_common::SafeDisplay;
 use golem_common::model::AccountId;
 use golem_common::model::ProjectId;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use std::fmt::Display;
 use std::sync::Arc;
 use tracing::info;

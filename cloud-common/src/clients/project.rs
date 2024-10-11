@@ -3,7 +3,7 @@ use std::fmt::Display;
 use crate::clients::auth::authorised_request;
 use crate::config::RemoteCloudServiceConfig;
 use crate::model::{ProjectAuthorisedActions, ProjectView, TokenSecret};
-use crate::{SafeDisplay, UriBackConversion};
+use crate::UriBackConversion;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use cloud_api_grpc::proto::golem::cloud::project::v1::project_error::Error;
@@ -15,6 +15,8 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::model::ProjectId;
 use golem_common::retries::with_retries;
+use golem_common::SafeDisplay;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
 
@@ -45,7 +47,11 @@ impl ProjectServiceDefault {
     pub fn new(config: &RemoteCloudServiceConfig) -> Self {
         let project_service_client: GrpcClient<CloudProjectServiceClient<Channel>> =
             GrpcClient::new(
-                CloudProjectServiceClient::new,
+                |channel| {
+                    CloudProjectServiceClient::new(channel)
+                        .send_compressed(CompressionEncoding::Gzip)
+                        .accept_compressed(CompressionEncoding::Gzip)
+                },
                 config.uri().as_http_02(),
                 GrpcClientConfig {
                     retries_on_unavailable: config.retries.clone(),

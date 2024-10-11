@@ -23,6 +23,7 @@ use golem_worker_executor_base::model::CurrentResourceLimits;
 use http::Uri;
 use prost::Message;
 use tokio::task::JoinHandle;
+use tonic::codec::CompressionEncoding;
 use tonic::Request;
 use tracing::error;
 use uuid::Uuid;
@@ -87,8 +88,10 @@ impl ResourceLimitsGrpc {
             &(self.endpoint.clone(), self.access_token, body),
             |(endpoint, access_token, body)| {
                 Box::pin(async move {
-                    let mut client =
-                        CloudLimitsServiceClient::connect(endpoint.as_http_02()).await?;
+                    let mut client = CloudLimitsServiceClient::connect(endpoint.as_http_02())
+                        .await?
+                        .send_compressed(CompressionEncoding::Gzip)
+                        .accept_compressed(CompressionEncoding::Gzip);
                     let request = authorised_request(
                         BatchUpdateResourceLimitsRequest {
                             resource_limits: Some(body.clone()),
@@ -129,7 +132,10 @@ impl ResourceLimitsGrpc {
             &(self.endpoint.clone(), self.access_token, account_id.clone()),
             |(url, access_token, account_id)| {
                 Box::pin(async move {
-                    let mut client = CloudLimitsServiceClient::connect(url.as_http_02()).await?;
+                    let mut client = CloudLimitsServiceClient::connect(url.as_http_02())
+                        .await?
+                        .send_compressed(CompressionEncoding::Gzip)
+                        .accept_compressed(CompressionEncoding::Gzip);
                     let request = authorised_request(
                         GetResourceLimitsRequest {
                             account_id: Some(account_id.clone().into()),

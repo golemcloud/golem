@@ -7,7 +7,7 @@ use crate::service::api_domain::RegisterDomainRoute;
 use crate::service::auth::AuthService;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace, GolemSecurityScheme};
 use golem_common::model::ProjectId;
-use golem_common::recorded_http_api_request;
+use golem_common::{recorded_http_api_request, safe};
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSiteString};
 use golem_worker_service_base::service::api_definition::ApiDefinitionIdWithVersion;
 use poem_openapi::param::{Path, Query};
@@ -98,7 +98,9 @@ impl ApiDeploymentApi {
 
             let deployment = data
                 .map(|d| d.into())
-                .ok_or(ApiEndpointError::not_found("API Deployment not found"))?;
+                .ok_or(ApiEndpointError::not_found(safe(
+                    "API Deployment not found".to_string(),
+                )))?;
 
             Ok(Json(deployment))
         };
@@ -170,7 +172,9 @@ impl ApiDeploymentApi {
                 .get_by_site(&ApiSiteString(site.clone()))
                 .instrument(record.span.clone())
                 .await?
-                .ok_or(ApiEndpointError::not_found("API deployment not found"))?;
+                .ok_or(ApiEndpointError::not_found(safe(
+                    "API deployment not found".to_string(),
+                )))?;
 
             let project_id = &api_deployment.namespace.project_id;
 
@@ -206,7 +210,9 @@ impl ApiDeploymentApi {
                 .get_by_site(&ApiSiteString(site.clone()))
                 .instrument(record.span.clone())
                 .await?
-                .ok_or(ApiEndpointError::not_found("API deployment not found"))?;
+                .ok_or(ApiEndpointError::not_found(safe(
+                    "API deployment not found".to_string(),
+                )))?;
 
             let project_id = &api_deployment.namespace.project_id;
 

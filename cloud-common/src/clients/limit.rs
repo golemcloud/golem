@@ -1,6 +1,6 @@
 use crate::clients::auth::authorised_request;
 use crate::config::RemoteCloudServiceConfig;
-use crate::{SafeDisplay, UriBackConversion};
+use crate::UriBackConversion;
 use async_trait::async_trait;
 use cloud_api_grpc::proto::golem::cloud::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
 use cloud_api_grpc::proto::golem::cloud::limit::v1::limits_error::Error;
@@ -13,7 +13,9 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::model::{AccountId, ComponentId, WorkerId};
 use golem_common::retries::with_retries;
+use golem_common::SafeDisplay;
 use std::fmt::Display;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tonic::Status;
 use tracing::info;
@@ -58,7 +60,11 @@ pub struct LimitServiceDefault {
 impl LimitServiceDefault {
     pub fn new(config: &RemoteCloudServiceConfig) -> Self {
         let limit_service_client: GrpcClient<CloudLimitsServiceClient<Channel>> = GrpcClient::new(
-            CloudLimitsServiceClient::new,
+            |channel| {
+                CloudLimitsServiceClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
             config.uri().as_http_02(),
             GrpcClientConfig {
                 retries_on_unavailable: config.retries.clone(),

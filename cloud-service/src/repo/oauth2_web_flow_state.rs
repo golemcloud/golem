@@ -2,10 +2,11 @@ use std::{ops::Deref, sync::Arc};
 
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
 use uuid::Uuid;
 
-use super::{token::TokenRecord, RepoError};
+use super::token::TokenRecord;
 
 #[derive(Debug, Clone)]
 pub enum LinkedTokenState {

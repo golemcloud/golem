@@ -49,6 +49,7 @@ use golem_worker_service_base::service::http::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
 use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
+use tonic::codec::CompressionEncoding;
 use tracing::{error, info};
 
 pub mod api_certificate;
@@ -278,7 +279,11 @@ impl ApiServices {
         );
 
         let worker_executor_clients = MultiTargetGrpcClient::new(
-            WorkerExecutorClient::new,
+            |channel| {
+                WorkerExecutorClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
             GrpcClientConfig {
                 // TODO
                 retries_on_unavailable: RetryConfig {

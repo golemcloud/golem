@@ -1,6 +1,7 @@
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;
 use std::net::SocketAddr;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::{Error, Server};
 
 use crate::grpcapi::component::ComponentGrpcApi;
@@ -23,9 +24,11 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
     Server::builder()
         .add_service(reflection_service)
         .add_service(health_service)
-        .add_service(ComponentServiceServer::new(ComponentGrpcApi::new(
-            services.component_service.clone(),
-        )))
+        .add_service(
+            ComponentServiceServer::new(ComponentGrpcApi::new(services.component_service.clone()))
+                .send_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Gzip),
+        )
         .serve(addr)
         .await
 }

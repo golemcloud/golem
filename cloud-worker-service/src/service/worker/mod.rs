@@ -4,15 +4,16 @@ use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::clients::limit::{LimitError, LimitService};
 use cloud_common::model::ProjectAction;
-use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::worker::{
-    IdempotencyKey as ProtoIdempotencyKey, InvocationContext, InvokeResult as ProtoInvokeResult,
-    UpdateMode,
+    InvocationContext, InvokeResult as ProtoInvokeResult, UpdateMode,
 };
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, ProjectId, ScanCursor,
     TargetWorkerId, WorkerFilter, WorkerId,
 };
+use golem_common::SafeDisplay;
 use golem_service_base::model::*;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
@@ -69,9 +70,9 @@ impl From<LimitError> for WorkerError {
         match error {
             LimitError::Unauthorized(message) => WorkerError::Unauthorized(message),
             LimitError::LimitExceeded(message) => WorkerError::Forbidden(message),
-            LimitError::InternalClientError(message) => WorkerError::Base(
-                BaseWorkerServiceError::Internal(anyhow::Error::msg(message)),
-            ),
+            LimitError::InternalClientError(message) => {
+                WorkerError::Base(BaseWorkerServiceError::Internal(message))
+            }
         }
     }
 }
@@ -94,7 +95,14 @@ pub trait WorkerService {
 
     async fn delete(&self, worker_id: &WorkerId, auth: &CloudAuthCtx) -> Result<(), WorkerError>;
 
-    async fn invoke_and_await_function_json(
+    fn validate_typed_parameters(
+        &self,
+        params: Vec<TypeAnnotatedValue>,
+    ) -> Result<Vec<ProtoVal>, WorkerError>;
+
+    /// Validates the provided list of `TypeAnnotatedValue` parameters, and then
+    /// invokes the worker and waits its results, returning it as a `TypeAnnotatedValue`.
+    async fn validate_and_invoke_and_await_typed(
         &self,
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
@@ -102,19 +110,46 @@ pub trait WorkerService {
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
-    ) -> Result<TypeAnnotatedValue, WorkerError>;
+    ) -> Result<TypeAnnotatedValue, WorkerError> {
+        let params = self.validate_typed_parameters(params)?;
+        self.invoke_and_await_typed(
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+            invocation_context,
+            auth,
+        )
+        .await
+    }
 
-    async fn invoke_and_await_function_proto(
+    /// Invokes a worker using raw `Val` parameter values and awaits its results returning
+    /// it as a `TypeAnnotatedValue`.
+    async fn invoke_and_await_typed(
         &self,
         worker_id: &TargetWorkerId,
-        idempotency_key: Option<ProtoIdempotencyKey>,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<ProtoVal>,
+        invocation_context: Option<InvocationContext>,
+        auth: &CloudAuthCtx,
+    ) -> Result<TypeAnnotatedValue, WorkerError>;
+
+    /// Invokes a worker using raw `Val` parameter values and awaits its results returning
+    /// a `Val` values (without type information)
+    async fn invoke_and_await(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<ProtoInvokeResult, WorkerError>;
 
-    async fn invoke_function_json(
+    /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
+    /// an invocation for the worker without awaiting its results.
+    async fn validate_and_invoke(
         &self,
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
@@ -122,12 +157,25 @@ pub trait WorkerService {
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
-    ) -> Result<(), WorkerError>;
+    ) -> Result<(), WorkerError> {
+        let params = self.validate_typed_parameters(params)?;
+        self.invoke(
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+            invocation_context,
+            auth,
+        )
+        .await
+    }
 
-    async fn invoke_function_proto(
+    /// Enqueues an invocation for the worker without awaiting its results, using raw `Val`
+    /// parameters.
+    async fn invoke(
         &self,
         worker_id: &TargetWorkerId,
-        idempotency_key: Option<ProtoIdempotencyKey>,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
@@ -180,6 +228,15 @@ pub trait WorkerService {
         worker_id: &WorkerId,
         auth_ctx: &CloudAuthCtx,
     ) -> Result<Component, WorkerError>;
+
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from_oplog_index: OplogIndex,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        auth_ctx: &CloudAuthCtx,
+    ) -> Result<GetOplogResponse, WorkerError>;
 }
 
 #[derive(Clone)]
@@ -308,12 +365,20 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    async fn invoke_and_await_function_json(
+    fn validate_typed_parameters(
+        &self,
+        params: Vec<TypeAnnotatedValue>,
+    ) -> Result<Vec<ProtoVal>, WorkerError> {
+        let result = self.base_worker_service.validate_typed_parameters(params)?;
+        Ok(result)
+    }
+
+    async fn invoke_and_await_typed(
         &self,
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<TypeAnnotatedValue>,
+        params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<TypeAnnotatedValue, WorkerError> {
@@ -321,9 +386,9 @@ impl WorkerService for WorkerServiceDefault {
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
-        let value = self
+        let result = self
             .base_worker_service
-            .invoke_and_await_function_json(
+            .invoke_and_await_typed(
                 worker_id,
                 idempotency_key,
                 function_name,
@@ -333,13 +398,13 @@ impl WorkerService for WorkerServiceDefault {
             )
             .await?;
 
-        Ok(value)
+        Ok(result)
     }
 
-    async fn invoke_and_await_function_proto(
+    async fn invoke_and_await(
         &self,
         worker_id: &TargetWorkerId,
-        idempotency_key: Option<ProtoIdempotencyKey>,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
@@ -349,9 +414,9 @@ impl WorkerService for WorkerServiceDefault {
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
 
-        let value = self
+        let result = self
             .base_worker_service
-            .invoke_and_await_function_proto(
+            .invoke_and_await(
                 worker_id,
                 idempotency_key,
                 function_name,
@@ -361,57 +426,30 @@ impl WorkerService for WorkerServiceDefault {
             )
             .await?;
 
-        Ok(value)
+        Ok(result)
     }
 
-    async fn invoke_function_json(
+    async fn invoke(
         &self,
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<TypeAnnotatedValue>,
+        params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         auth: &CloudAuthCtx,
     ) -> Result<(), WorkerError> {
         let worker_namespace = self
             .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
             .await?;
-        let _ = self
-            .base_worker_service
-            .invoke_function_json(
+
+        self.base_worker_service
+            .invoke(
                 worker_id,
                 idempotency_key,
                 function_name,
                 params,
                 invocation_context,
                 worker_namespace.as_worker_request_metadata(),
-            )
-            .await?;
-
-        Ok(())
-    }
-
-    async fn invoke_function_proto(
-        &self,
-        worker_id: &TargetWorkerId,
-        idempotency_key: Option<ProtoIdempotencyKey>,
-        function_name: String,
-        params: Vec<ProtoVal>,
-        invocation_context: Option<InvocationContext>,
-        auth: &CloudAuthCtx,
-    ) -> Result<(), WorkerError> {
-        let namespace = self
-            .authorize(&worker_id.component_id, &ProjectAction::CreateWorker, auth)
-            .await?;
-        let _ = self
-            .base_worker_service
-            .invoke_function_proto(
-                worker_id,
-                idempotency_key,
-                function_name,
-                params,
-                invocation_context,
-                namespace.as_worker_request_metadata(),
             )
             .await?;
 
@@ -584,6 +622,37 @@ impl WorkerService for WorkerServiceDefault {
             .await?;
 
         Ok(component)
+    }
+
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from_oplog_index: OplogIndex,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        auth_ctx: &CloudAuthCtx,
+    ) -> Result<GetOplogResponse, WorkerError> {
+        let worker_namespace = self
+            .authorize(
+                &worker_id.component_id,
+                &ProjectAction::ViewWorker,
+                auth_ctx,
+            )
+            .await?;
+
+        let response = self
+            .base_worker_service
+            .get_oplog(
+                worker_id,
+                from_oplog_index,
+                cursor,
+                count,
+                worker_namespace.as_worker_request_metadata(),
+                auth_ctx,
+            )
+            .await?;
+
+        Ok(response)
     }
 }
 

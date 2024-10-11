@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use cloud_common::auth::CloudNamespace;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::AccountId;
-use golem_worker_service_base::repo::RepoError;
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
 use std::ops::Deref;
 use std::sync::Arc;

@@ -5,11 +5,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use cloud_common::model::PlanId;
 use conditional_trait_gen::trait_gen;
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
 use uuid::Uuid;
 
 use crate::model::{Plan, PlanData};
-use crate::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct PlanRecord {

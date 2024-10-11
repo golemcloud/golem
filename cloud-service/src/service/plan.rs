@@ -1,10 +1,10 @@
 use crate::config::PlansConfig;
 use crate::model::Plan;
 use crate::repo::plan::{PlanRecord, PlanRepo};
-use crate::repo::RepoError;
 use async_trait::async_trait;
 use cloud_common::model::PlanId;
-use cloud_common::SafeDisplay;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::info;

@@ -5,10 +5,12 @@ use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use cloud_common::clients::auth::AuthServiceError;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
     ComponentId, IdempotencyKey, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
 };
-use golem_common::recorded_http_api_request;
+use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::model::*;
 use golem_worker_service_base::service::component::{ComponentService, ComponentServiceError};
 use poem_openapi::param::{Header, Path, Query};
@@ -109,6 +111,20 @@ impl From<ComponentServiceError> for WorkerError {
             ComponentServiceError::NotFound(error) => {
                 WorkerError::NotFound(Json(ErrorBody { error }))
             }
+            ComponentServiceError::FailedGrpcStatus(_) => {
+                WorkerError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown {
+                        details: value.to_safe_string(),
+                    }),
+                }))
+            }
+            ComponentServiceError::FailedTransport(_) => {
+                WorkerError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown {
+                        details: value.to_safe_string(),
+                    }),
+                }))
+            }
         }
     }
 }
@@ -118,12 +134,12 @@ impl From<WorkerServiceError> for WorkerError {
         use golem_worker_service_base::service::worker::WorkerServiceError as BaseServiceError;
 
         match value {
-            WorkerServiceError::Forbidden(error) => {
-                WorkerError::LimitExceeded(Json(ErrorBody { error }))
-            }
-            WorkerServiceError::Unauthorized(error) => {
-                WorkerError::Unauthorized(Json(ErrorBody { error }))
-            }
+            WorkerServiceError::Forbidden(error) => WorkerError::LimitExceeded(Json(ErrorBody {
+                error: error.clone(),
+            })),
+            WorkerServiceError::Unauthorized(error) => WorkerError::Unauthorized(Json(ErrorBody {
+                error: error.clone(),
+            })),
             WorkerServiceError::ProjectNotFound(_) => WorkerError::NotFound(Json(ErrorBody {
                 error: value.to_string(),
             })),
@@ -134,7 +150,7 @@ impl From<WorkerServiceError> for WorkerError {
                 | BaseServiceError::WorkerNotFound(_) => WorkerError::NotFound(Json(ErrorBody {
                     error: error.to_string(),
                 })),
-                BaseServiceError::TypeChecker(error) => WorkerError::bad_request(error),
+                BaseServiceError::TypeChecker(error) => WorkerError::bad_request(error.clone()),
                 BaseServiceError::Component(error) => error.into(),
                 BaseServiceError::Internal(error) => {
                     WorkerError::InternalError(Json(GolemErrorBody {
@@ -144,13 +160,22 @@ impl From<WorkerServiceError> for WorkerError {
                     }))
                 }
                 BaseServiceError::Golem(golem_error) => {
-                    WorkerError::InternalError(Json(GolemErrorBody { golem_error }))
+                    WorkerError::InternalError(Json(GolemErrorBody {
+                        golem_error: golem_error.clone(),
+                    }))
+                }
+                BaseServiceError::InternalCallError(inner) => {
+                    WorkerError::InternalError(Json(GolemErrorBody {
+                        golem_error: GolemError::Unknown(GolemErrorUnknown {
+                            details: inner.to_safe_string(),
+                        }),
+                    }))
                 }
             },
             WorkerServiceError::InternalAuthServiceError(_) => {
                 WorkerError::InternalError(Json(GolemErrorBody {
                     golem_error: GolemError::Unknown(GolemErrorUnknown {
-                        details: value.to_string(),
+                        details: value.to_safe_string(),
                     }),
                 }))
             }
@@ -291,7 +316,7 @@ impl WorkerApi {
         record.result(response)
     }
 
-    /// Invoke a function and await it's resolution
+    /// Invoke a function and await its resolution
     ///
     /// Supply the parameters in the request body as JSON.
     #[oai(
@@ -319,7 +344,7 @@ impl WorkerApi {
         );
         let response = self
             .worker_service
-            .invoke_and_await_function_json(
+            .validate_and_invoke_and_await_typed(
                 &worker_id.into_target_worker_id(),
                 idempotency_key.0,
                 function.0,
@@ -335,7 +360,7 @@ impl WorkerApi {
         record.result(response)
     }
 
-    /// Invoke a function and await it's resolution on a new worker with a random generated name
+    /// Invoke a function and await its resolution on a new worker with a random generated name
     ///
     /// Ideal for invoking ephemeral components, but works with durable ones as well.
     /// Supply the parameters in the request body as JSON.
@@ -363,7 +388,7 @@ impl WorkerApi {
         );
         let response = self
             .worker_service
-            .invoke_and_await_function_json(
+            .validate_and_invoke_and_await_typed(
                 &target_worker_id,
                 idempotency_key.0,
                 function.0,
@@ -409,7 +434,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .invoke_function_json(
+            .validate_and_invoke(
                 &worker_id.into_target_worker_id(),
                 idempotency_key.0,
                 function.0,
@@ -455,7 +480,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .invoke_function_json(
+            .validate_and_invoke(
                 &target_worker_id,
                 idempotency_key.0,
                 function.0,
@@ -475,7 +500,7 @@ impl WorkerApi {
     ///
     /// Completes a promise with a given custom array of bytes.
     /// The promise must be previously created from within the worker, and it's identifier (a combination of a worker identifier and an oplogIdx ) must be sent out to an external caller so it can use this endpoint to mark the promise completed.
-    /// The data field is sent back to the worker and it has no predefined meaning.
+    /// The data field is sent back to the worker, and it has no predefined meaning.
     #[oai(
         path = "/:component_id/workers/:worker_name/complete",
         method = "post",
@@ -786,6 +811,43 @@ impl WorkerApi {
             .await
             .map_err(|e| e.into())
             .map(|_| Json(UpdateWorkerResponse {}));
+
+        record.result(response)
+    }
+
+    /// Get the oplog of a worker
+    #[oai(
+        path = "/:component_id/workers/:worker_name/oplog",
+        method = "get",
+        operation_id = "get_oplog"
+    )]
+    async fn get_oplog(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        from: Query<u64>,
+        count: Query<u64>,
+        cursor: Query<Option<OplogCursor>>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<GetOplogResponse>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_oplog(
+                &worker_id,
+                OplogIndex::from_u64(from.0),
+                cursor.0,
+                count.0,
+                &auth,
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
 
         record.result(response)
     }

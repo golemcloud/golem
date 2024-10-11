@@ -4,9 +4,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::AccountId;
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool};
-
-use super::RepoError;
 
 #[async_trait]
 pub trait AccountUsedStorageRepo {

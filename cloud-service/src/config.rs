@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use cloud_common::model::PlanId;
 use cloud_common::model::Role;
@@ -167,23 +166,6 @@ pub struct AccountConfig {
     pub email: String,
     pub token: Uuid,
     pub role: Role,
-}
-
-// TODO: move to the base library
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkerExecutorClientCacheConfig {
-    pub max_capacity: usize,
-    #[serde(with = "humantime_serde")]
-    pub time_to_idle: Duration,
-}
-
-impl Default for WorkerExecutorClientCacheConfig {
-    fn default() -> Self {
-        Self {
-            max_capacity: 1000,
-            time_to_idle: Duration::from_secs(60 * 60 * 4),
-        }
-    }
 }
 
 pub fn make_config_loader() -> ConfigLoader<CloudServiceConfig> {

@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use crate::model::ProjectPolicy;
 use crate::repo::project_policy::{ProjectPolicyRecord, ProjectPolicyRepo};
-use crate::repo::RepoError;
 use async_trait::async_trait;
 use cloud_common::model::ProjectPolicyId;
-use cloud_common::SafeDisplay;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 use tracing::info;
 use uuid::Uuid;
 

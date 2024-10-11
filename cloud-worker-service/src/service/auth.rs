@@ -17,6 +17,7 @@ use golem_worker_service_base::service::component::ComponentServiceError;
 use golem_worker_service_base::service::with_metadata;
 use std::sync::Arc;
 use std::time::Duration;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::error;
 
@@ -45,7 +46,11 @@ impl CloudAuthService {
         let common_auth = cloud_common::clients::auth::CloudAuthService::new(project_service);
 
         let component_service_client = GrpcClient::new(
-            ComponentServiceClient::new,
+            |channel| {
+                ComponentServiceClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
             component_service_config.uri().as_http_02(),
             GrpcClientConfig {
                 retries_on_unavailable: component_service_config.retries.clone(),
@@ -106,7 +111,9 @@ impl CloudAuthService {
                                     .into_inner();
 
                                 match response.result {
-                                    None => Err(ComponentServiceError::internal("Empty response")),
+                                    None => Err(ComponentServiceError::Internal(
+                                        "Empty response".to_string(),
+                                    )),
                                     Some(get_component_metadata_response::Result::Success(
                                         response,
                                     )) => response
@@ -114,7 +121,9 @@ impl CloudAuthService {
                                         .and_then(|c| c.project_id)
                                         .and_then(|id| id.try_into().ok())
                                         .ok_or_else(|| {
-                                            ComponentServiceError::internal("Empty project id")
+                                            ComponentServiceError::Internal(
+                                                "Empty project id".to_string(),
+                                            )
                                         }),
                                     Some(get_component_metadata_response::Result::Error(error)) => {
                                         Err(error.into())
@@ -166,10 +175,10 @@ impl AuthService for CloudAuthService {
 }
 
 fn is_retriable(error: &ComponentServiceError) -> bool {
-    match error {
-        ComponentServiceError::Internal(error) => error.is::<tonic::Status>(),
-        _ => false,
-    }
+    matches!(
+        error,
+        ComponentServiceError::FailedGrpcStatus(_) | ComponentServiceError::FailedTransport(_)
+    )
 }
 
 #[cfg(test)]

@@ -6,14 +6,14 @@ use cloud_api_grpc::proto::golem::cloud::project::v1::project_error::Error;
 use cloud_common::auth::CloudNamespace;
 use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::clients::project::ProjectError;
-use cloud_common::SafeDisplay;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::SafeDisplay;
 use golem_service_base::model::ErrorBody;
 use golem_worker_service_base::service::api_definition::ApiDefinitionError as BaseApiDefinitionError;
+use golem_worker_service_base::service::api_deployment::ApiDeploymentError;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Tags, Union};
-use std::fmt::Display;
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Tags)]
@@ -77,59 +77,46 @@ impl TraceErrorKind for ApiEndpointError {
 }
 
 impl ApiEndpointError {
-    pub fn unauthorized<T: Display>(error: T) -> Self {
+    pub fn unauthorized<T: SafeDisplay>(error: T) -> Self {
         Self::Unauthorized(Json(ErrorBody {
-            error: error.to_string(),
+            error: error.to_safe_string(),
         }))
     }
 
-    pub fn internal<T: Display>(error: T) -> Self {
+    pub fn internal<T: SafeDisplay>(error: T) -> Self {
         Self::InternalError(Json(ErrorBody {
-            error: error.to_string(),
+            error: error.to_safe_string(),
         }))
     }
 
-    pub fn bad_request<T: Display>(error: T) -> Self {
+    pub fn bad_request<T: SafeDisplay>(error: T) -> Self {
         Self::BadRequest(Json(WorkerServiceErrorsBody::Messages(
             MessagesErrorsBody {
-                errors: vec![error.to_string()],
+                errors: vec![error.to_safe_string()],
             },
         )))
     }
 
-    pub fn not_found<T: Display>(error: T) -> Self {
+    pub fn not_found<T: SafeDisplay>(error: T) -> Self {
         Self::NotFound(Json(MessageBody {
-            message: error.to_string(),
+            message: error.to_safe_string(),
         }))
     }
 
-    pub fn already_exists<T: Display>(error: T) -> Self {
-        Self::AlreadyExists(Json(error.to_string()))
+    pub fn already_exists<T: SafeDisplay>(error: T) -> Self {
+        Self::AlreadyExists(Json(error.to_safe_string()))
     }
 }
 
-impl From<golem_worker_service_base::service::api_deployment::ApiDeploymentError<CloudNamespace>>
-    for ApiEndpointError
-{
-    fn from(
-        value: golem_worker_service_base::service::api_deployment::ApiDeploymentError<
-            CloudNamespace,
-        >,
-    ) -> Self {
+impl From<ApiDeploymentError<CloudNamespace>> for ApiEndpointError {
+    fn from(value: ApiDeploymentError<CloudNamespace>) -> Self {
         match value {
-             golem_worker_service_base::service::api_deployment::ApiDeploymentError::InternalError(error) => ApiEndpointError::internal(error),
-            e @  golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDefinitionNotFound(_, _) => {
-                ApiEndpointError::not_found(e)
-            }
-            e @  golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDeploymentNotFound(_, _) => {
-                ApiEndpointError::not_found(e)
-            }
-            e @  golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDeploymentConflict(_) => {
-                ApiEndpointError::already_exists(e)
-            }
-            e @  golem_worker_service_base::service::api_deployment::ApiDeploymentError::ApiDefinitionsConflict(_) => {
-                ApiEndpointError::bad_request(e)
-            }
+            ApiDeploymentError::ApiDefinitionNotFound(_, _) => ApiEndpointError::not_found(value),
+            ApiDeploymentError::ApiDeploymentNotFound(_, _) => ApiEndpointError::not_found(value),
+            ApiDeploymentError::ApiDeploymentConflict(_) => ApiEndpointError::already_exists(value),
+            ApiDeploymentError::ApiDefinitionsConflict(_) => ApiEndpointError::bad_request(value),
+            ApiDeploymentError::InternalRepoError(_) => ApiEndpointError::internal(value),
+            ApiDeploymentError::InternalConversionError { .. } => ApiEndpointError::internal(value),
         }
     }
 }
@@ -153,7 +140,6 @@ impl From<BaseApiDefinitionError<RouteValidationError>> for ApiEndpointError {
 
                 ApiEndpointError::BadRequest(Json(WorkerServiceErrorsBody::Validation(error)))
             }
-            BaseApiDefinitionError::InternalError(error) => ApiEndpointError::internal(error),
             BaseApiDefinitionError::ApiDefinitionNotDraft(_) => {
                 ApiEndpointError::bad_request(value)
             }
@@ -168,6 +154,8 @@ impl From<BaseApiDefinitionError<RouteValidationError>> for ApiEndpointError {
                 ApiEndpointError::bad_request(value)
             }
             BaseApiDefinitionError::RibCompilationErrors(_) => ApiEndpointError::bad_request(value),
+            BaseApiDefinitionError::InternalRepoError(_) => ApiEndpointError::internal(value),
+            BaseApiDefinitionError::Internal(_) => ApiEndpointError::internal(value),
         }
     }
 }

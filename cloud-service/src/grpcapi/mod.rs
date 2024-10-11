@@ -20,6 +20,7 @@ use cloud_api_grpc::proto::golem::cloud::token::v1::cloud_token_service_server::
 use cloud_common::model::TokenSecret as ModelTokenSecret;
 use std::net::SocketAddr;
 use std::str::FromStr;
+use tonic::codec::CompressionEncoding;
 use tonic::metadata::MetadataMap;
 use tonic::transport::{Error, Server};
 
@@ -87,47 +88,81 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
     Server::builder()
         .add_service(reflection_service)
         .add_service(health_service)
-        .add_service(CloudAccountServiceServer::new(AccountGrpcApi {
-            auth_service: services.auth_service.clone(),
-            account_service: services.account_service.clone(),
-        }))
-        .add_service(CloudAccountSummaryServiceServer::new(
-            AccountSummaryGrpcApi {
+        .add_service(
+            CloudAccountServiceServer::new(AccountGrpcApi {
+                auth_service: services.auth_service.clone(),
+                account_service: services.account_service.clone(),
+            })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            CloudAccountSummaryServiceServer::new(AccountSummaryGrpcApi {
                 auth_service: services.auth_service.clone(),
                 account_summary_service: services.account_summary_service.clone(),
-            },
-        ))
-        .add_service(CloudGrantServiceServer::new(GrantGrpcApi {
-            auth_service: services.auth_service.clone(),
-            account_grant_service: services.account_grant_service.clone(),
-        }))
-        .add_service(CloudLimitsServiceServer::new(LimitsGrpcApi {
-            auth_service: services.auth_service.clone(),
-            plan_limit_service: services.plan_limit_service.clone(),
-        }))
-        .add_service(CloudLoginServiceServer::new(LoginGrpcApi {
-            auth_service: services.auth_service.clone(),
-            login_service: services.login_service.clone(),
-            oauth2_service: services.oauth2_service.clone(),
-        }))
-        .add_service(CloudProjectServiceServer::new(ProjectGrpcApi {
-            auth_service: services.auth_service.clone(),
-            project_service: services.project_service.clone(),
-            project_auth_service: services.project_auth_service.clone(),
-        }))
-        .add_service(CloudProjectGrantServiceServer::new(ProjectGrantGrpcApi {
-            auth_service: services.auth_service.clone(),
-            project_grant_service: services.project_grant_service.clone(),
-            project_policy_service: services.project_policy_service.clone(),
-        }))
-        .add_service(CloudProjectPolicyServiceServer::new(ProjectPolicyGrpcApi {
-            auth_service: services.auth_service.clone(),
-            project_policy_service: services.project_policy_service.clone(),
-        }))
-        .add_service(CloudTokenServiceServer::new(TokenGrpcApi {
-            auth_service: services.auth_service.clone(),
-            token_service: services.token_service.clone(),
-        }))
+            })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            CloudGrantServiceServer::new(GrantGrpcApi {
+                auth_service: services.auth_service.clone(),
+                account_grant_service: services.account_grant_service.clone(),
+            })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            CloudLimitsServiceServer::new(LimitsGrpcApi {
+                auth_service: services.auth_service.clone(),
+                plan_limit_service: services.plan_limit_service.clone(),
+            })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            CloudLoginServiceServer::new(LoginGrpcApi {
+                auth_service: services.auth_service.clone(),
+                login_service: services.login_service.clone(),
+                oauth2_service: services.oauth2_service.clone(),
+            })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            CloudProjectServiceServer::new(ProjectGrpcApi {
+                auth_service: services.auth_service.clone(),
+                project_service: services.project_service.clone(),
+                project_auth_service: services.project_auth_service.clone(),
+            })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            CloudProjectGrantServiceServer::new(ProjectGrantGrpcApi {
+                auth_service: services.auth_service.clone(),
+                project_grant_service: services.project_grant_service.clone(),
+                project_policy_service: services.project_policy_service.clone(),
+            })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            CloudProjectPolicyServiceServer::new(ProjectPolicyGrpcApi {
+                auth_service: services.auth_service.clone(),
+                project_policy_service: services.project_policy_service.clone(),
+            })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            CloudTokenServiceServer::new(TokenGrpcApi {
+                auth_service: services.auth_service.clone(),
+                token_service: services.token_service.clone(),
+            })
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+        )
         .serve(addr)
         .await
 }

@@ -13,10 +13,10 @@ use cloud_api_grpc::proto::golem::cloud::projectpolicy::v1::{
 use cloud_api_grpc::proto::golem::cloud::projectpolicy::ProjectPolicy;
 use cloud_common::grpc::proto_project_policy_id_string;
 use cloud_common::model::{ProjectActions, ProjectPolicyId};
-use cloud_common::SafeDisplay;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::recorded_grpc_api_request;
+use golem_common::SafeDisplay;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;

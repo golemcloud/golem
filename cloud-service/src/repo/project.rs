@@ -5,11 +5,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::ProjectId;
+use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, Row};
 use uuid::Uuid;
 
 use crate::model::{Project, ProjectData, ProjectType};
-use crate::repo::RepoError;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ProjectRecord {

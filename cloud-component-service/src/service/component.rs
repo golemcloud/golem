@@ -8,15 +8,15 @@ use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
 use cloud_common::clients::limit::{LimitError, LimitService};
 use cloud_common::clients::project::{ProjectError, ProjectService};
 use cloud_common::model::ProjectAction;
-use cloud_common::SafeDisplay;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::ProjectId;
 use golem_common::model::{ComponentId, ComponentType};
-use golem_component_service_base::repo::RepoError;
+use golem_common::SafeDisplay;
 use golem_component_service_base::service::component::{
     ComponentError as BaseComponentError, ComponentService as BaseComponentService,
 };
 use golem_service_base::model::*;
+use golem_service_base::repo::RepoError;
 use golem_service_base::stream::ByteStream;
 use tracing::error;
 
@@ -57,9 +57,9 @@ impl SafeDisplay for ComponentError {
             ComponentError::UnknownProject(_) => self.to_string(),
             ComponentError::Unauthorized(_) => self.to_string(),
             ComponentError::LimitExceeded(_) => self.to_string(),
-            ComponentError::ComponentProcessing(_) => self.to_string(), // TODO: add safe display to ComponentProcessingError
-            ComponentError::InternalBaseComponentError(_) => self.to_string(), // TODO: add safe display to BaseComponentError
-            ComponentError::InternalRepoError(_) => "Internal repository error".to_string(), // TODO: add safe display to RepoError
+            ComponentError::ComponentProcessing(inner) => inner.to_safe_string(),
+            ComponentError::InternalBaseComponentError(inner) => inner.to_safe_string(),
+            ComponentError::InternalRepoError(inner) => inner.to_safe_string(),
             ComponentError::InternalAuthServiceError(inner) => inner.to_safe_string(),
             ComponentError::InternalLimitError(inner) => inner.to_safe_string(),
             ComponentError::InternalProjectError(inner) => inner.to_safe_string(),

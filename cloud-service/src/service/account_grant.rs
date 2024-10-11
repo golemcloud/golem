@@ -7,9 +7,9 @@ use tracing::error;
 use crate::auth::AccountAuthorisation;
 use crate::repo::account::AccountRepo;
 use crate::repo::account_grant::AccountGrantRepo;
-use crate::repo::RepoError;
 use cloud_common::model::Role;
-use cloud_common::SafeDisplay;
+use golem_common::SafeDisplay;
+use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AccountGrantServiceError {

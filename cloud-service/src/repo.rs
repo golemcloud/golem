@@ -13,10 +13,8 @@ use crate::repo::project::{DbProjectRepo, ProjectRepo};
 use crate::repo::project_grant::{DbProjectGrantRepo, ProjectGrantRepo};
 use crate::repo::project_policy::{DbProjectPolicyRepo, ProjectPolicyRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
-use cloud_common::SafeDisplay;
 use oauth2_web_flow_state::{DbOAuth2FlowState, OAuth2WebFlowStateRepo};
 use sqlx::{Pool, Postgres, Sqlite};
-use std::fmt::Display;
 use std::sync::Arc;
 
 pub mod account;
@@ -35,33 +33,6 @@ pub mod project;
 pub mod project_grant;
 pub mod project_policy;
 pub mod token;
-
-#[derive(Debug, thiserror::Error)]
-pub enum RepoError {
-    Internal(String),
-}
-
-impl SafeDisplay for RepoError {
-    fn to_safe_string(&self) -> String {
-        match self {
-            RepoError::Internal(_) => "Internal repository error".to_string(),
-        }
-    }
-}
-
-impl From<sqlx::Error> for RepoError {
-    fn from(error: sqlx::Error) -> Self {
-        RepoError::Internal(error.to_string())
-    }
-}
-
-impl Display for RepoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RepoError::Internal(error) => write!(f, "{}", error),
-        }
-    }
-}
 
 #[derive(Clone)]
 pub struct Repositories {

@@ -12,8 +12,8 @@ use crate::service::token::{TokenService, TokenServiceError};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use cloud_common::model::{TokenId, TokenSecret};
-use cloud_common::SafeDisplay;
 use golem_common::model::AccountId;
+use golem_common::SafeDisplay;
 use tracing::info;
 
 use super::token::UnsafeTokenWithMetadata;

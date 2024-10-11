@@ -1,5 +1,5 @@
 use crate::model::{EncodedOAuth2Session, OAuth2Session};
-use cloud_common::SafeDisplay;
+use golem_common::SafeDisplay;
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;

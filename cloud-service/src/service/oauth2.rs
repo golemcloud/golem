@@ -6,7 +6,7 @@ use crate::model::{
 use crate::service::oauth2_github_client::{OAuth2GithubClient, OAuth2GithubClientError};
 use crate::service::oauth2_session::{OAuth2SessionError, OAuth2SessionService};
 use async_trait::async_trait;
-use cloud_common::SafeDisplay;
+use golem_common::SafeDisplay;
 
 #[derive(Debug, thiserror::Error)]
 pub enum OAuth2Error {

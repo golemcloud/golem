@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use cloud_common::SafeDisplay;
+use golem_common::SafeDisplay;
 use http::StatusCode;
 use url::Url;
 

@@ -1,13 +1,13 @@
 use crate::auth::{CloudAuthCtx, CloudNamespace};
 use crate::clients::project::{ProjectError, ProjectService};
 use crate::model::{ProjectAction, TokenSecret};
-use crate::SafeDisplay;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerExecutionError,
 };
 use golem_common::model::{AccountId, ProjectId};
+use golem_common::SafeDisplay;
 use std::str::FromStr;
 use std::sync::Arc;
 use tonic::metadata::MetadataMap;
