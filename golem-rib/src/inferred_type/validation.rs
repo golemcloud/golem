@@ -1,25 +1,26 @@
-use crate::inferred_type::validation::internal::{failed, unified};
-use crate::inferred_type::UnificationResult;
+use crate::inferred_type::{UnificationResult, Unified};
 use crate::InferredType;
 
 pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult {
     match inferred_type {
-        InferredType::Bool => unified(InferredType::Bool),
-        InferredType::S8 => unified(InferredType::S8),
-        InferredType::U8 => unified(InferredType::U8),
-        InferredType::S16 => unified(InferredType::S16),
-        InferredType::U16 => unified(InferredType::U16),
-        InferredType::S32 => unified(InferredType::S32),
-        InferredType::U32 => unified(InferredType::U32),
-        InferredType::S64 => unified(InferredType::S64),
-        InferredType::U64 => unified(InferredType::U64),
-        InferredType::F32 => unified(InferredType::F32),
-        InferredType::F64 => unified(InferredType::F64),
-        InferredType::Chr => unified(InferredType::Chr),
-        InferredType::Str => unified(InferredType::Str),
+        InferredType::Bool => Ok(Unified(InferredType::Bool)),
+        InferredType::S8 => Ok(Unified(InferredType::S8)),
+        InferredType::U8 => Ok(Unified(InferredType::U8)),
+        InferredType::S16 => Ok(Unified(InferredType::S16)),
+        InferredType::U16 => Ok(Unified(InferredType::U16)),
+        InferredType::S32 => Ok(Unified(InferredType::S32)),
+        InferredType::U32 => Ok(Unified(InferredType::U32)),
+        InferredType::S64 => Ok(Unified(InferredType::S64)),
+        InferredType::U64 => Ok(Unified(InferredType::U64)),
+        InferredType::F32 => Ok(Unified(InferredType::F32)),
+        InferredType::F64 => Ok(Unified(InferredType::F64)),
+        InferredType::Chr => Ok(Unified(InferredType::Chr)),
+        InferredType::Str => Ok(Unified(InferredType::Str)),
         InferredType::List(inferred_type) => {
             let verified = validate_unified_type(inferred_type)?;
-            unified(InferredType::List(Box::new(verified.inferred_type())))
+            Ok(Unified(
+                (InferredType::List(Box::new(verified.inferred_type()))),
+            ))
         }
         InferredType::Tuple(types) => {
             let mut verified_types = vec![];
@@ -29,25 +30,27 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
                 verified_types.push(verified.inferred_type());
             }
 
-            unified(InferredType::Tuple(verified_types))
+            Ok(Unified((InferredType::Tuple(verified_types))))
         }
         InferredType::Record(field) => {
             for (field, typ) in field {
                 if let Err(unresolved) = validate_unified_type(typ) {
-                    return failed(format!(
+                    return Err(format!(
                         "Un-inferred type for field {} in record: {}",
                         field, unresolved
                     ));
                 }
             }
 
-            unified(InferredType::Record(field.clone()))
+            Ok(Unified(InferredType::Record(field.clone())))
         }
-        InferredType::Flags(flags) => unified(InferredType::Flags(flags.clone())),
-        InferredType::Enum(enums) => unified(InferredType::Enum(enums.clone())),
+        InferredType::Flags(flags) => Ok(Unified((InferredType::Flags(flags.clone())))),
+        InferredType::Enum(enums) => Ok(Unified((InferredType::Enum(enums.clone())))),
         InferredType::Option(inferred_type) => {
             let result = validate_unified_type(inferred_type)?;
-            unified(InferredType::Option(Box::new(result.inferred_type())))
+            Ok(Unified(
+                (InferredType::Option(Box::new(result.inferred_type()))),
+            ))
         }
         result @ InferredType::Result { ok, error } => {
             // For Result, we try to be flexible with types
@@ -61,29 +64,29 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
                         // We fail only if both are unknown
                         (Err(ok_err), Err(err_err)) => {
                             let err = format!("Ok: {}, Error: {}", ok_err, err_err);
-                            failed(err)
+                            Err(err)
                         }
-                        (_, _) => unified(result.clone()),
+                        (_, _) => Ok(Unified((result.clone()))),
                     }
                 }
 
                 (Some(ok), None) => {
                     let ok_unified = validate_unified_type(ok);
                     match ok_unified {
-                        Err(ok_err) => failed(ok_err),
-                        _ => unified(result.clone()),
+                        Err(ok_err) => Err(ok_err),
+                        _ => Ok(Unified((result.clone()))),
                     }
                 }
 
                 (None, Some(err)) => {
                     let err_unified = validate_unified_type(err);
                     match err_unified {
-                        Err(err_err) => failed(err_err),
-                        _ => unified(result.clone()),
+                        Err(err_err) => Err(err_err),
+                        _ => Ok(Unified((result.clone()))),
                     }
                 }
 
-                (None, None) => unified(result.clone()),
+                (None, None) => Ok(Unified((result.clone()))),
             }
         }
         inferred_type @ InferredType::Variant(variant) => {
@@ -92,33 +95,18 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
                     validate_unified_type(typ)?;
                 }
             }
-            unified(inferred_type.clone())
+            Ok(Unified((inferred_type.clone())))
         }
-        resource @ InferredType::Resource { .. } => unified(resource.clone()),
-        InferredType::OneOf(possibilities) => failed(format!("Cannot resolve {:?}", possibilities)),
-        InferredType::AllOf(possibilities) => {
-            failed(format!("Cannot be all of {:?}", possibilities))
-        }
-        InferredType::Unknown => failed("Unknown".to_string()),
+        resource @ InferredType::Resource { .. } => Ok(Unified((resource.clone()))),
+        InferredType::OneOf(possibilities) => Err(format!("Cannot resolve {:?}", possibilities)),
+        InferredType::AllOf(possibilities) => Err(format!("Cannot be all of {:?}", possibilities)),
+        InferredType::Unknown => Err("Unknown".to_string()),
         inferred_type @ InferredType::Sequence(inferred_types) => {
             for typ in inferred_types {
                 validate_unified_type(typ)?;
             }
 
-            unified(inferred_type.clone())
+            Ok(Unified(inferred_type.clone()))
         }
-    }
-}
-
-mod internal {
-    use crate::inferred_type::{validate_unified_type, UnificationResult, Unified};
-    use crate::InferredType;
-
-    pub(crate) fn unified(inferred_type: InferredType) -> UnificationResult {
-        Ok(Unified(inferred_type))
-    }
-
-    pub(crate) fn failed(unresolved: String) -> UnificationResult {
-        Err(unresolved)
     }
 }

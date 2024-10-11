@@ -76,7 +76,6 @@ mod type_check_tests {
         compile(&expr, &vec![]).unwrap();
     }
 
-
     // mod internal {
     //     use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeRecord};
     //
