@@ -4842,7 +4842,6 @@ dependencies = [
  "async-trait",
  "clap 4.5.20",
  "console-subscriber",
- "ctor",
  "golem-api-grpc",
  "golem-common",
  "golem-test-framework",

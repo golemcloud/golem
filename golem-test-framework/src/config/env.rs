@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -141,6 +142,7 @@ impl Default for EnvBasedTestDependenciesConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct EnvBasedTestDependencies {
     config: Arc<EnvBasedTestDependenciesConfig>,
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -151,6 +153,12 @@ pub struct EnvBasedTestDependencies {
     component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
+}
+
+impl Debug for EnvBasedTestDependencies {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EnvBasedTestDependencies")
+    }
 }
 
 impl EnvBasedTestDependencies {

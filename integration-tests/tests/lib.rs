@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
-
-use ctor::{ctor, dtor};
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::config::{
+    EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
+};
+use test_r::test_dep;
+
+test_r::enable!();
 
 mod worker;
 
-struct Tracing;
+#[derive(Debug)]
+pub struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
@@ -29,25 +32,19 @@ impl Tracing {
     }
 }
 
-#[ctor]
-pub static DEPS: EnvBasedTestDependencies = {
-    let deps = EnvBasedTestDependencies::blocking_new_from_worker_executor_cluster_size(3);
+#[test_dep]
+pub async fn create_deps(_tracing: &Tracing) -> EnvBasedTestDependencies {
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 3,
+        ..EnvBasedTestDependenciesConfig::new()
+    }).await;
 
     deps.redis_monitor().assert_valid();
 
     deps
-};
-
-#[dtor]
-unsafe fn drop_deps() {
-    let base_deps_ptr = DEPS.deref() as *const EnvBasedTestDependencies;
-    let base_deps_ptr = base_deps_ptr as *mut EnvBasedTestDependencies;
-    (*base_deps_ptr).kill_all()
 }
 
-// Note: by having it after DEPS, we don't see logs during setting up the env. But moving it before
-// it crashes the dropping of the tracing subscriber with
-// cannot access a Thread Local Storage value during or after destruction: AccessError
-// This will be solved by our new test library in the future
-#[ctor]
-pub static TRACING: Tracing = Tracing::init();
+#[test_dep]
+pub fn tracing() -> Tracing {
+    Tracing::init()
+}
