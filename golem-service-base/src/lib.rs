@@ -16,6 +16,7 @@ pub mod auth;
 pub mod config;
 pub mod db;
 pub mod model;
+pub mod repo;
 pub mod routing_table;
 pub mod service;
 pub mod stream;

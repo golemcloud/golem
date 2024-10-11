@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use golem_common::recorded_http_api_request;
+use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::DefaultNamespace;
 use golem_worker_service_base::api::ApiEndpointError;
@@ -62,9 +62,9 @@ impl ApiDeploymentApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            let deployment = data.ok_or(ApiEndpointError::internal(
-                "Failed to verify the deployment",
-            ))?;
+            let deployment = data.ok_or(ApiEndpointError::internal(safe(
+                "Failed to verify the deployment".to_string(),
+            )))?;
 
             Ok(Json(deployment.into()))
         };
@@ -112,7 +112,9 @@ impl ApiDeploymentApi {
                 .deployment_service
                 .get_by_site(&ApiSiteString(site))
                 .await?
-                .ok_or(ApiEndpointError::not_found("Api deployment not found"))?;
+                .ok_or(ApiEndpointError::not_found(safe(
+                    "Api deployment not found".to_string(),
+                )))?;
 
             Ok(Json(value.into()))
         };

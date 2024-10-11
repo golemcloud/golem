@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::fmt;
+use std::fmt::{Display, Formatter};
+
 pub mod cache;
 pub mod client;
 pub mod config;
@@ -27,3 +30,26 @@ pub mod retries;
 pub mod serialization;
 pub mod tracing;
 pub mod uri;
+
+/// Trait to convert a value to a string which is safe to return through a public API.
+pub trait SafeDisplay {
+    fn to_safe_string(&self) -> String;
+}
+
+pub struct SafeString(String);
+
+impl SafeDisplay for SafeString {
+    fn to_safe_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
+impl Display for SafeString {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+pub fn safe(value: String) -> impl SafeDisplay {
+    SafeString(value)
+}

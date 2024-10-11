@@ -1705,6 +1705,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "conditional-trait-gen"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9359589034c900055ec8b3590ba1b45384b62379ffd505e3e9d641fd184d461d"
+dependencies = [
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "config"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3626,6 +3638,7 @@ dependencies = [
  "bincode",
  "bytes 1.7.2",
  "chrono",
+ "conditional-trait-gen",
  "criterion",
  "fastrand 2.1.1",
  "golem-api-grpc",
@@ -4096,6 +4109,7 @@ dependencies = [
  "bincode",
  "bytes 1.7.2",
  "chrono",
+ "conditional-trait-gen",
  "criterion",
  "derive_more 0.99.18",
  "fastrand 2.1.1",
@@ -6755,6 +6769,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecf48c7ca261d60b74ab1a7b20da18bede46776b2e55535cb958eb595c5fa7b"
 dependencies = [
  "toml_edit 0.22.22",
+]
+
+[[package]]
+name = "proc-macro-error"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da25490ff9892aab3fcf7c36f08cfb902dd3e71ca0f9f9517bea02a73a5ce38c"
+dependencies = [
+ "proc-macro-error-attr",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+ "version_check",
+]
+
+[[package]]
+name = "proc-macro-error-attr"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1be40180e52ecc98ad80b184934baf3d0d29f979574e439af5a55274b35f869"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "version_check",
 ]
 
 [[package]]

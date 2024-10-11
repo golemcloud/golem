@@ -330,7 +330,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
 
@@ -364,7 +364,7 @@ where
                     {
                         WorkerServiceError::WorkerNotFound(worker_id_err.clone())
                     }
-                    _ => WorkerServiceError::internal(error),
+                    _ => WorkerServiceError::InternalCallError(error),
                 },
             )
             .await?;
@@ -402,7 +402,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::DeleteWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
 
@@ -478,7 +478,7 @@ where
                     }
                 }
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         ).await?;
 
         Ok(invoke_response)
@@ -538,7 +538,7 @@ where
                     }
                 }
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         ).await?;
 
         Ok(invoke_response)
@@ -583,7 +583,7 @@ where
                 }
                 workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
         Ok(())
@@ -637,7 +637,7 @@ where
                         }
                     }
                 },
-                WorkerServiceError::internal,
+                WorkerServiceError::InternalCallError,
             )
             .await?;
         Ok(result)
@@ -674,7 +674,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::InterruptWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
 
@@ -720,7 +720,7 @@ where
                     }
                 }
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         ).await?;
 
         Ok(metadata)
@@ -782,7 +782,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::ResumeWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
         Ok(())
@@ -818,7 +818,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::UpdateWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
         Ok(())
@@ -889,7 +889,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::GetOplogResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await
     }
@@ -976,7 +976,7 @@ where
                     }
                 }).collect::<Result<Vec<_>, ResponseMapResult>>()
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         ).await?;
 
         Ok(result.into_iter().flatten().collect())
@@ -1044,7 +1044,7 @@ where
                         Err("Empty response".into())
                     }
                 },
-                WorkerServiceError::internal,
+                WorkerServiceError::InternalCallError,
             )
             .await?;
 

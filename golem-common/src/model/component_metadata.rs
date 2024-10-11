@@ -15,6 +15,7 @@
 use bincode::{Decode, Encode};
 use std::fmt::{self, Display, Formatter};
 
+use crate::SafeDisplay;
 use golem_wasm_ast::analysis::AnalysedFunctionParameter;
 use golem_wasm_ast::core::Mem;
 use golem_wasm_ast::metadata::Producers as WasmAstProducers;
@@ -361,6 +362,15 @@ impl RawComponentMetadata {
 pub enum ComponentProcessingError {
     Parsing(String),
     Analysis(AnalysisFailure),
+}
+
+impl SafeDisplay for ComponentProcessingError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            ComponentProcessingError::Parsing(_) => self.to_string(),
+            ComponentProcessingError::Analysis(_) => self.to_string(),
+        }
+    }
 }
 
 impl Display for ComponentProcessingError {
