@@ -460,13 +460,13 @@ mod type_inference_tests {
 
                let y = match query2 {
                 foo(n) => "y foo ${n}",
-                bar-baz(n) => "y bar ${n}",
+                bar-baz(n1) => "y bar ${n1}",
                 foo-bar => "y foo-bar"
               };
 
               let z = match query3 {
                 foo(n) => "z foo ${n}",
-                bar-baz(n) => "z bar ${n}",
+                bar-baz(n1) => "z bar ${n1}",
                 foo-bar => "z foo-bar"
               };
 

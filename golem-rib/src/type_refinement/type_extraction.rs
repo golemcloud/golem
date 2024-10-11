@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_refinement::precise_types::{ErrType, ListType, OkType, OptionalType, RecordType, TupleType, VariantType};
+use crate::type_refinement::precise_types::{
+    ErrType, ListType, OkType, OptionalType, RecordType, TupleType, VariantType,
+};
 use crate::InferredType;
 
 pub trait ExtractInnerType {
@@ -76,18 +78,11 @@ impl GetInferredTypeByName for RecordType {
     }
 }
 
-
 impl GetInferredTypeByName for VariantType {
     fn get(&self, name: &str) -> Vec<InferredType> {
         self.0
             .iter()
-            .filter_map(|(name, typ)| {
-                if name == name {
-                    typ.clone()
-                } else {
-                    None
-                }
-            })
+            .filter_map(|(n, typ)| if n == name { typ.clone() } else { None })
             .collect()
     }
 }

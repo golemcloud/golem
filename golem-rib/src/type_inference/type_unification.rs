@@ -246,9 +246,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
-                    Ok(unified_type) => {
-                        *inferred_type = unified_type
-                    }
+                    Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
                             "Unable to resolve the type of identifier {:?}",

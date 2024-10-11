@@ -432,8 +432,7 @@ impl Expr {
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
 
-       self.unify_types()?;
-      //  dbg!(self.clone());
+        self.unify_types()?;
         Ok(())
     }
 
@@ -459,13 +458,6 @@ impl Expr {
         let expr = self.pull_types_up()?;
         *self = expr;
         self.infer_global_inputs();
-
-        dbg!(self.clone());
-        // dbg!(self.clone());
-        // let mut x = self.clone();
-        // dbg!(self.clone());
-
-
         Ok(())
     }
 

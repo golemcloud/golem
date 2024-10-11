@@ -71,9 +71,7 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 } in match_arms
                 {
                     let predicate_type = pred.inferred_type();
-                    dbg!("calling", arm_pattern.clone(), predicate_type.clone());
                     internal::update_arm_pattern_type(arm_pattern, &predicate_type, pred)?;
-                    dbg!("called", arm_pattern.clone());
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                     queue.push_back(arm_resolution_expr);
                 }
@@ -246,8 +244,10 @@ mod internal {
 
             ArmPattern::Constructor(constructor_name, patterns) => {
                 if constructor_name == "some" || constructor_name == "none" {
-                    let resolved = OptionalType::refine(predicate_type)
-                        .ok_or(format!("Invalid pattern match. Cannot match {} to {}", original_predicate,  constructor_name))?;
+                    let resolved = OptionalType::refine(predicate_type).ok_or(format!(
+                        "Invalid pattern match. Cannot match {} to {}",
+                        original_predicate, constructor_name
+                    ))?;
 
                     let inner = resolved.inner_type();
 
@@ -255,8 +255,10 @@ mod internal {
                         update_arm_pattern_type(pattern, &inner, original_predicate)?;
                     }
                 } else if constructor_name == "ok" {
-                    let resolved = OkType::refine(predicate_type)
-                        .ok_or(format!("Invalid pattern match. Cannot match {} to {}", original_predicate,  constructor_name))?;
+                    let resolved = OkType::refine(predicate_type).ok_or(format!(
+                        "Invalid pattern match. Cannot match {} to {}",
+                        original_predicate, constructor_name
+                    ))?;
 
                     let inner = resolved.inner_type();
 
@@ -264,26 +266,36 @@ mod internal {
                         update_arm_pattern_type(pattern, &inner, original_predicate)?;
                     }
                 } else if constructor_name == "err" {
-                    let resolved = ErrType::refine(predicate_type)
-                        .ok_or(format!("Invalid pattern match. Cannot match {} to {}", original_predicate,  constructor_name))?;
+                    let resolved = ErrType::refine(predicate_type).ok_or(format!(
+                        "Invalid pattern match. Cannot match {} to {}",
+                        original_predicate, constructor_name
+                    ))?;
 
                     let inner = resolved.inner_type();
 
                     for pattern in patterns {
                         update_arm_pattern_type(pattern, &inner, original_predicate)?;
                     }
-                } else if let Some(variant_type) =  VariantType::refine(predicate_type) {
+                } else if let Some(variant_type) = VariantType::refine(predicate_type) {
+                    dbg!(predicate_type.clone());
                     let variant_arg_type = variant_type.inner_type_by_name(constructor_name);
+
+                    dbg!(variant_arg_type.clone());
+                    dbg!(constructor_name.clone());
+                    dbg!(patterns.clone());
 
                     for pattern in patterns {
                         update_arm_pattern_type(pattern, &variant_arg_type, original_predicate)?;
                     }
-                } else {}
+                } else {
+                }
             }
 
             ArmPattern::TupleConstructor(patterns) => {
-                let tuple_type = TupleType::refine(predicate_type)
-                    .ok_or(format!("Invalid pattern match. Cannot match {} to tuple", original_predicate))?;
+                let tuple_type = TupleType::refine(predicate_type).ok_or(format!(
+                    "Invalid pattern match. Cannot match {} to tuple",
+                    original_predicate
+                ))?;
                 let inner_types = tuple_type.inner_types();
 
                 if patterns.len() == inner_types.len() {
@@ -296,8 +308,10 @@ mod internal {
             }
 
             ArmPattern::ListConstructor(patterns) => {
-                let list_type = ListType::refine(predicate_type)
-                    .ok_or(format!("Invalid pattern match. Cannot match {} to list", original_predicate))?;
+                let list_type = ListType::refine(predicate_type).ok_or(format!(
+                    "Invalid pattern match. Cannot match {} to list",
+                    original_predicate
+                ))?;
 
                 let list_elem_type = list_type.inner_type();
 
@@ -307,9 +321,10 @@ mod internal {
             }
 
             ArmPattern::RecordConstructor(fields) => {
-
-                let record_type = RecordType::refine(predicate_type)
-                    .ok_or(format!("Invalid pattern match. Cannot match {} to record", original_predicate))?;
+                let record_type = RecordType::refine(predicate_type).ok_or(format!(
+                    "Invalid pattern match. Cannot match {} to record",
+                    original_predicate
+                ))?;
 
                 for (field, pattern) in fields {
                     let type_of_field = record_type.inner_type_by_name(field);
