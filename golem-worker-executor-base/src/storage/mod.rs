@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod blob;
+pub mod cassandra;
 pub mod indexed;
 pub mod keyvalue;
 pub mod sqlite_types;

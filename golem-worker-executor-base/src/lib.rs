@@ -72,6 +72,8 @@ use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use std::sync::Arc;
+use storage::cassandra::CassandraSession;
+use storage::keyvalue::cassandra::CassandraKeyValueStorage;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use storage::sqlite_types::SqlitePool;
 use tokio::runtime::Handle;
@@ -195,6 +197,18 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                     .map_err(|err| anyhow!(err))?;
                 let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
                     Arc::new(SqliteKeyValueStorage::new(pool.clone()));
+                (None, key_value_storage)
+            }
+            KeyValueStorageConfig::Cassandra(cassandra) => {
+                info!(
+                    "Using Cassandra for key-value storage at {:?}",
+                    cassandra.nodes
+                );
+                let session = CassandraSession::configured(cassandra)
+                    .await
+                    .map_err(|err| anyhow!(err))?;
+                let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
+                    Arc::new(CassandraKeyValueStorage::new(session.clone()));
                 (None, key_value_storage)
             }
         };
