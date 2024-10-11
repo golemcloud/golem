@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action, log_warn_action};
-use crate::copy::copy;
+use crate::copy::{copy, copy_transformed};
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
     InterfaceStubTypeDef, StubDefinition,
 };
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexMap;
+use regex::Regex;
 use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Write};
 use std::fs;
@@ -59,7 +60,7 @@ pub fn get_stub_wit(
 
     let mut out = String::new();
 
-    writeln!(out, "package {}-stub;", def.source_package_name);
+    writeln!(out, "package {}-stub;", def.source_package_name)?;
     writeln!(out)?;
     writeln!(out, "interface stub-{} {{", world.name)?;
 
@@ -498,47 +499,80 @@ fn write_param_list(
 }
 
 pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
+    let target_wit_root = def.target_wit_root();
+    let target_deps = target_wit_root.join("deps");
+
     // TODO: naming to def
     let stub_package_name = format!("{}-stub", def.source_package_name);
-    let target_wit_root = def.target_wit_root();
+    let pattern_import_stub_package_name = Regex::new(
+        format!(
+            r"import\s+{}(/[^;]*)?;",
+            regex::escape(stub_package_name.as_str())
+        )
+        .as_str(),
+    )
+    .context(anyhow!("Failed to compile stub import regex"))?;
+
+    // Used for removing self stub imports from the source component's wit definition
+    let remove_stub_imports = |src: String| -> anyhow::Result<String> {
+        Ok(pattern_import_stub_package_name
+            .replace_all(&src, "")
+            .to_string())
+    };
 
     for (package, sources) in def.source_packages_with_sources() {
-        // TODO: self refs
         let should_skip = package.name.to_string() == stub_package_name;
-
         if should_skip {
             log_warn_action("Skipping", format!("package {}", package.name));
             continue;
         }
 
-        let target_dep_package_dir = target_wit_root
-            .join("deps")
-            // TODO: naming to def and review this naming
-            .join(format!(
-                "{}_{}",
-                def.source_package_name.namespace, def.source_package_name.name
-            ));
+        let is_source_package = package.name == def.source_package_name;
 
         log_action("Copying", format!("source package {}", package.name));
         for source in sources {
-            let relative = source.strip_prefix(&def.source_wit_root)?;
-            let dest = target_dep_package_dir.join(relative);
-            log_action(
-                "  Copying",
-                format!("{} to {}", source.to_string_lossy(), dest.to_string_lossy()),
-            );
-            copy(source, &dest)?;
+            if is_source_package {
+                // TODO: naming to def and review this naming
+                let dest = target_deps
+                    .join(format!(
+                        "{}_{}",
+                        def.source_package_name.namespace, def.source_package_name.name
+                    ))
+                    .join(source.file_name().ok_or_else(|| {
+                        anyhow!(
+                            "Failed to get file name for source: {}",
+                            source.to_string_lossy()
+                        )
+                    })?);
+                log_action(
+                    "  Copying",
+                    format!(
+                        "(with source imports removed) {} to {}",
+                        source.to_string_lossy(),
+                        dest.to_string_lossy()
+                    ),
+                );
+                copy_transformed(source, &dest, remove_stub_imports)?;
+            } else {
+                let relative = source.strip_prefix(&def.source_wit_root)?;
+                let dest = target_wit_root.join(relative);
+                log_action(
+                    "  Copying",
+                    format!("{} to {}", source.to_string_lossy(), dest.to_string_lossy()),
+                );
+                copy(source, &dest)?;
+            }
         }
     }
 
     write_embedded_source(
-        &target_wit_root.join("deps/wasm-rpc"),
+        &target_deps.join("wasm-rpc"),
         "wasm-rpc.wit",
         golem_wasm_rpc::WASM_RPC_WIT,
     )?;
 
     write_embedded_source(
-        &target_wit_root.join("deps/io"),
+        &target_deps.join("io"),
         "poll.wit",
         golem_wasm_rpc::WASI_POLL_WIT,
     )?;
@@ -649,7 +683,7 @@ pub fn get_dep_dirs(wit_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(result)
 }
 
-pub fn get_package_name(wit: &Path) -> anyhow::Result<PackageName> {
+pub fn get_package_name(_wit: &Path) -> anyhow::Result<PackageName> {
     /*let pkg = UnresolvedPackage::parse_path(wit)?;
     Ok(pkg.name)*/
     todo!()
