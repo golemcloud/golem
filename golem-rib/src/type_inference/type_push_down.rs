@@ -71,8 +71,9 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 } in match_arms
                 {
                     let predicate_type = pred.inferred_type();
-                    dbg!("calling {}, {}", arm_pattern.clone(), predicate_type.clone());
-                    internal::update_arm_pattern_type(arm_pattern, &predicate_type)?;
+                    dbg!("calling", arm_pattern.clone(), predicate_type.clone());
+                    internal::update_arm_pattern_type(arm_pattern, &predicate_type, pred)?;
+                    dbg!("called", arm_pattern.clone());
                     arm_resolution_expr.add_infer_type_mut(inferred_type.clone());
                     queue.push_back(arm_resolution_expr);
                 }
@@ -232,82 +233,92 @@ mod internal {
     pub(crate) fn update_arm_pattern_type(
         arm_pattern: &mut ArmPattern,
         predicate_type: &InferredType,
+        original_predicate: &Expr,
     ) -> Result<(), String> {
         match arm_pattern {
             ArmPattern::Literal(expr) => {
                 expr.add_infer_type_mut(predicate_type.clone());
-                expr.push_types_down()?;
+                //expr.push_types_down()?;
             }
             ArmPattern::As(_, pattern) => {
-                update_arm_pattern_type(pattern, predicate_type)?;
+                update_arm_pattern_type(pattern, predicate_type, original_predicate)?;
             }
-            ArmPattern::Constructor(constructor_name, patterns) => match predicate_type {
-                InferredType::Option(inner_type) => {
-                    if constructor_name == "some" || constructor_name == "none" {
-                        for pattern in &mut *patterns {
-                            update_arm_pattern_type(pattern, inner_type)?;
-                        }
+
+            ArmPattern::Constructor(constructor_name, patterns) => {
+                if constructor_name == "some" || constructor_name == "none" {
+                    let resolved = OptionalType::refine(predicate_type)
+                        .ok_or(format!("Invalid pattern match. Cannot match {} to {}", original_predicate,  constructor_name))?;
+
+                    let inner = resolved.inner_type();
+
+                    for pattern in patterns {
+                        update_arm_pattern_type(pattern, &inner, original_predicate)?;
                     }
-                }
-                InferredType::Result { ok, error } => {
-                    if constructor_name == "ok" {
-                        if let Some(ok_type) = ok {
-                            for pattern in &mut *patterns {
-                                update_arm_pattern_type(pattern, ok_type)?;
-                            }
-                        }
-                    };
-                    if constructor_name == "err" {
-                        if let Some(err_type) = error {
-                            for pattern in &mut *patterns {
-                                update_arm_pattern_type(pattern, err_type)?;
-                            }
-                        }
-                    };
-                }
-                InferredType::Variant(variant) => {
-                    let identified_variant = variant
+                } else if constructor_name == "ok" {
+                    let resolved = OkType::refine(predicate_type)
+                        .ok_or(format!("Invalid pattern match. Cannot match {} to {}", original_predicate,  constructor_name))?;
+
+                    let inner = resolved.inner_type();
+
+                    for pattern in patterns {
+                        update_arm_pattern_type(pattern, &inner, original_predicate)?;
+                    }
+                } else if constructor_name == "err" {
+                    let resolved = ErrType::refine(predicate_type)
+                        .ok_or(format!("Invalid pattern match. Cannot match {} to {}", original_predicate,  constructor_name))?;
+
+                    let inner = resolved.inner_type();
+
+                    for pattern in patterns {
+                        update_arm_pattern_type(pattern, &inner, original_predicate)?;
+                    }
+                } else {
+                    let identified_variant = predicate_type
+                        .variant()
                         .iter()
                         .find(|(name, _optional_type)| name == constructor_name);
 
                     if let Some((_name, Some(inner_type))) = identified_variant {
-                        for pattern in &mut *patterns {
-                            update_arm_pattern_type(pattern, inner_type)?;
+                        for pattern in patterns {
+                            update_arm_pattern_type(pattern, inner_type, original_predicate)?;
                         }
                     }
                 }
-                _ => {}
-            },
+            }
+
             ArmPattern::TupleConstructor(patterns) => {
-                if let InferredType::Tuple(inner_types) = predicate_type {
-                    if patterns.len() == inner_types.len() {
-                        for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
-                            update_arm_pattern_type(pattern, inner_type)?;
-                        }
-                    } else {
-                        return Err(format!("Mismatch in number of elements in tuple pattern match. Expected {}, Actual: {}", inner_types.len(), patterns.len()));
+                let tuple_type = TupleType::refine(predicate_type)
+                    .ok_or(format!("Invalid pattern match. Cannot match {} to tuple", original_predicate))?;
+                let inner_types = tuple_type.inner_types();
+
+                if patterns.len() == inner_types.len() {
+                    for (pattern, inner_type) in patterns.iter_mut().zip(inner_types) {
+                        update_arm_pattern_type(pattern, &inner_type, original_predicate)?;
                     }
+                } else {
+                    return Err(format!("Mismatch in number of elements in tuple pattern match. Expected {}, Actual: {}", inner_types.len(), patterns.len()));
                 }
             }
 
             ArmPattern::ListConstructor(patterns) => {
-                if let InferredType::List(inner_type) = predicate_type {
-                    for pattern in &mut *patterns {
-                        update_arm_pattern_type(pattern, inner_type)?;
-                    }
+                let list_type = ListType::refine(predicate_type)
+                    .ok_or(format!("Invalid pattern match. Cannot match {} to list", original_predicate))?;
+
+                let inner_type = list_type.inner_type();
+
+                for pattern in &mut *patterns {
+                    update_arm_pattern_type(pattern, &inner_type, original_predicate)?;
                 }
             }
 
             ArmPattern::RecordConstructor(fields) => {
-                if let InferredType::Record(record_fields) = predicate_type {
-                    for (field, pattern) in fields {
-                        let inner_type = record_fields
-                            .iter()
-                            .find(|(name, _)| name == field)
-                            .map(|(_, typ)| typ)
-                            .ok_or(format!("Field {} not found in record type", field))?;
-                        update_arm_pattern_type(pattern, inner_type)?;
-                    }
+
+                let record_type = RecordType::refine(predicate_type)
+                    .ok_or(format!("Invalid pattern match. Cannot match {} to record", original_predicate))?;
+
+                for (field, pattern) in fields {
+                    let inner_type = record_type.inner_type_by_field(field);
+                    update_arm_pattern_type(pattern, &inner_type, original_predicate)?;
                 }
             }
 

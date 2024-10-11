@@ -25,6 +25,12 @@ pub enum RefinedType<A> {
 
 pub struct HeterogeneousCollectionType(pub Vec<InferredType>);
 
+impl HeterogeneousCollectionType {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 impl IntoIterator for HeterogeneousCollectionType {
     type Item = InferredType;
     type IntoIter = IntoIter<InferredType>;
