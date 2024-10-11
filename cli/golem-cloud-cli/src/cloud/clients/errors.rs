@@ -391,8 +391,8 @@ fn display_golem_error(error: GolemError) -> String {
         }) => {
             format!(
                 "Invalid shard id: {} not in [{}]",
-                shard_id.value,
-                shard_ids.iter().map(|id| id.value).join(", ")
+                shard_id,
+                shard_ids.iter().map(|id| id.to_string()).join(", ")
             )
         }
         GolemError::PreviousInvocationFailed(_) => {

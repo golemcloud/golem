@@ -15,7 +15,7 @@ pub mod account {
         fields.build()
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub struct AccountGetView(pub Account);
 
     impl MessageWithFields for AccountGetView {

@@ -15,6 +15,7 @@ use golem_cloud_client::api::WorkerError;
 use golem_cloud_client::model::{WorkerCreationRequest, WorkersMetadataRequest};
 use golem_cloud_client::Context;
 use golem_cloud_client::Error;
+use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::WorkerEvent;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 use native_tls::TlsConnector;
@@ -222,7 +223,7 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .find_workers_metadata(
                 &component_urn.id.0,
                 &WorkersMetadataRequest {
-                    filter: filter.to_cloud(),
+                    filter,
                     cursor: cursor.to_cloud(),
                     count,
                     precise,
@@ -478,6 +479,51 @@ impl<C: golem_cloud_client::api::WorkerClient + Sync + Send> WorkerClient for Wo
             .await
             .map_err(CloudGolemError::from)?;
         Ok(())
+    }
+
+    async fn get_oplog(
+        &self,
+        worker_urn: WorkerUrn,
+        from: u64,
+    ) -> Result<Vec<(u64, PublicOplogEntry)>, GolemError> {
+        let mut entries = Vec::new();
+        let mut cursor: Option<OplogCursor> = None;
+
+        loop {
+            let chunk = self
+                .client
+                .get_oplog(
+                    &worker_urn.id.component_id.0,
+                    &worker_name_required(&worker_urn)?,
+                    from,
+                    100,
+                    cursor.as_ref(),
+                )
+                .await
+                .map_err(CloudGolemError::from)?;
+
+            trace!(
+                "Got {} oplog entries starting from {}, last index is {}",
+                chunk.entries.len(),
+                chunk.first_index_in_chunk,
+                chunk.last_index
+            );
+
+            if chunk.entries.is_empty() {
+                break;
+            } else {
+                entries.extend(
+                    chunk
+                        .entries
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, e)| (chunk.first_index_in_chunk + i as u64, e)),
+                );
+                cursor = chunk.next;
+            }
+        }
+
+        Ok(entries)
     }
 }
 
