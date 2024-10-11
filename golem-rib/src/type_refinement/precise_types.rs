@@ -45,3 +45,8 @@ pub struct NumberType;
 pub struct CharType;
 #[derive(Clone, PartialEq, Debug)]
 pub struct BoolType;
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct FlagsType(pub Vec<String>);
+#[derive(Clone, PartialEq, Debug)]
+pub struct EnumType(pub Vec<String>);

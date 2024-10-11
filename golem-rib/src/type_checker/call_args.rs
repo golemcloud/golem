@@ -1,5 +1,8 @@
 use crate::{Expr, FunctionTypeRegistry, RegistryKey};
 use std::collections::VecDeque;
+use std::fmt::{Display, Formatter};
+use std::ops::Deref;
+use golem_wasm_ast::analysis::AnalysedType;
 
 pub fn check_call_args(
     expr: &mut Expr,
@@ -25,8 +28,9 @@ mod internal {
     use super::*;
     use crate::call_type::CallType;
     use golem_wasm_ast::analysis::AnalysedType;
+    use poem_openapi::types::Type;
     use crate::InferredType;
-    use crate::type_refinement::precise_types::{CharType, NumberType, RecordType};
+    use crate::type_refinement::precise_types::{CharType, ErrType, NumberType, OkType, OptionalType, RecordType, VariantType};
     use crate::type_refinement::TypeRefinement;
 
     pub(crate) fn check_call_args(
@@ -45,15 +49,14 @@ mod internal {
         let expected_arg_types = registry_value.argument_types();
 
         for (arg, expected_arg_type) in args.iter_mut().zip(expected_arg_types) {
-           validate(expected_arg_type.clone(), &arg.inferred_type()).map_err(|e| format!("Invalid argument in function {}: {}", call_type, e))?;
+           validate(expected_arg_type.clone(), &arg.inferred_type()).map_err(|e| format!("`{}` has invalid argument`{}`: {}", call_type, arg.to_string(), e))?;
         }
 
         Ok(())
     }
 
-
-    fn validate(expected_analysed_type: AnalysedType, actual_type: &InferredType) -> Result<(), String> {
-        match expected_analysed_type {
+    fn validate(expected_analysed_type: &AnalysedType, actual_type: &InferredType) -> Result<(), String> {
+        match &expected_analysed_type {
             AnalysedType::Record(fields) => {
                 let resolved = RecordType::refine(&actual_type);
 
@@ -63,22 +66,30 @@ mod internal {
                             let field_name = field.name.clone();
                             let expected_field_type = field.typ.clone();
                             let actual_field_type = record_type.inner_type_by_name(&field_name);
-                            validate(expected_field_type, &actual_field_type)?;
+                            let result = validate(&expected_field_type, &actual_field_type);
+                            match result {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    return Err(format!("Invalid type for field `{}` in the record. Expected {}. {}", field_name, PrettyAnalysedType(expected_field_type), e));
+                                }
+                            }
                         }
 
                         Ok(())
                     }
 
-                    None => Err(format!("Expected record type, but got {:?}", actual_type))
+                    None => Err(format!("Expected record type {}", PrettyAnalysedType(expected_analysed_type.clone())))
                 }
 
             }
 
-            AnalysedType::S32(_) | AnalysedType::U64(_) => {
+            AnalysedType::S8(_) | AnalysedType::S16(_) |
+            AnalysedType::S32(_) | AnalysedType::S64(_) |
+            AnalysedType::U8(_) | AnalysedType::U16(_) |
+            AnalysedType::U32(_) | AnalysedType::U64(_) | AnalysedType::F32(_) | AnalysedType::F64(_) => {
                 dbg!(actual_type.clone());
                 let resolved =  NumberType::refine(&actual_type);
                 dbg!(resolved.clone());
-
 
 
                 if let Some(_) = resolved {
@@ -92,18 +103,186 @@ mod internal {
             AnalysedType::Chr(_) => {
                 let resolved =  CharType::refine(&actual_type);
 
-                if let Some(_) = resolved {
+                if resolved.is_some() {
                     Ok(())
                 } else {
                     Err(format!("Expected char type, but got {:?}", actual_type))
                 }
             }
 
-            _ => {
-                Err(format!("The {:?} not yet supported", actual_type))
+            AnalysedType::Variant(expected_variant) => {
+                let actual_variant_type = VariantType::refine(&actual_type);
+
+                match actual_variant_type {
+                    Some(actual_variant) => {
+                        for expected_case in expected_variant.cases.iter() {
+                            let expected_case_name = expected_case.name.clone();
+                            let actual_case_type = actual_variant.inner_type_by_name(&expected_case_name);
+
+                            if let Some(expected_case_typ) = expected_case.typ.clone() {
+                                let result = validate(&expected_case_typ, &actual_case_type);
+                                match result {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        return Err(format!("Invalid type for case `{}` in the variant. Expected {}. {}", expected_case_name, PrettyAnalysedType(expected_case_typ), e));
+                                    }
+                                }
+                            }
+
+                        }
+
+                        Ok(())
+                    }
+
+                    None => {
+                        return Err(format!("Expected variant type {}", PrettyAnalysedType(expected_analysed_type.clone())));
+                    }
+                }
             }
+            AnalysedType::Result(result) => {
+                let actual_type_ok = OkType::refine(&actual_type).map(|t| t.inner_type().clone());
+                let actual_type_err = ErrType::refine(&actual_type).map(|t| t.inner_type().clone());
+                let expected = actual_type_ok.or(actual_type_err);
+
+                if expected.is_some() {
+                    Ok(())
+                } else {
+                    Err(format!("Expected result type {}", PrettyAnalysedType(expected_analysed_type.clone())))
+                }
+            }
+            AnalysedType::Option(_) => {
+                let optional_type = OptionalType::refine(&actual_type).map(|t| t.inner_type().clone());
+
+                if let Some(optional_type) = optional_type {
+                    validate(expected_analysed_type, &optional_type)
+                } else {
+                    Err(format!("Expected option type {}", PrettyAnalysedType(expected_analysed_type.clone())))
+                }
+            }
+
+            AnalysedType::Enum(enum_cases) => {
+
+            }
+            AnalysedType::Flags(_) => {}
+            AnalysedType::Tuple(_) => {}
+            AnalysedType::List(_) => {}
+            AnalysedType::Str(_) => {}
+            AnalysedType::Bool(_) => {}
+            AnalysedType::Handle(_) => {}
         }
 
+    }
+}
+
+pub struct PrettyAnalysedType(AnalysedType);
+
+impl Display for PrettyAnalysedType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            AnalysedType::Record(fields) => {
+                write!(f, "record {{")?;
+                for field in fields.fields.iter() {
+                    write!(f, "{}: {}, ", field.name, PrettyAnalysedType(field.clone().typ))?;
+                }
+                write!(f, "}}")
+            }
+
+            AnalysedType::S32(_) => write!(f, "s32"),
+            AnalysedType::U64(_) => write!(f, "u64"),
+            AnalysedType::Chr(_) => write!(f, "char"),
+            AnalysedType::Result(type_result) => {
+               let ok_type =
+                   type_result.ok.clone().map(|t| PrettyAnalysedType(t.deref().clone())).map_or("unknown".to_string(), |t| t.to_string());
+
+               let error_type =
+                     type_result.err.clone().map(|t| PrettyAnalysedType(t.deref().clone())).map_or("unknown".to_string(), |t| t.to_string());
+
+               write!(f, "Result<{}, {}>", ok_type, error_type)
+           }
+            AnalysedType::Option(t) => {
+                let inner_type = PrettyAnalysedType(t.inner.deref().clone());
+                write!(f, "Option<{}>", inner_type)
+            }
+
+            AnalysedType::Variant(type_variant) => {
+                write!(f, "variant {{")?;
+                for field in type_variant.cases.iter() {
+                    let name = field.name.clone();
+                    let typ =field.typ.clone();
+
+                    match typ {
+                        Some(t) => {
+                            write!(f, "{}({}), ", name, PrettyAnalysedType(t))?;
+                        }
+                        None => {
+                            write!(f, "{}, ", name)?;
+                        }
+                    }
+                }
+                write!(f, "}}")
+            }
+            AnalysedType::Enum(cases) => {
+                write!(f, "enum {{")?;
+                for case in cases.cases {
+                    write!(f, "{}, ", case)?;
+                }
+                write!(f, "}}")
+            }
+            AnalysedType::Flags(flags) => {
+                write!(f, "flags {{")?;
+                for flag in flags.names.iter() {
+                    write!(f, "{}, ", flag)?;
+                }
+                write!(f, "}}")
+            }
+            AnalysedType::Tuple(tuple) => {
+                write!(f, "tuple<")?;
+                for (index, typ) in tuple.items.iter().enumerate() {
+                    write!(f, "{}", PrettyAnalysedType(typ.clone()))?;
+
+                    if index < tuple.items.len() - 1 {
+                        write!(f, ",")?;
+                    }
+                }
+                write!(f, ">")
+            }
+            AnalysedType::List(list) => {
+                write!(f, "list<{}>", PrettyAnalysedType(list.inner.deref().clone()))
+            }
+            AnalysedType::Str(_) => {
+                write!(f, "str")
+            }
+            AnalysedType::F64(_) => {
+                write!(f, "f64")
+            }
+            AnalysedType::F32(_) => {
+                write!(f, "f32")
+            }
+            AnalysedType::S64(_) => {
+                write!(f, "s64")
+            }
+            AnalysedType::U32(_) => {
+                write!(f, "u32")
+            }
+            AnalysedType::U16(_) => {
+                write!(f, "u16")
+            }
+            AnalysedType::S16(_) => {
+                write!(f, "s16")
+            }
+            AnalysedType::U8(_) => {
+                write!(f, "u8")
+            }
+            AnalysedType::S8(_) => {
+                write!(f, "s8")
+            }
+            AnalysedType::Bool(_) => {
+                write!(f, "bool")
+            }
+            AnalysedType::Handle(resource) => {
+                write!(f, "handle<{}>", resource)
+            }
+        }
     }
 }
 

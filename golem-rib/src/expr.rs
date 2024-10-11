@@ -429,7 +429,7 @@ impl Expr {
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
 
-        //self.check_types(function_type_registry).map_err(|x| vec![x])?;
+        self.check_types(function_type_registry).map_err(|x| vec![x])?;
         self.unify_types()?;
         Ok(())
     }
