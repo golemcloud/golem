@@ -1,5 +1,3 @@
-use golem_wasm_ast::analysis::protobuf::Type;
-
 use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
 use crate::protobuf::typed_result::ResultValue;
 use crate::protobuf::{NameValuePair, TypedOption};
@@ -7,7 +5,351 @@ use crate::protobuf::{TypeAnnotatedValue as RootTypeAnnotatedValue, TypedResult}
 use crate::protobuf::{
     TypedEnum, TypedFlags, TypedHandle, TypedList, TypedRecord, TypedTuple, TypedVariant,
 };
-use crate::Value;
+use crate::{Value, WitValue};
+use golem_wasm_ast::analysis::analysed_type::{
+    bool, chr, f32, f64, list, option, result, result_err, result_ok, s16, s32, s64, s8, str,
+    tuple, u16, u32, u64, u8,
+};
+use golem_wasm_ast::analysis::protobuf::Type;
+use golem_wasm_ast::analysis::AnalysedType;
+use std::collections::HashMap;
+use uuid::Uuid;
+
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "bincode", derive(::bincode::Encode, ::bincode::Decode))]
+pub struct ValueAndType {
+    pub value: Value,
+    pub typ: AnalysedType,
+}
+
+impl ValueAndType {
+    pub fn new(value: Value, typ: AnalysedType) -> Self {
+        Self { value, typ }
+    }
+}
+
+impl From<ValueAndType> for Value {
+    fn from(value_and_type: ValueAndType) -> Self {
+        value_and_type.value
+    }
+}
+
+impl From<ValueAndType> for AnalysedType {
+    fn from(value_and_type: ValueAndType) -> Self {
+        value_and_type.typ
+    }
+}
+
+impl From<ValueAndType> for WitValue {
+    fn from(value_and_type: ValueAndType) -> Self {
+        value_and_type.value.into()
+    }
+}
+
+impl TryFrom<ValueAndType> for TypeAnnotatedValue {
+    type Error = Vec<String>;
+
+    fn try_from(value_and_type: ValueAndType) -> Result<Self, Self::Error> {
+        TypeAnnotatedValue::create(&value_and_type.value, &value_and_type.typ)
+    }
+}
+
+impl TryFrom<&ValueAndType> for TypeAnnotatedValue {
+    type Error = Vec<String>;
+
+    fn try_from(value_and_type: &ValueAndType) -> Result<Self, Self::Error> {
+        TypeAnnotatedValue::create(&value_and_type.value, &value_and_type.typ)
+    }
+}
+
+impl TryFrom<TypeAnnotatedValue> for ValueAndType {
+    type Error = String;
+
+    fn try_from(value: TypeAnnotatedValue) -> Result<Self, Self::Error> {
+        let typ: AnalysedType = (&value).try_into()?;
+        let value: Value = value.try_into()?;
+        Ok(Self::new(value, typ))
+    }
+}
+
+impl TryFrom<crate::protobuf::TypeAnnotatedValue> for ValueAndType {
+    type Error = String;
+
+    fn try_from(value: crate::protobuf::TypeAnnotatedValue) -> Result<Self, Self::Error> {
+        let inner = value
+            .type_annotated_value
+            .ok_or("Missing type_annotated_value field")?;
+        let typ: AnalysedType = (&inner).try_into()?;
+        let value: Value = inner.try_into()?;
+        Ok(Self::new(value, typ))
+    }
+}
+
+impl TryFrom<ValueAndType> for crate::protobuf::TypeAnnotatedValue {
+    type Error = Vec<String>;
+
+    fn try_from(value_and_type: ValueAndType) -> Result<Self, Self::Error> {
+        Ok(crate::protobuf::TypeAnnotatedValue {
+            type_annotated_value: Some(value_and_type.try_into()?),
+        })
+    }
+}
+
+/// Specific trait to convert a type into a `ValueAndType` type.
+pub trait IntoValue {
+    fn into_value(self) -> Value;
+    fn get_type() -> AnalysedType;
+}
+
+pub trait IntoValueAndType {
+    fn into_value_and_type(self) -> ValueAndType;
+}
+
+impl<T: IntoValue + Sized> IntoValueAndType for T {
+    fn into_value_and_type(self) -> ValueAndType {
+        ValueAndType::new(self.into_value(), Self::get_type())
+    }
+}
+
+impl IntoValue for u8 {
+    fn into_value(self) -> Value {
+        Value::U8(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        u8()
+    }
+}
+
+impl IntoValue for u16 {
+    fn into_value(self) -> Value {
+        Value::U16(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        u16()
+    }
+}
+
+impl IntoValue for u32 {
+    fn into_value(self) -> Value {
+        Value::U32(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        u32()
+    }
+}
+
+impl IntoValue for u64 {
+    fn into_value(self) -> Value {
+        Value::U64(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        u64()
+    }
+}
+
+impl IntoValue for i8 {
+    fn into_value(self) -> Value {
+        Value::S8(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        s8()
+    }
+}
+
+impl IntoValue for i16 {
+    fn into_value(self) -> Value {
+        Value::S16(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        s16()
+    }
+}
+
+impl IntoValue for i32 {
+    fn into_value(self) -> Value {
+        Value::S32(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        s32()
+    }
+}
+
+impl IntoValue for i64 {
+    fn into_value(self) -> Value {
+        Value::S64(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        s64()
+    }
+}
+
+impl IntoValue for f32 {
+    fn into_value(self) -> Value {
+        Value::F32(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        f32()
+    }
+}
+
+impl IntoValue for f64 {
+    fn into_value(self) -> Value {
+        Value::F64(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        f64()
+    }
+}
+
+impl IntoValue for bool {
+    fn into_value(self) -> Value {
+        Value::Bool(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        bool()
+    }
+}
+
+impl IntoValue for char {
+    fn into_value(self) -> Value {
+        Value::Char(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        chr()
+    }
+}
+
+impl IntoValue for String {
+    fn into_value(self) -> Value {
+        Value::String(self)
+    }
+
+    fn get_type() -> AnalysedType {
+        str()
+    }
+}
+
+impl<S: IntoValue, E: IntoValue> IntoValue for Result<S, E> {
+    fn into_value(self) -> Value {
+        match self {
+            Ok(s) => Value::Result(Ok(Some(Box::new(s.into_value())))),
+            Err(e) => Value::Result(Err(Some(Box::new(e.into_value())))),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        result(S::get_type(), E::get_type())
+    }
+}
+
+impl<E: IntoValue> IntoValue for Result<(), E> {
+    fn into_value(self) -> Value {
+        match self {
+            Ok(_) => Value::Result(Ok(None)),
+            Err(e) => Value::Result(Err(Some(Box::new(e.into_value())))),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        result_err(E::get_type())
+    }
+}
+
+impl<S: IntoValue> IntoValue for Result<S, ()> {
+    fn into_value(self) -> Value {
+        match self {
+            Ok(s) => Value::Result(Ok(Some(Box::new(s.into_value())))),
+            Err(_) => Value::Result(Err(None)),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        result_ok(S::get_type())
+    }
+}
+
+impl<T: IntoValue> IntoValue for Option<T> {
+    fn into_value(self) -> Value {
+        match self {
+            Some(t) => Value::Option(Some(Box::new(t.into_value()))),
+            None => Value::Option(None),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        option(T::get_type())
+    }
+}
+
+impl<T: IntoValue> IntoValue for Vec<T> {
+    fn into_value(self) -> Value {
+        Value::List(self.into_iter().map(IntoValue::into_value).collect())
+    }
+
+    fn get_type() -> AnalysedType {
+        list(T::get_type())
+    }
+}
+
+impl<A: IntoValue, B: IntoValue> IntoValue for (A, B) {
+    fn into_value(self) -> Value {
+        Value::Tuple(vec![self.0.into_value(), self.1.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        tuple(vec![A::get_type(), B::get_type()])
+    }
+}
+
+impl<A: IntoValue, B: IntoValue, C: IntoValue> IntoValue for (A, B, C) {
+    fn into_value(self) -> Value {
+        Value::Tuple(vec![
+            self.0.into_value(),
+            self.1.into_value(),
+            self.2.into_value(),
+        ])
+    }
+
+    fn get_type() -> AnalysedType {
+        tuple(vec![A::get_type(), B::get_type(), C::get_type()])
+    }
+}
+
+impl<K: IntoValue, V: IntoValue> IntoValue for HashMap<K, V> {
+    fn into_value(self) -> Value {
+        Value::List(
+            self.into_iter()
+                .map(|(k, v)| Value::Tuple(vec![k.into_value(), v.into_value()]))
+                .collect(),
+        )
+    }
+
+    fn get_type() -> AnalysedType {
+        list(tuple(vec![K::get_type(), V::get_type()]))
+    }
+}
+
+impl IntoValue for Uuid {
+    fn into_value(self) -> Value {
+        Value::String(self.to_string())
+    }
+
+    fn get_type() -> AnalysedType {
+        str()
+    }
+}
 
 pub trait TypeAnnotatedValueConstructors: Sized {
     fn create<T: Into<Type>>(value: &Value, typ: T) -> Result<Self, Vec<String>>;
@@ -343,15 +685,16 @@ fn create_from_type(val: &Value, typ: &Type) -> Result<TypeAnnotatedValue, Vec<S
 
 #[cfg(test)]
 mod tests {
-    use golem_wasm_ast::analysis::protobuf::{r#type, PrimitiveType, TypePrimitive};
-    use golem_wasm_ast::analysis::{AnalysedType, TypeU32};
+    use test_r::test;
 
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
     use crate::{TypeAnnotatedValueConstructors, Value};
+    use golem_wasm_ast::analysis::analysed_type::u32;
+    use golem_wasm_ast::analysis::protobuf::{r#type, PrimitiveType, TypePrimitive};
 
     #[test]
     fn test_type_annotated_value_from_analysed_type() {
-        let analysed_type = AnalysedType::U32(TypeU32);
+        let analysed_type = u32();
 
         let result = TypeAnnotatedValue::create(&Value::U32(1), &analysed_type);
 

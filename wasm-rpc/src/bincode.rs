@@ -349,6 +349,8 @@ impl<'de> BorrowDecode<'de> for WitNode {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::{Value, WitValue};
     use proptest::prelude::*;
     use proptest_arbitrary_interop::arb_sized;

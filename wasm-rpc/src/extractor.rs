@@ -323,6 +323,8 @@ impl<'a> WitNodePointer<'a> {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
     use crate::*;
 

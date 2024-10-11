@@ -13,10 +13,20 @@ unstable-dec-dep = []
 [lib]
 name = "golem_wasm_rpc_stubgen"
 path = "src/lib.rs"
+harness = false
 
 [[bin]]
 name = "wasm-rpc-stubgen"
 path = "src/main.rs"
+harness = false
+
+[[test]]
+name = "wit"
+harness = false
+
+[[test]]
+name = "add_dep"
+harness = false
 
 [dependencies]
 anyhow = "1.0.79"
@@ -49,6 +59,8 @@ tokio = { workspace = true }
 toml = "0.8.14"
 walkdir = "2.5.0"
 wac-graph = "0.6.0"
-wit-encoder = "=0.219.0"
 wit-bindgen-rust = "=0.26.0"
 wit-parser = "=0.219.0"
+
+[dev-dependencies]
+test-r = { workspace = true }

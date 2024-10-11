@@ -15,11 +15,11 @@
 use crate::{Uri, Value};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::{
-    AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64,
-    TypeFlags, TypeList, TypeOption, TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8,
-    TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8, TypeVariant,
+use golem_wasm_ast::analysis::analysed_type::{
+    bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, s16, s32, s64, s8, str,
+    tuple, u16, u32, u64, u8, unit_case, variant,
 };
+use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 use wasmtime::component::{types, ResourceAny, Type, Val};
 
 pub enum EncodingError {
@@ -573,69 +573,51 @@ pub async fn encode_output(
 
 pub fn type_to_analysed_type(typ: &Type) -> Result<AnalysedType, String> {
     match typ {
-        Type::Bool => Ok(AnalysedType::Bool(TypeBool)),
-        Type::S8 => Ok(AnalysedType::S8(TypeS8)),
-        Type::U8 => Ok(AnalysedType::U8(TypeU8)),
-        Type::S16 => Ok(AnalysedType::S16(TypeS16)),
-        Type::U16 => Ok(AnalysedType::U16(TypeU16)),
-        Type::S32 => Ok(AnalysedType::S32(TypeS32)),
-        Type::U32 => Ok(AnalysedType::U32(TypeU32)),
-        Type::S64 => Ok(AnalysedType::S64(TypeS64)),
-        Type::U64 => Ok(AnalysedType::U64(TypeU64)),
-        Type::Float32 => Ok(AnalysedType::F32(TypeF32)),
-        Type::Float64 => Ok(AnalysedType::F64(TypeF64)),
-        Type::Char => Ok(AnalysedType::Chr(TypeChr)),
-        Type::String => Ok(AnalysedType::Str(TypeStr)),
-        Type::List(list) => {
-            let inner = type_to_analysed_type(&list.ty())?;
-            Ok(AnalysedType::List(TypeList {
-                inner: Box::new(inner),
-            }))
+        Type::Bool => Ok(bool()),
+        Type::S8 => Ok(s8()),
+        Type::U8 => Ok(u8()),
+        Type::S16 => Ok(s16()),
+        Type::U16 => Ok(u16()),
+        Type::S32 => Ok(s32()),
+        Type::U32 => Ok(u32()),
+        Type::S64 => Ok(s64()),
+        Type::U64 => Ok(u64()),
+        Type::Float32 => Ok(f32()),
+        Type::Float64 => Ok(f64()),
+        Type::Char => Ok(chr()),
+        Type::String => Ok(str()),
+        Type::List(wlist) => {
+            let inner = type_to_analysed_type(&wlist.ty())?;
+            Ok(list(inner))
         }
-        Type::Record(record) => {
-            let fields = record
+        Type::Record(wrecord) => {
+            let fields = wrecord
                 .fields()
-                .map(|field| {
-                    type_to_analysed_type(&field.ty).map(|t| NameTypePair {
-                        name: field.name.to_string(),
-                        typ: t,
-                    })
-                })
+                .map(|wfield| type_to_analysed_type(&wfield.ty).map(|t| field(wfield.name, t)))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(AnalysedType::Record(TypeRecord { fields }))
+            Ok(record(fields))
         }
-        Type::Tuple(tuple) => {
-            let items = tuple
+        Type::Tuple(wtuple) => {
+            let items = wtuple
                 .types()
                 .map(|ty| type_to_analysed_type(&ty))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(AnalysedType::Tuple(TypeTuple { items }))
+            Ok(tuple(items))
         }
-        Type::Variant(variant) => {
-            let cases = variant
+        Type::Variant(wvariant) => {
+            let cases = wvariant
                 .cases()
-                .map(|case| match case.ty {
-                    Some(ty) => type_to_analysed_type(&ty).map(|t| NameOptionTypePair {
-                        name: case.name.to_string(),
-                        typ: Some(t),
-                    }),
-                    None => Ok(NameOptionTypePair {
-                        name: case.name.to_string(),
-                        typ: None,
-                    }),
+                .map(|wcase| match wcase.ty {
+                    Some(ty) => type_to_analysed_type(&ty).map(|t| case(wcase.name, t)),
+                    None => Ok(unit_case(wcase.name)),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(AnalysedType::Variant(TypeVariant { cases }))
+            Ok(variant(cases))
         }
-        Type::Enum(enm) => {
-            let cases = enm.names().map(|name| name.to_string()).collect();
-            Ok(AnalysedType::Enum(TypeEnum { cases }))
-        }
-        Type::Option(option) => {
-            let inner = type_to_analysed_type(&option.ty())?;
-            Ok(AnalysedType::Option(TypeOption {
-                inner: Box::new(inner),
-            }))
+        Type::Enum(wenum) => Ok(r#enum(&wenum.names().collect::<Vec<_>>())),
+        Type::Option(woption) => {
+            let inner = type_to_analysed_type(&woption.ty())?;
+            Ok(option(inner))
         }
         Type::Result(result) => {
             let ok = match result.ok() {
@@ -648,10 +630,7 @@ pub fn type_to_analysed_type(typ: &Type) -> Result<AnalysedType, String> {
             };
             Ok(AnalysedType::Result(TypeResult { ok, err }))
         }
-        Type::Flags(flags) => {
-            let names = flags.names().map(|name| name.to_string()).collect();
-            Ok(AnalysedType::Flags(TypeFlags { names }))
-        }
+        Type::Flags(wflags) => Ok(flags(&wflags.names().collect::<Vec<_>>())),
         Type::Own(_) => Err("Cannot extract information about owned resource type".to_string()),
         Type::Borrow(_) => {
             Err("Cannot extract information about borrowed resource type".to_string())

@@ -18,6 +18,9 @@
 #[cfg(feature = "stub")]
 mod bindings;
 
+#[cfg(test)]
+test_r::enable!();
+
 /// Implements bincode encoders and decoders for WitValue instances
 #[cfg(feature = "bincode")]
 pub mod bincode;
@@ -182,6 +185,14 @@ impl From<Value> for WitValue {
         let mut builder = WitValueBuilder::new();
         build_wit_value(value, &mut builder);
         builder.build()
+    }
+}
+
+impl PartialEq for WitValue {
+    fn eq(&self, other: &Self) -> bool {
+        let a: Value = self.clone().into();
+        let b: Value = other.clone().into();
+        a == b
     }
 }
 
@@ -402,6 +413,8 @@ pub const WASM_RPC_VERSION: &str = version::lib_version!();
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::{Value, WitValue};
     use proptest::prelude::*;
     use proptest_arbitrary_interop::arb_sized;

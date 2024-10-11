@@ -526,14 +526,16 @@ impl WasmValue for TypeAnnotatedValuePrintable {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
     use crate::text::type_annotated_value_from_str;
     use crate::{type_annotated_value_to_string, TypeAnnotatedValueConstructors, Value};
-    use golem_wasm_ast::analysis::{
-        AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
-        TypeF64, TypeFlags, TypeOption, TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8,
-        TypeStr, TypeTuple, TypeU16, TypeU32, TypeU64, TypeU8, TypeVariant,
+    use golem_wasm_ast::analysis::analysed_type::{
+        bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result_err,
+        result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case, variant,
     };
+    use golem_wasm_ast::analysis::AnalysedType;
 
     fn round_trip(value: Value, typ: AnalysedType) {
         let typed_value = TypeAnnotatedValue::create(&value, &typ).unwrap();
@@ -549,82 +551,74 @@ mod tests {
 
     #[test]
     fn round_trip_u8() {
-        round_trip(Value::U8(42), AnalysedType::U8(TypeU8));
+        round_trip(Value::U8(42), u8());
     }
 
     #[test]
     fn round_trip_u16() {
-        round_trip(Value::U16(1234), AnalysedType::U16(TypeU16));
+        round_trip(Value::U16(1234), u16());
     }
 
     #[test]
     fn round_trip_u32() {
-        round_trip(Value::U32(123456), AnalysedType::U32(TypeU32));
+        round_trip(Value::U32(123456), u32());
     }
 
     #[test]
     fn round_trip_u64() {
-        round_trip(Value::U64(1234567890123456), AnalysedType::U64(TypeU64));
+        round_trip(Value::U64(1234567890123456), u64());
     }
 
     #[test]
     fn round_trip_s8() {
-        round_trip(Value::S8(-42), AnalysedType::S8(TypeS8));
+        round_trip(Value::S8(-42), s8());
     }
 
     #[test]
     fn round_trip_s16() {
-        round_trip(Value::S16(-1234), AnalysedType::S16(TypeS16));
+        round_trip(Value::S16(-1234), s16());
     }
 
     #[test]
     fn round_trip_s32() {
-        round_trip(Value::S32(-123456), AnalysedType::S32(TypeS32));
+        round_trip(Value::S32(-123456), s32());
     }
 
     #[test]
     fn round_trip_s64() {
-        round_trip(Value::S64(-1234567890123456), AnalysedType::S64(TypeS64));
+        round_trip(Value::S64(-1234567890123456), s64());
     }
 
     #[test]
     fn round_trip_f32() {
-        round_trip(Value::F32(1234.5678), AnalysedType::F32(TypeF32));
+        round_trip(Value::F32(1234.5678), f32());
     }
 
     #[test]
     fn round_trip_f64() {
-        round_trip(
-            Value::F64(1_234_567_890_123_456.8),
-            AnalysedType::F64(TypeF64),
-        );
+        round_trip(Value::F64(1_234_567_890_123_456.8), f64());
     }
 
     #[test]
     fn round_trip_bool() {
-        round_trip(Value::Bool(true), AnalysedType::Bool(TypeBool));
+        round_trip(Value::Bool(true), bool());
     }
 
     #[test]
     fn round_trip_char() {
-        round_trip(Value::Char('a'), AnalysedType::Chr(TypeChr));
+        round_trip(Value::Char('a'), chr());
     }
 
     #[test]
     fn round_trip_string() {
-        round_trip(
-            Value::String("hello".to_string()),
-            AnalysedType::Str(TypeStr),
-        );
+        round_trip(Value::String("hello".to_string()), str());
     }
 
     #[test]
     fn round_trip_list_1() {
         round_trip(
             Value::List(vec![Value::U8(1), Value::U8(2), Value::U8(3)]),
-            AnalysedType::List(golem_wasm_ast::analysis::TypeList {
-                inner: Box::new(AnalysedType::U8(TypeU8)),
-            }),
+            list(u8()),
         );
     }
 
@@ -635,11 +629,7 @@ mod tests {
                 Value::String("hello".to_string()),
                 Value::String("world".to_string()),
             ])]),
-            AnalysedType::List(golem_wasm_ast::analysis::TypeList {
-                inner: Box::new(AnalysedType::List(golem_wasm_ast::analysis::TypeList {
-                    inner: Box::new(AnalysedType::Str(TypeStr)),
-                })),
-            }),
+            list(list(str())),
         );
     }
 
@@ -651,22 +641,11 @@ mod tests {
                 Value::String("hello".to_string()),
                 Value::Bool(true),
             ]),
-            AnalysedType::Record(TypeRecord {
-                fields: vec![
-                    NameTypePair {
-                        name: "a".to_string(),
-                        typ: AnalysedType::U8(TypeU8),
-                    },
-                    NameTypePair {
-                        name: "b".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
-                    },
-                    NameTypePair {
-                        name: "c".to_string(),
-                        typ: AnalysedType::Bool(TypeBool),
-                    },
-                ],
-            }),
+            record(vec![
+                field("a", u8()),
+                field("b", str()),
+                field("c", bool()),
+            ]),
         );
     }
 
@@ -678,13 +657,7 @@ mod tests {
                 Value::String("hello".to_string()),
                 Value::Bool(true),
             ]),
-            AnalysedType::Tuple(TypeTuple {
-                items: vec![
-                    AnalysedType::U8(TypeU8),
-                    AnalysedType::Str(TypeStr),
-                    AnalysedType::Bool(TypeBool),
-                ],
-            }),
+            tuple(vec![u8(), str(), bool()]),
         );
     }
 
@@ -695,49 +668,25 @@ mod tests {
                 case_idx: 1,
                 case_value: Some(Box::new(Value::String("hello".to_string()))),
             },
-            AnalysedType::Variant(TypeVariant {
-                cases: vec![
-                    NameOptionTypePair {
-                        name: "A".to_string(),
-                        typ: None,
-                    },
-                    NameOptionTypePair {
-                        name: "B".to_string(),
-                        typ: Some(AnalysedType::Str(TypeStr)),
-                    },
-                ],
-            }),
+            variant(vec![unit_case("A"), case("B", str())]),
         );
     }
 
     #[test]
     fn round_trip_enum() {
-        round_trip(
-            Value::Enum(1),
-            AnalysedType::Enum(TypeEnum {
-                cases: vec!["A".to_string(), "B".to_string()],
-            }),
-        );
+        round_trip(Value::Enum(1), r#enum(&["A", "B"]));
     }
 
     #[test]
     fn round_trip_option() {
-        round_trip(
-            Value::Option(Some(Box::new(Value::U8(1)))),
-            AnalysedType::Option(TypeOption {
-                inner: Box::new(AnalysedType::U8(TypeU8)),
-            }),
-        );
+        round_trip(Value::Option(Some(Box::new(Value::U8(1)))), option(u8()));
     }
 
     #[test]
     fn round_trip_result_ok() {
         round_trip(
             Value::Result(Ok(Some(Box::new(Value::U8(1))))),
-            AnalysedType::Result(TypeResult {
-                ok: Some(Box::new(AnalysedType::U8(TypeU8))),
-                err: None,
-            }),
+            result_ok(u8()),
         );
     }
 
@@ -745,10 +694,7 @@ mod tests {
     fn round_trip_result_err() {
         round_trip(
             Value::Result(Err(Some(Box::new(Value::U8(1))))),
-            AnalysedType::Result(TypeResult {
-                err: Some(Box::new(AnalysedType::U8(TypeU8))),
-                ok: None,
-            }),
+            result_err(u8()),
         );
     }
 
@@ -756,9 +702,7 @@ mod tests {
     fn round_trip_flags() {
         round_trip(
             Value::Flags(vec![true, false, true]),
-            AnalysedType::Flags(TypeFlags {
-                names: vec!["A".to_string(), "B".to_string(), "C".to_string()],
-            }),
+            flags(&["A", "B", "C"]),
         );
     }
 }
