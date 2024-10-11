@@ -17,7 +17,7 @@ pub fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
 
     let (package_id, sources) = resolve
         .push_dir(path)
-        .with_context(|| anyhow!("failed to resolve wit dir: {}", path.to_string_lossy()))?;
+        .with_context(|| anyhow!("Failed to resolve wit dir: {}", path.to_string_lossy()))?;
 
     let sources = partition_sources_by_package_ids(path, &resolve, package_id, sources)?;
 
