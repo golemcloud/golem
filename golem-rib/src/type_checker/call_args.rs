@@ -59,3 +59,44 @@ mod internal {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod type_check_tests {
+    use super::*;
+    use crate::compile;
+
+    #[test]
+    fn test_check_call_args() {
+        let expr = r#"
+          let result = foo({a: 1, b: 2});
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        compile(&expr, &vec![]).unwrap();
+    }
+
+
+    // mod internal {
+    //     use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeRecord};
+    //
+    //     pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
+    //         let analysed_export = AnalysedExport::Function(
+    //             AnalysedFunction {
+    //                 name: "foo".to_string(),
+    //                 parameters: vec![AnalysedFunctionParameter {
+    //                     name: "arg1".to_string(),
+    //                     typ: AnalysedType::Record(TypeRecord {
+    //                         fields: vec![
+    //                             ("a".to_string(), AnalysedType::Int),
+    //                             ("b".to_string(), AnalysedType::Int),
+    //                         ],
+    //                     }),
+    //                 }],
+    //                 results: vec![AnalysedType::Str(TypeStr)],
+    //             }
+    //         );
+    //
+    //     }
+    // }
+}
