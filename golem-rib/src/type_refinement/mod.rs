@@ -152,6 +152,18 @@ impl TypeRefinement for TupleType {
     }
 }
 
+impl TypeRefinement for VariantType {
+    fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
+        internal::refine_inferred_type(inferred_type, &|inferred_type| {
+            if let InferredType::Variant(variant_type) = inferred_type {
+                Some(VariantType(variant_type.clone()))
+            } else {
+                None
+            }
+        })
+    }
+}
+
 mod internal {
     use crate::type_refinement::RefinedType;
     use crate::InferredType;

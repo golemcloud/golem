@@ -189,7 +189,7 @@ mod internal {
             RecordType::refine(outer_inferred_type).ok_or("Expected record type".to_string())?;
 
         for (field, expr) in inner_expressions {
-            let inner_type = refined_record_type.inner_type_by_field(field);
+            let inner_type = refined_record_type.inner_type_by_name(field);
             expr.add_infer_type_mut(inner_type.clone());
             push_down_queue.push_back(expr);
         }
@@ -272,18 +272,13 @@ mod internal {
                     for pattern in patterns {
                         update_arm_pattern_type(pattern, &inner, original_predicate)?;
                     }
-                } else {
-                    let identified_variant = predicate_type
-                        .variant()
-                        .iter()
-                        .find(|(name, _optional_type)| name == constructor_name);
+                } else if let Some(variant_type) =  VariantType::refine(predicate_type) {
+                    let variant_arg_type = variant_type.inner_type_by_name(constructor_name);
 
-                    if let Some((_name, Some(inner_type))) = identified_variant {
-                        for pattern in patterns {
-                            update_arm_pattern_type(pattern, inner_type, original_predicate)?;
-                        }
+                    for pattern in patterns {
+                        update_arm_pattern_type(pattern, &variant_arg_type, original_predicate)?;
                     }
-                }
+                } else {}
             }
 
             ArmPattern::TupleConstructor(patterns) => {
@@ -304,10 +299,10 @@ mod internal {
                 let list_type = ListType::refine(predicate_type)
                     .ok_or(format!("Invalid pattern match. Cannot match {} to list", original_predicate))?;
 
-                let inner_type = list_type.inner_type();
+                let list_elem_type = list_type.inner_type();
 
                 for pattern in &mut *patterns {
-                    update_arm_pattern_type(pattern, &inner_type, original_predicate)?;
+                    update_arm_pattern_type(pattern, &list_elem_type, original_predicate)?;
                 }
             }
 
@@ -317,8 +312,8 @@ mod internal {
                     .ok_or(format!("Invalid pattern match. Cannot match {} to record", original_predicate))?;
 
                 for (field, pattern) in fields {
-                    let inner_type = record_type.inner_type_by_field(field);
-                    update_arm_pattern_type(pattern, &inner_type, original_predicate)?;
+                    let type_of_field = record_type.inner_type_by_name(field);
+                    update_arm_pattern_type(pattern, &type_of_field, original_predicate)?;
                 }
             }
 
