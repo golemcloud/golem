@@ -243,7 +243,7 @@ fn is_package_same_or_stub(
 fn remove_stub_import(wit_file: &PathBuf, package_name: &PackageName) -> anyhow::Result<String> {
     let read_data = fs::read_to_string(wit_file)?;
     // TODO: naming
-    let self_stub_package =  format!("{}:{}-stub", package_name.namespace, package_name.name);
+    let self_stub_package = format!("{}:{}-stub", package_name.namespace, package_name.name);
 
     let re = Regex::new(
         format!(

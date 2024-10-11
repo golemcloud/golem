@@ -99,11 +99,10 @@ impl StubDefinition {
             .unwrap_or_else(|| panic!("root package not found"))
     }
 
-    pub fn dep_packages_with_sources(&self) -> impl Iterator<Item = (&Package, &Vec<PathBuf>)> {
+    pub fn source_packages_with_sources(&self) -> impl Iterator<Item = (&Package, &Vec<PathBuf>)> {
         self.resolve
             .topological_packages()
             .into_iter()
-            .filter(|package_id| *package_id != self.source_package_id)
             .map(|package_id| {
                 (
                     self.resolve
@@ -196,8 +195,11 @@ impl StubDefinition {
 
     pub fn source_interfaces(&self) -> &Vec<InterfaceStub> {
         self.source_interfaces.get_or_init(|| {
-            let (types, functions, interfaces) =
-                self.partition_world_items(&self.source_world().exports);
+            let WorldItemsByType {
+                types,
+                functions,
+                interfaces,
+            } = self.partition_world_items(&self.source_world().exports);
 
             interfaces
                 .into_iter()
@@ -210,11 +212,7 @@ impl StubDefinition {
     fn partition_world_items<'a>(
         &'a self,
         world_items: &'a IndexMap<WorldKey, WorldItem>,
-    ) -> (
-        Vec<(String, TypeId)>,
-        Vec<&Function>,
-        Vec<(String, &Interface)>,
-    ) {
+    ) -> WorldItemsByType {
         let mut types = Vec::<(String, TypeId)>::new();
         let mut functions = Vec::new();
         let mut interfaces = Vec::new();
@@ -239,7 +237,11 @@ impl StubDefinition {
             }
         }
 
-        (types, functions, interfaces)
+        WorldItemsByType {
+            types,
+            functions,
+            interfaces,
+        }
     }
 
     fn function_to_stub(function: &Function) -> FunctionStub {
@@ -323,8 +325,7 @@ impl StubDefinition {
                 .map(|(name, typ)| (name.clone(), *typ)),
         );
 
-        let mut interface_stubs = Vec::<InterfaceStub>::new();
-        interface_stubs.reserve(1 + resource_interfaces.len());
+        let mut interface_stubs = Vec::with_capacity(1 + resource_interfaces.len());
 
         interface_stubs.push(InterfaceStub {
             name,
@@ -340,7 +341,7 @@ impl StubDefinition {
         interface_stubs
     }
 
-    fn extract_interface_stubs_from_types<'a>(
+    fn extract_interface_stubs_from_types(
         &self,
         types: impl Iterator<Item = (String, TypeId)>,
     ) -> (Vec<InterfaceStubTypeDef>, Vec<InterfaceStub>) {
@@ -489,6 +490,12 @@ impl StubDefinition {
             .get(type_id)
             .ok_or_else(|| anyhow!("failed to get type by id: {:?}", type_id))
     }
+}
+
+struct WorldItemsByType<'a> {
+    pub types: Vec<(String, TypeId)>,
+    pub functions: Vec<&'a Function>,
+    pub interfaces: Vec<(String, &'a Interface)>,
 }
 
 #[derive(Debug, Clone)]

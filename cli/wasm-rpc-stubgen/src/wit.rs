@@ -20,14 +20,12 @@ use crate::stub::{
 };
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexMap;
-use regex::Regex;
 use std::ffi::OsStr;
 use std::fmt::{Display, Formatter, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
 use wit_parser::{
-    Enum, Field, Flags, Handle, PackageName, Resolve, Result_, Tuple, Type, TypeDef, TypeDefKind,
-    UnresolvedPackage, Variant,
+    Enum, Field, Flags, Handle, PackageName, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant,
 };
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
@@ -214,7 +212,7 @@ fn write_function_result_type(
 ) -> anyhow::Result<()> {
     match &function.results {
         FunctionResultStub::Single(typ) => {
-            write!(out, "{}", typ.wit_type_string(&def)?)?;
+            write!(out, "{}", typ.wit_type_string(def)?)?;
         }
         FunctionResultStub::Multi(params) => {
             write!(out, "(")?;
@@ -300,11 +298,11 @@ fn write_type_def(
             if let Some(name) = &typ.name {
                 write!(out, "  type {} =", name)?;
                 write!(out, "  {}", kind_str)?;
-                write!(out, " {}", list_typ.wit_type_string(&def)?)?;
+                write!(out, " {}", list_typ.wit_type_string(def)?)?;
                 writeln!(out, ";")?;
             } else {
                 write!(out, "  {}", kind_str)?;
-                write!(out, " {}", list_typ.wit_type_string(&def)?)?;
+                write!(out, " {}", list_typ.wit_type_string(def)?)?;
             }
         }
         TypeDefKind::Future(_) => {}
@@ -317,7 +315,7 @@ fn write_type_def(
                     write!(out, "  {} ", kind_str)?;
                     write!(out, "{}", typ_name)?;
                     write!(out, " =")?;
-                    write!(out, " {}", aliased_typ.wit_type_string(&def)?)?;
+                    write!(out, " {}", aliased_typ.wit_type_string(def)?)?;
                     writeln!(out, ";")?;
                 } else {
                     // import from another interface
@@ -329,7 +327,7 @@ fn write_type_def(
                 write!(out, "  {} ", kind_str)?;
                 write!(out, "{}", typ_name)?;
                 write!(out, " =")?;
-                write!(out, " {}", aliased_typ.wit_type_string(&def)?)?;
+                write!(out, " {}", aliased_typ.wit_type_string(def)?)?;
                 writeln!(out, ";")?;
             }
         },
@@ -352,11 +350,11 @@ fn write_type_def(
 fn write_handle(out: &mut String, handle: &Handle, def: &StubDefinition) -> anyhow::Result<()> {
     match handle {
         Handle::Own(type_id) => {
-            write!(out, "{}", Type::Id(*type_id).wit_type_string(&def)?)?;
+            write!(out, "{}", Type::Id(*type_id).wit_type_string(def)?)?;
         }
         Handle::Borrow(type_id) => {
             write!(out, " borrow<")?;
-            write!(out, "{}", Type::Id(*type_id).wit_type_string(&def)?)?;
+            write!(out, "{}", Type::Id(*type_id).wit_type_string(def)?)?;
             write!(out, ">")?;
         }
     }
@@ -369,19 +367,19 @@ fn write_result(out: &mut String, result: &Result_, def: &StubDefinition) -> any
     match (result.ok, result.err) {
         (Some(ok), Some(err)) => {
             write!(out, "<")?;
-            write!(out, "{}", ok.wit_type_string(&def)?)?;
+            write!(out, "{}", ok.wit_type_string(def)?)?;
             write!(out, ", ")?;
-            write!(out, "{}", err.wit_type_string(&def)?)?;
+            write!(out, "{}", err.wit_type_string(def)?)?;
             write!(out, ">")?;
         }
         (Some(ok), None) => {
             write!(out, "<")?;
-            write!(out, "{}", ok.wit_type_string(&def)?)?;
+            write!(out, "{}", ok.wit_type_string(def)?)?;
             write!(out, ">")?;
         }
         (None, Some(err)) => {
             write!(out, "<_, ")?;
-            write!(out, "{}", err.wit_type_string(&def)?)?;
+            write!(out, "{}", err.wit_type_string(def)?)?;
             write!(out, ">")?;
         }
         (None, None) => {}
@@ -392,7 +390,7 @@ fn write_result(out: &mut String, result: &Result_, def: &StubDefinition) -> any
 
 fn write_option(out: &mut String, option: &Type, def: &StubDefinition) -> anyhow::Result<()> {
     write!(out, "<")?;
-    write!(out, "{}", option.wit_type_string(&def)?)?;
+    write!(out, "{}", option.wit_type_string(def)?)?;
     write!(out, ">")?;
     Ok(())
 }
@@ -407,7 +405,7 @@ fn write_variant(out: &mut String, variant: &Variant, def: &StubDefinition) -> a
 
         if let Some(ty) = case.ty {
             write!(out, "(")?;
-            write!(out, "{}", ty.wit_type_string(&def)?)?;
+            write!(out, "{}", ty.wit_type_string(def)?)?;
             write!(out, ")")?;
         }
 
@@ -439,7 +437,7 @@ fn write_tuple(out: &mut String, tuple: &Tuple, def: &StubDefinition) -> anyhow:
     let tuple_length = tuple.types.len();
     write!(out, " <")?;
     for (idx, typ) in tuple.types.iter().enumerate() {
-        write!(out, "{}", typ.wit_type_string(&def)?)?;
+        write!(out, "{}", typ.wit_type_string(def)?)?;
         if idx < tuple_length - 1 {
             write!(out, ", ")?;
         }
@@ -457,7 +455,7 @@ fn write_record(out: &mut String, fields: &[Field], def: &StubDefinition) -> any
             out,
             "    {}: {}",
             field.name,
-            field.ty.wit_type_string(&def)?
+            field.ty.wit_type_string(def)?
         )?;
         if idx < fields.len() - 1 {
             write!(out, ", ")?;
@@ -491,7 +489,7 @@ fn write_param_list(
     params: &[FunctionParamStub],
 ) -> anyhow::Result<()> {
     for (idx, param) in params.iter().enumerate() {
-        write!(out, "{}: {}", param.name, param.typ.wit_type_string(&def)?)?;
+        write!(out, "{}: {}", param.name, param.typ.wit_type_string(def)?)?;
         if idx < params.len() - 1 {
             write!(out, ", ")?;
         }
@@ -500,99 +498,65 @@ fn write_param_list(
 }
 
 pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
-    /*let mut all = def.unresolved_deps.clone();
-    all.push(def.unresolved_root.clone());
-    let stub_package_name = format!("{}-stub", def.root_package_name);
+    // TODO: naming to def
+    let stub_package_name = format!("{}-stub", def.source_package_name);
+    let target_wit_root = def.target_wit_root();
 
-    let dest_wit_root = def.target_wit_root();
-    fs::create_dir_all(&dest_wit_root)?;
+    for (package, sources) in def.source_packages_with_sources() {
+        // TODO: self refs
+        let should_skip = package.name.to_string() == stub_package_name;
 
-    for unresolved in all {
-        if unresolved.name == def.root_package_name {
-            log_action("Copying", format!("root package {}", unresolved.name));
-            let dep_dir = dest_wit_root
-                .join(Path::new("deps"))
-                .join(Path::new(&format!(
-                    "{}_{}",
-                    def.root_package_name.namespace, def.root_package_name.name
-                )));
+        if should_skip {
+            log_warn_action("Skipping", format!("package {}", package.name));
+            continue;
+        }
 
-            fs::create_dir_all(&dep_dir)?;
-            for source in unresolved.source_files() {
-                // While copying this root WIT (from which the stub is generated) to the deps directory
-                // of the stub, we ensure there is no import of the same stub's types. This happens
-                // when you regenerate a stub from a WIT, which the user may have manually modified to refer to the same stub.
-                // This occurs only when there is a cyclic dependency. That's when the package from which the stub is generated is using the stub itself.
-                //
-                // Replacing this import with `none` is closer to being the right thing to do at this stage,
-                // because there is no reason a stub WIT needs to cyclically depend on its own types to generate the stub.
-                // Now the question is whether we need to parse this WIT to Resolved and then have our own Display
-                // for it, or just use regex replace. The latter is chosen because we hardly refer to the same stub without
-                // `import`, and the actual stub package name.
-                // The former may look cleaner, but slower, and may not bring about anymore significant correctness or reliability.
-                let read_data = fs::read_to_string(source)?;
-                let re = Regex::new(
-                    format!(
-                        r"import\s+{}(/[^;]*)?;",
-                        regex::escape(stub_package_name.as_str())
-                    )
-                    .as_str(),
-                )?;
-                let new_data = re.replace_all(&read_data, "");
+        let target_dep_package_dir = target_wit_root
+            .join("deps")
+            // TODO: naming to def and review this naming
+            .join(format!(
+                "{}_{}",
+                def.source_package_name.namespace, def.source_package_name.name
+            ));
 
-                let dest = dep_dir.join(source.file_name().unwrap());
-                log_action(
-                    "  Copying",
-                    format!("{} to {}", source.to_string_lossy(), dest.to_string_lossy()),
-                );
-
-                fs::create_dir_all(dest.parent().unwrap())?;
-                fs::write(&dest, new_data.to_string())?;
-            }
-        } else if unresolved.name.to_string() != stub_package_name {
-            log_action("Copying", format!("package {}", unresolved.name));
-
-            for source in unresolved.source_files() {
-                let relative = source.strip_prefix(&def.source_wit_root)?;
-                let dest = dest_wit_root.join(relative);
-                log_action(
-                    "  Copying",
-                    format!("{} to {}", source.to_string_lossy(), dest.to_string_lossy()),
-                );
-                copy(source, &dest)?;
-            }
-        } else {
-            log_warn_action(
-                "Skipping",
-                format!("copying stub package {}", stub_package_name),
+        log_action("Copying", format!("source package {}", package.name));
+        for source in sources {
+            let relative = source.strip_prefix(&def.source_wit_root)?;
+            let dest = target_dep_package_dir.join(relative);
+            log_action(
+                "  Copying",
+                format!("{} to {}", source.to_string_lossy(), dest.to_string_lossy()),
             );
+            copy(source, &dest)?;
         }
     }
-    let wasm_rpc_root = dest_wit_root.join(Path::new("deps/wasm-rpc"));
-    fs::create_dir_all(&wasm_rpc_root)?;
 
-    log_action(
-        "Writing",
-        format!("wasm-rpc.wit to {}", wasm_rpc_root.to_string_lossy()),
-    );
-    fs::write(
-        wasm_rpc_root.join(Path::new("wasm-rpc.wit")),
+    write_embedded_source(
+        &target_wit_root.join("deps/wasm-rpc"),
+        "wasm-rpc.wit",
         golem_wasm_rpc::WASM_RPC_WIT,
     )?;
 
-    let wasi_poll_root = dest_wit_root.join(Path::new("deps/io"));
-    fs::create_dir_all(&wasi_poll_root)?;
-    log_action(
-        "Writing",
-        format!("Writing poll.wit to {}", wasi_poll_root.to_string_lossy()),
-    );
-    fs::write(
-        wasi_poll_root.join(Path::new("poll.wit")),
+    write_embedded_source(
+        &target_wit_root.join("deps/io"),
+        "poll.wit",
         golem_wasm_rpc::WASI_POLL_WIT,
     )?;
 
-    Ok(())*/
-    todo!()
+    Ok(())
+}
+
+fn write_embedded_source(target_dir: &Path, file_name: &str, content: &str) -> anyhow::Result<()> {
+    fs::create_dir_all(target_dir)?;
+
+    log_action(
+        "Writing",
+        format!("{} to {}", file_name, target_dir.to_string_lossy()),
+    );
+
+    fs::write(target_dir.join(file_name), content)?;
+
+    Ok(())
 }
 
 trait TypeExtensions {
