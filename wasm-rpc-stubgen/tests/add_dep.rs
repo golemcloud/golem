@@ -23,7 +23,6 @@ use golem_wasm_rpc_stubgen::wit_resolve::resolve_wit_dir;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
 use tempfile::TempDir;
-use wit_parser::Resolve;
 
 #[test]
 fn all_wit_types_no_collision() {
