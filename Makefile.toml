@@ -408,9 +408,9 @@ description = "Publishes packages to crates.io"
 dependencies = [
     "build-release",
     "publish-golem-api-grpc",
+    "publish-golem-rib",
     "publish-golem-common",
     "publish-golem-client",
-    "publish-golem-rib",
     "publish-golem-service-base",
     "publish-golem-test-framework",
     "publish-golem-cli",
