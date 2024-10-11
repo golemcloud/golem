@@ -14,10 +14,12 @@
 
 use bincode::{Decode, Encode};
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
     WorkerFilter, WorkerId, WorkerStatus,
 };
+use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
@@ -146,6 +148,12 @@ pub struct GolemErrorInvalidRequest {
     pub details: String,
 }
 
+impl SafeDisplay for GolemErrorInvalidRequest {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl From<golem_api_grpc::proto::golem::worker::v1::InvalidRequest> for GolemErrorInvalidRequest {
     fn from(value: golem_api_grpc::proto::golem::worker::v1::InvalidRequest) -> Self {
         Self {
@@ -168,6 +176,12 @@ impl From<GolemErrorInvalidRequest> for golem_api_grpc::proto::golem::worker::v1
 #[error("Worker already exists: {worker_id}")]
 pub struct GolemErrorWorkerAlreadyExists {
     pub worker_id: WorkerId,
+}
+
+impl SafeDisplay for GolemErrorWorkerAlreadyExists {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerAlreadyExists>
@@ -205,6 +219,12 @@ pub struct GolemErrorWorkerNotFound {
     pub worker_id: WorkerId,
 }
 
+impl SafeDisplay for GolemErrorWorkerNotFound {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerNotFound>
     for GolemErrorWorkerNotFound
 {
@@ -237,6 +257,12 @@ impl From<GolemErrorWorkerNotFound> for golem_api_grpc::proto::golem::worker::v1
 pub struct GolemErrorWorkerCreationFailed {
     pub worker_id: WorkerId,
     pub details: String,
+}
+
+impl SafeDisplay for GolemErrorWorkerCreationFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerCreationFailed>
@@ -277,6 +303,12 @@ pub struct GolemErrorFailedToResumeWorker {
     pub reason: Box<GolemError>,
 }
 
+impl SafeDisplay for GolemErrorFailedToResumeWorker {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::FailedToResumeWorker>
     for GolemErrorFailedToResumeWorker
 {
@@ -313,6 +345,12 @@ impl From<GolemErrorFailedToResumeWorker>
 pub struct GolemErrorComponentDownloadFailed {
     pub component_id: VersionedComponentId,
     pub reason: String,
+}
+
+impl SafeDisplay for GolemErrorComponentDownloadFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::ComponentDownloadFailed>
@@ -361,6 +399,12 @@ pub struct GolemErrorComponentParseFailed {
     pub reason: String,
 }
 
+impl SafeDisplay for GolemErrorComponentParseFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::ComponentParseFailed>
     for GolemErrorComponentParseFailed
 {
@@ -407,6 +451,12 @@ pub struct GolemErrorGetLatestVersionOfComponentFailed {
     pub reason: String,
 }
 
+impl SafeDisplay for GolemErrorGetLatestVersionOfComponentFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::GetLatestVersionOfComponentFailed>
     for GolemErrorGetLatestVersionOfComponentFailed
 {
@@ -444,6 +494,12 @@ pub struct GolemErrorPromiseNotFound {
     pub promise_id: PromiseId,
 }
 
+impl SafeDisplay for GolemErrorPromiseNotFound {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::PromiseNotFound>
     for GolemErrorPromiseNotFound
 {
@@ -477,6 +533,12 @@ pub struct GolemErrorPromiseDropped {
     pub promise_id: PromiseId,
 }
 
+impl SafeDisplay for GolemErrorPromiseDropped {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::PromiseDropped>
     for GolemErrorPromiseDropped
 {
@@ -508,6 +570,12 @@ impl From<GolemErrorPromiseDropped> for golem_api_grpc::proto::golem::worker::v1
 #[error("Promise already completed: {promise_id}")]
 pub struct GolemErrorPromiseAlreadyCompleted {
     pub promise_id: PromiseId,
+}
+
+impl SafeDisplay for GolemErrorPromiseAlreadyCompleted {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::PromiseAlreadyCompleted>
@@ -546,6 +614,13 @@ impl From<GolemErrorPromiseAlreadyCompleted>
 pub struct GolemErrorInterrupted {
     pub recover_immediately: bool,
 }
+
+impl SafeDisplay for GolemErrorInterrupted {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl From<golem_api_grpc::proto::golem::worker::v1::Interrupted> for GolemErrorInterrupted {
     fn from(value: golem_api_grpc::proto::golem::worker::v1::Interrupted) -> Self {
         Self {
@@ -566,6 +641,12 @@ impl From<GolemErrorInterrupted> for golem_api_grpc::proto::golem::worker::v1::I
 #[error("Parameter type mismatch")]
 pub struct GolemErrorParamTypeMismatch {
     pub details: String,
+}
+
+impl SafeDisplay for GolemErrorParamTypeMismatch {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 impl From<golem_api_grpc::proto::golem::worker::v1::ParamTypeMismatch>
@@ -592,6 +673,12 @@ impl From<GolemErrorParamTypeMismatch>
 #[error("No value in message")]
 pub struct GolemErrorNoValueInMessage {}
 
+impl SafeDisplay for GolemErrorNoValueInMessage {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl From<golem_api_grpc::proto::golem::worker::v1::NoValueInMessage>
     for GolemErrorNoValueInMessage
 {
@@ -612,6 +699,12 @@ impl From<GolemErrorNoValueInMessage>
 #[error("Value mismatch: {details}")]
 pub struct GolemErrorValueMismatch {
     pub details: String,
+}
+
+impl SafeDisplay for GolemErrorValueMismatch {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 impl From<golem_api_grpc::proto::golem::worker::v1::ValueMismatch> for GolemErrorValueMismatch {
@@ -635,6 +728,12 @@ impl From<GolemErrorValueMismatch> for golem_api_grpc::proto::golem::worker::v1:
 pub struct GolemErrorUnexpectedOplogEntry {
     pub expected: String,
     pub got: String,
+}
+
+impl SafeDisplay for GolemErrorUnexpectedOplogEntry {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 impl From<golem_api_grpc::proto::golem::worker::v1::UnexpectedOplogEntry>
@@ -665,6 +764,12 @@ pub struct GolemErrorRuntimeError {
     pub details: String,
 }
 
+impl SafeDisplay for GolemErrorRuntimeError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl From<golem_api_grpc::proto::golem::worker::v1::RuntimeError> for GolemErrorRuntimeError {
     fn from(value: golem_api_grpc::proto::golem::worker::v1::RuntimeError) -> Self {
         Self {
@@ -688,6 +793,12 @@ impl From<GolemErrorRuntimeError> for golem_api_grpc::proto::golem::worker::v1::
 pub struct GolemErrorInvalidShardId {
     pub shard_id: ShardId,
     pub shard_ids: std::collections::HashSet<ShardId>,
+}
+
+impl SafeDisplay for GolemErrorInvalidShardId {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::InvalidShardId>
@@ -719,6 +830,12 @@ pub struct GolemErrorPreviousInvocationFailed {
     pub details: String,
 }
 
+impl SafeDisplay for GolemErrorPreviousInvocationFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl From<golem_api_grpc::proto::golem::worker::v1::PreviousInvocationFailed>
     for GolemErrorPreviousInvocationFailed
 {
@@ -743,6 +860,12 @@ impl From<GolemErrorPreviousInvocationFailed>
 #[error("Previous invocation exited")]
 pub struct GolemErrorPreviousInvocationExited {}
 
+impl SafeDisplay for GolemErrorPreviousInvocationExited {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl From<golem_api_grpc::proto::golem::worker::v1::PreviousInvocationExited>
     for GolemErrorPreviousInvocationExited
 {
@@ -765,6 +888,12 @@ pub struct GolemErrorUnknown {
     pub details: String,
 }
 
+impl SafeDisplay for GolemErrorUnknown {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl From<golem_api_grpc::proto::golem::worker::v1::UnknownError> for GolemErrorUnknown {
     fn from(value: golem_api_grpc::proto::golem::worker::v1::UnknownError) -> Self {
         Self {
@@ -785,6 +914,12 @@ impl From<GolemErrorUnknown> for golem_api_grpc::proto::golem::worker::v1::Unkno
 #[error("Invalid account")]
 pub struct GolemErrorInvalidAccount {}
 
+impl SafeDisplay for GolemErrorInvalidAccount {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 impl From<golem_api_grpc::proto::golem::worker::v1::InvalidAccount> for GolemErrorInvalidAccount {
     fn from(_value: golem_api_grpc::proto::golem::worker::v1::InvalidAccount) -> Self {
         Self {}
@@ -800,6 +935,12 @@ impl From<GolemErrorInvalidAccount> for golem_api_grpc::proto::golem::worker::v1
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[error("Invalid account")]
 pub struct GolemErrorShardingNotReady {}
+
+impl SafeDisplay for GolemErrorShardingNotReady {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
 
 impl From<golem_api_grpc::proto::golem::worker::v1::ShardingNotReady>
     for crate::model::GolemErrorShardingNotReady
@@ -836,6 +977,14 @@ pub struct ResumeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 pub struct UpdateWorkerResponse {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+pub struct GetOplogResponse {
+    pub entries: Vec<PublicOplogEntry>,
+    pub next: Option<OplogCursor>,
+    pub first_index_in_chunk: u64,
+    pub last_index: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
 pub enum WorkerUpdateMode {
@@ -1136,6 +1285,7 @@ pub struct InvokeResult {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, thiserror::Error)]
 #[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
 pub enum GolemError {
     #[error(transparent)]
     InvalidRequest(GolemErrorInvalidRequest),
@@ -1183,6 +1333,36 @@ pub enum GolemError {
     InvalidAccount(GolemErrorInvalidAccount),
     #[error(transparent)]
     ShardingNotReady(GolemErrorShardingNotReady),
+}
+
+impl SafeDisplay for GolemError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            GolemError::InvalidRequest(inner) => inner.to_safe_string(),
+            GolemError::WorkerAlreadyExists(inner) => inner.to_safe_string(),
+            GolemError::WorkerNotFound(inner) => inner.to_safe_string(),
+            GolemError::WorkerCreationFailed(inner) => inner.to_safe_string(),
+            GolemError::FailedToResumeWorker(inner) => inner.to_safe_string(),
+            GolemError::ComponentDownloadFailed(inner) => inner.to_safe_string(),
+            GolemError::ComponentParseFailed(inner) => inner.to_safe_string(),
+            GolemError::GetLatestVersionOfComponentFailed(inner) => inner.to_safe_string(),
+            GolemError::PromiseNotFound(inner) => inner.to_safe_string(),
+            GolemError::PromiseDropped(inner) => inner.to_safe_string(),
+            GolemError::PromiseAlreadyCompleted(inner) => inner.to_safe_string(),
+            GolemError::Interrupted(inner) => inner.to_safe_string(),
+            GolemError::ParamTypeMismatch(inner) => inner.to_safe_string(),
+            GolemError::NoValueInMessage(inner) => inner.to_safe_string(),
+            GolemError::ValueMismatch(inner) => inner.to_safe_string(),
+            GolemError::UnexpectedOplogEntry(inner) => inner.to_safe_string(),
+            GolemError::RuntimeError(inner) => inner.to_safe_string(),
+            GolemError::InvalidShardId(inner) => inner.to_safe_string(),
+            GolemError::PreviousInvocationFailed(inner) => inner.to_safe_string(),
+            GolemError::PreviousInvocationExited(inner) => inner.to_safe_string(),
+            GolemError::Unknown(inner) => inner.to_safe_string(),
+            GolemError::InvalidAccount(inner) => inner.to_safe_string(),
+            GolemError::ShardingNotReady(inner) => inner.to_safe_string(),
+        }
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError> for GolemError {

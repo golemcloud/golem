@@ -10,6 +10,8 @@ import public "golem/common/resource_limits.proto";
 import public "golem/shardmanager/shard_id.proto";
 import public "golem/component/component_id.proto";
 import public "golem/worker/cursor.proto";
+import public "golem/worker/oplog_cursor.proto";
+import public "golem/worker/public_oplog.proto";
 import public "golem/worker/update_mode.proto";
 import public "golem/worker/target_worker_id.proto";
 import public "golem/worker/worker_id.proto";
@@ -39,6 +41,7 @@ service WorkerExecutor {
   rpc GetRunningWorkersMetadata(GetRunningWorkersMetadataRequest) returns (GetRunningWorkersMetadataResponse);
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
+  rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
 }
 
 message InvokeWorkerResponse {
@@ -253,4 +256,26 @@ message UpdateWorkerResponse {
     golem.common.Empty success = 1;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
+}
+
+message GetOplogRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  uint64 from_oplog_index = 3;
+  optional golem.worker.OplogCursor cursor = 4;
+  uint64 count = 5;
+}
+
+message GetOplogResponse {
+  oneof result {
+    GetOplogSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetOplogSuccessResponse {
+  repeated golem.worker.OplogEntry entries = 1;
+  optional golem.worker.OplogCursor next = 2;
+  uint64 first_index_in_chunk = 3;
+  uint64 last_index = 5;
 }

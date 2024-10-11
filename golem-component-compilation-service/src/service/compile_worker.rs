@@ -34,6 +34,7 @@ use http::Uri;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use uuid::Uuid;
 use wasmtime::component::Component;
@@ -74,6 +75,8 @@ impl CompileWorker {
                 move |channel| {
                     ComponentServiceClient::new(channel)
                         .max_decoding_message_size(max_component_size)
+                        .send_compressed(CompressionEncoding::Gzip)
+                        .accept_compressed(CompressionEncoding::Gzip)
                 },
                 uri.as_http_02(),
                 GrpcClientConfig {

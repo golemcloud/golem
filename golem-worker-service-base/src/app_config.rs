@@ -27,22 +27,6 @@ pub struct WorkerServiceBaseConfig {
     pub worker_executor_retries: RetryConfig,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WorkerExecutorClientCacheConfig {
-    pub max_capacity: usize,
-    #[serde(with = "humantime_serde")]
-    pub time_to_idle: Duration,
-}
-
-impl Default for WorkerExecutorClientCacheConfig {
-    fn default() -> Self {
-        Self {
-            max_capacity: 1000,
-            time_to_idle: Duration::from_secs(60 * 60 * 4),
-        }
-    }
-}
-
 impl WorkerServiceBaseConfig {
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"

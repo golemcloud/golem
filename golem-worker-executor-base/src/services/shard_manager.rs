@@ -21,6 +21,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::{ShardAssignment, ShardId};
 use golem_common::retries::with_retries;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 
 use crate::error::GolemError;
@@ -52,7 +53,11 @@ pub struct ShardManagerServiceGrpc {
 impl ShardManagerServiceGrpc {
     pub fn new(config: ShardManagerServiceGrpcConfig) -> Self {
         let client = GrpcClient::new(
-            ShardManagerServiceClient::new,
+            |channel| {
+                ShardManagerServiceClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
             config.uri().as_http_02(),
             GrpcClientConfig {
                 retries_on_unavailable: config.retries.clone(),

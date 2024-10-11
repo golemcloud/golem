@@ -31,6 +31,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 
@@ -331,6 +332,8 @@ async fn new_client(host: &str, grpc_port: u16) -> ComponentServiceClient<Channe
     ComponentServiceClient::connect(format!("http://{host}:{grpc_port}"))
         .await
         .expect("Failed to connect to golem-component-service")
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {

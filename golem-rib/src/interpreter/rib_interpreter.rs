@@ -1009,7 +1009,7 @@ mod internal {
 mod interpreter_tests {
     use super::*;
     use crate::{InstructionId, VariableId};
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeList, TypeRecord, TypeS32};
+    use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
 
@@ -1164,18 +1164,7 @@ mod interpreter_tests {
             instructions: vec![
                 RibIR::PushLit(TypeAnnotatedValue::S32(2)),
                 RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::CreateAndPushRecord(AnalysedType::Record(TypeRecord {
-                    fields: vec![
-                        NameTypePair {
-                            name: "x".to_string(),
-                            typ: AnalysedType::S32(TypeS32),
-                        },
-                        NameTypePair {
-                            name: "y".to_string(),
-                            typ: AnalysedType::S32(TypeS32),
-                        },
-                    ],
-                })),
+                RibIR::CreateAndPushRecord(record(vec![field("x", s32()), field("y", s32())])),
                 RibIR::UpdateRecord("x".to_string()),
                 RibIR::UpdateRecord("y".to_string()),
             ],
@@ -1200,15 +1189,11 @@ mod interpreter_tests {
             typ: vec![
                 golem_wasm_ast::analysis::protobuf::NameTypePair {
                     name: "x".to_string(),
-                    typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(
-                        &AnalysedType::S32(TypeS32),
-                    )),
+                    typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(&s32())),
                 },
                 golem_wasm_ast::analysis::protobuf::NameTypePair {
                     name: "y".to_string(),
-                    typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(
-                        &AnalysedType::S32(TypeS32),
-                    )),
+                    typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(&s32())),
                 },
             ],
         });
@@ -1223,12 +1208,7 @@ mod interpreter_tests {
             instructions: vec![
                 RibIR::PushLit(TypeAnnotatedValue::S32(2)),
                 RibIR::PushLit(TypeAnnotatedValue::S32(1)),
-                RibIR::PushList(
-                    AnalysedType::List(TypeList {
-                        inner: Box::new(AnalysedType::S32(TypeS32)),
-                    }),
-                    2,
-                ),
+                RibIR::PushList(list(s32()), 2),
             ],
         };
 
@@ -1242,9 +1222,7 @@ mod interpreter_tests {
                     type_annotated_value: Some(TypeAnnotatedValue::S32(2)),
                 },
             ],
-            typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(
-                &AnalysedType::S32(TypeS32),
-            )),
+            typ: Some(golem_wasm_ast::analysis::protobuf::Type::from(&s32())),
         });
         assert_eq!(result.get_val().unwrap(), expected);
     }
@@ -1257,12 +1235,7 @@ mod interpreter_tests {
             instructions: vec![
                 RibIR::PushLit(TypeAnnotatedValue::S32(1)),
                 RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::CreateAndPushRecord(AnalysedType::Record(TypeRecord {
-                    fields: vec![NameTypePair {
-                        name: "x".to_string(),
-                        typ: AnalysedType::S32(TypeS32),
-                    }],
-                })),
+                RibIR::CreateAndPushRecord(record(vec![field("x", s32())])),
                 RibIR::UpdateRecord("x".to_string()),
                 RibIR::SelectField("x".to_string()),
             ],
@@ -1280,12 +1253,7 @@ mod interpreter_tests {
             instructions: vec![
                 RibIR::PushLit(TypeAnnotatedValue::S32(1)),
                 RibIR::PushLit(TypeAnnotatedValue::S32(2)),
-                RibIR::PushList(
-                    AnalysedType::List(TypeList {
-                        inner: Box::new(AnalysedType::S32(TypeS32)),
-                    }),
-                    2,
-                ),
+                RibIR::PushList(list(s32()), 2),
                 RibIR::SelectIndex(0),
             ],
         };
@@ -1297,9 +1265,7 @@ mod interpreter_tests {
     mod pattern_match_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr, FunctionTypeRegistry, Interpreter};
-        use golem_wasm_ast::analysis::{
-            AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeTuple, TypeU16, TypeU64,
-        };
+        use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple, u16, u64};
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
         #[tokio::test]
@@ -1400,11 +1366,8 @@ mod interpreter_tests {
 
             let tuple = internal::get_analysed_type_tuple();
 
-            let analysed_exports = internal::get_component_metadata(
-                "foo",
-                vec![tuple],
-                Some(AnalysedType::Str(TypeStr)),
-            );
+            let analysed_exports =
+                internal::get_component_metadata("foo", vec![tuple], Some(str()));
 
             let expr = r#"
 
@@ -1434,11 +1397,8 @@ mod interpreter_tests {
 
             let tuple = internal::get_analysed_type_tuple();
 
-            let analysed_exports = internal::get_component_metadata(
-                "my-worker-function",
-                vec![tuple],
-                Some(AnalysedType::Str(TypeStr)),
-            );
+            let analysed_exports =
+                internal::get_component_metadata("my-worker-function", vec![tuple], Some(str()));
 
             let expr = r#"
 
@@ -1493,18 +1453,7 @@ mod interpreter_tests {
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             let expected = internal::get_type_annotated_value(
-                &AnalysedType::Record(TypeRecord {
-                    fields: vec![
-                        NameTypePair {
-                            name: "body".to_string(),
-                            typ: AnalysedType::U64(TypeU64),
-                        },
-                        NameTypePair {
-                            name: "status".to_string(),
-                            typ: AnalysedType::U16(TypeU16),
-                        },
-                    ],
-                }),
+                &record(vec![field("body", u64()), field("status", u16())]),
                 r#"{body: 1, status: 200}"#,
             );
 
@@ -1543,9 +1492,7 @@ mod interpreter_tests {
             let result = interpreter.run(compiled.byte_code).await.unwrap();
 
             let expected = internal::get_type_annotated_value(
-                &AnalysedType::Tuple(TypeTuple {
-                    items: vec![AnalysedType::Str(TypeStr), AnalysedType::Str(TypeStr)],
-                }),
+                &tuple(vec![str(), str()]),
                 r#"("failed", "bar")"#,
             );
 
@@ -1556,9 +1503,8 @@ mod interpreter_tests {
     mod dynamic_resource_parameter_tests {
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr, Interpreter};
-        use golem_wasm_ast::analysis::{
-            AnalysedType, NameOptionTypePair, NameTypePair, TypeF32, TypeList, TypeRecord, TypeStr,
-            TypeU32, TypeVariant,
+        use golem_wasm_ast::analysis::analysed_type::{
+            case, f32, field, list, record, str, u32, variant,
         };
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
@@ -1594,23 +1540,10 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let result_type = AnalysedType::Variant(TypeVariant {
-                cases: vec![
-                    NameOptionTypePair {
-                        name: "error".to_string(),
-                        typ: Some(AnalysedType::Str(TypeStr)),
-                    },
-                    NameOptionTypePair {
-                        name: "success".to_string(),
-                        typ: Some(AnalysedType::Record(TypeRecord {
-                            fields: vec![NameTypePair {
-                                name: "order-id".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            }],
-                        })),
-                    },
-                ],
-            });
+            let result_type = variant(vec![
+                case("error", str()),
+                case("success", record(vec![field("order-id", str())])),
+            ]);
 
             let result_value = internal::get_type_annotated_value(
                 &result_type,
@@ -1639,28 +1572,12 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let result_type = AnalysedType::List(TypeList {
-                inner: Box::new(AnalysedType::Record(TypeRecord {
-                    fields: vec![
-                        NameTypePair {
-                            name: "product-id".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        },
-                        NameTypePair {
-                            name: "name".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        },
-                        NameTypePair {
-                            name: "price".to_string(),
-                            typ: AnalysedType::F32(TypeF32),
-                        },
-                        NameTypePair {
-                            name: "quantity".to_string(),
-                            typ: AnalysedType::U32(TypeU32),
-                        },
-                    ],
-                })),
-            });
+            let result_type = list(record(vec![
+                field("product-id", str()),
+                field("name", str()),
+                field("price", f32()),
+                field("quantity", u32()),
+            ]));
 
             let result_value = internal::get_type_annotated_value(
                 &result_type,
@@ -1770,28 +1687,12 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let result_type = AnalysedType::List(TypeList {
-                inner: Box::new(AnalysedType::Record(TypeRecord {
-                    fields: vec![
-                        NameTypePair {
-                            name: "product-id".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        },
-                        NameTypePair {
-                            name: "name".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        },
-                        NameTypePair {
-                            name: "price".to_string(),
-                            typ: AnalysedType::F32(TypeF32),
-                        },
-                        NameTypePair {
-                            name: "quantity".to_string(),
-                            typ: AnalysedType::U32(TypeU32),
-                        },
-                    ],
-                })),
-            });
+            let result_type = list(record(vec![
+                field("product-id", str()),
+                field("name", str()),
+                field("price", f32()),
+                field("quantity", u32()),
+            ]));
 
             let result_value = internal::get_type_annotated_value(
                 &result_type,
@@ -1845,23 +1746,10 @@ mod interpreter_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let result_type = AnalysedType::Variant(TypeVariant {
-                cases: vec![
-                    NameOptionTypePair {
-                        name: "error".to_string(),
-                        typ: Some(AnalysedType::Str(TypeStr)),
-                    },
-                    NameOptionTypePair {
-                        name: "success".to_string(),
-                        typ: Some(AnalysedType::Record(TypeRecord {
-                            fields: vec![NameTypePair {
-                                name: "order-id".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            }],
-                        })),
-                    },
-                ],
-            });
+            let result_type = variant(vec![
+                case("error", str()),
+                case("success", record(vec![field("order-id", str())])),
+            ]);
 
             let result_value = internal::get_type_annotated_value(
                 &result_type,
@@ -1904,94 +1792,66 @@ mod interpreter_tests {
         use crate::interpreter::env::InterpreterEnv;
         use crate::interpreter::stack::InterpreterStack;
         use crate::{Interpreter, RibFunctionInvoke};
-        use golem_wasm_ast::analysis::*;
+        use golem_wasm_ast::analysis::analysed_type::{
+            case, f32, field, handle, list, r#enum, record, result, str, tuple, u32, u64,
+            unit_case, variant,
+        };
+        use golem_wasm_ast::analysis::{
+            AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
+            AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType,
+        };
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use golem_wasm_rpc::protobuf::TypedTuple;
         use std::collections::HashMap;
         use std::sync::Arc;
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
-            AnalysedType::Variant(TypeVariant {
-                cases: vec![
-                    NameOptionTypePair {
-                        name: "register-user".to_string(),
-                        typ: Some(AnalysedType::U64(TypeU64)),
-                    },
-                    NameOptionTypePair {
-                        name: "process-user".to_string(),
-                        typ: Some(AnalysedType::Str(TypeStr)),
-                    },
-                    NameOptionTypePair {
-                        name: "validate".to_string(),
-                        typ: None,
-                    },
-                ],
-            })
+            variant(vec![
+                case("register-user", u64()),
+                case("process-user", str()),
+                unit_case("validate"),
+            ])
         }
 
         pub(crate) fn get_analysed_type_record() -> AnalysedType {
-            AnalysedType::Record(TypeRecord {
-                fields: vec![
-                    NameTypePair {
-                        name: "request".to_string(),
-                        typ: AnalysedType::Record(TypeRecord {
-                            fields: vec![NameTypePair {
-                                name: "path".to_string(),
-                                typ: AnalysedType::Record(TypeRecord {
-                                    fields: vec![NameTypePair {
-                                        name: "user".to_string(),
-                                        typ: AnalysedType::Str(TypeStr),
-                                    }],
-                                }),
-                            }],
-                        }),
-                    },
-                    NameTypePair {
-                        name: "y".to_string(),
-                        typ: AnalysedType::Str(TypeStr),
-                    },
-                ],
-            })
+            record(vec![
+                field(
+                    "request",
+                    record(vec![field("path", record(vec![field("user", str())]))]),
+                ),
+                field("y", str()),
+            ])
         }
 
         pub(crate) fn get_analysed_type_result() -> AnalysedType {
-            AnalysedType::Result(TypeResult {
-                ok: Some(Box::new(AnalysedType::U64(TypeU64))),
-                err: Some(Box::new(AnalysedType::Str(TypeStr))),
-            })
+            result(u64(), str())
         }
 
         pub(crate) fn get_analysed_type_enum() -> AnalysedType {
-            AnalysedType::Enum(TypeEnum {
-                cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()],
-            })
+            r#enum(&["prod", "dev", "test"])
         }
 
         pub(crate) fn get_analysed_typ_str() -> AnalysedType {
-            AnalysedType::Str(TypeStr)
+            str()
         }
 
         pub(crate) fn get_analysed_typ_u64() -> AnalysedType {
-            AnalysedType::U64(TypeU64)
+            u64()
         }
 
         pub(crate) fn get_analysed_type_tuple() -> AnalysedType {
-            let tuple_type = TypeTuple {
-                items: vec![
-                    get_analysed_typ_u64(),
-                    get_analysed_type_result(),
-                    get_analysed_typ_str(),
-                    get_analysed_type_record(),
-                    get_analysed_type_variant(),
-                    get_analysed_type_variant(),
-                    get_analysed_type_variant(),
-                    get_analysed_type_enum(),
-                    get_analysed_type_enum(),
-                    get_analysed_type_enum(),
-                ],
-            };
-
-            AnalysedType::Tuple(tuple_type)
+            tuple(vec![
+                get_analysed_typ_u64(),
+                get_analysed_type_result(),
+                get_analysed_typ_str(),
+                get_analysed_type_record(),
+                get_analysed_type_variant(),
+                get_analysed_type_variant(),
+                get_analysed_type_variant(),
+                get_analysed_type_enum(),
+                get_analysed_type_enum(),
+                get_analysed_type_enum(),
+            ])
         }
 
         pub(crate) fn get_component_metadata(
@@ -2029,7 +1889,7 @@ mod interpreter_tests {
         ) -> Vec<AnalysedExport> {
             get_shopping_cart_metadata_with_cart_resource(vec![AnalysedFunctionParameter {
                 name: "user-id".to_string(),
-                typ: AnalysedType::Str(TypeStr),
+                typ: str(),
             }])
         }
 
@@ -2048,10 +1908,7 @@ mod interpreter_tests {
                         parameters: constructor_parameters,
                         results: vec![AnalysedFunctionResult {
                             name: None,
-                            typ: AnalysedType::Handle(TypeHandle {
-                                resource_id: AnalysedResourceId(0),
-                                mode: AnalysedResourceMode::Owned,
-                            }),
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
                         }],
                     },
                     AnalysedFunction {
@@ -2059,33 +1916,16 @@ mod interpreter_tests {
                         parameters: vec![
                             AnalysedFunctionParameter {
                                 name: "self".to_string(),
-                                typ: AnalysedType::Handle(TypeHandle {
-                                    resource_id: AnalysedResourceId(0),
-                                    mode: AnalysedResourceMode::Borrowed,
-                                }),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                             },
                             AnalysedFunctionParameter {
                                 name: "item".to_string(),
-                                typ: AnalysedType::Record(TypeRecord {
-                                    fields: vec![
-                                        NameTypePair {
-                                            name: "product-id".to_string(),
-                                            typ: AnalysedType::Str(TypeStr),
-                                        },
-                                        NameTypePair {
-                                            name: "name".to_string(),
-                                            typ: AnalysedType::Str(TypeStr),
-                                        },
-                                        NameTypePair {
-                                            name: "price".to_string(),
-                                            typ: AnalysedType::F32(TypeF32),
-                                        },
-                                        NameTypePair {
-                                            name: "quantity".to_string(),
-                                            typ: AnalysedType::U32(TypeU32),
-                                        },
-                                    ],
-                                }),
+                                typ: record(vec![
+                                    field("product-id", str()),
+                                    field("name", str()),
+                                    field("price", f32()),
+                                    field("quantity", u32()),
+                                ]),
                             },
                         ],
                         results: vec![],
@@ -2095,14 +1935,11 @@ mod interpreter_tests {
                         parameters: vec![
                             AnalysedFunctionParameter {
                                 name: "self".to_string(),
-                                typ: AnalysedType::Handle(TypeHandle {
-                                    resource_id: AnalysedResourceId(0),
-                                    mode: AnalysedResourceMode::Borrowed,
-                                }),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                             },
                             AnalysedFunctionParameter {
                                 name: "product-id".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
+                                typ: str(),
                             },
                         ],
                         results: vec![],
@@ -2112,18 +1949,15 @@ mod interpreter_tests {
                         parameters: vec![
                             AnalysedFunctionParameter {
                                 name: "self".to_string(),
-                                typ: AnalysedType::Handle(TypeHandle {
-                                    resource_id: AnalysedResourceId(0),
-                                    mode: AnalysedResourceMode::Borrowed,
-                                }),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                             },
                             AnalysedFunctionParameter {
                                 name: "product-id".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
+                                typ: str(),
                             },
                             AnalysedFunctionParameter {
                                 name: "quantity".to_string(),
-                                typ: AnalysedType::U32(TypeU32),
+                                typ: u32(),
                             },
                         ],
                         results: vec![],
@@ -2132,65 +1966,30 @@ mod interpreter_tests {
                         name: "[method]cart.checkout".to_string(),
                         parameters: vec![AnalysedFunctionParameter {
                             name: "self".to_string(),
-                            typ: AnalysedType::Handle(TypeHandle {
-                                resource_id: AnalysedResourceId(0),
-                                mode: AnalysedResourceMode::Borrowed,
-                            }),
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                         }],
                         results: vec![AnalysedFunctionResult {
                             name: None,
-                            typ: AnalysedType::Variant(TypeVariant {
-                                cases: vec![
-                                    NameOptionTypePair {
-                                        name: "error".to_string(),
-                                        typ: Some(AnalysedType::Str(TypeStr)),
-                                    },
-                                    NameOptionTypePair {
-                                        name: "success".to_string(),
-                                        typ: Some(AnalysedType::Record(TypeRecord {
-                                            fields: vec![NameTypePair {
-                                                name: "order-id".to_string(),
-                                                typ: AnalysedType::Str(TypeStr),
-                                            }],
-                                        })),
-                                    },
-                                ],
-                            }),
+                            typ: variant(vec![
+                                case("error", str()),
+                                case("success", record(vec![field("order-id", str())])),
+                            ]),
                         }],
                     },
                     AnalysedFunction {
                         name: "[method]cart.get-cart-contents".to_string(),
                         parameters: vec![AnalysedFunctionParameter {
                             name: "self".to_string(),
-                            typ: AnalysedType::Handle(TypeHandle {
-                                resource_id: AnalysedResourceId(0),
-                                mode: AnalysedResourceMode::Borrowed,
-                            }),
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                         }],
                         results: vec![AnalysedFunctionResult {
                             name: None,
-                            typ: AnalysedType::List(TypeList {
-                                inner: Box::new(AnalysedType::Record(TypeRecord {
-                                    fields: vec![
-                                        NameTypePair {
-                                            name: "product-id".to_string(),
-                                            typ: AnalysedType::Str(TypeStr),
-                                        },
-                                        NameTypePair {
-                                            name: "name".to_string(),
-                                            typ: AnalysedType::Str(TypeStr),
-                                        },
-                                        NameTypePair {
-                                            name: "price".to_string(),
-                                            typ: AnalysedType::F32(TypeF32),
-                                        },
-                                        NameTypePair {
-                                            name: "quantity".to_string(),
-                                            typ: AnalysedType::U32(TypeU32),
-                                        },
-                                    ],
-                                })),
-                            }),
+                            typ: list(record(vec![
+                                field("product-id", str()),
+                                field("name", str()),
+                                field("price", f32()),
+                                field("quantity", u32()),
+                            ])),
                         }],
                     },
                     AnalysedFunction {
@@ -2198,17 +1997,11 @@ mod interpreter_tests {
                         parameters: vec![
                             AnalysedFunctionParameter {
                                 name: "self".to_string(),
-                                typ: AnalysedType::Handle(TypeHandle {
-                                    resource_id: AnalysedResourceId(0),
-                                    mode: AnalysedResourceMode::Borrowed,
-                                }),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                             },
                             AnalysedFunctionParameter {
                                 name: "other-cart".to_string(),
-                                typ: AnalysedType::Handle(TypeHandle {
-                                    resource_id: AnalysedResourceId(0),
-                                    mode: AnalysedResourceMode::Borrowed,
-                                }),
+                                typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
                             },
                         ],
                         results: vec![],
@@ -2217,10 +2010,7 @@ mod interpreter_tests {
                         name: "[drop]cart".to_string(),
                         parameters: vec![AnalysedFunctionParameter {
                             name: "self".to_string(),
-                            typ: AnalysedType::Handle(TypeHandle {
-                                resource_id: AnalysedResourceId(0),
-                                mode: AnalysedResourceMode::Owned,
-                            }),
+                            typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
                         }],
                         results: vec![],
                     },

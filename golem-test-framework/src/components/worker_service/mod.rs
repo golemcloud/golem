@@ -17,18 +17,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 use tonic::Streaming;
 use tracing::Level;
 
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest,
+    GetOplogResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
+    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest,
+    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::LogEvent;
 
@@ -183,6 +185,10 @@ pub trait WorkerService {
             .into_inner())
     }
 
+    async fn get_oplog(&self, request: GetOplogRequest) -> crate::Result<GetOplogResponse> {
+        Ok(self.client().await?.get_oplog(request).await?.into_inner())
+    }
+
     fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
     fn private_grpc_port(&self) -> u16;
@@ -214,7 +220,9 @@ async fn new_client(
     let endpoint = Endpoint::new(format!("http://{host}:{grpc_port}"))?
         .connect_timeout(Duration::from_secs(10));
     let channel = endpoint.connect().await?;
-    Ok(WorkerServiceClient::new(channel))
+    Ok(WorkerServiceClient::new(channel)
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip))
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {

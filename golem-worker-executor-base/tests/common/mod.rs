@@ -57,7 +57,7 @@ use tokio::runtime::Handle;
 
 use tokio::task::JoinHandle;
 
-use golem::api;
+use golem::api0_2_0;
 use golem_common::config::RedisConfig;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -75,6 +75,7 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
+use golem_worker_executor_base::preview2::golem::api1_1_0_rc1;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -635,6 +636,7 @@ impl WorkerCtx for TestWorkerCtx {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         rpc: Arc<dyn Rpc + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
+        component_service: Arc<dyn ComponentService + Send + Sync>,
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
@@ -655,6 +657,7 @@ impl WorkerCtx for TestWorkerCtx {
             scheduler_service,
             rpc,
             worker_proxy,
+            component_service,
             config,
             worker_config,
             execution_status,
@@ -815,7 +818,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
 
     fn create_wasmtime_linker(&self, engine: &Engine) -> anyhow::Result<Linker<TestWorkerCtx>> {
         let mut linker = create_linker(engine, get_durable_ctx)?;
-        api::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api0_2_0::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        api1_1_0_rc1::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem::rpc::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }

@@ -68,10 +68,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         record_host_function_call("sockets::ip_name_lookup", "resolve_addresses");
 
         let addresses: Result<Vec<IpAddress>, SocketError> =
-            Durability::<Ctx, SerializableIpAddresses, SerializableError>::wrap(
+            Durability::<Ctx, String, SerializableIpAddresses, SerializableError>::wrap(
                 self,
                 WrappedFunctionType::ReadRemote,
                 "sockets::ip_name_lookup::resolve_addresses",
+                name.clone(),
                 |ctx| {
                     Box::pin(async move { resolve_and_drain_addresses(ctx, network, name).await })
                 },

@@ -78,21 +78,23 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
-        let result = Durability::<Ctx, Vec<u8>, SerializableError>::wrap(
-            self,
-            WrappedFunctionType::ReadRemote,
-            "golem blobstore::container::get_data",
-            |ctx| {
-                ctx.state.blob_store_service.get_data(
-                    account_id.clone(),
-                    container_name.clone(),
-                    name.clone(),
-                    start,
-                    end,
-                )
-            },
-        )
-        .await;
+        let result =
+            Durability::<Ctx, (String, String, u64, u64), Vec<u8>, SerializableError>::wrap(
+                self,
+                WrappedFunctionType::ReadRemote,
+                "golem blobstore::container::get_data",
+                (container_name.clone(), name.clone(), start, end),
+                |ctx| {
+                    ctx.state.blob_store_service.get_data(
+                        account_id,
+                        container_name,
+                        name,
+                        start,
+                        end,
+                    )
+                },
+            )
+            .await;
         match result {
             Ok(get_data) => {
                 let incoming_value = self
@@ -125,17 +127,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<OutgoingValueEntry>(&data)
             .map(|outgoing_value_entry| outgoing_value_entry.body.read().unwrap().clone())?;
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, String, u64), (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::container::write_data",
+            (container_name.clone(), name.clone(), data.len() as u64),
             |ctx| {
-                ctx.state.blob_store_service.write_data(
-                    account_id.clone(),
-                    container_name.clone(),
-                    name.clone(),
-                    data.clone(),
-                )
+                ctx.state
+                    .blob_store_service
+                    .write_data(account_id, container_name, name, data)
             },
         )
         .await;
@@ -158,14 +158,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
-        let result = Durability::<Ctx, Vec<String>, SerializableError>::wrap(
+        let result = Durability::<Ctx, String, Vec<String>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem blobstore::container::list_objects",
+            container_name.clone(),
             |ctx| {
                 ctx.state
                     .blob_store_service
-                    .list_objects(account_id.clone(), container_name.clone())
+                    .list_objects(account_id, container_name)
             },
         )
         .await;
@@ -195,16 +196,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, String), (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::container::delete_object",
+            (container_name.clone(), name.clone()),
             |ctx| {
-                ctx.state.blob_store_service.delete_object(
-                    account_id.clone(),
-                    container_name.clone(),
-                    name.clone(),
-                )
+                ctx.state
+                    .blob_store_service
+                    .delete_object(account_id, container_name, name)
             },
         )
         .await;
@@ -228,16 +228,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, Vec<String>), (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::container::delete_objects",
+            (container_name.clone(), names.clone()),
             |ctx| {
-                ctx.state.blob_store_service.delete_objects(
-                    account_id.clone(),
-                    container_name.clone(),
-                    names.clone(),
-                )
+                ctx.state
+                    .blob_store_service
+                    .delete_objects(account_id, container_name, names)
             },
         )
         .await;
@@ -261,16 +260,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
-        let result = Durability::<Ctx, bool, SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, String), bool, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem blobstore::container::has_object",
+            (container_name.clone(), name.clone()),
             |ctx| {
-                ctx.state.blob_store_service.has_object(
-                    account_id.clone(),
-                    container_name.clone(),
-                    name.clone(),
-                )
+                ctx.state
+                    .blob_store_service
+                    .has_object(account_id, container_name, name)
             },
         )
         .await;
@@ -296,18 +294,18 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .map(|container_entry| container_entry.name.clone())?;
         let result = Durability::<
             Ctx,
+            (String, String),
             crate::services::blob_store::ObjectMetadata,
             SerializableError,
         >::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem blobstore::container::object_info",
+            (container_name.clone(), name.clone()),
             |ctx| {
-                ctx.state.blob_store_service.object_info(
-                    account_id.clone(),
-                    container_name.clone(),
-                    name.clone(),
-                )
+                ctx.state
+                    .blob_store_service
+                    .object_info(account_id, container_name, name)
             },
         )
         .await;
@@ -335,14 +333,15 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             .table()
             .get::<ContainerEntry>(&container)
             .map(|container_entry| container_entry.name.clone())?;
-        Durability::<Ctx, (), SerializableError>::wrap(
+        Durability::<Ctx, String, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem blobstore::container::clear",
+            container_name.clone(),
             |ctx| {
                 ctx.state
                     .blob_store_service
-                    .clear(account_id.clone(), container_name.clone())
+                    .clear(account_id, container_name)
             },
         )
         .await?;

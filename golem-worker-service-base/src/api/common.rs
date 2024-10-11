@@ -1,9 +1,10 @@
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Formatter};
 
 use crate::service::http::http_api_definition_validator::RouteValidationError;
 use golem_api_grpc::proto::golem::apidefinition::v1::{api_definition_error, ApiDefinitionError};
 use golem_api_grpc::proto::golem::worker;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::SafeDisplay;
 use golem_service_base::model::ErrorBody;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Union};
@@ -57,40 +58,40 @@ impl TraceErrorKind for ApiEndpointError {
 }
 
 impl ApiEndpointError {
-    pub fn unauthorized<T: Display>(error: T) -> Self {
+    pub fn unauthorized<T: SafeDisplay>(error: T) -> Self {
         Self::Unauthorized(Json(ErrorBody {
-            error: error.to_string(),
+            error: error.to_safe_string(),
         }))
     }
 
-    pub fn forbidden<T: Display>(error: T) -> Self {
+    pub fn forbidden<T: SafeDisplay>(error: T) -> Self {
         Self::Forbidden(Json(ErrorBody {
-            error: error.to_string(),
+            error: error.to_safe_string(),
         }))
     }
 
-    pub fn internal<T: Display>(error: T) -> Self {
+    pub fn internal<T: SafeDisplay>(error: T) -> Self {
         Self::InternalError(Json(ErrorBody {
-            error: error.to_string(),
+            error: error.to_safe_string(),
         }))
     }
 
-    pub fn bad_request<T: Display>(error: T) -> Self {
+    pub fn bad_request<T: SafeDisplay>(error: T) -> Self {
         Self::BadRequest(Json(WorkerServiceErrorsBody::Messages(
             MessagesErrorsBody {
-                errors: vec![error.to_string()],
+                errors: vec![error.to_safe_string()],
             },
         )))
     }
 
-    pub fn not_found<T: Display>(error: T) -> Self {
+    pub fn not_found<T: SafeDisplay>(error: T) -> Self {
         Self::NotFound(Json(ErrorBody {
-            error: error.to_string(),
+            error: error.to_safe_string(),
         }))
     }
 
-    pub fn already_exists<T: Display>(error: T) -> Self {
-        Self::AlreadyExists(Json(error.to_string()))
+    pub fn already_exists<T: SafeDisplay>(error: T) -> Self {
+        Self::AlreadyExists(Json(error.to_safe_string()))
     }
 }
 
@@ -145,6 +146,7 @@ impl<'a> TraceErrorKind for ApiDefinitionTraceErrorKind<'a> {
 }
 
 mod conversion {
+    use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
     use crate::service::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
     use crate::service::api_definition_validator::ValidationErrors;
     use crate::service::api_deployment::ApiDeploymentError;
@@ -155,20 +157,16 @@ mod conversion {
         apidefinition::v1::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
         common::ErrorBody,
     };
+    use golem_common::SafeDisplay;
     use poem_openapi::payload::Json;
     use std::fmt::Display;
-
-    use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
 
     impl From<ApiDefinitionServiceError<RouteValidationError>> for ApiEndpointError {
         fn from(error: ApiDefinitionServiceError<RouteValidationError>) -> Self {
             match error {
                 ApiDefinitionServiceError::ValidationError(e) => e.into(),
-                e @ ApiDefinitionServiceError::ComponentNotFoundError(_) => {
-                    ApiEndpointError::bad_request(e)
-                }
-                ApiDefinitionServiceError::InternalError(error) => {
-                    ApiEndpointError::internal(error)
+                ApiDefinitionServiceError::ComponentNotFoundError(_) => {
+                    ApiEndpointError::bad_request(error)
                 }
                 ApiDefinitionServiceError::ApiDefinitionNotDraft(_) => {
                     ApiEndpointError::bad_request(error)
@@ -185,6 +183,10 @@ mod conversion {
                 ApiDefinitionServiceError::RibCompilationErrors(_) => {
                     ApiEndpointError::bad_request(error)
                 }
+                ApiDefinitionServiceError::InternalRepoError(_) => {
+                    ApiEndpointError::internal(error)
+                }
+                ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
             }
         }
     }
@@ -192,18 +194,21 @@ mod conversion {
     impl<Namespace: Display> From<ApiDeploymentError<Namespace>> for ApiEndpointError {
         fn from(error: ApiDeploymentError<Namespace>) -> Self {
             match error {
-                ApiDeploymentError::InternalError(error) => ApiEndpointError::internal(error),
-                e @ ApiDeploymentError::ApiDefinitionNotFound(_, _) => {
-                    ApiEndpointError::not_found(e)
+                ApiDeploymentError::ApiDefinitionNotFound(_, _) => {
+                    ApiEndpointError::not_found(error)
                 }
-                e @ ApiDeploymentError::ApiDeploymentNotFound(_, _) => {
-                    ApiEndpointError::not_found(e)
+                ApiDeploymentError::ApiDeploymentNotFound(_, _) => {
+                    ApiEndpointError::not_found(error)
                 }
-                e @ ApiDeploymentError::ApiDeploymentConflict(_) => {
-                    ApiEndpointError::already_exists(e)
+                ApiDeploymentError::ApiDeploymentConflict(_) => {
+                    ApiEndpointError::already_exists(error)
                 }
-                e @ ApiDeploymentError::ApiDefinitionsConflict(_) => {
-                    ApiEndpointError::bad_request(e)
+                ApiDeploymentError::ApiDefinitionsConflict(_) => {
+                    ApiEndpointError::bad_request(error)
+                }
+                ApiDeploymentError::InternalRepoError(_) => ApiEndpointError::internal(error),
+                ApiDeploymentError::InternalConversionError { .. } => {
+                    ApiEndpointError::internal(error)
                 }
             }
         }
@@ -250,32 +255,27 @@ mod conversion {
                 }
                 ApiDefinitionServiceError::RibCompilationErrors(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
-                        error: error.to_string(),
+                        error: error.to_safe_string(),
                     })),
                 },
                 ApiDefinitionServiceError::ApiDefinitionNotFound(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
-                        error: error.to_string(),
+                        error: error.to_safe_string(),
                     })),
                 },
                 ApiDefinitionServiceError::ApiDefinitionNotDraft(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotDraft(ErrorBody {
-                        error: error.to_string(),
+                        error: error.to_safe_string(),
                     })),
                 },
                 ApiDefinitionServiceError::ApiDefinitionAlreadyExists(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::AlreadyExists(ErrorBody {
-                        error: error.to_string(),
+                        error: error.to_safe_string(),
                     })),
                 },
                 ApiDefinitionServiceError::ApiDefinitionDeployed(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::BadRequest(ErrorsBody {
-                        errors: vec![error.to_string()],
-                    })),
-                },
-                ApiDefinitionServiceError::InternalError(error) => ApiDefinitionError {
-                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
-                        error: error.to_string(),
+                        errors: vec![error.to_safe_string()],
                     })),
                 },
                 ApiDefinitionServiceError::ComponentNotFoundError(error) => ApiDefinitionError {
@@ -288,6 +288,16 @@ mod conversion {
                                 .collect::<Vec<String>>()
                                 .join(", ")
                         ),
+                    })),
+                },
+                ApiDefinitionServiceError::InternalRepoError(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::Internal(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::InternalError(ErrorBody {
+                        error: error.to_safe_string(),
                     })),
                 },
             }

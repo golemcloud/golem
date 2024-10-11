@@ -13,35 +13,3 @@
 // limitations under the License.
 
 pub mod component;
-
-use sqlx::error::ErrorKind;
-use std::fmt::Display;
-
-#[derive(Debug)]
-pub enum RepoError {
-    Internal(String),
-    UniqueViolation(String),
-}
-
-impl From<sqlx::Error> for RepoError {
-    fn from(error: sqlx::Error) -> Self {
-        if let Some(db_error) = error.as_database_error() {
-            if db_error.kind() == ErrorKind::UniqueViolation {
-                RepoError::UniqueViolation(db_error.to_string())
-            } else {
-                RepoError::Internal(db_error.to_string())
-            }
-        } else {
-            RepoError::Internal(error.to_string())
-        }
-    }
-}
-
-impl Display for RepoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RepoError::UniqueViolation(error) => write!(f, "{}", error),
-            RepoError::Internal(error) => write!(f, "{}", error),
-        }
-    }
-}

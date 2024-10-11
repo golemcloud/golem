@@ -1,0 +1,211 @@
+syntax = "proto3";
+
+import "golem/common/account_id.proto";
+import "golem/common/empty.proto";
+import "golem/worker/idempotency_key.proto";
+import "golem/worker/worker_id.proto";
+import "google/protobuf/timestamp.proto";
+import "wasm/rpc/type_annotated_value.proto";
+
+package golem.worker;
+
+message OplogEntry {
+  oneof entry {
+      CreateParameters Create = 1;
+      ImportedFunctionInvokedParameters ImportedFunctionInvoked = 2;
+      ExportedFunctionInvokedParameters ExportedFunctionInvoked = 3;
+      ExportedFunctionCompletedParameters ExportedFunctionCompleted = 4;
+      TimestampParameter Suspend = 5;
+      ErrorParameters Error = 6;
+      TimestampParameter NoOp = 7;
+      JumpParameters Jump = 8;
+      TimestampParameter Interrupted = 9;
+      TimestampParameter Exited = 10;
+      ChangeRetryPolicyParameters ChangeRetryPolicy = 11;
+      TimestampParameter BeginAtomicRegion = 12;
+      EndAtomicRegionParameters EndAtomicRegion = 13;
+      TimestampParameter BeginRemoteWrite = 14;
+      EndRemoteWriteParameters EndRemoteWrite = 15;
+      PendingWorkerInvocationParameters PendingWorkerInvocation = 16;
+      PendingUpdateParameters PendingUpdate = 17;
+      SuccessfulUpdateParameters SuccessfulUpdate = 18;
+      FailedUpdateParameters FailedUpdate = 19;
+      GrowMemoryParameters GrowMemory = 20;
+      CreateResourceParameters CreateResource = 21;
+      DropResourceParameters DropResource = 22;
+      DescribeResourceParameters DescribeResource = 23;
+      LogParameters Log = 24;
+      TimestampParameter Restart = 25;
+  }
+}
+
+message WrappedFunctionType {
+  enum Type {
+    READ_LOCAL = 0;
+    WRITE_LOCAL = 1;
+    READ_REMOTE = 2;
+    WRITE_REMOTE = 3;
+    WRITE_REMOTE_BATCHED = 4;
+  }
+  Type type = 1;
+  optional uint64 oplog_index = 2;
+}
+
+message CreateParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  WorkerId worker_id = 2;
+  uint64 component_version = 3;
+  repeated string args = 4;
+  map<string, string> env = 5;
+  golem.common.AccountId account_id = 6;
+  optional WorkerId parent = 7;
+  uint64 component_size = 8;
+  uint64 initial_total_linear_memory_size = 9;
+}
+
+message ImportedFunctionInvokedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string function_name = 2;
+  wasm.rpc.TypeAnnotatedValue request = 3;
+  wasm.rpc.TypeAnnotatedValue response = 4;
+  WrappedFunctionType wrapped_function_type = 5;
+}
+
+message ExportedFunctionInvokedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string function_name = 2;
+  repeated wasm.rpc.TypeAnnotatedValue request = 3;
+  IdempotencyKey idempotency_key = 4;
+}
+
+message ExportedFunctionCompletedParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  wasm.rpc.TypeAnnotatedValue response = 2;
+  int64 consumed_fuel = 3;
+}
+
+message ErrorParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string error = 2;
+}
+
+message JumpParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 start = 2;
+  uint64 end = 3;
+}
+
+message ChangeRetryPolicyParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  RetryPolicy retry_policy = 2;
+}
+
+message RetryPolicy {
+  uint32 max_attempts = 1;
+  uint64 min_delay = 2;
+  uint64 max_delay = 3;
+  double multiplier = 4;
+  optional double max_jitter_factor = 5;
+}
+
+message EndAtomicRegionParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 begin_index = 2;
+}
+
+message EndRemoteWriteParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 begin_index = 2;
+}
+
+message ExportedFunctionInvocationParameters {
+  IdempotencyKey idempotency_key = 1;
+  string function_name = 2;
+  repeated wasm.rpc.TypeAnnotatedValue input = 3;
+  bool valid_input = 4;
+}
+
+message WorkerInvocation {
+  oneof invocation {
+    ExportedFunctionInvocationParameters exported_function = 1;
+    uint64 manual_update = 2;
+  }
+}
+
+message PendingWorkerInvocationParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  WorkerInvocation invocation = 2;
+}
+
+message SnapshotBasedUpdateParameters {
+  bytes payload = 1;
+}
+
+message UpdateDescription {
+  oneof description {
+    golem.common.Empty auto_update = 1;
+    SnapshotBasedUpdateParameters snapshot_based = 2;
+  }
+}
+
+message PendingUpdateParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 target_version = 2;
+  UpdateDescription update_description = 3;
+}
+
+message SuccessfulUpdateParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 target_version = 2;
+  uint64 new_component_size = 3;
+}
+
+message FailedUpdateParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 target_version = 2;
+  optional string details = 3;
+}
+
+message GrowMemoryParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 delta = 2;
+}
+
+message CreateResourceParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 resource_id = 2;
+}
+
+message DropResourceParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 resource_id = 2;
+}
+
+message DescribeResourceParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 resource_id = 2;
+  string resource_name = 3;
+  repeated wasm.rpc.TypeAnnotatedValue resource_params = 4;
+}
+
+message TimestampParameter {
+  google.protobuf.Timestamp timestamp = 1;
+}
+
+enum OplogLogLevel {
+  OPLOG_STDOUT = 0;
+  OPLOG_STDERR = 1;
+  OPLOG_TRACE = 2;
+  OPLOG_DEBUG = 3;
+  OPLOG_INFO = 4;
+  OPLOG_WARN = 5;
+  OPLOG_ERROR = 6;
+  OPLOG_CRITICAL = 7;
+}
+
+message LogParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  OplogLogLevel level = 2;
+  string context = 3;
+  string message = 4;
+}

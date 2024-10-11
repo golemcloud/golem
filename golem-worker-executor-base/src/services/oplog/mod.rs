@@ -22,9 +22,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use bytes::Bytes;
-
 pub use blob::BlobOplogArchiveService;
+use bytes::Bytes;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::oplog::{
@@ -37,6 +36,7 @@ use golem_common::model::{
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
+use tracing::Instrument;
 
 use crate::error::GolemError;
 
@@ -133,6 +133,20 @@ pub trait OplogService: Debug {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError>;
+
+    /// Uploads a big oplog payload and returns a reference to it
+    async fn upload_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        data: &[u8],
+    ) -> Result<OplogPayload, String>;
+
+    /// Downloads a big oplog payload by its reference
+    async fn download_payload(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        payload: &OplogPayload,
+    ) -> Result<Bytes, String>;
 }
 
 /// Level of commit guarantees
@@ -201,19 +215,23 @@ pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog + Send + Sync>) -> 
 
 #[async_trait]
 pub trait OplogOps: Oplog {
-    async fn add_imported_function_invoked<R: Encode + Sync>(
+    async fn add_imported_function_invoked<I: Encode + Sync, O: Encode + Sync>(
         &self,
         function_name: String,
-        response: &R,
+        request: &I,
+        response: &O,
         wrapped_function_type: WrappedFunctionType,
     ) -> Result<OplogEntry, String> {
+        let serialized_request = serialize(request)?.to_vec();
         let serialized_response = serialize(response)?.to_vec();
 
-        let payload = self.upload_payload(&serialized_response).await?;
+        let request_payload: OplogPayload = self.upload_payload(&serialized_request).await?;
+        let response_payload = self.upload_payload(&serialized_response).await?;
         let entry = OplogEntry::ImportedFunctionInvoked {
             timestamp: Timestamp::now_utc(),
             function_name,
-            response: payload,
+            request: request_payload,
+            response: response_payload,
             wrapped_function_type,
         };
         self.add(entry.clone()).await;
@@ -273,6 +291,10 @@ pub trait OplogOps: Oplog {
         entry: &OplogEntry,
     ) -> Result<Option<T>, String> {
         match entry {
+            OplogEntry::ImportedFunctionInvokedV1 { response, .. } => {
+                let response_bytes: Bytes = self.download_payload(response).await?;
+                try_deserialize(&response_bytes)
+            }
             OplogEntry::ImportedFunctionInvoked { response, .. } => {
                 let response_bytes: Bytes = self.download_payload(response).await?;
                 try_deserialize(&response_bytes)
@@ -353,18 +375,21 @@ impl OpenOplogs {
                     worker_id,
                     || Ok(()),
                     |_| {
-                        Box::pin(async move {
-                            let result = constructor_clone.create_oplog(close).await;
+                        Box::pin(
+                            async move {
+                                let result = constructor_clone.create_oplog(close).await;
 
-                            // Temporarily increasing ref count because we want to store a weak pointer
-                            // but not drop it before we re-gain a strong reference when got out of the cache
-                            let result = unsafe {
-                                let ptr = Arc::into_raw(result);
-                                Arc::increment_strong_count(ptr);
-                                Arc::from_raw(ptr)
-                            };
-                            Ok(OpenOplogEntry::new(result))
-                        })
+                                // Temporarily increasing ref count because we want to store a weak pointer
+                                // but not drop it before we re-gain a strong reference when got out of the cache
+                                let result = unsafe {
+                                    let ptr = Arc::into_raw(result);
+                                    Arc::increment_strong_count(ptr);
+                                    Arc::from_raw(ptr)
+                                };
+                                Ok(OpenOplogEntry::new(result))
+                            }
+                            .in_current_span(),
+                        )
                     },
                 )
                 .await

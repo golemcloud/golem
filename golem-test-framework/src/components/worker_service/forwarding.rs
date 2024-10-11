@@ -16,17 +16,19 @@ use anyhow::anyhow;
 use std::sync::Arc;
 
 use crate::components::component_service::ComponentService;
+use crate::components::worker_executor::WorkerExecutor;
+use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
-    InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest,
+    GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, LogEvent, WorkerId};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
@@ -34,9 +36,6 @@ use golem_api_grpc::proto::golem::{worker, workerexecutor};
 use golem_common::model::AccountId;
 use tonic::transport::Channel;
 use tonic::Streaming;
-
-use crate::components::worker_executor::WorkerExecutor;
-use crate::components::worker_service::WorkerService;
 
 pub struct ForwardingWorkerService {
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
@@ -483,6 +482,52 @@ impl WorkerService for ForwardingWorkerService {
                             error: Some(worker::v1::worker_error::Error::InternalError(error)),
                         },
                     )),
+                })
+            }
+        }
+    }
+
+    async fn get_oplog(&self, request: GetOplogRequest) -> crate::Result<GetOplogResponse> {
+        let result = self
+            .worker_executor
+            .client()
+            .await?
+            .get_oplog(workerexecutor::v1::GetOplogRequest {
+                worker_id: request.worker_id,
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
+                from_oplog_index: request.from_oplog_index,
+                cursor: request.cursor,
+                count: request.count,
+            })
+            .await?
+            .into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor get-oplog call"
+            )),
+            Some(workerexecutor::v1::get_oplog_response::Result::Success(oplog)) => {
+                Ok(GetOplogResponse {
+                    result: Some(worker::v1::get_oplog_response::Result::Success(
+                        GetOplogSuccessResponse {
+                            entries: oplog.entries,
+                            next: oplog.next,
+                            first_index_in_chunk: oplog.first_index_in_chunk,
+                            last_index: oplog.last_index,
+                        },
+                    )),
+                })
+            }
+            Some(workerexecutor::v1::get_oplog_response::Result::Failure(error)) => {
+                Ok(GetOplogResponse {
+                    result: Some(worker::v1::get_oplog_response::Result::Error(WorkerError {
+                        error: Some(worker::v1::worker_error::Error::InternalError(error)),
+                    })),
                 })
             }
         }

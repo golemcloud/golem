@@ -26,10 +26,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn now(&mut self) -> anyhow::Result<Datetime> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("clocks::wall_clock", "now");
-        Durability::<Ctx, SerializableDateTime, SerializableError>::wrap(
+        Durability::<Ctx, (), SerializableDateTime, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "wall_clock::now",
+            (),
             |ctx| Box::pin(async { Host::now(&mut ctx.as_wasi_view()).await }),
         )
         .await
@@ -38,10 +39,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn resolution(&mut self) -> anyhow::Result<Datetime> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("clocks::wall_clock", "resolution");
-        Durability::<Ctx, SerializableDateTime, SerializableError>::wrap(
+        Durability::<Ctx, (), SerializableDateTime, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "wall_clock::resolution",
+            (),
             |ctx| Box::pin(async { Host::resolution(&mut ctx.as_wasi_view()).await }),
         )
         .await

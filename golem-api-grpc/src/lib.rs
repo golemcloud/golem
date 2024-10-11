@@ -14,6 +14,11 @@
 
 #[allow(clippy::large_enum_variant)]
 pub mod proto {
+    use crate::proto::golem::worker::UpdateMode;
+    use bincode::de::Decoder;
+    use bincode::enc::Encoder;
+    use bincode::error::{DecodeError, EncodeError};
+    use bincode::{Decode, Encode};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance,
@@ -185,6 +190,25 @@ pub mod proto {
             Self {
                 name: value.name,
                 typ: Some((&value.typ).into()),
+            }
+        }
+    }
+
+    impl Encode for UpdateMode {
+        fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+            match self {
+                UpdateMode::Automatic => 0u8.encode(encoder),
+                UpdateMode::Manual => 1u8.encode(encoder),
+            }
+        }
+    }
+
+    impl Decode for UpdateMode {
+        fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+            match Decode::decode(decoder)? {
+                0u8 => Ok(UpdateMode::Automatic),
+                1u8 => Ok(UpdateMode::Manual),
+                _ => Err(DecodeError::Other("Invalid UpdateMode")),
             }
         }
     }

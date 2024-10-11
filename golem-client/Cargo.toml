@@ -12,6 +12,10 @@ include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 [lib]
 
 [dependencies]
+golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-wasm-ast = { workspace = true }
+golem-wasm-rpc = { workspace = true }
+
 async-trait = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
@@ -24,5 +28,5 @@ tracing = { workspace = true }
 uuid = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = "0.0.8"
+golem-openapi-client-generator = "0.0.10"
 relative-path = "1.9.2"

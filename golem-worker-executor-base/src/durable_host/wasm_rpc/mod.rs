@@ -15,26 +15,34 @@
 pub mod serialized;
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::wasm_rpc::serialized::SerializableInvokeResult;
+use crate::durable_host::wasm_rpc::serialized::{
+    SerializableInvokeRequest, SerializableInvokeResult, SerializableInvokeResultV1,
+};
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::error::GolemError;
 use crate::get_oplog_entry;
 use crate::metrics::wasm::record_host_function_call;
 use crate::model::PersistenceLevel;
+use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::{InvocationManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
+use golem_common::model::exports::function_by_name;
 use golem_common::model::oplog::{OplogEntry, WrappedFunctionType};
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{ComponentId, IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 use golem_common::uri::oss::urn::{WorkerFunctionUrn, WorkerOrFunctionUrn};
 use golem_wasm_rpc::golem::rpc::types::{
     FutureInvokeResult, HostFutureInvokeResult, Pollable, Uri,
 };
-use golem_wasm_rpc::{FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, WasmRpcEntry, WitValue};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::{
+    FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, ValueAndType, WasmRpcEntry, WitValue,
+};
 use std::any::Any;
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{error, warn};
 use uuid::Uuid;
 use wasmtime::component::Resource;
@@ -94,10 +102,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
+        let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
             "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
+            (),
             |_ctx| {
                 Box::pin(async move {
                     let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
@@ -113,10 +122,28 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let result = Durability::<Ctx, WitValue, SerializableError>::wrap(
+        // NOTE: Could be Durability::<Ctx, SerializableInvokeRequest, TypeAnnotatedValue, SerializableError>::wrap but need to support old WitValue values during recovery
+        let result: Result<WitValue, RpcError> = Durability::<
+            Ctx,
+            SerializableInvokeRequest,
+            TypeAnnotatedValue,
+            SerializableError,
+        >::full_custom_wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem::rpc::wasm-rpc::invoke-and-await",
+            SerializableInvokeRequest {
+                remote_worker_id: remote_worker_id.worker_id(),
+                idempotency_key: idempotency_key.clone(),
+                function_name: function_name.clone(),
+                function_params: try_get_typed_parameters(
+                    self.state.component_service.clone(),
+                    &remote_worker_id.worker_id.component_id,
+                    &function_name,
+                    &function_params,
+                )
+                .await,
+            },
             |ctx| {
                 Box::pin(async move {
                     ctx.rpc()
@@ -132,11 +159,41 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                         .await
                 })
             },
+            |_, typed_value| Ok(typed_value.clone()),
+            |_, typed_value| {
+                typed_value
+                    .clone()
+                    .try_into()
+                    .map_err(|s: String| RpcError::ProtocolError { details: s })
+            },
+            |_, oplog, entry| {
+                Box::pin(async move {
+                    let typed_value = DurableWorkerCtx::<Ctx>::try_default_load::<
+                        TypeAnnotatedValue,
+                        SerializableError,
+                    >(oplog.clone(), entry)
+                    .await;
+                    if let Ok(Ok(typed_value)) = typed_value {
+                        typed_value
+                            .try_into()
+                            .map_err(|s: String| RpcError::ProtocolError { details: s })
+                    } else if let Ok(Err(err)) = typed_value {
+                        Err(err.into())
+                    } else {
+                        let wit_value = DurableWorkerCtx::<Ctx>::default_load::<
+                            WitValue,
+                            SerializableError,
+                        >(oplog, entry)
+                        .await;
+                        wit_value.map_err(|err| err.into())
+                    }
+                })
+            },
         )
         .await;
 
         match result {
-            Ok(result) => Ok(Ok(result)),
+            Ok(wit_value) => Ok(Ok(wit_value)),
             Err(err) => {
                 error!("RPC error: {err}");
                 Ok(Err(err.into()))
@@ -167,10 +224,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
+        let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
-            "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
+            "golem::rpc::wasm-rpc::invoke idempotency key",
+            (),
             |_ctx| {
                 Box::pin(async move {
                     let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
@@ -186,10 +244,22 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
 
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
+        let result = Durability::<Ctx, SerializableInvokeRequest, (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem::rpc::wasm-rpc::invoke",
+            SerializableInvokeRequest {
+                remote_worker_id: remote_worker_id.worker_id(),
+                idempotency_key: idempotency_key.clone(),
+                function_name: function_name.clone(),
+                function_params: try_get_typed_parameters(
+                    self.state.component_service.clone(),
+                    &remote_worker_id.worker_id.component_id,
+                    &function_name,
+                    &function_params,
+                )
+                .await,
+            },
             |ctx| {
                 Box::pin(async move {
                     ctx.rpc()
@@ -244,10 +314,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let oplog_index = self.state.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
-        let uuid = Durability::<Ctx, (u64, u64), SerializableError>::custom_wrap(
+        let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
-            "golem::rpc::wasm-rpc::invoke-and-await idempotency key",
+            "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key",
+            (),
             |_ctx| {
                 Box::pin(async move {
                     let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
@@ -263,6 +334,18 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         .await?;
         let idempotency_key = IdempotencyKey::from_uuid(uuid);
         let worker_id = self.worker_id().clone();
+        let request = SerializableInvokeRequest {
+            remote_worker_id: remote_worker_id.worker_id(),
+            idempotency_key: idempotency_key.clone(),
+            function_name: function_name.clone(),
+            function_params: try_get_typed_parameters(
+                self.state.component_service.clone(),
+                &remote_worker_id.worker_id.component_id,
+                &function_name,
+                &function_params,
+            )
+            .await,
+        };
         let result = if self.state.is_live() {
             let rpc = self.rpc();
 
@@ -281,7 +364,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             });
 
             let fut = self.table().push(FutureInvokeResultEntry {
-                payload: Box::new(FutureInvokeResultState::Pending { handle }),
+                payload: Box::new(FutureInvokeResultState::Pending { handle, request }),
             })?;
             Ok(fut)
         } else {
@@ -340,10 +423,12 @@ impl From<RpcError> for golem_wasm_rpc::RpcError {
 #[allow(clippy::large_enum_variant)]
 enum FutureInvokeResultState {
     Pending {
-        handle: AbortOnDropJoinHandle<Result<Result<WitValue, RpcError>, anyhow::Error>>,
+        request: SerializableInvokeRequest,
+        handle: AbortOnDropJoinHandle<Result<Result<TypeAnnotatedValue, RpcError>, anyhow::Error>>,
     },
     Completed {
-        result: Result<Result<WitValue, RpcError>, anyhow::Error>,
+        request: SerializableInvokeRequest,
+        result: Result<Result<TypeAnnotatedValue, RpcError>, anyhow::Error>,
     },
     Deferred {
         remote_worker_id: OwnedWorkerId,
@@ -354,15 +439,18 @@ enum FutureInvokeResultState {
         function_params: Vec<WitValue>,
         idempotency_key: IdempotencyKey,
     },
-    Consumed,
+    Consumed {
+        request: SerializableInvokeRequest,
+    },
 }
 
 #[async_trait]
 impl SubscribeAny for FutureInvokeResultState {
     async fn ready(&mut self) {
-        if let Self::Pending { handle } = self {
+        if let Self::Pending { handle, request } = self {
             *self = Self::Completed {
                 result: handle.await,
+                request: request.clone(),
             };
         }
     }
@@ -394,6 +482,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("golem::rpc::future-invoke-result", "get");
         let rpc = self.rpc();
+        let component_service = self.state.component_service.clone();
 
         let handle = this.rep();
         if self.state.is_live() || self.state.persistence_level == PersistenceLevel::PersistNothing
@@ -405,34 +494,43 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 .downcast_mut::<FutureInvokeResultState>()
                 .unwrap();
 
-            let (result, serializable_invoke_result) = match entry {
-                FutureInvokeResultState::Consumed => {
+            let (result, serializable_invoke_request, serializable_invoke_result) = match entry {
+                FutureInvokeResultState::Consumed { request } => {
                     let message = "future-invoke-result already consumed";
                     (
                         Err(anyhow!(message)),
+                        request.clone(),
                         SerializableInvokeResult::Failed(SerializableError::Generic {
                             message: message.to_string(),
                         }),
                     )
                 }
-                FutureInvokeResultState::Pending { .. } => {
-                    (Ok(None), SerializableInvokeResult::Pending)
+                FutureInvokeResultState::Pending { request, .. } => {
+                    (Ok(None), request.clone(), SerializableInvokeResult::Pending)
                 }
-                FutureInvokeResultState::Completed { .. } => {
-                    let result = std::mem::replace(entry, FutureInvokeResultState::Consumed);
-                    if let FutureInvokeResultState::Completed { result } = result {
+                FutureInvokeResultState::Completed { request, .. } => {
+                    let request = request.clone();
+                    let result =
+                        std::mem::replace(entry, FutureInvokeResultState::Consumed { request });
+                    if let FutureInvokeResultState::Completed { request, result } = result {
                         match result {
                             Ok(Ok(result)) => (
                                 Ok(Some(Ok(result.clone()))),
+                                request,
                                 SerializableInvokeResult::Completed(Ok(result)),
                             ),
                             Ok(Err(rpc_error)) => (
                                 Ok(Some(Err(rpc_error.clone().into()))),
+                                request,
                                 SerializableInvokeResult::Completed(Err(rpc_error)),
                             ),
                             Err(err) => {
                                 let serializable_err = (&err).into();
-                                (Err(err), SerializableInvokeResult::Failed(serializable_err))
+                                (
+                                    Err(err),
+                                    request,
+                                    SerializableInvokeResult::Failed(serializable_err),
+                                )
                             }
                         }
                     } else {
@@ -467,12 +565,37 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             )
                             .await)
                     });
+                    let FutureInvokeResultState::Deferred {
+                        remote_worker_id,
+                        function_name,
+                        function_params,
+                        idempotency_key,
+                        ..
+                    } = &entry
+                    else {
+                        return Err(anyhow!("unexpected state entry".to_string()));
+                    };
+                    let request = SerializableInvokeRequest {
+                        remote_worker_id: remote_worker_id.worker_id(),
+                        idempotency_key: idempotency_key.clone(),
+                        function_name: function_name.clone(),
+                        function_params: try_get_typed_parameters(
+                            component_service,
+                            &remote_worker_id.worker_id.component_id,
+                            function_name,
+                            function_params,
+                        )
+                        .await,
+                    };
                     tx.send(std::mem::replace(
                         entry,
-                        FutureInvokeResultState::Pending { handle },
+                        FutureInvokeResultState::Pending {
+                            handle,
+                            request: request.clone(),
+                        },
                     ))
                     .map_err(|_| anyhow!("failed to send request to handler"))?;
-                    (Ok(None), SerializableInvokeResult::Pending)
+                    (Ok(None), request, SerializableInvokeResult::Pending)
                 }
             };
 
@@ -481,6 +604,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     .oplog
                     .add_imported_function_invoked(
                         "golem::rpc::future-invoke-result::get".to_string(),
+                        &serializable_invoke_request,
                         &serializable_invoke_result,
                         WrappedFunctionType::WriteRemote,
                     )
@@ -506,7 +630,15 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 self.state.oplog.commit(CommitLevel::DurableOnly).await;
             }
 
-            result
+            match result {
+                Ok(Some(Ok(tav))) => {
+                    let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
+                    Ok(Some(Ok(wit_value)))
+                }
+                Ok(Some(Err(error))) => Ok(Some(Err(error))),
+                Ok(None) => Ok(None),
+                Err(err) => Err(err),
+            }
         } else {
             let (_, oplog_entry) =
                 get_oplog_entry!(self.state.replay_state, OplogEntry::ImportedFunctionInvoked)
@@ -516,39 +648,78 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 )
                     })?;
 
-            let serialized_invoke_result = self
+            let serialized_invoke_result: Result<SerializableInvokeResult, String> = self
                 .state
                 .oplog
                 .get_payload_of_entry::<SerializableInvokeResult>(&oplog_entry)
                 .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to deserialize function response: {:?}: {err}",
-                        oplog_entry
-                    )
-                })
-                .unwrap();
+                .map(|v| v.unwrap());
 
-            if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
-                match self.state.open_function_table.get(&handle) {
-                    Some(begin_index) => {
-                        self.state
-                            .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
-                            .await?;
-                        self.state.open_function_table.remove(&handle);
-                    }
-                    None => {
-                        warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
+            if let Ok(serialized_invoke_result) = serialized_invoke_result {
+                if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
+                    match self.state.open_function_table.get(&handle) {
+                        Some(begin_index) => {
+                            self.state
+                                .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                                .await?;
+                            self.state.open_function_table.remove(&handle);
+                        }
+                        None => {
+                            warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
+                        }
                     }
                 }
-            }
 
-            match serialized_invoke_result {
-                SerializableInvokeResult::Pending => Ok(None),
-                SerializableInvokeResult::Completed(result) => {
-                    Ok(Some(result.map_err(|err| err.into())))
+                match serialized_invoke_result {
+                    SerializableInvokeResult::Pending => Ok(None),
+                    SerializableInvokeResult::Completed(result) => match result {
+                        Ok(tav) => {
+                            let wit_value = tav.try_into().map_err(|s: String| anyhow!(s))?;
+                            Ok(Some(Ok(wit_value)))
+                        }
+                        Err(error) => Ok(Some(Err(error.into()))),
+                    },
+                    SerializableInvokeResult::Failed(error) => Err(error.into()),
                 }
-                SerializableInvokeResult::Failed(error) => Err(error.into()),
+            } else {
+                let serialized_invoke_result = self
+                    .state
+                    .oplog
+                    .get_payload_of_entry::<SerializableInvokeResultV1>(&oplog_entry)
+                    .await
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "failed to deserialize function response: {:?}: {err}",
+                            oplog_entry
+                        )
+                    })
+                    .unwrap();
+
+                if !matches!(
+                    serialized_invoke_result,
+                    SerializableInvokeResultV1::Pending
+                ) {
+                    match self.state.open_function_table.get(&handle) {
+                        Some(begin_index) => {
+                            self.state
+                                .end_function(&WrappedFunctionType::WriteRemote, *begin_index)
+                                .await?;
+                            self.state.open_function_table.remove(&handle);
+                        }
+                        None => {
+                            warn!("No matching BeginRemoteWrite index was found when invoke response arrived. Handle: {}; open functions: {:?}", handle, self.state.open_function_table);
+                        }
+                    }
+                }
+
+                match serialized_invoke_result {
+                    SerializableInvokeResultV1::Pending => Ok(None),
+                    SerializableInvokeResultV1::Completed(result) => match result {
+                        Ok(wit_value) => Ok(Some(Ok(wit_value))),
+                        Err(error) => Ok(Some(Err(error.into()))),
+                    },
+                    SerializableInvokeResultV1::Failed(error) => Err(error.into()),
+                }
             }
         }
     }
@@ -570,10 +741,11 @@ async fn generate_unique_local_worker_id<Ctx: WorkerCtx>(
     match remote_worker_id.clone().try_into_worker_id() {
         Some(worker_id) => Ok(worker_id),
         None => {
-            let worker_id = Durability::<Ctx, WorkerId, SerializableError>::wrap(
+            let worker_id = Durability::<Ctx, (), WorkerId, SerializableError>::wrap(
                 ctx,
                 WrappedFunctionType::ReadLocal,
                 "golem::rpc::wasm-rpc::generate_unique_local_worker_id",
+                (),
                 |ctx| {
                     Box::pin(async move {
                         ctx.rpc()
@@ -586,6 +758,33 @@ async fn generate_unique_local_worker_id<Ctx: WorkerCtx>(
             Ok(worker_id)
         }
     }
+}
+
+/// Tries to get a `ValueAndType` representation for the given `WitValue` parameters by querying the latest component metadata for the
+/// target component.
+/// If the query fails, or the expected function name is not in its metadata or the number of parameters does not match, then it returns an
+/// empty vector.
+///
+/// This should only be used for generating "debug information" for the stored oplog entries.
+async fn try_get_typed_parameters(
+    components: Arc<dyn ComponentService + Send + Sync>,
+    component_id: &ComponentId,
+    function_name: &str,
+    params: &[WitValue],
+) -> Vec<ValueAndType> {
+    if let Ok(metadata) = components.get_metadata(component_id, None).await {
+        if let Ok(Some(function)) = function_by_name(&metadata.exports, function_name) {
+            if function.parameters.len() == params.len() {
+                return params
+                    .iter()
+                    .zip(function.parameters)
+                    .map(|(value, def)| ValueAndType::new(value.clone().into(), def.typ.clone()))
+                    .collect();
+            }
+        }
+    }
+
+    Vec::new()
 }
 
 pub struct WasmRpcEntryPayload {

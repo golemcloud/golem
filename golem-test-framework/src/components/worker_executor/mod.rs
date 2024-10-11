@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 use tracing::Level;
 
@@ -58,13 +59,20 @@ pub trait WorkerExecutor {
 }
 
 async fn new_client(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {
-    Ok(WorkerExecutorClient::connect(format!("http://{host}:{grpc_port}")).await?)
+    Ok(
+        WorkerExecutorClient::connect(format!("http://{host}:{grpc_port}"))
+            .await?
+            .send_compressed(CompressionEncoding::Gzip)
+            .accept_compressed(CompressionEncoding::Gzip),
+    )
 }
 
 fn new_client_lazy(host: &str, grpc_port: u16) -> crate::Result<WorkerExecutorClient<Channel>> {
     Ok(WorkerExecutorClient::new(
         Endpoint::try_from(format!("http://{host}:{grpc_port}"))?.connect_lazy(),
-    ))
+    )
+    .send_compressed(CompressionEncoding::Gzip)
+    .accept_compressed(CompressionEncoding::Gzip))
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {

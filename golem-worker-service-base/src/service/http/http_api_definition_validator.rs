@@ -1,8 +1,9 @@
 use poem_openapi::Object;
+use std::fmt::{Display, Formatter};
 
-use serde::{Deserialize, Serialize};
-
+use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
+use serde::{Deserialize, Serialize};
 
 use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
 
@@ -26,6 +27,22 @@ impl RouteValidationError {
             component: route.binding.component_id,
             detail,
         }
+    }
+}
+
+impl Display for RouteValidationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RouteValidationError: method: {}, path: {}, component: {}, detail: {}",
+            self.method, self.path, self.component, self.detail
+        )
+    }
+}
+
+impl SafeDisplay for RouteValidationError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
     }
 }
 

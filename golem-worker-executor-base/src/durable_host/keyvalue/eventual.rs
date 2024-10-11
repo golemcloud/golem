@@ -43,15 +43,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .get::<BucketEntry>(&bucket)?
             .name
             .clone();
-        let result = Durability::<Ctx, Option<Vec<u8>>, SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, String), Option<Vec<u8>>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem keyvalue::eventual::get",
-            |ctx| {
-                ctx.state
-                    .key_value_service
-                    .get(account_id.clone(), bucket.clone(), key.clone())
-            },
+            (bucket.clone(), key.clone()),
+            |ctx| ctx.state.key_value_service.get(account_id, bucket, key),
         )
         .await;
         match result {
@@ -96,17 +93,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .read()
             .unwrap()
             .clone();
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, String, u64), (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem keyvalue::eventual::set",
+            (bucket.clone(), key.clone(), outgoing_value.len() as u64),
             |ctx| {
-                ctx.state.key_value_service.set(
-                    account_id.clone(),
-                    bucket.clone(),
-                    key.clone(),
-                    outgoing_value.clone(),
-                )
+                ctx.state
+                    .key_value_service
+                    .set(account_id, bucket, key, outgoing_value)
             },
         )
         .await;
@@ -136,15 +131,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .get::<BucketEntry>(&bucket)?
             .name
             .clone();
-        let result = Durability::<Ctx, (), SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, String), (), SerializableError>::wrap(
             self,
             WrappedFunctionType::WriteRemote,
             "golem keyvalue::eventual::delete",
-            |ctx| {
-                ctx.state
-                    .key_value_service
-                    .delete(account_id.clone(), bucket.clone(), key.clone())
-            },
+            (bucket.clone(), key.clone()),
+            |ctx| ctx.state.key_value_service.delete(account_id, bucket, key),
         )
         .await;
         match result {
@@ -173,15 +165,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .get::<BucketEntry>(&bucket)?
             .name
             .clone();
-        let result = Durability::<Ctx, bool, SerializableError>::wrap(
+        let result = Durability::<Ctx, (String, String), bool, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadRemote,
             "golem keyvalue::eventual::exists",
-            |ctx| {
-                ctx.state
-                    .key_value_service
-                    .exists(account_id.clone(), bucket.clone(), key.clone())
-            },
+            (bucket.clone(), key.clone()),
+            |ctx| ctx.state.key_value_service.exists(account_id, bucket, key),
         )
         .await;
         match result {

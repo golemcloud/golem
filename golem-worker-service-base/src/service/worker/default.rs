@@ -23,9 +23,7 @@ use tonic::Code;
 use tracing::{error, info};
 
 use golem_api_grpc::proto::golem::worker::UpdateMode;
-use golem_api_grpc::proto::golem::worker::{
-    IdempotencyKey as ProtoIdempotencyKey, InvocationContext, InvokeResult,
-};
+use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -35,11 +33,14 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
     ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
-use golem_service_base::model::{GolemErrorUnknown, ResourceLimits, WorkerMetadata};
+use golem_service_base::model::{
+    GetOplogResponse, GolemErrorUnknown, ResourceLimits, WorkerMetadata,
+};
 use golem_service_base::routing_table::HasRoutingTableService;
 use golem_service_base::{
     model::{Component, GolemError},
@@ -81,8 +82,14 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
-    // Accepts Vec<TypeAnnotatedValue> and returns TypeAnnotatedValue
-    async fn invoke_and_await_function_json(
+    fn validate_typed_parameters(
+        &self,
+        params: Vec<TypeAnnotatedValue>,
+    ) -> WorkerResult<Vec<ProtoVal>>;
+
+    /// Validates the provided list of `TypeAnnotatedValue` parameters, and then
+    /// invokes the worker and waits its results, returning it as a `TypeAnnotatedValue`.
+    async fn validate_and_invoke_and_await_typed(
         &self,
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
@@ -90,21 +97,46 @@ pub trait WorkerService<AuthCtx> {
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<TypeAnnotatedValue>;
+    ) -> WorkerResult<TypeAnnotatedValue> {
+        let params = self.validate_typed_parameters(params)?;
+        self.invoke_and_await_typed(
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+            invocation_context,
+            metadata,
+        )
+        .await
+    }
 
-    // Accepts a Vec<Val> and returns a Vec<Val> (with no type information)
-    async fn invoke_and_await_function_proto(
+    /// Invokes a worker using raw `Val` parameter values and awaits its results returning
+    /// it as a `TypeAnnotatedValue`.
+    async fn invoke_and_await_typed(
         &self,
         worker_id: &TargetWorkerId,
-        idempotency_key: Option<ProtoIdempotencyKey>,
+        idempotency_key: Option<IdempotencyKey>,
+        function_name: String,
+        params: Vec<ProtoVal>,
+        invocation_context: Option<InvocationContext>,
+        metadata: WorkerRequestMetadata,
+    ) -> WorkerResult<TypeAnnotatedValue>;
+
+    /// Invokes a worker using raw `Val` parameter values and awaits its results returning
+    /// a `Val` values (without type information)
+    async fn invoke_and_await(
+        &self,
+        worker_id: &TargetWorkerId,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<InvokeResult>;
 
-    // Accepts Vec<TypeAnnotatedValue> parameters as input
-    async fn invoke_function_json(
+    /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
+    /// an invocation for the worker without awaiting its results.
+    async fn validate_and_invoke(
         &self,
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
@@ -112,13 +144,25 @@ pub trait WorkerService<AuthCtx> {
         params: Vec<TypeAnnotatedValue>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<()>;
+    ) -> WorkerResult<()> {
+        let params = self.validate_typed_parameters(params)?;
+        self.invoke(
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+            invocation_context,
+            metadata,
+        )
+        .await
+    }
 
-    // Accepts Vec<Val> as input
-    async fn invoke_function_proto(
+    /// Enqueues an invocation for the worker without awaiting its results, using raw `Val`
+    /// parameters.
+    async fn invoke(
         &self,
         worker_id: &TargetWorkerId,
-        idempotency_key: Option<ProtoIdempotencyKey>,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
@@ -182,6 +226,16 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<Component, WorkerServiceError>;
+
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from_oplog_index: OplogIndex,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> Result<GetOplogResponse, WorkerServiceError>;
 }
 
 pub struct TypedResult {
@@ -276,7 +330,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::CreateWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
 
@@ -310,7 +364,7 @@ where
                     {
                         WorkerServiceError::WorkerNotFound(worker_id_err.clone())
                     }
-                    _ => WorkerServiceError::internal(error),
+                    _ => WorkerServiceError::InternalCallError(error),
                 },
             )
             .await?;
@@ -348,32 +402,38 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::DeleteWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
 
         Ok(())
     }
 
-    async fn invoke_and_await_function_json(
+    fn validate_typed_parameters(
+        &self,
+        params: Vec<TypeAnnotatedValue>,
+    ) -> WorkerResult<Vec<ProtoVal>> {
+        let mut result = Vec::new();
+        for param in params {
+            result.push(golem_wasm_rpc::protobuf::Val::from(
+                golem_wasm_rpc::Value::try_from(param).map_err(WorkerServiceError::TypeChecker)?,
+            ));
+        }
+        Ok(result)
+    }
+
+    async fn invoke_and_await_typed(
         &self,
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<TypeAnnotatedValue>,
+        params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<TypeAnnotatedValue> {
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
         let function_name_clone = function_name.clone();
-
-        let mut params_ = Vec::new();
-        for param in params {
-            params_.push(golem_wasm_rpc::protobuf::Val::from(
-                golem_wasm_rpc::Value::try_from(param).map_err(WorkerServiceError::TypeChecker)?,
-            ));
-        }
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
@@ -383,7 +443,7 @@ where
                     InvokeAndAwaitWorkerRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
-                        input: params_.clone(),
+                        input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|v| v.into()),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
@@ -418,16 +478,16 @@ where
                     }
                 }
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         ).await?;
 
         Ok(invoke_response)
     }
 
-    async fn invoke_and_await_function_proto(
+    async fn invoke_and_await(
         &self,
         worker_id: &TargetWorkerId,
-        idempotency_key: Option<ProtoIdempotencyKey>,
+        idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
@@ -445,7 +505,7 @@ where
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
                         input: params.clone(),
-                        idempotency_key: idempotency_key.clone(),
+                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                         context: invocation_context.clone(),
@@ -478,64 +538,16 @@ where
                     }
                 }
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         ).await?;
 
         Ok(invoke_response)
     }
 
-    async fn invoke_function_json(
+    async fn invoke(
         &self,
         worker_id: &TargetWorkerId,
         idempotency_key: Option<IdempotencyKey>,
-        function_name: String,
-        params: Vec<TypeAnnotatedValue>,
-        invocation_context: Option<InvocationContext>,
-        metadata: WorkerRequestMetadata,
-    ) -> WorkerResult<()> {
-        let worker_id = worker_id.clone();
-
-        let mut params_ = Vec::new();
-        for param in params {
-            params_.push(golem_wasm_rpc::protobuf::Val::from(
-                golem_wasm_rpc::Value::try_from(param).map_err(WorkerServiceError::TypeChecker)?,
-            ));
-        }
-        self.call_worker_executor(
-            worker_id.clone(),
-            move |worker_executor_client| {
-                let worker_id = worker_id.clone();
-                Box::pin(worker_executor_client.invoke_worker(
-                    workerexecutor::v1::InvokeWorkerRequest {
-                        worker_id: Some(worker_id.into()),
-                        name: function_name.clone(),
-                        input: params_.clone(),
-                        idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        account_id: metadata.account_id.clone().map(|id| id.into()),
-                        account_limits: metadata.limits.clone().map(|id| id.into()),
-                        context: invocation_context.clone(),
-                    },
-                ))
-            },
-            |response| match response.into_inner() {
-                workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Success(_)),
-                } => Ok(()),
-                workerexecutor::v1::InvokeWorkerResponse {
-                    result: Some(workerexecutor::v1::invoke_worker_response::Result::Failure(err)),
-                } => Err(err.into()),
-                workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
-            },
-            WorkerServiceError::internal,
-        )
-        .await?;
-        Ok(())
-    }
-
-    async fn invoke_function_proto(
-        &self,
-        worker_id: &TargetWorkerId,
-        idempotency_key: Option<ProtoIdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
@@ -550,7 +562,7 @@ where
                 Box::pin(worker_executor_client.invoke_worker(
                     workerexecutor::v1::InvokeWorkerRequest {
                         worker_id: Some(worker_id.into()),
-                        idempotency_key: idempotency_key.clone(),
+                        idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         name: function_name.clone(),
                         input: params.clone(),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
@@ -571,7 +583,7 @@ where
                 }
                 workerexecutor::v1::InvokeWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
         Ok(())
@@ -625,7 +637,7 @@ where
                         }
                     }
                 },
-                WorkerServiceError::internal,
+                WorkerServiceError::InternalCallError,
             )
             .await?;
         Ok(result)
@@ -662,7 +674,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::InterruptWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
 
@@ -708,7 +720,7 @@ where
                     }
                 }
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         ).await?;
 
         Ok(metadata)
@@ -770,7 +782,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::ResumeWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
         Ok(())
@@ -806,7 +818,7 @@ where
                 } => Err(err.into()),
                 workerexecutor::v1::UpdateWorkerResponse { .. } => Err("Empty response".into()),
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         )
         .await?;
         Ok(())
@@ -820,6 +832,66 @@ where
     ) -> Result<Component, WorkerServiceError> {
         self.try_get_component_for_worker(worker_id, metadata, auth_ctx)
             .await
+    }
+
+    async fn get_oplog(
+        &self,
+        worker_id: &WorkerId,
+        from_oplog_index: OplogIndex,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<GetOplogResponse, WorkerServiceError> {
+        let worker_id = worker_id.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                info!("Get oplog");
+                let worker_id = worker_id.clone();
+                Box::pin(
+                    worker_executor_client.get_oplog(workerexecutor::v1::GetOplogRequest {
+                        worker_id: Some(worker_id.into()),
+                        from_oplog_index: from_oplog_index.into(),
+                        cursor: cursor.clone().map(|c| c.into()),
+                        count,
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::GetOplogResponse {
+                    result:
+                        Some(workerexecutor::v1::get_oplog_response::Result::Success(
+                            workerexecutor::v1::GetOplogSuccessResponse {
+                                entries,
+                                next,
+                                first_index_in_chunk,
+                                last_index,
+                            },
+                        )),
+                } => Ok(GetOplogResponse {
+                    entries: entries
+                        .into_iter()
+                        .map(|e| e.try_into())
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|err| {
+                            GolemError::Unknown(GolemErrorUnknown {
+                                details: format!("Unexpected oplog entries in error: {err}"),
+                            })
+                        })?,
+                    next: next.map(|c| c.into()),
+                    first_index_in_chunk,
+                    last_index,
+                }),
+                workerexecutor::v1::GetOplogResponse {
+                    result: Some(workerexecutor::v1::get_oplog_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::GetOplogResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
     }
 }
 
@@ -904,7 +976,7 @@ where
                     }
                 }).collect::<Result<Vec<_>, ResponseMapResult>>()
             },
-            WorkerServiceError::internal,
+            WorkerServiceError::InternalCallError,
         ).await?;
 
         Ok(result.into_iter().flatten().collect())
@@ -953,9 +1025,11 @@ where
                             .into_iter()
                             .map(|w| w.try_into())
                             .collect::<Result<Vec<_>, _>>()
-                            .map_err(|_| {
+                            .map_err(|err| {
                                 GolemError::Unknown(GolemErrorUnknown {
-                                    details: "Convert response error".to_string(),
+                                    details: format!(
+                                        "Unexpected worker metadata in response: {err}"
+                                    ),
                                 })
                             })?;
                         Ok((cursor.map(|c| c.into()), workers))
@@ -970,7 +1044,7 @@ where
                         Err("Empty response".into())
                     }
                 },
-                WorkerServiceError::internal,
+                WorkerServiceError::InternalCallError,
             )
             .await?;
 

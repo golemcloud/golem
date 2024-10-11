@@ -1059,6 +1059,98 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/oplog:
+    get:
+      tags:
+      - Worker
+      summary: Get the oplog of a worker
+      operationId: get_oplog
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: from
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: count
+        required: true
+        deprecated: false
+        schema:
+          type: integer
+          format: uint64
+        explode: true
+        style: form
+      - in: query
+        name: cursor
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/OplogCursor'
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GetOplogResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -2539,6 +2631,17 @@ components:
           type: string
       required:
       - host
+    ChangeRetryPolicyParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        new_policy:
+          $ref: '#/components/schemas/PublicRetryConfig'
+      required:
+      - timestamp
+      - new_policy
     CompleteParameters:
       type: object
       properties:
@@ -2553,14 +2656,97 @@ components:
       required:
       - oplogIdx
       - data
+    CreateParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        worker_id:
+          $ref: '#/components/schemas/WorkerId'
+        component_version:
+          type: integer
+          format: uint64
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        account_id:
+          type: string
+        parent:
+          $ref: '#/components/schemas/WorkerId'
+        component_size:
+          type: integer
+          format: uint64
+        initial_total_linear_memory_size:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - worker_id
+      - component_version
+      - args
+      - env
+      - account_id
+      - component_size
+      - initial_total_linear_memory_size
     DeleteWorkerResponse:
       type: object
+    DescribeResourceParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        id:
+          type: integer
+          format: uint64
+        resource_name:
+          type: string
+        resource_params:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValueAndType'
+      required:
+      - timestamp
+      - id
+      - resource_name
+      - resource_params
+    Empty:
+      type: object
+    EndRegionParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        begin_index:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - begin_index
     ErrorBody:
       type: object
       properties:
         error:
           type: string
       required:
+      - error
+    ErrorParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        error:
+          type: string
+      required:
+      - timestamp
       - error
     ErrorsBody:
       type: object
@@ -2571,6 +2757,54 @@ components:
             type: string
       required:
       - errors
+    ExportedFunctionCompletedParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        response:
+          $ref: '#/components/schemas/ValueAndType'
+        consumed_fuel:
+          type: integer
+          format: int64
+      required:
+      - timestamp
+      - response
+      - consumed_fuel
+    ExportedFunctionInvokedParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        function_name:
+          type: string
+        request:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValueAndType'
+        idempotency_key:
+          type: string
+      required:
+      - timestamp
+      - function_name
+      - request
+      - idempotency_key
+    ExportedFunctionParameters:
+      type: object
+      properties:
+        idempotency_key:
+          type: string
+        full_function_name:
+          type: string
+        function_input:
+          type: array
+          items:
+            $ref: '#/components/schemas/ValueAndType'
+      required:
+      - idempotency_key
+      - full_function_name
     FailedUpdate:
       type: object
       properties:
@@ -2585,6 +2819,20 @@ components:
       required:
       - timestamp
       - targetVersion
+    FailedUpdateParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        target_version:
+          type: integer
+          format: uint64
+        details:
+          type: string
+      required:
+      - timestamp
+      - target_version
     FilterComparator:
       type: string
       enum:
@@ -2594,6 +2842,25 @@ components:
       - Greater
       - LessEqual
       - Less
+    GetOplogResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/PublicOplogEntry'
+        next:
+          $ref: '#/components/schemas/OplogCursor'
+        first_index_in_chunk:
+          type: integer
+          format: uint64
+        last_index:
+          type: integer
+          format: uint64
+      required:
+      - entries
+      - first_index_in_chunk
+      - last_index
     GolemError:
       discriminator:
         propertyName: type
@@ -3130,6 +3397,18 @@ components:
       - componentId
       - workerName
       - response
+    GrowMemoryParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        delta:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - delta
     HealthcheckResponse:
       type: object
     HttpApiDefinitionRequest:
@@ -3171,6 +3450,26 @@ components:
       - version
       - routes
       - draft
+    ImportedFunctionInvokedParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        function_name:
+          type: string
+        request:
+          $ref: '#/components/schemas/ValueAndType'
+        response:
+          $ref: '#/components/schemas/ValueAndType'
+        wrapped_function_type:
+          $ref: '#/components/schemas/PublicWrappedFunctionType'
+      required:
+      - timestamp
+      - function_name
+      - request
+      - response
+      - wrapped_function_type
     IndexedWorkerMetadata:
       type: object
       properties:
@@ -3203,6 +3502,54 @@ components:
           $ref: '#/components/schemas/TypeAnnotatedValue'
       required:
       - result
+    JumpParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        jump:
+          $ref: '#/components/schemas/OplogRegion'
+      required:
+      - timestamp
+      - jump
+    LogLevel:
+      description: Worker log levels including the special stdout and stderr channels
+      type: string
+      enum:
+      - Stdout
+      - Stderr
+      - Trace
+      - Debug
+      - Info
+      - Warn
+      - Error
+      - Critical
+    LogParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          $ref: '#/components/schemas/LogLevel'
+        context:
+          type: string
+        message:
+          type: string
+      required:
+      - timestamp
+      - level
+      - context
+      - message
+    ManualUpdateParameters:
+      type: object
+      properties:
+        target_version:
+          type: integer
+          format: uint64
+      required:
+      - target_version
     MessagesErrorsBody:
       type: object
       properties:
@@ -3243,6 +3590,30 @@ components:
       required:
       - name
       - typ
+    OplogCursor:
+      type: object
+      properties:
+        next_oplog_index:
+          type: integer
+          format: uint64
+        current_component_version:
+          type: integer
+          format: uint64
+      required:
+      - next_oplog_index
+      - current_component_version
+    OplogRegion:
+      type: object
+      properties:
+        start:
+          type: integer
+          format: uint64
+        end:
+          type: integer
+          format: uint64
+      required:
+      - start
+      - end
     PendingUpdate:
       type: object
       properties:
@@ -3255,6 +3626,32 @@ components:
       required:
       - timestamp
       - targetVersion
+    PendingUpdateParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        target_version:
+          type: integer
+          format: uint64
+        description:
+          $ref: '#/components/schemas/PublicUpdateDescription'
+      required:
+      - timestamp
+      - target_version
+      - description
+    PendingWorkerInvocationParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocation:
+          $ref: '#/components/schemas/PublicWorkerInvocation'
+      required:
+      - timestamp
+      - invocation
     PromiseId:
       type: object
       properties:
@@ -3266,6 +3663,406 @@ components:
       required:
       - workerId
       - oplogIdx
+    PublicOplogEntry:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      discriminator:
+        propertyName: type
+        mapping:
+          Create: '#/components/schemas/PublicOplogEntry_CreateParameters'
+          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
+          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
+          ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
+          Suspend: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          Error: '#/components/schemas/PublicOplogEntry_ErrorParameters'
+          NoOp: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          Jump: '#/components/schemas/PublicOplogEntry_JumpParameters'
+          Interrupted: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          Exited: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          ChangeRetryPolicy: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
+          BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          EndAtomicRegion: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+          BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          EndRemoteWrite: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+          PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
+          PendingUpdate: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
+          SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
+          FailedUpdate: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
+          GrowMemory: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
+          CreateResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+          DropResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+          DescribeResource: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
+          Log: '#/components/schemas/PublicOplogEntry_LogParameters'
+          Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_ErrorParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_JumpParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+    PublicOplogEntry_ChangeRetryPolicyParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ChangeRetryPolicy
+            type: string
+            enum:
+            - ChangeRetryPolicy
+        required:
+        - type
+      - $ref: '#/components/schemas/ChangeRetryPolicyParameters'
+    PublicOplogEntry_CreateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Create
+            type: string
+            enum:
+            - Create
+        required:
+        - type
+      - $ref: '#/components/schemas/CreateParameters'
+    PublicOplogEntry_DescribeResourceParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: DescribeResource
+            type: string
+            enum:
+            - DescribeResource
+        required:
+        - type
+      - $ref: '#/components/schemas/DescribeResourceParameters'
+    PublicOplogEntry_EndRegionParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: EndRemoteWrite
+            type: string
+            enum:
+            - EndRemoteWrite
+        required:
+        - type
+      - $ref: '#/components/schemas/EndRegionParameters'
+    PublicOplogEntry_ErrorParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Error
+            type: string
+            enum:
+            - Error
+        required:
+        - type
+      - $ref: '#/components/schemas/ErrorParameters'
+    PublicOplogEntry_ExportedFunctionCompletedParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExportedFunctionCompleted
+            type: string
+            enum:
+            - ExportedFunctionCompleted
+        required:
+        - type
+      - $ref: '#/components/schemas/ExportedFunctionCompletedParameters'
+    PublicOplogEntry_ExportedFunctionInvokedParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExportedFunctionInvoked
+            type: string
+            enum:
+            - ExportedFunctionInvoked
+        required:
+        - type
+      - $ref: '#/components/schemas/ExportedFunctionInvokedParameters'
+    PublicOplogEntry_FailedUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FailedUpdate
+            type: string
+            enum:
+            - FailedUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/FailedUpdateParameters'
+    PublicOplogEntry_GrowMemoryParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: GrowMemory
+            type: string
+            enum:
+            - GrowMemory
+        required:
+        - type
+      - $ref: '#/components/schemas/GrowMemoryParameters'
+    PublicOplogEntry_ImportedFunctionInvokedParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ImportedFunctionInvoked
+            type: string
+            enum:
+            - ImportedFunctionInvoked
+        required:
+        - type
+      - $ref: '#/components/schemas/ImportedFunctionInvokedParameters'
+    PublicOplogEntry_JumpParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Jump
+            type: string
+            enum:
+            - Jump
+        required:
+        - type
+      - $ref: '#/components/schemas/JumpParameters'
+    PublicOplogEntry_LogParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Log
+            type: string
+            enum:
+            - Log
+        required:
+        - type
+      - $ref: '#/components/schemas/LogParameters'
+    PublicOplogEntry_PendingUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PendingUpdate
+            type: string
+            enum:
+            - PendingUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/PendingUpdateParameters'
+    PublicOplogEntry_PendingWorkerInvocationParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PendingWorkerInvocation
+            type: string
+            enum:
+            - PendingWorkerInvocation
+        required:
+        - type
+      - $ref: '#/components/schemas/PendingWorkerInvocationParameters'
+    PublicOplogEntry_ResourceParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: DropResource
+            type: string
+            enum:
+            - DropResource
+        required:
+        - type
+      - $ref: '#/components/schemas/ResourceParameters'
+    PublicOplogEntry_SuccessfulUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SuccessfulUpdate
+            type: string
+            enum:
+            - SuccessfulUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/SuccessfulUpdateParameters'
+    PublicOplogEntry_TimestampParameter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Restart
+            type: string
+            enum:
+            - Restart
+        required:
+        - type
+      - $ref: '#/components/schemas/TimestampParameter'
+    PublicRetryConfig:
+      type: object
+      properties:
+        max_attempts:
+          type: integer
+          format: uint32
+        min_delay:
+          type: string
+          format: duration
+        max_delay:
+          type: string
+          format: duration
+        multiplier:
+          type: number
+          format: double
+        max_jitter_factor:
+          type: number
+          format: double
+      required:
+      - max_attempts
+      - min_delay
+      - max_delay
+      - multiplier
+    PublicUpdateDescription:
+      discriminator:
+        propertyName: type
+        mapping:
+          Automatic: '#/components/schemas/PublicUpdateDescription_Empty'
+          SnapshotBased: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicUpdateDescription_Empty'
+      - $ref: '#/components/schemas/PublicUpdateDescription_SnapshotBasedUpdateParameters'
+    PublicUpdateDescription_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Automatic
+            type: string
+            enum:
+            - Automatic
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicUpdateDescription_SnapshotBasedUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SnapshotBased
+            type: string
+            enum:
+            - SnapshotBased
+        required:
+        - type
+      - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
+    PublicWorkerInvocation:
+      discriminator:
+        propertyName: type
+        mapping:
+          ExportedFunction: '#/components/schemas/PublicWorkerInvocation_ExportedFunctionParameters'
+          ManualUpdate: '#/components/schemas/PublicWorkerInvocation_ManualUpdateParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicWorkerInvocation_ExportedFunctionParameters'
+      - $ref: '#/components/schemas/PublicWorkerInvocation_ManualUpdateParameters'
+    PublicWorkerInvocation_ExportedFunctionParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ExportedFunction
+            type: string
+            enum:
+            - ExportedFunction
+        required:
+        - type
+      - $ref: '#/components/schemas/ExportedFunctionParameters'
+    PublicWorkerInvocation_ManualUpdateParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ManualUpdate
+            type: string
+            enum:
+            - ManualUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/ManualUpdateParameters'
+    PublicWrappedFunctionType:
+      discriminator:
+        propertyName: type
+        mapping:
+          ReadLocal: '#/components/schemas/PublicWrappedFunctionType_Empty'
+          WriteLocal: '#/components/schemas/PublicWrappedFunctionType_Empty'
+          ReadRemote: '#/components/schemas/PublicWrappedFunctionType_Empty'
+          WriteRemote: '#/components/schemas/PublicWrappedFunctionType_Empty'
+          WriteRemoteBatched: '#/components/schemas/PublicWrappedFunctionType_WriteRemoteBatchedParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicWrappedFunctionType_Empty'
+      - $ref: '#/components/schemas/PublicWrappedFunctionType_WriteRemoteBatchedParameters'
+    PublicWrappedFunctionType_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WriteRemote
+            type: string
+            enum:
+            - WriteRemote
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
+    PublicWrappedFunctionType_WriteRemoteBatchedParameters:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WriteRemoteBatched
+            type: string
+            enum:
+            - WriteRemoteBatched
+        required:
+        - type
+      - $ref: '#/components/schemas/WriteRemoteBatchedParameters'
     ResourceMetadata:
       type: object
       properties:
@@ -3276,6 +4073,18 @@ components:
           $ref: '#/components/schemas/IndexedWorkerMetadata'
       required:
       - createdAt
+    ResourceParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        id:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - id
     ResumeResponse:
       type: object
     RibInputTypeInfo:
@@ -3349,6 +4158,16 @@ components:
           format: int64
       required:
       - value
+    SnapshotBasedUpdateParameters:
+      type: object
+      properties:
+        payload:
+          type: array
+          items:
+            type: integer
+            format: uint8
+      required:
+      - payload
     StringFilterComparator:
       type: string
       enum:
@@ -3368,6 +4187,30 @@ components:
       required:
       - timestamp
       - targetVersion
+    SuccessfulUpdateParameters:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        target_version:
+          type: integer
+          format: uint64
+        new_component_size:
+          type: integer
+          format: uint64
+      required:
+      - timestamp
+      - target_version
+      - new_component_size
+    TimestampParameter:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+      required:
+      - timestamp
     TypeAnnotatedValue:
       type: object
       properties:
@@ -3550,6 +4393,15 @@ components:
             $ref: '#/components/schemas/RouteValidationError'
       required:
       - errors
+    ValueAndType:
+      type: object
+      properties:
+        typ:
+          $ref: '#/components/schemas/AnalysedType'
+        value: {}
+      required:
+      - typ
+      - value
     VersionInfo:
       type: object
       properties:
@@ -3939,6 +4791,12 @@ components:
           $ref: '#/components/schemas/ScanCursor'
       required:
       - workers
+    WriteRemoteBatchedParameters:
+      type: object
+      properties:
+        index:
+          type: integer
+          format: uint64
     AnalysedExport:
       discriminator:
         propertyName: type

@@ -1,11 +1,11 @@
+use crate::service::component::ComponentServiceError;
+use crate::service::worker::WorkerServiceError;
 use golem_common::metrics::api::TraceErrorKind;
+use golem_common::SafeDisplay;
 use golem_service_base::model::*;
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use tonic::Status;
-
-use crate::service::component::ComponentServiceError;
-use crate::service::worker::WorkerServiceError;
 
 // The dependents og golem-worker-service-base
 // is expected to exposer worker api endpoints
@@ -81,20 +81,21 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
         }
 
         match error {
-            ServiceError::Internal(_) => internal(error.to_string()),
+            ServiceError::Internal(_) => internal(error.to_safe_string()),
             ServiceError::TypeChecker(_) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
-                errors: vec![error.to_string()],
+                errors: vec![error.to_safe_string()],
             })),
             ServiceError::VersionedComponentIdNotFound(_)
             | ServiceError::ComponentNotFound(_)
             | ServiceError::AccountIdNotFound(_)
             | ServiceError::WorkerNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
-                error: error.to_string(),
+                error: error.to_safe_string(),
             })),
             ServiceError::Golem(golem_error) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody { golem_error }))
             }
             ServiceError::Component(error) => error.into(),
+            ServiceError::InternalCallError(_) => internal(error.to_safe_string()),
         }
     }
 }
@@ -110,9 +111,7 @@ impl From<ComponentServiceError> for WorkerApiBaseError {
             }
             ComponentServiceError::Internal(error) => {
                 WorkerApiBaseError::InternalError(Json(GolemErrorBody {
-                    golem_error: GolemError::Unknown(GolemErrorUnknown {
-                        details: error.to_string(),
-                    }),
+                    golem_error: GolemError::Unknown(GolemErrorUnknown { details: error }),
                 }))
             }
 
@@ -124,6 +123,20 @@ impl From<ComponentServiceError> for WorkerApiBaseError {
             }
             ComponentServiceError::Forbidden(error) => {
                 WorkerApiBaseError::Forbidden(Json(ErrorBody { error }))
+            }
+            ComponentServiceError::FailedGrpcStatus(_) => {
+                WorkerApiBaseError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown {
+                        details: value.to_safe_string(),
+                    }),
+                }))
+            }
+            ComponentServiceError::FailedTransport(_) => {
+                WorkerApiBaseError::InternalError(Json(GolemErrorBody {
+                    golem_error: GolemError::Unknown(GolemErrorUnknown {
+                        details: value.to_safe_string(),
+                    }),
+                }))
             }
         }
     }

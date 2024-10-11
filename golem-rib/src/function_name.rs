@@ -578,8 +578,7 @@ impl ParsedFunctionReference {
                 let mut result = Vec::new();
                 for (raw_param, param_type) in raw_params.iter().zip(types.iter()) {
                     let type_annotated_value: TypeAnnotatedValue =
-                        type_annotated_value_from_str(param_type, raw_param)
-                            .map_err(|err| err.to_string())?;
+                        type_annotated_value_from_str(param_type, raw_param)?;
                     let value = type_annotated_value.try_into()?;
                     result.push(value);
                 }

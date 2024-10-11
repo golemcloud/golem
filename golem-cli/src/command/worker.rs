@@ -447,6 +447,16 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         #[arg(short = 't', long)]
         target_version: u64,
     },
+    /// Queries and dumps a worker's full oplog
+    #[command()]
+    Oplog {
+        #[command(flatten)]
+        worker_ref: WorkerRef,
+
+        /// Index of the first oplog entry to get. If missing, the whole oplog is returned
+        #[arg(short, long)]
+        from: Option<u64>,
+    },
 }
 
 pub trait WorkerRefSplit<ProjectRef> {
@@ -653,6 +663,13 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                         mode,
                         project_id,
                     )
+                    .await
+            }
+            WorkerSubcommand::Oplog { worker_ref, from } => {
+                let (worker_uri, project_ref) = worker_ref.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .get_oplog(worker_uri, from.unwrap_or_default(), project_id)
                     .await
             }
         }

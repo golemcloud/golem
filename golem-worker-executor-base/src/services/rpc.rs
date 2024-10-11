@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::WitValue;
 use tokio::runtime::Handle;
 use tracing::debug;
@@ -53,7 +54,7 @@ pub trait Rpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
-    ) -> Result<WitValue, RpcError>;
+    ) -> Result<TypeAnnotatedValue, RpcError>;
 
     async fn invoke(
         &self,
@@ -200,7 +201,7 @@ impl Rpc for RemoteInvocationRpc {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
-    ) -> Result<WitValue, RpcError> {
+    ) -> Result<TypeAnnotatedValue, RpcError> {
         Ok(self
             .worker_proxy
             .invoke_and_await(
@@ -496,7 +497,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
-    ) -> Result<WitValue, RpcError> {
+    ) -> Result<TypeAnnotatedValue, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
 
         if self
@@ -525,9 +526,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .invoke_and_await(idempotency_key, function_name, input_values)
                 .await?;
 
-            let result_value = golem_wasm_rpc::Value::try_from(result_values).unwrap();
-
-            Ok(result_value.into())
+            Ok(result_values)
         } else {
             self.remote_rpc
                 .invoke_and_await(

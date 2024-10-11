@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::componentcompilation::v1::{
     component_compilation_response, ComponentCompilationRequest,
 };
+use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::Level;
 
@@ -85,6 +86,8 @@ async fn new_client(host: &str, grpc_port: u16) -> ComponentCompilationServiceCl
     ComponentCompilationServiceClient::connect(format!("http://{host}:{grpc_port}"))
         .await
         .expect("Failed to connect to golem-component-compilation-service")
+        .send_compressed(CompressionEncoding::Gzip)
+        .accept_compressed(CompressionEncoding::Gzip)
 }
 
 async fn wait_for_startup(host: &str, grpc_port: u16, timeout: Duration) {
