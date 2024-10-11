@@ -209,8 +209,29 @@ impl TypeRefinement for CharType {
     }
 }
 
+impl TypeRefinement for FlagsType {
+    fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
+        internal::refine_inferred_type(inferred_type, &|inferred_type| {
+            if let InferredType::Flags(flags) = inferred_type {
+                Some(FlagsType(flags.clone()))
+            } else {
+                None
+            }
+        })
+    }
+}
 
-
+impl TypeRefinement for EnumType {
+    fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
+        internal::refine_inferred_type(inferred_type, &|inferred_type| {
+            if let InferredType::Enum(enums) = inferred_type {
+                Some(EnumType(enums.clone()))
+            } else {
+                None
+            }
+        })
+    }
+}
 
 impl TypeRefinement for VariantType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {

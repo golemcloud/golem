@@ -30,7 +30,7 @@ mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
     use poem_openapi::types::Type;
     use crate::InferredType;
-    use crate::type_refinement::precise_types::{CharType, ErrType, NumberType, OkType, OptionalType, RecordType, VariantType};
+    use crate::type_refinement::precise_types::{BoolType, CharType, EnumType, ErrType, FlagsType, ListType, NumberType, OkType, OptionalType, RecordType, StringType, TupleType, VariantType};
     use crate::type_refinement::TypeRefinement;
 
     pub(crate) fn check_call_args(
@@ -49,7 +49,7 @@ mod internal {
         let expected_arg_types = registry_value.argument_types();
 
         for (arg, expected_arg_type) in args.iter_mut().zip(expected_arg_types) {
-           validate(expected_arg_type.clone(), &arg.inferred_type()).map_err(|e| format!("`{}` has invalid argument`{}`: {}", call_type, arg.to_string(), e))?;
+           validate(&expected_arg_type, &arg.inferred_type()).map_err(|e| format!("`{}` has invalid argument`{}`: {}. Actual: {:?}", call_type, arg.to_string(), e, arg.inferred_type()))?;
         }
 
         Ok(())
@@ -60,9 +60,10 @@ mod internal {
             AnalysedType::Record(fields) => {
                 let resolved = RecordType::refine(&actual_type);
 
+                let cloned = fields.clone();
                 match resolved {
                     Some(record_type) =>  {
-                        for field in fields.fields {
+                        for field in cloned.fields {
                             let field_name = field.name.clone();
                             let expected_field_type = field.typ.clone();
                             let actual_field_type = record_type.inner_type_by_name(&field_name);
@@ -139,7 +140,7 @@ mod internal {
                     }
                 }
             }
-            AnalysedType::Result(result) => {
+            AnalysedType::Result(_) => {
                 let actual_type_ok = OkType::refine(&actual_type).map(|t| t.inner_type().clone());
                 let actual_type_err = ErrType::refine(&actual_type).map(|t| t.inner_type().clone());
                 let expected = actual_type_ok.or(actual_type_err);
@@ -150,25 +151,95 @@ mod internal {
                     Err(format!("Expected result type {}", PrettyAnalysedType(expected_analysed_type.clone())))
                 }
             }
-            AnalysedType::Option(_) => {
+            AnalysedType::Option(inner_type) => {
                 let optional_type = OptionalType::refine(&actual_type).map(|t| t.inner_type().clone());
 
                 if let Some(optional_type) = optional_type {
-                    validate(expected_analysed_type, &optional_type)
+                    validate(inner_type.inner.deref(), &optional_type)
                 } else {
                     Err(format!("Expected option type {}", PrettyAnalysedType(expected_analysed_type.clone())))
                 }
             }
 
-            AnalysedType::Enum(enum_cases) => {
+            AnalysedType::Enum(_) => {
+                let actual_enum = EnumType::refine(&actual_type);
 
+                if let Some(_) = actual_enum {
+                    Ok(())
+                } else {
+                    Err(format!("Expected enum type {}", PrettyAnalysedType(expected_analysed_type.clone())))
+                }
             }
-            AnalysedType::Flags(_) => {}
-            AnalysedType::Tuple(_) => {}
-            AnalysedType::List(_) => {}
-            AnalysedType::Str(_) => {}
-            AnalysedType::Bool(_) => {}
-            AnalysedType::Handle(_) => {}
+            AnalysedType::Flags(_) => {
+                let actual_flags = FlagsType::refine(&actual_type);
+
+                if let Some(_) = actual_flags {
+                    Ok(())
+                } else {
+                    Err(format!("Expected flags type {}", PrettyAnalysedType(expected_analysed_type.clone())))
+                }
+            }
+            AnalysedType::Tuple(tuple) => {
+                let actual_tuple = TupleType::refine(&actual_type);
+
+                if let Some(actual_tuple) = actual_tuple {
+                    for (index, expected_type) in tuple.items.iter().enumerate() {
+                        let actual_types = actual_tuple.inner_types();
+
+                        let actual_types_vec = actual_types.into_iter().collect::<Vec<_>>();
+
+                        let actual_type = actual_types_vec.get(index).ok_or(format!("Tuple index out of bounds"))?;
+
+                        let result = validate(expected_type, &actual_type);
+                        match result {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Err(format!("Invalid type for tuple index `{}`. Expected {}. {}", index, PrettyAnalysedType(expected_type.clone()), e));
+                            }
+                        }
+                    }
+
+                    Ok(())
+                } else {
+                    Err(format!("Expected tuple type {}", PrettyAnalysedType(expected_analysed_type.clone())))
+                }
+            }
+            AnalysedType::List(list_type) => {
+                let actual_list = ListType::refine(&actual_type);
+
+                if let Some(actual_list) = actual_list {
+                    let actual_inner_type = actual_list.inner_type().clone();
+                    let result = validate(&list_type.inner.deref().clone(), &actual_inner_type);
+                    match result {
+                        Ok(_) => {}
+                        Err(e) => {
+                            return Err(format!("Invalid type for list. Expected {}. {}", PrettyAnalysedType(list_type.inner.deref().clone()), e));
+                        }
+                    }
+
+                    Ok(())
+                } else {
+                    Err(format!("Expected list type {}", PrettyAnalysedType(expected_analysed_type.clone())))
+                }
+            }
+            AnalysedType::Str(_) => {
+                dbg!(actual_type.clone());
+                if let Some(_) = StringType::refine(&actual_type) {
+                    Ok(())
+                } else {
+                    Err(format!("Expected str type, but got {:?}", actual_type))
+                }
+            }
+            AnalysedType::Bool(_) => {
+                if let Some(_) = BoolType::refine(&actual_type) {
+                    Ok(())
+                } else {
+                    Err(format!("Expected bool type, but got {:?}", actual_type))
+                }
+            }
+            AnalysedType::Handle(_) => {
+                Ok(())
+            }
         }
 
     }
@@ -223,7 +294,7 @@ impl Display for PrettyAnalysedType {
             }
             AnalysedType::Enum(cases) => {
                 write!(f, "enum {{")?;
-                for case in cases.cases {
+                for case in cases.cases.iter() {
                     write!(f, "{}, ", case)?;
                 }
                 write!(f, "}}")
@@ -279,8 +350,8 @@ impl Display for PrettyAnalysedType {
             AnalysedType::Bool(_) => {
                 write!(f, "bool")
             }
-            AnalysedType::Handle(resource) => {
-                write!(f, "handle<{}>", resource)
+            AnalysedType::Handle(_) => {
+                write!(f, "handle<>")
             }
         }
     }
