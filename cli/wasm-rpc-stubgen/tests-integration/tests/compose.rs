@@ -16,6 +16,8 @@
 
 // TODO: test compose with multiple stubs
 
+use test_r::test;
+
 use fs_extra::dir::CopyOptions;
 use golem_wasm_ast::component::{Component, ComponentExternName};
 use golem_wasm_ast::{DefaultAst, IgnoreAllButMetadata};
@@ -27,7 +29,9 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
 
-#[tokio::test]
+test_r::enable!();
+
+#[test]
 async fn compose_with_single_stub() {
     let (stub_dir, stub_wasm) = init_stub("all-wit-types").await;
     let caller_dir = init_caller("caller-no-dep-importstub");
@@ -65,7 +69,7 @@ async fn compose_with_single_stub() {
     assert_not_importing(&dest_wasm, "test:main-stub/stub-api");
 }
 
-#[tokio::test]
+#[test]
 async fn compose_with_single_stub_not_importing_stub() {
     let (stub_dir, stub_wasm) = init_stub("all-wit-types").await;
     let caller_dir = init_caller("caller-no-dep");

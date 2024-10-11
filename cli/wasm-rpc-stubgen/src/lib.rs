@@ -30,6 +30,9 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+#[cfg(test)]
+test_r::enable!();
+
 #[derive(Parser, Debug)]
 #[command(name = "wasm-rpc-stubgen", version)]
 pub enum Command {

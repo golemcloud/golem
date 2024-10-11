@@ -24,3 +24,6 @@ pub fn wasm_rpc_override() -> WasmRpcOverride {
         wasm_rpc_version_override: None,
     }
 }
+
+#[cfg(test)]
+test_r::enable!();
