@@ -22,6 +22,7 @@ mod type_extraction;
 use crate::type_refinement::precise_types::*;
 use crate::InferredType;
 use std::ops::Deref;
+use golem_wasm_ast::analysis::TypeS32;
 
 /// # Example:
 ///
@@ -152,6 +153,65 @@ impl TypeRefinement for TupleType {
     }
 }
 
+impl TypeRefinement for StringType {
+    fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
+        internal::refine_inferred_type(inferred_type, &|inferred_type| {
+            if let InferredType::Str = inferred_type {
+                Some(StringType)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl TypeRefinement for NumberType {
+    fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
+        internal::refine_inferred_type(inferred_type, &|inferred_type| {
+            match inferred_type {
+                InferredType::S8 => Some(NumberType),
+                InferredType::S16 => Some(NumberType),
+                InferredType::S32 => Some(NumberType),
+                InferredType::S64 => Some(NumberType),
+                InferredType::U8 => Some(NumberType),
+                InferredType::U16 => Some(NumberType),
+                InferredType::U32 => Some(NumberType),
+                InferredType::U64 => Some(NumberType),
+                InferredType::F32 => Some(NumberType),
+                InferredType::F64 => Some(NumberType),
+                _ => None,
+            }
+        })
+    }
+}
+
+impl TypeRefinement for BoolType {
+    fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
+        internal::refine_inferred_type(inferred_type, &|inferred_type| {
+            if let InferredType::Bool = inferred_type {
+                Some(BoolType)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+impl TypeRefinement for CharType {
+    fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
+        internal::refine_inferred_type(inferred_type, &|inferred_type| {
+            if let InferredType::Chr = inferred_type {
+                Some(CharType)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+
+
+
 impl TypeRefinement for VariantType {
     fn refine(inferred_type: &InferredType) -> Option<RefinedType<Self>> {
         internal::refine_inferred_type(inferred_type, &|inferred_type| {
@@ -182,6 +242,8 @@ mod internal {
                 for typ in types {
                     if let Some(refined) = refine_inferred_type(typ, select) {
                         refined_one_of.push(refined);
+                    } else {
+                        return None;
                     }
                 }
 
@@ -193,6 +255,8 @@ mod internal {
                 for typ in types {
                     if let Some(refined) = refine_inferred_type(typ, select) {
                         refined_all_of.push(refined);
+                    } else {
+                        return None;
                     }
                 }
 

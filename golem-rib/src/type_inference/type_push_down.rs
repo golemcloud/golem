@@ -255,35 +255,53 @@ mod internal {
                         update_arm_pattern_type(pattern, &inner, original_predicate)?;
                     }
                 } else if constructor_name == "ok" {
-                    let resolved = OkType::refine(predicate_type).ok_or(format!(
-                        "Invalid pattern match. Cannot match {} to {}",
-                        original_predicate, constructor_name
-                    ))?;
+                    let resolved = OkType::refine(predicate_type);
 
-                    let inner = resolved.inner_type();
+                    match resolved {
+                        Some(resolved) => {
+                            let inner = resolved.inner_type();
 
-                    for pattern in patterns {
-                        update_arm_pattern_type(pattern, &inner, original_predicate)?;
+                            for pattern in patterns {
+                                update_arm_pattern_type(pattern, &inner, original_predicate)?;
+                            }
+                        }
+
+                        None => {
+                            let refined_type = ErrType::refine(predicate_type);
+
+                            match refined_type {
+                                Some(_) => {},
+                                None => {
+                                    return Err(format!("Invalid pattern match. Cannot match {} to ok", original_predicate));
+                                }
+                            }
+                        }
                     }
                 } else if constructor_name == "err" {
-                    let resolved = ErrType::refine(predicate_type).ok_or(format!(
-                        "Invalid pattern match. Cannot match {} to {}",
-                        original_predicate, constructor_name
-                    ))?;
+                    let resolved = ErrType::refine(predicate_type);
 
-                    let inner = resolved.inner_type();
+                    match resolved {
+                        Some(resolved) => {
+                            let inner = resolved.inner_type();
 
-                    for pattern in patterns {
-                        update_arm_pattern_type(pattern, &inner, original_predicate)?;
+                            for pattern in patterns {
+                                update_arm_pattern_type(pattern, &inner, original_predicate)?;
+                            }
+                        }
+
+                        None => {
+                            let refined_type = OkType::refine(predicate_type);
+
+                            match refined_type {
+                                Some(_) => {},
+                                None => {
+                                    return Err(format!("Invalid pattern match. Cannot match {} to err", original_predicate));
+                                }
+                            }
+                        }
                     }
                 } else if let Some(variant_type) = VariantType::refine(predicate_type) {
-                    dbg!(predicate_type.clone());
                     let variant_arg_type = variant_type.inner_type_by_name(constructor_name);
-
-                    dbg!(variant_arg_type.clone());
-                    dbg!(constructor_name.clone());
-                    dbg!(patterns.clone());
-
                     for pattern in patterns {
                         update_arm_pattern_type(pattern, &variant_arg_type, original_predicate)?;
                     }

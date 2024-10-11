@@ -35,3 +35,13 @@ pub struct TupleType(pub Vec<InferredType>);
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct VariantType(pub Vec<(String, Option<InferredType>)>);
+#[derive(Clone, PartialEq, Debug)]
+pub struct StringType;
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct NumberType;
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct CharType;
+#[derive(Clone, PartialEq, Debug)]
+pub struct BoolType;

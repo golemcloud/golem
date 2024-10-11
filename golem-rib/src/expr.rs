@@ -16,10 +16,7 @@ use crate::call_type::CallType;
 use crate::parser::rib_expr::rib_program;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{
-    from_string, text, type_inference, DynamicParsedFunctionName, InferredType, ParsedFunctionName,
-    VariableId,
-};
+use crate::{from_string, text, type_inference, DynamicParsedFunctionName, InferredType, ParsedFunctionName, VariableId, type_checker};
 use bincode::{Decode, Encode};
 use combine::stream::position;
 use combine::EasyParser;
@@ -432,6 +429,7 @@ impl Expr {
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
 
+        //self.check_types(function_type_registry).map_err(|x| vec![x])?;
         self.unify_types()?;
         Ok(())
     }
@@ -500,6 +498,10 @@ impl Expr {
 
     pub fn bind_types(&mut self) {
         type_inference::bind_type(self);
+    }
+
+    pub fn check_types(&mut self, function_type_registry: &FunctionTypeRegistry) -> Result<(), String> {
+        type_checker::check_call_args(self, function_type_registry)
     }
 
     pub fn unify_types(&mut self) -> Result<(), Vec<String>> {
