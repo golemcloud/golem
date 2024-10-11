@@ -16,10 +16,10 @@ impl TypeCheckError {
     pub fn new(
         expected_type: AnalysedType,
         actual_type: InferredType,
-        message: Option<impl AsRef<str>>,
+        message: Option<String>,
     ) -> Self {
         TypeCheckError {
-            message: message.map(|m| m.as_ref().to_string()),
+            message,
             expected_type: PrettyAnalysedType(expected_type),
             actual_type,
         }
@@ -66,7 +66,7 @@ pub fn validate(
                                 return Err(TypeCheckError::new(
                                     expected_field_type,
                                     actual_field_type,
-                                    Some(format!("Invalid type for field {}", field_name)),
+                                    Some(format!("Invalid type for field {}. ", field_name)),
                                 ));
                             }
                         }
@@ -78,7 +78,7 @@ pub fn validate(
                 None => Err(TypeCheckError::new(
                     expected_type.clone(),
                     actual_type.clone(),
-                    None,
+                    None
                 )),
             }
         }
@@ -101,7 +101,7 @@ pub fn validate(
                 Err(TypeCheckError::new(
                     expected_type.clone(),
                     actual_type.clone(),
-                    Some("Invalid number type"),
+                    Some("Invalid number type".to_string()),
                 ))
             }
         }
@@ -227,7 +227,7 @@ pub fn validate(
                     let actual_type = actual_types_vec.get(index).ok_or(TypeCheckError::new(
                         expected_type.clone(),
                         actual_type.clone(),
-                        Some("Actual tuple length is different"),
+                        Some("Actual tuple length is different".to_string()),
                     ))?;
 
                     let result = validate(expected_type, &actual_type);
