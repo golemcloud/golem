@@ -49,6 +49,8 @@ mod internal {
         let expected_arg_types = registry_value.argument_types();
 
         for (arg, expected_arg_type) in args.iter_mut().zip(expected_arg_types) {
+            dbg!(arg.clone());
+            dbg!(expected_arg_type.clone());
            validate(&expected_arg_type, &arg.inferred_type()).map_err(|e| format!("`{}` has invalid argument`{}`: {}. Actual: {:?}", call_type, arg.to_string(), e, arg.inferred_type()))?;
         }
 
