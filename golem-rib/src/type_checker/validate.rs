@@ -7,7 +7,7 @@ use std::ops::Deref;
 
 pub struct TypeCheckError {
     pub message: Option<String>,
-    pub expected_type: String,
+    pub expected_type: AnalysedType,
     pub actual_type: InferredType,
 }
 
@@ -19,9 +19,7 @@ impl TypeCheckError {
     ) -> Self {
         TypeCheckError {
             message,
-            expected_type: TypeName::try_from(expected_type)
-                .map(|x| x.to_string())
-                .unwrap_or("Unknown".to_string()),
+            expected_type,
             actual_type,
         }
     }
@@ -33,13 +31,16 @@ impl Display for TypeCheckError {
             write!(f, "{}", message)?;
         }
 
+        let expected_type =
+            TypeName::try_from(self.expected_type.clone()).map(|x| x.to_string()).unwrap_or_default();
+
         if self.actual_type.is_one_of() || self.actual_type.is_all_of() {
-            write!(f, "Expected type `{}", self.expected_type)
+            write!(f, "Expected type `{}", &expected_type)
         } else {
             write!(
                 f,
                 "Expected type `{}`, got `{:?}`",
-                self.expected_type, self.actual_type
+                &expected_type, self.actual_type
             )
         }
     }

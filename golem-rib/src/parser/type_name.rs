@@ -22,7 +22,7 @@ use combine::parser::choice::choice;
 use combine::{attempt, between, sep_by, Parser};
 use combine::{parser, ParseError};
 use golem_wasm_ast::analysis::{
-    AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeResult,
+   AnalysedType, TypeResult,
 };
 
 use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
