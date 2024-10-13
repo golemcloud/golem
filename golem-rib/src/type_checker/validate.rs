@@ -1,14 +1,14 @@
 use crate::type_checker::PrettyAnalysedType;
 use crate::type_refinement::precise_types::*;
 use crate::type_refinement::TypeRefinement;
-use crate::InferredType;
+use crate::{InferredType, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt::Display;
 use std::ops::Deref;
 
 pub struct TypeCheckError {
     pub message: Option<String>,
-    pub expected_type: PrettyAnalysedType,
+    pub expected_type: TypeName,
     pub actual_type: InferredType,
 }
 

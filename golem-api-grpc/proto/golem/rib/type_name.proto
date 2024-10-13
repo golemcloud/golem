@@ -25,6 +25,11 @@ message TypeName {
         ListType list_type = 2;
         TupleType tuple_type = 3;
         OptionType option_type = 4;
+        ResultType result_type = 5;
+        EnumType enum_type = 6;
+        FlagType flag_type = 7;
+        RecordType record_type = 8;
+
     }
 }
 
@@ -39,3 +44,21 @@ message TupleType {
 message OptionType {
     TypeName inner_type = 1;
 }
+
+message ResultType {
+    optional TypeName ok_type = 1;
+    optional TypeName err_type = 2;
+}
+
+message EnumType {
+    repeated string cases = 1;
+}
+
+message FlagType {
+    repeated string flags = 1;
+}
+
+message RecordType {
+    map<string, TypeName> fields = 1;
+}
+

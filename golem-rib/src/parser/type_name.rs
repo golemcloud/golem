@@ -21,11 +21,10 @@ use combine::parser::char::{char, spaces, string};
 use combine::parser::choice::choice;
 use combine::{attempt, between, sep_by, Parser};
 use combine::{parser, ParseError};
+use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeResult};
 
 use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
-use golem_api_grpc::proto::golem::rib::{
-    BasicTypeName, ListType, OptionType, TupleType, TypeName as ProtoTypeName,
-};
+use golem_api_grpc::proto::golem::rib::{BasicTypeName, EnumType, FlagType, ListType, OptionType, ResultType, TupleType, TypeName as ProtoTypeName};
 
 use crate::parser::errors::RibParseError;
 use crate::InferredType;
@@ -48,7 +47,26 @@ pub enum TypeName {
     List(Box<TypeName>),
     Tuple(Vec<TypeName>),
     Option(Box<TypeName>),
+    Result {
+        ok: Option<Box<TypeName>>,
+        error: Option<Box<TypeName>>,
+    },
+    Record(Vec<(String, Box<TypeName>)>),
+    Flags(Vec<String>),
+    Enum(Vec<String>),
+    Variant {cases: Vec<(String, Option<Box<TypeName>>)>},
+    Handle {
+        resource_id: u64,
+        mode: ResourceMode,
+    },
 }
+
+#[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
+pub enum ResourceMode {
+    Owned,
+    Borrowed,
+}
+
 
 impl Display for TypeName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -78,6 +96,74 @@ impl Display for TypeName {
                 write!(f, ">")
             }
             TypeName::Option(inner_type) => write!(f, "option<{}>", inner_type),
+            // https://component-model.bytecodealliance.org/design/wit.html#results
+            TypeName::Result{ok, error} => {
+                match (ok, error) {
+                    (Some(ok), Some(error)) => {
+                        write!(f, "result<{}, {}>", ok, error)
+                    }
+                    (Some(ok), None) => {
+                        write!(f, "result<{}>", ok)
+                    }
+                    (None, Some(error)) => {
+                        write!(f, "result<_, {}>", error)
+                    }
+                    (None, None) => {
+                        write!(f, "result")
+                    }
+                }
+            },
+            TypeName::Record(fields) => {
+                write!(f, "record<")?;
+                for (i, (field, typ)) in fields.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}: {}", field, typ)?;
+                }
+                write!(f, ">")
+            }
+            TypeName::Flags(flags) => {
+                write!(f, "flags<")?;
+                for (i, flag) in flags.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", flag)?;
+                }
+                write!(f, ">")
+            }
+            TypeName::Enum(cases) => {
+                write!(f, "enum<")?;
+                for (i, case) in cases.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", case)?;
+                }
+                write!(f, ">")
+            }
+            TypeName::Variant {cases} => {
+                write!(f, "variant<")?;
+                for (i, (case, typ)) in cases.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", case)?;
+                    if let Some(typ) = typ {
+                        write!(f, "({})", typ)?;
+                    }
+                }
+                write!(f, ">")
+            }
+
+            TypeName::Handle { resource_id, mode } => {
+                write!(f, "handle<{}, {}>", resource_id,  match mode {
+                    ResourceMode::Owned => "owned",
+                    ResourceMode::Borrowed => "borrowed",
+                })
+
+            }
         }
     }
 }
@@ -107,6 +193,25 @@ impl From<TypeName> for ProtoTypeName {
             TypeName::Option(type_name) => InnerTypeName::OptionType(Box::new(OptionType {
                 inner_type: Some(Box::new(type_name.deref().clone().into())),
             })),
+            TypeName::Result{ok, error } => {
+                InnerTypeName::ResultType(Box::new(ResultType {
+                    ok_type: ok.map(|ok| Box::new(ok.deref().clone().into())),
+                    err_type: error.map(|error| Box::new(error.deref().clone().into())),
+                }))
+            }
+            TypeName::Record(fields) => {
+                InnerTypeName::RecordType(fields.into_iter().map(|(field, typ)| (field, Box::new(typ.into()))).collect())
+            }
+            TypeName::Flags(flags) => {
+                InnerTypeName::FlagType(FlagType {
+                    flags: flags.into_iter().collect(),
+                })
+            }
+            TypeName::Enum(cases) => {
+                InnerTypeName::EnumType(EnumType {
+                    cases: cases.into_iter().collect(),
+                })
+            }
         };
 
         ProtoTypeName { kind: Some(inner) }
@@ -157,8 +262,71 @@ impl TryFrom<ProtoTypeName> for TypeName {
                     let option_type = proto_option_type.deref().clone().try_into()?;
                     Ok(TypeName::Option(Box::new(option_type)))
                 }
+                InnerTypeName::ResultType(result_type) => {
+                    let ok = result_type.ok_type.map(|ok| ok.deref().clone().try_into()).transpose()?;
+                    let error = result_type.err_type.map(|error| error.deref().clone().try_into()).transpose()?;
+                    Ok(TypeName::Result {
+                        ok: ok.map(Box::new),
+                        error: error.map(Box::new),
+                    })
+                }
+                InnerTypeName::RecordType(fields) => {
+                    let record_type = fields
+                        .into_iter()
+                        .map(|(field, typ)| typ.try_into().map(|typ| (field, Box::new(typ))))
+                        .collect::<Result<Vec<(String, Box<TypeName>)>, String>>()?;
+                    Ok(TypeName::Record(record_type))
+                }
+                InnerTypeName::FlagType(flag_type) => Ok(TypeName::Flags(flag_type.flags)),
+                InnerTypeName::EnumType(enum_type) => Ok(TypeName::Enum(enum_type.cases)),
             },
             None => Err("No type kind provided".to_string()),
+        }
+    }
+}
+
+impl From<AnalysedType> for TypeName {
+    fn from(analysed_type: AnalysedType) -> Self {
+        match analysed_type {
+            AnalysedType::Bool(_) => TypeName::Bool,
+            AnalysedType::S8(_) => TypeName::S8,
+            AnalysedType::U8(_) => TypeName::U8,
+            AnalysedType::S16(_) => TypeName::S16,
+            AnalysedType::U16(_) => TypeName::U16,
+            AnalysedType::S32(_) => TypeName::S32,
+            AnalysedType::U32(_) => TypeName::U32,
+            AnalysedType::S64(_) => TypeName::S64,
+            AnalysedType::U64(_) => TypeName::U64,
+            AnalysedType::F32(_) => TypeName::F32,
+            AnalysedType::F64(_) => TypeName::F64,
+            AnalysedType::Chr(_) => TypeName::Chr,
+            AnalysedType::Str(_) => TypeName::Str,
+            AnalysedType::List(inner_type) => {
+                TypeName::List(Box::new(inner_type.deref().clone().into()))
+            }
+            AnalysedType::Tuple(inner_types) => {
+                TypeName::Tuple(inner_types.into_iter().map(|t| t.into()).collect())
+            }
+            AnalysedType::Option(type_name) => {
+                TypeName::Option(Box::new(type_name.deref().clone().into()))
+            }
+            AnalysedType::Result(TypeResult {ok, err}) => {
+                TypeName::Result {
+                    ok: ok.map(|x| Box::new(x.deref().clone().into())),
+                    error: err.map(|x| Box::new(x.deref().clone().into())),
+                }
+            }
+            AnalysedType::Record(fields) => {
+                TypeName::Record(fields.into_iter().map(|(field, typ)| (field, Box::new(typ.into()))).collect())
+            }
+            AnalysedType::Flags(flags) => TypeName::Flags(flags),
+            AnalysedType::Enum(cases) => TypeName::Enum(cases),
+            AnalysedType::Variant(cases ) => {
+                TypeName::Variant {
+                    cases: cases.cases.into_iter().map(|case_typ| (case_typ.name, case_typ.typ.map(|x| Box::new(x.into())))).collect()
+                }
+            }
+            AnalysedType::Handle(type_handle) => {}
         }
     }
 }
@@ -188,6 +356,18 @@ impl From<TypeName> for InferredType {
             TypeName::Option(type_name) => {
                 InferredType::Option(Box::new(type_name.deref().clone().into()))
             }
+            TypeName::Result(ok, error) => {
+                InferredType::Result {
+                    ok: Box::new(ok.deref().clone().into()),
+                    error: Box::new(error.deref().clone().into()),
+                }
+            }
+            TypeName::Record(fields) => {
+                InferredType::Record(fields.into_iter().map(|(field, typ)| (field, Box::new(typ.into()))).collect())
+            }
+            TypeName::Flags(flags) => InferredType::Flags(flags),
+            TypeName::Enum(cases) => InferredType::Enum(cases),
+
         }
     }
 }
@@ -291,13 +471,17 @@ parser! {
     }
 }
 
+
 #[cfg(test)]
-mod type_name_parser_tests {
+mod type_name_tests {
     use combine::EasyParser;
 
     use super::*;
 
     fn parse_and_compare(input: &str, expected: TypeName) {
+        let written = format!("{}", expected);
+        dbg!(written, input);
+        assert_eq!(input, written);
         let result = parse_type_name().easy_parse(input);
         assert_eq!(result, Ok((expected, "")));
     }
