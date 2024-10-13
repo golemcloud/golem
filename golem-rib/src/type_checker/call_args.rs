@@ -48,8 +48,6 @@ mod internal {
         }
 
         for (arg, expected_arg_type) in args.iter_mut().zip(filtered_expected_types) {
-            dbg!(arg.clone());
-            dbg!(expected_arg_type.clone());
             validate(&expected_arg_type, &arg.inferred_type()).map_err(|e| {
                 format!(
                     "`{}` has invalid argument `{}`: {}",
@@ -70,7 +68,7 @@ mod type_check_tests {
     use crate::compile;
 
     #[test]
-    fn test_check_call_args() {
+    fn test_invalid_value_in_record_field() {
         let expr = r#"
           let result = foo({a: "foo", b: 2});
           result
@@ -80,18 +78,34 @@ mod type_check_tests {
 
         let metadata = internal::get_metadata();
 
-        let result = compile(&expr, &metadata);
+        let result = compile(&expr, &metadata).unwrap_err();
 
-        dbg!(result.clone());
+        let expected = "`foo` has invalid argument `{a: \"foo\", b: 2}`: Invalid type for field `a`\nExpected type `s32` ";
+        assert_eq!(result, expected);
+    }
 
-        assert!(false);
+    #[test]
+    fn test_invalid_key_in_record_field() {
+        let expr = r#"
+          let result = foo({c: 3, b: 2});
+          result
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let metadata = internal::get_metadata();
+
+        let result = compile(&expr, &metadata).unwrap_err();
+
+        let expected = "`foo` has invalid argument `{a: \"foo\", b: 2}`: Invalid type for field `a`\nExpected type `s32` ";
+        assert_eq!(result, expected);
     }
 
     mod internal {
         use golem_wasm_ast::analysis::analysed_type::{record, s32, str, u64};
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedType, NameTypePair, TypeRecord,
+            NameTypePair,
         };
 
         pub(crate) fn get_metadata() -> Vec<AnalysedExport> {

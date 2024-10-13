@@ -28,8 +28,6 @@ impl CallType {
     pub fn is_resource_method(&self) -> bool {
         match self {
             CallType::Function(parsed_fn_name) => {
-                dbg!(parsed_fn_name.to_static().clone());
-
                 parsed_fn_name
                     .to_static()
                     .function

@@ -5,20 +5,27 @@ use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt::Display;
 use std::ops::Deref;
 
+#[derive(Clone, Debug)]
 pub struct TypeCheckError {
-    pub message: Option<String>,
+    pub details: Vec<String>,
     pub expected_type: AnalysedType,
     pub actual_type: InferredType,
 }
 
+
 impl TypeCheckError {
+    pub fn with_message(&self, message: String) -> TypeCheckError {
+        let mut new_messages: TypeCheckError = self.clone();
+        new_messages.details.push(message);
+        new_messages
+    }
     pub fn new(
         expected_type: AnalysedType,
         actual_type: InferredType,
         message: Option<String>,
     ) -> Self {
         TypeCheckError {
-            message,
+            details: message.map(|x| vec![x]).unwrap_or_default(),
             expected_type,
             actual_type,
         }
@@ -27,8 +34,8 @@ impl TypeCheckError {
 
 impl Display for TypeCheckError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(message) = &self.message {
-            write!(f, "{}", message)?;
+        for detail in self.details.iter() {
+            write!(f, "{}\n", detail)?;
         }
 
         let expected_type = TypeName::try_from(self.expected_type.clone())
@@ -36,7 +43,7 @@ impl Display for TypeCheckError {
             .unwrap_or_default();
 
         if self.actual_type.is_one_of() || self.actual_type.is_all_of() {
-            write!(f, "Expected type `{}", &expected_type)
+            write!(f, "Expected type `{}` ", &expected_type)
         } else {
             write!(
                 f,
@@ -51,26 +58,35 @@ pub fn validate(
     expected_type: &AnalysedType,
     actual_type: &InferredType,
 ) -> Result<(), TypeCheckError> {
+    dbg!(expected_type.clone(), actual_type.clone());
     match &expected_type {
-        AnalysedType::Record(fields) => {
+        AnalysedType::Record(expected_type_record) => {
             let resolved = RecordType::refine(&actual_type);
-
-            let cloned = fields.clone();
+            let expected_fields = expected_type_record.clone();
             match resolved {
-                Some(record_type) => {
-                    for field in cloned.fields {
-                        let field_name = field.name.clone();
-                        let expected_field_type = field.typ.clone();
-                        let actual_field_type = record_type.inner_type_by_name(&field_name);
+                Some(actual_record_type) => {
+                    for expected_name_type_pair in expected_fields.fields {
+                        let expected_field_name = expected_name_type_pair.name.clone();
+                        let expected_field_type = expected_name_type_pair.typ.clone();
+                        let actual_field_type = actual_record_type.inner_type_by_name(&expected_field_name);
+
+                        dbg!(expected_field_name.clone(), actual_field_type.clone());
+                        if actual_field_type.is_unknown() {
+                            return Err(TypeCheckError::new(
+                                expected_type.clone(),
+                                actual_type.clone(),
+                                Some(format!("Missing field {}", expected_field_name)),
+                            ));
+                        }
+
                         let result = validate(&expected_field_type, &actual_field_type);
                         match result {
                             Ok(_) => {}
                             Err(e) => {
-                                return Err(TypeCheckError::new(
-                                    expected_field_type,
-                                    actual_field_type,
-                                    Some(format!("Invalid type for field {}. {} ", field_name, e)),
-                                ));
+                                return Err(e.with_message(format!(
+                                    "Invalid type for field `{}`",
+                                    expected_field_name
+                                )));
                             }
                         }
                     }
@@ -104,7 +120,7 @@ pub fn validate(
                 Err(TypeCheckError::new(
                     expected_type.clone(),
                     actual_type.clone(),
-                    Some("Invalid number type".to_string()),
+                    None,
                 ))
             }
         }
@@ -138,14 +154,10 @@ pub fn validate(
                             match result {
                                 Ok(_) => {}
                                 Err(e) => {
-                                    return Err(TypeCheckError::new(
-                                        expected_case_typ,
-                                        actual_case_type,
-                                        Some(format!(
-                                            "Invalid type for variant case {}, {}",
-                                            expected_case_name, e
-                                        )),
-                                    ));
+                                    return Err(e.with_message(format!(
+                                        "Invalid type for variant case `{}`",
+                                        expected_case_name
+                                    )));
                                 }
                             }
                         }
@@ -237,11 +249,10 @@ pub fn validate(
                     match result {
                         Ok(_) => {}
                         Err(e) => {
-                            return Err(TypeCheckError::new(
-                                expected_type.clone(),
-                                actual_type.clone(),
-                                Some(format!("Invalid type for tuple at index {}, {}", index, e)),
-                            ));
+                            return Err(e.with_message(format!(
+                                "Invalid type for tuple item at index {}",
+                                index
+                            )));
                         }
                     }
                 }
@@ -265,11 +276,7 @@ pub fn validate(
                 match result {
                     Ok(_) => {}
                     Err(e) => {
-                        return Err(TypeCheckError::new(
-                            expected_inner_type,
-                            actual_inner_type,
-                            Some(format!("Invalid type for list, {}", e)),
-                        ));
+                        return Err(e.with_message("Invalid type for list item".to_string()));
                     }
                 }
 
@@ -283,7 +290,6 @@ pub fn validate(
             }
         }
         AnalysedType::Str(_) => {
-            dbg!(actual_type.clone());
             if let Some(_) = StringType::refine(&actual_type) {
                 Ok(())
             } else {
