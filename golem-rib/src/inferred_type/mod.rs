@@ -63,6 +63,10 @@ pub enum InferredType {
 }
 
 impl InferredType {
+    pub fn un_resolved(&self) -> bool {
+        self.is_unknown() || self.is_one_of()
+    }
+
     pub fn all_of(types: Vec<InferredType>) -> Option<InferredType> {
         let flattened = InferredType::flatten_all_of_inferred_types(&types);
 

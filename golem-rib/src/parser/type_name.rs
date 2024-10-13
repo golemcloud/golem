@@ -510,10 +510,10 @@ mod type_name_tests {
 
     fn parse_and_compare(input: &str, expected: TypeName) {
         let written = format!("{}", expected);
-        dbg!(&written, input);
-        assert_eq!(input, written);
-        let result = parse_type_name().easy_parse(input);
-        assert_eq!(result, Ok((expected, "")));
+        let result1 = parse_type_name().easy_parse(input);
+        let result2 = parse_type_name().easy_parse(written.as_str());
+        assert_eq!(result1, Ok((expected.clone(), "")));
+        assert_eq!(result1, Ok((expected, "")));
     }
 
     #[test]

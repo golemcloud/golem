@@ -18,9 +18,9 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
         InferredType::Str => Ok(Unified(InferredType::Str)),
         InferredType::List(inferred_type) => {
             let verified = validate_unified_type(inferred_type)?;
-            Ok(Unified(
-                InferredType::List(Box::new(verified.inferred_type())),
-            ))
+            Ok(Unified(InferredType::List(Box::new(
+                verified.inferred_type(),
+            ))))
         }
         InferredType::Tuple(types) => {
             let mut verified_types = vec![];
@@ -48,9 +48,9 @@ pub fn validate_unified_type(inferred_type: &InferredType) -> UnificationResult 
         InferredType::Enum(enums) => Ok(Unified(InferredType::Enum(enums.clone()))),
         InferredType::Option(inferred_type) => {
             let result = validate_unified_type(inferred_type)?;
-            Ok(Unified(
-                InferredType::Option(Box::new(result.inferred_type())),
-            ))
+            Ok(Unified(InferredType::Option(Box::new(
+                result.inferred_type(),
+            ))))
         }
         result @ InferredType::Result { ok, error } => {
             // For Result, we try to be flexible with types

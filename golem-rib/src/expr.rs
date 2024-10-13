@@ -66,10 +66,14 @@ pub enum Expr {
 }
 
 impl Expr {
-
     pub fn as_record(&self) -> Option<Vec<(String, Expr)>> {
         match self {
-            Expr::Record(fields, _) => Some(fields.iter().map(|(k, v)| (k.clone(), v.deref().clone())).collect::<Vec<_>>()),
+            Expr::Record(fields, _) => Some(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.deref().clone()))
+                    .collect::<Vec<_>>(),
+            ),
             _ => None,
         }
     }

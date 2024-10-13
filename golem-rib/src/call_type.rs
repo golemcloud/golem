@@ -27,13 +27,11 @@ pub enum CallType {
 impl CallType {
     pub fn is_resource_method(&self) -> bool {
         match self {
-            CallType::Function(parsed_fn_name) => {
-                parsed_fn_name
-                    .to_static()
-                    .function
-                    .resource_method_name()
-                    .is_some()
-            }
+            CallType::Function(parsed_fn_name) => parsed_fn_name
+                .to_static()
+                .function
+                .resource_method_name()
+                .is_some(),
             _ => false,
         }
     }
