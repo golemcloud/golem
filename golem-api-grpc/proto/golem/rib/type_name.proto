@@ -29,6 +29,7 @@ message TypeName {
         EnumType enum_type = 6;
         FlagType flag_type = 7;
         RecordType record_type = 8;
+        VariantType variant_type = 9;
 
     }
 }
@@ -60,5 +61,14 @@ message FlagType {
 
 message RecordType {
     map<string, TypeName> fields = 1;
+}
+
+message VariantType {
+    repeated VariantCase cases = 2;
+}
+
+message VariantCase {
+    case_name case_name = 1;
+    optional TypeName variant_arg = 2;
 }
 

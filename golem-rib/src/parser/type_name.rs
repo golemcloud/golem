@@ -55,10 +55,6 @@ pub enum TypeName {
     Flags(Vec<String>),
     Enum(Vec<String>),
     Variant {cases: Vec<(String, Option<Box<TypeName>>)>},
-    Handle {
-        resource_id: u64,
-        mode: ResourceMode,
-    },
 }
 
 #[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
@@ -155,14 +151,6 @@ impl Display for TypeName {
                     }
                 }
                 write!(f, ">")
-            }
-
-            TypeName::Handle { resource_id, mode } => {
-                write!(f, "handle<{}, {}>", resource_id,  match mode {
-                    ResourceMode::Owned => "owned",
-                    ResourceMode::Borrowed => "borrowed",
-                })
-
             }
         }
     }
