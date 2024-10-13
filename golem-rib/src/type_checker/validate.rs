@@ -60,7 +60,7 @@ pub fn validate(
     actual_type: &InferredType,
     actual_expr: &Expr,
 ) -> Result<(), TypeCheckError> {
-    let un_inferred = check_type_resolution(actual_expr);
+    let un_inferred = check_unresolved_types(actual_expr);
     if let Err(msg) = un_inferred {
         return Err(TypeCheckError::new(
             expected_type.clone(),
@@ -72,7 +72,7 @@ pub fn validate(
     }
 }
 
-pub fn check_type_resolution(
+pub fn check_unresolved_types(
      expr: &Expr,
 ) -> Result<(), String> {
 
@@ -348,7 +348,7 @@ pub fn check_type_mismatch(
 
 mod internal {
     use crate::{Expr, InferredType};
-    use crate::type_checker::{check_type_resolution, check_type_mismatch};
+    use crate::type_checker::{check_unresolved_types, check_type_mismatch};
 
     pub fn unresolved_types_in_record(expr_fields: &Vec<(String, Expr)>) -> Result<(), String> {
         for (field_name, field_expr) in expr_fields {
@@ -356,7 +356,7 @@ mod internal {
             if field_type.is_unknown() || field_type.is_one_of() {
                 return Err(format!("Un-inferred type for field `{}` in record", field_name))
             } else {
-                check_type_resolution(field_expr)?;
+                check_unresolved_types(field_expr)?;
             }
         }
 
@@ -369,7 +369,7 @@ mod internal {
             if field_type.is_unknown() || field_type.is_one_of() {
                 return Err("Un-inferred type for tuple item".to_string())
             } else {
-                check_type_resolution(field_expr)?;
+                check_unresolved_types(field_expr)?;
             }
         }
 
@@ -382,7 +382,7 @@ mod internal {
             if field_type.is_unknown() || field_type.is_one_of() {
                 return Err("Un-inferred type for list item".to_string())
             } else {
-                check_type_resolution(field_expr)?;
+                check_unresolved_types(field_expr)?;
             }
         }
 
@@ -396,7 +396,7 @@ mod internal {
                 if field_type.is_unknown() || field_type.is_one_of() {
                     return Err("Un-inferred type for variant case".to_string())
                 } else {
-                    check_type_resolution(field_expr)?;
+                    check_unresolved_types(field_expr)?;
                 }
             }
         }
