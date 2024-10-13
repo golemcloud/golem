@@ -24,7 +24,7 @@ use combine::{parser, ParseError};
 use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeResult};
 
 use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
-use golem_api_grpc::proto::golem::rib::{BasicTypeName, EnumType, FlagType, ListType, OptionType, ResultType, TupleType, TypeName as ProtoTypeName};
+use golem_api_grpc::proto::golem::rib::{BasicTypeName, EnumType, FlagType, KeyValue, ListType, OptionType, RecordType, ResultType, TupleType, TypeName as ProtoTypeName, VariantCase, VariantType};
 
 use crate::parser::errors::RibParseError;
 use crate::InferredType;
@@ -56,13 +56,6 @@ pub enum TypeName {
     Enum(Vec<String>),
     Variant {cases: Vec<(String, Option<Box<TypeName>>)>},
 }
-
-#[derive(Debug, Hash, Clone, Eq, PartialEq, Encode, Decode)]
-pub enum ResourceMode {
-    Owned,
-    Borrowed,
-}
-
 
 impl Display for TypeName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -188,7 +181,14 @@ impl From<TypeName> for ProtoTypeName {
                 }))
             }
             TypeName::Record(fields) => {
-                InnerTypeName::RecordType(fields.into_iter().map(|(field, typ)| (field, Box::new(typ.into()))).collect())
+                InnerTypeName::RecordType(RecordType {
+                    fields: fields.into_iter().map(|(field, typ)|{
+                        KeyValue {
+                            key: field,
+                            value: Some(typ.deref().clone().into())
+                        }
+                    }).collect(),
+                })
             }
             TypeName::Flags(flags) => {
                 InnerTypeName::FlagType(FlagType {
@@ -198,6 +198,14 @@ impl From<TypeName> for ProtoTypeName {
             TypeName::Enum(cases) => {
                 InnerTypeName::EnumType(EnumType {
                     cases: cases.into_iter().collect(),
+                })
+            }
+            TypeName::Variant {cases} => {
+                InnerTypeName::VariantType(VariantType {
+                    cases: cases.into_iter().map(|(case, typ)| VariantCase {
+                        case_name: case,
+                        variant_arg: typ.map(|x| x.deref().clone().into())
+                    }).collect()
                 })
             }
         };
@@ -260,13 +268,29 @@ impl TryFrom<ProtoTypeName> for TypeName {
                 }
                 InnerTypeName::RecordType(fields) => {
                     let record_type = fields
+                        .fields
                         .into_iter()
-                        .map(|(field, typ)| typ.try_into().map(|typ| (field, Box::new(typ))))
+                        .map(|key_value| key_value.value.ok_or("Field type missing")?.try_into().map(|typ| (key_value.key, Box::new(typ))))
                         .collect::<Result<Vec<(String, Box<TypeName>)>, String>>()?;
                     Ok(TypeName::Record(record_type))
                 }
                 InnerTypeName::FlagType(flag_type) => Ok(TypeName::Flags(flag_type.flags)),
                 InnerTypeName::EnumType(enum_type) => Ok(TypeName::Enum(enum_type.cases)),
+                InnerTypeName::VariantType(variant_type) => {
+
+                    let mut cases = vec![];
+                    for variant_case in variant_type.cases {
+                        let case = variant_case.case_name;
+                        let typ = match variant_case.variant_arg {
+                            Some(typ) => Some(Box::new(TypeName::try_from(typ)?)),
+                            None => None,
+                        };
+                        cases.push((case, typ));
+                    }
+
+                    Ok(TypeName::Variant {cases})
+
+                }
             },
             None => Err("No type kind provided".to_string()),
         }
@@ -314,7 +338,7 @@ impl From<AnalysedType> for TypeName {
                     cases: cases.cases.into_iter().map(|case_typ| (case_typ.name, case_typ.typ.map(|x| Box::new(x.into())))).collect()
                 }
             }
-            AnalysedType::Handle(type_handle) => {}
+            AnalysedType::Handle(type_handle) => panic!("Unexpected handle type: {:?}", type_handle),
         }
     }
 }
@@ -355,6 +379,9 @@ impl From<TypeName> for InferredType {
             }
             TypeName::Flags(flags) => InferredType::Flags(flags),
             TypeName::Enum(cases) => InferredType::Enum(cases),
+            TypeName::Variant {cases} => {
+                InferredType::Variant(cases.into_iter().map(|(case, typ)| (case, typ.map(|x| Box::new(x.into())))).collect())
+            }
 
         }
     }

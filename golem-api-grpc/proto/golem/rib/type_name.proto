@@ -60,7 +60,12 @@ message FlagType {
 }
 
 message RecordType {
-    map<string, TypeName> fields = 1;
+   repeated KeyValue fields = 1;
+}
+
+message KeyValue {
+    string key = 1;
+    TypeName value = 2;
 }
 
 message VariantType {
@@ -68,7 +73,7 @@ message VariantType {
 }
 
 message VariantCase {
-    case_name case_name = 1;
+    string case_name = 1;
     optional TypeName variant_arg = 2;
 }
 

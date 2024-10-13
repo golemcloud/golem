@@ -1,4 +1,3 @@
-use crate::type_checker::PrettyAnalysedType;
 use crate::type_refinement::precise_types::*;
 use crate::type_refinement::TypeRefinement;
 use crate::{InferredType, TypeName};
@@ -8,7 +7,7 @@ use std::ops::Deref;
 
 pub struct TypeCheckError {
     pub message: Option<String>,
-    pub expected_type: TypeName,
+    pub expected_type: String,
     pub actual_type: InferredType,
 }
 
@@ -20,7 +19,7 @@ impl TypeCheckError {
     ) -> Self {
         TypeCheckError {
             message,
-            expected_type: PrettyAnalysedType(expected_type),
+            expected_type: TypeName::try_from(expected_type).map(|x| x.to_string()).unwrap_or("Unknown".to_string()),
             actual_type,
         }
     }
