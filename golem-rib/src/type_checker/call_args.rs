@@ -1,8 +1,5 @@
 use crate::{Expr, FunctionTypeRegistry, RegistryKey};
-use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::VecDeque;
-use std::fmt::{Display, Formatter};
-use std::ops::Deref;
 
 pub fn check_call_args(
     expr: &mut Expr,

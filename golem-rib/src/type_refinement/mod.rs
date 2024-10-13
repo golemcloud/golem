@@ -21,7 +21,6 @@ mod type_extraction;
 
 use crate::type_refinement::precise_types::*;
 use crate::InferredType;
-use golem_wasm_ast::analysis::TypeS32;
 use std::ops::Deref;
 
 /// # Example:
