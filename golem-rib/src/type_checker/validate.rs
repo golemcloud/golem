@@ -31,8 +31,9 @@ impl Display for TypeCheckError {
             write!(f, "{}", message)?;
         }
 
-        let expected_type =
-            TypeName::try_from(self.expected_type.clone()).map(|x| x.to_string()).unwrap_or_default();
+        let expected_type = TypeName::try_from(self.expected_type.clone())
+            .map(|x| x.to_string())
+            .unwrap_or_default();
 
         if self.actual_type.is_one_of() || self.actual_type.is_all_of() {
             write!(f, "Expected type `{}", &expected_type)
@@ -68,7 +69,7 @@ pub fn validate(
                                 return Err(TypeCheckError::new(
                                     expected_field_type,
                                     actual_field_type,
-                                    Some(format!("Invalid type for field {}. ", field_name)),
+                                    Some(format!("Invalid type for field {}. {} ", field_name, e)),
                                 ));
                             }
                         }
@@ -141,8 +142,8 @@ pub fn validate(
                                         expected_case_typ,
                                         actual_case_type,
                                         Some(format!(
-                                            "Invalid type for variant case {}",
-                                            expected_case_name
+                                            "Invalid type for variant case {}, {}",
+                                            expected_case_name, e
                                         )),
                                     ));
                                 }
@@ -239,7 +240,7 @@ pub fn validate(
                             return Err(TypeCheckError::new(
                                 expected_type.clone(),
                                 actual_type.clone(),
-                                Some(format!("Invalid type for tuple index {}", index)),
+                                Some(format!("Invalid type for tuple at index {}, {}", index, e)),
                             ));
                         }
                     }
@@ -267,7 +268,7 @@ pub fn validate(
                         return Err(TypeCheckError::new(
                             expected_inner_type,
                             actual_inner_type,
-                            Some(format!("Invalid type for list")),
+                            Some(format!("Invalid type for list, {}", e)),
                         ));
                     }
                 }

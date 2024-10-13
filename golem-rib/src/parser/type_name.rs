@@ -21,9 +21,7 @@ use combine::parser::char::{char, spaces, string};
 use combine::parser::choice::choice;
 use combine::{attempt, between, sep_by, Parser};
 use combine::{parser, ParseError};
-use golem_wasm_ast::analysis::{
-   AnalysedType, TypeResult,
-};
+use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 
 use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
 use golem_api_grpc::proto::golem::rib::{
