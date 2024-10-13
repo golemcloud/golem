@@ -78,7 +78,7 @@ pub fn check_type_resolution(
 
     match expr {
         Expr::Record(record, _) => {
-            internal::un_inferred_fields_in_record(&record.iter().map(|(k, v)| (k.clone(), v.deref().clone())).collect())
+            internal::unresolved_types_in_record(&record.iter().map(|(k, v)| (k.clone(), v.deref().clone())).collect())
         }
 
         _ => Ok(())
@@ -350,7 +350,7 @@ mod internal {
     use crate::{Expr, InferredType};
     use crate::type_checker::{check_type_resolution, check_type_mismatch};
 
-    pub fn un_inferred_fields_in_record(expr_fields: &Vec<(String, Expr)>) -> Result<(), String> {
+    pub fn unresolved_types_in_record(expr_fields: &Vec<(String, Expr)>) -> Result<(), String> {
         for (field_name, field_expr) in expr_fields {
             let field_type = field_expr.inferred_type();
             if field_type.is_unknown() || field_type.is_one_of() {
@@ -362,4 +362,47 @@ mod internal {
 
         Ok(())
     }
+
+    pub fn unresolved_types_in_tuple(expr_fields: &Vec<Expr>) -> Result<(), String> {
+        for field_expr in expr_fields {
+            let field_type = field_expr.inferred_type();
+            if field_type.is_unknown() || field_type.is_one_of() {
+                return Err("Un-inferred type for tuple item".to_string())
+            } else {
+                check_type_resolution(field_expr)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn unresolved_types_in_list(expr_fields: &Vec<Expr>) -> Result<(), String> {
+        for field_expr in expr_fields {
+            let field_type = field_expr.inferred_type();
+            if field_type.is_unknown() || field_type.is_one_of() {
+                return Err("Un-inferred type for list item".to_string())
+            } else {
+                check_type_resolution(field_expr)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn unresolved_types_in_variant(expr_fields: &Vec<(String, Option<Expr>)>) -> Result<(), String> {
+        for (_, field_expr) in expr_fields {
+            if let Some(field_expr) = field_expr {
+                let field_type = field_expr.inferred_type();
+                if field_type.is_unknown() || field_type.is_one_of() {
+                    return Err("Un-inferred type for variant case".to_string())
+                } else {
+                    check_type_resolution(field_expr)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+
 }
