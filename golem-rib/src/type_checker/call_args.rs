@@ -24,7 +24,7 @@ pub fn check_call_args(
 mod internal {
     use super::*;
     use crate::call_type::CallType;
-    use crate::type_checker::validate;
+    use crate::type_checker::{check_type_mismatch, validate};
 
     pub(crate) fn check_call_args(
         call_type: &mut CallType,
@@ -47,12 +47,14 @@ mod internal {
             filtered_expected_types.remove(0);
         }
 
-        for (arg, expected_arg_type) in args.iter_mut().zip(filtered_expected_types) {
-            validate(&expected_arg_type, &arg.inferred_type()).map_err(|e| {
+        for (actual_arg, expected_arg_type) in args.iter_mut().zip(filtered_expected_types) {
+            let actual_arg_type = &actual_arg.inferred_type();
+
+            validate(&expected_arg_type, actual_arg_type, actual_arg).map_err(|e| {
                 format!(
                     "`{}` has invalid argument `{}`: {}",
                     call_type,
-                    arg.to_string(),
+                    actual_arg.to_string(),
                     e
                 )
             })?;
@@ -97,7 +99,7 @@ mod type_check_tests {
 
         let result = compile(&expr, &metadata).unwrap_err();
 
-        let expected = "`foo` has invalid argument `{a: \"foo\", b: 2}`: Invalid type for field `a`\nExpected type `s32` ";
+        let expected = "`foo` has invalid argument `{c: 3, b: 2}`: Un-inferred type for field `c` in record\nExpected type `record<a: s32, b: u64>` ";
         assert_eq!(result, expected);
     }
 

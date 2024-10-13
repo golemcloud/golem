@@ -1,6 +1,6 @@
 use crate::type_refinement::precise_types::*;
 use crate::type_refinement::TypeRefinement;
-use crate::{InferredType, TypeName};
+use crate::{Expr, InferredType, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt::Display;
 use std::ops::Deref;
@@ -54,52 +54,83 @@ impl Display for TypeCheckError {
     }
 }
 
+
 pub fn validate(
     expected_type: &AnalysedType,
     actual_type: &InferredType,
+    actual_expr: &Expr,
 ) -> Result<(), TypeCheckError> {
-    dbg!(expected_type.clone(), actual_type.clone());
+    let un_inferred = check_type_resolution(actual_expr);
+    if let Err(msg) = un_inferred {
+        return Err(TypeCheckError::new(
+            expected_type.clone(),
+            actual_type.clone(),
+            Some(msg),
+        ));
+    } else {
+        check_type_mismatch(expected_type, actual_type)
+    }
+}
+
+pub fn check_type_resolution(
+     expr: &Expr,
+) -> Result<(), String> {
+
+    match expr {
+        Expr::Record(record, _) => {
+            internal::un_inferred_fields_in_record(&record.iter().map(|(k, v)| (k.clone(), v.deref().clone())).collect())
+        }
+
+        _ => Ok(())
+    }
+}
+
+pub fn check_type_mismatch(
+    expected_type: &AnalysedType,
+    actual_type: &InferredType,
+) -> Result<(), TypeCheckError> {
     match &expected_type {
         AnalysedType::Record(expected_type_record) => {
-            let resolved = RecordType::refine(&actual_type);
-            let expected_fields = expected_type_record.clone();
-            match resolved {
-                Some(actual_record_type) => {
-                    for expected_name_type_pair in expected_fields.fields {
-                        let expected_field_name = expected_name_type_pair.name.clone();
-                        let expected_field_type = expected_name_type_pair.typ.clone();
-                        let actual_field_type = actual_record_type.inner_type_by_name(&expected_field_name);
+                let resolved = RecordType::refine(&actual_type);
+                let expected_fields = expected_type_record.clone();
+                match resolved {
+                    Some(actual_record_type) => {
+                        for expected_name_type_pair in expected_fields.fields {
+                            let expected_field_name = expected_name_type_pair.name.clone();
+                            let expected_field_type = expected_name_type_pair.typ.clone();
+                            let actual_field_type = actual_record_type.inner_type_by_name(&expected_field_name);
 
-                        dbg!(expected_field_name.clone(), actual_field_type.clone());
-                        if actual_field_type.is_unknown() {
-                            return Err(TypeCheckError::new(
-                                expected_type.clone(),
-                                actual_type.clone(),
-                                Some(format!("Missing field {}", expected_field_name)),
-                            ));
-                        }
+                            if actual_field_type.is_unknown() {
+                                return Err(TypeCheckError::new(
+                                    expected_type.clone(),
+                                    actual_type.clone(),
+                                    Some(format!("Missing field {}", expected_field_name)),
+                                ));
+                            }
 
-                        let result = validate(&expected_field_type, &actual_field_type);
-                        match result {
-                            Ok(_) => {}
-                            Err(e) => {
-                                return Err(e.with_message(format!(
-                                    "Invalid type for field `{}`",
-                                    expected_field_name
-                                )));
+                            let result =
+                                check_type_mismatch(&expected_field_type, &actual_field_type);
+
+                            match result {
+                                Ok(_) => {}
+                                Err(e) => {
+                                    return Err(e.with_message(format!(
+                                        "Invalid type for field `{}`",
+                                        expected_field_name
+                                    )));
+                                }
                             }
                         }
+
+                        Ok(())
                     }
 
-                    Ok(())
+                    None => Err(TypeCheckError::new(
+                        expected_type.clone(),
+                        actual_type.clone(),
+                        None,
+                    )),
                 }
-
-                None => Err(TypeCheckError::new(
-                    expected_type.clone(),
-                    actual_type.clone(),
-                    None,
-                )),
-            }
         }
 
         AnalysedType::S8(_)
@@ -150,7 +181,7 @@ pub fn validate(
                             actual_variant.inner_type_by_name(&expected_case_name);
 
                         if let Some(expected_case_typ) = expected_case.typ.clone() {
-                            let result = validate(&expected_case_typ, &actual_case_type);
+                            let result = check_type_mismatch(&expected_case_typ, &actual_case_type);
                             match result {
                                 Ok(_) => {}
                                 Err(e) => {
@@ -194,7 +225,7 @@ pub fn validate(
             let optional_type = OptionalType::refine(&actual_type).map(|t| t.inner_type().clone());
 
             if let Some(optional_type) = optional_type {
-                validate(inner_type.inner.deref(), &optional_type)
+                check_type_mismatch(inner_type.inner.deref(), &optional_type)
             } else {
                 Err(TypeCheckError::new(
                     expected_type.clone(),
@@ -245,7 +276,7 @@ pub fn validate(
                         Some("Actual tuple length is different".to_string()),
                     ))?;
 
-                    let result = validate(expected_type, &actual_type);
+                    let result = check_type_mismatch(expected_type, &actual_type);
                     match result {
                         Ok(_) => {}
                         Err(e) => {
@@ -272,7 +303,7 @@ pub fn validate(
             if let Some(actual_list) = actual_list {
                 let actual_inner_type = actual_list.inner_type().clone();
                 let expected_inner_type = list_type.inner.deref().clone();
-                let result = validate(&expected_inner_type, &actual_inner_type);
+                let result = check_type_mismatch(&expected_inner_type, &actual_inner_type);
                 match result {
                     Ok(_) => {}
                     Err(e) => {
@@ -312,5 +343,23 @@ pub fn validate(
             }
         }
         AnalysedType::Handle(_) => Ok(()),
+    }
+}
+
+mod internal {
+    use crate::{Expr, InferredType};
+    use crate::type_checker::{check_type_resolution, check_type_mismatch};
+
+    pub fn un_inferred_fields_in_record(expr_fields: &Vec<(String, Expr)>) -> Result<(), String> {
+        for (field_name, field_expr) in expr_fields {
+            let field_type = field_expr.inferred_type();
+            if field_type.is_unknown() || field_type.is_one_of() {
+                return Err(format!("Un-inferred type for field `{}` in record", field_name))
+            } else {
+                check_type_resolution(field_expr)?;
+            }
+        }
+
+        Ok(())
     }
 }
