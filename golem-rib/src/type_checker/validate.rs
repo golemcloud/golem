@@ -19,7 +19,9 @@ impl TypeCheckError {
     ) -> Self {
         TypeCheckError {
             message,
-            expected_type: TypeName::try_from(expected_type).map(|x| x.to_string()).unwrap_or("Unknown".to_string()),
+            expected_type: TypeName::try_from(expected_type)
+                .map(|x| x.to_string())
+                .unwrap_or("Unknown".to_string()),
             actual_type,
         }
     }
@@ -77,7 +79,7 @@ pub fn validate(
                 None => Err(TypeCheckError::new(
                     expected_type.clone(),
                     actual_type.clone(),
-                    None
+                    None,
                 )),
             }
         }

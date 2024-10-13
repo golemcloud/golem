@@ -21,10 +21,15 @@ use combine::parser::char::{char, spaces, string};
 use combine::parser::choice::choice;
 use combine::{attempt, between, sep_by, Parser};
 use combine::{parser, ParseError};
-use golem_wasm_ast::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeResult};
+use golem_wasm_ast::analysis::{
+    AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeResult,
+};
 
 use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
-use golem_api_grpc::proto::golem::rib::{BasicTypeName, EnumType, FlagType, KeyValue, ListType, OptionType, RecordType, ResultType, TupleType, TypeName as ProtoTypeName, VariantCase, VariantType};
+use golem_api_grpc::proto::golem::rib::{
+    BasicTypeName, EnumType, FlagType, KeyValue, ListType, OptionType, RecordType, ResultType,
+    TupleType, TypeName as ProtoTypeName, VariantCase, VariantType,
+};
 
 use crate::parser::errors::RibParseError;
 use crate::InferredType;
@@ -54,7 +59,9 @@ pub enum TypeName {
     Record(Vec<(String, Box<TypeName>)>),
     Flags(Vec<String>),
     Enum(Vec<String>),
-    Variant {cases: Vec<(String, Option<Box<TypeName>>)>},
+    Variant {
+        cases: Vec<(String, Option<Box<TypeName>>)>,
+    },
 }
 
 impl Display for TypeName {
@@ -86,20 +93,18 @@ impl Display for TypeName {
             }
             TypeName::Option(inner_type) => write!(f, "option<{}>", inner_type),
             // https://component-model.bytecodealliance.org/design/wit.html#results
-            TypeName::Result{ok, error} => {
-                match (ok, error) {
-                    (Some(ok), Some(error)) => {
-                        write!(f, "result<{}, {}>", ok, error)
-                    }
-                    (Some(ok), None) => {
-                        write!(f, "result<{}>", ok)
-                    }
-                    (None, Some(error)) => {
-                        write!(f, "result<_, {}>", error)
-                    }
-                    (None, None) => {
-                        write!(f, "result")
-                    }
+            TypeName::Result { ok, error } => match (ok, error) {
+                (Some(ok), Some(error)) => {
+                    write!(f, "result<{}, {}>", ok, error)
+                }
+                (Some(ok), None) => {
+                    write!(f, "result<{}>", ok)
+                }
+                (None, Some(error)) => {
+                    write!(f, "result<_, {}>", error)
+                }
+                (None, None) => {
+                    write!(f, "result")
                 }
             },
             TypeName::Record(fields) => {
@@ -132,7 +137,7 @@ impl Display for TypeName {
                 }
                 write!(f, ">")
             }
-            TypeName::Variant {cases} => {
+            TypeName::Variant { cases } => {
                 write!(f, "variant<")?;
                 for (i, (case, typ)) in cases.iter().enumerate() {
                     if i > 0 {
@@ -174,40 +179,34 @@ impl From<TypeName> for ProtoTypeName {
             TypeName::Option(type_name) => InnerTypeName::OptionType(Box::new(OptionType {
                 inner_type: Some(Box::new(type_name.deref().clone().into())),
             })),
-            TypeName::Result{ok, error } => {
-                InnerTypeName::ResultType(Box::new(ResultType {
-                    ok_type: ok.map(|ok| Box::new(ok.deref().clone().into())),
-                    err_type: error.map(|error| Box::new(error.deref().clone().into())),
-                }))
-            }
-            TypeName::Record(fields) => {
-                InnerTypeName::RecordType(RecordType {
-                    fields: fields.into_iter().map(|(field, typ)|{
-                        KeyValue {
-                            key: field,
-                            value: Some(typ.deref().clone().into())
-                        }
-                    }).collect(),
-                })
-            }
-            TypeName::Flags(flags) => {
-                InnerTypeName::FlagType(FlagType {
-                    flags: flags.into_iter().collect(),
-                })
-            }
-            TypeName::Enum(cases) => {
-                InnerTypeName::EnumType(EnumType {
-                    cases: cases.into_iter().collect(),
-                })
-            }
-            TypeName::Variant {cases} => {
-                InnerTypeName::VariantType(VariantType {
-                    cases: cases.into_iter().map(|(case, typ)| VariantCase {
+            TypeName::Result { ok, error } => InnerTypeName::ResultType(Box::new(ResultType {
+                ok_type: ok.map(|ok| Box::new(ok.deref().clone().into())),
+                err_type: error.map(|error| Box::new(error.deref().clone().into())),
+            })),
+            TypeName::Record(fields) => InnerTypeName::RecordType(RecordType {
+                fields: fields
+                    .into_iter()
+                    .map(|(field, typ)| KeyValue {
+                        key: field,
+                        value: Some(typ.deref().clone().into()),
+                    })
+                    .collect(),
+            }),
+            TypeName::Flags(flags) => InnerTypeName::FlagType(FlagType {
+                flags: flags.into_iter().collect(),
+            }),
+            TypeName::Enum(cases) => InnerTypeName::EnumType(EnumType {
+                cases: cases.into_iter().collect(),
+            }),
+            TypeName::Variant { cases } => InnerTypeName::VariantType(VariantType {
+                cases: cases
+                    .into_iter()
+                    .map(|(case, typ)| VariantCase {
                         case_name: case,
-                        variant_arg: typ.map(|x| x.deref().clone().into())
-                    }).collect()
-                })
-            }
+                        variant_arg: typ.map(|x| x.deref().clone().into()),
+                    })
+                    .collect(),
+            }),
         };
 
         ProtoTypeName { kind: Some(inner) }
@@ -259,8 +258,14 @@ impl TryFrom<ProtoTypeName> for TypeName {
                     Ok(TypeName::Option(Box::new(option_type)))
                 }
                 InnerTypeName::ResultType(result_type) => {
-                    let ok = result_type.ok_type.map(|ok| ok.deref().clone().try_into()).transpose()?;
-                    let error = result_type.err_type.map(|error| error.deref().clone().try_into()).transpose()?;
+                    let ok = result_type
+                        .ok_type
+                        .map(|ok| ok.deref().clone().try_into())
+                        .transpose()?;
+                    let error = result_type
+                        .err_type
+                        .map(|error| error.deref().clone().try_into())
+                        .transpose()?;
                     Ok(TypeName::Result {
                         ok: ok.map(Box::new),
                         error: error.map(Box::new),
@@ -270,14 +275,19 @@ impl TryFrom<ProtoTypeName> for TypeName {
                     let record_type = fields
                         .fields
                         .into_iter()
-                        .map(|key_value| key_value.value.ok_or("Field type missing")?.try_into().map(|typ| (key_value.key, Box::new(typ))))
+                        .map(|key_value| {
+                            key_value
+                                .value
+                                .ok_or("Field type missing")?
+                                .try_into()
+                                .map(|typ| (key_value.key, Box::new(typ)))
+                        })
                         .collect::<Result<Vec<(String, Box<TypeName>)>, String>>()?;
                     Ok(TypeName::Record(record_type))
                 }
                 InnerTypeName::FlagType(flag_type) => Ok(TypeName::Flags(flag_type.flags)),
                 InnerTypeName::EnumType(enum_type) => Ok(TypeName::Enum(enum_type.cases)),
                 InnerTypeName::VariantType(variant_type) => {
-
                     let mut cases = vec![];
                     for variant_case in variant_type.cases {
                         let case = variant_case.case_name;
@@ -288,8 +298,7 @@ impl TryFrom<ProtoTypeName> for TypeName {
                         cases.push((case, typ));
                     }
 
-                    Ok(TypeName::Variant {cases})
-
+                    Ok(TypeName::Variant { cases })
                 }
             },
             None => Err("No type kind provided".to_string()),
@@ -314,31 +323,37 @@ impl From<AnalysedType> for TypeName {
             AnalysedType::Chr(_) => TypeName::Chr,
             AnalysedType::Str(_) => TypeName::Str,
             AnalysedType::List(inner_type) => {
-                TypeName::List(Box::new(inner_type.deref().clone().into()))
+                TypeName::List(Box::new(inner_type.inner.deref().clone().into()))
             }
-            AnalysedType::Tuple(inner_types) => {
-                TypeName::Tuple(inner_types.into_iter().map(|t| t.into()).collect())
+            AnalysedType::Tuple(inner_type) => {
+                TypeName::Tuple(inner_type.items.into_iter().map(|t| t.into()).collect())
             }
-            AnalysedType::Option(type_name) => {
-                TypeName::Option(Box::new(type_name.deref().clone().into()))
+            AnalysedType::Option(type_option) => {
+                TypeName::Option(Box::new(type_option.inner.deref().clone().into()))
             }
-            AnalysedType::Result(TypeResult {ok, err}) => {
-                TypeName::Result {
-                    ok: ok.map(|x| Box::new(x.deref().clone().into())),
-                    error: err.map(|x| Box::new(x.deref().clone().into())),
-                }
+            AnalysedType::Result(TypeResult { ok, err }) => TypeName::Result {
+                ok: ok.map(|x| Box::new(x.deref().clone().into())),
+                error: err.map(|x| Box::new(x.deref().clone().into())),
+            },
+            AnalysedType::Record(fields) => TypeName::Record(
+                fields
+                    .fields
+                    .into_iter()
+                    .map(|key_value| (key_value.name, Box::new(key_value.typ.into())))
+                    .collect(),
+            ),
+            AnalysedType::Flags(flags) => TypeName::Flags(flags.names),
+            AnalysedType::Enum(cases) => TypeName::Enum(cases.cases),
+            AnalysedType::Variant(cases) => TypeName::Variant {
+                cases: cases
+                    .cases
+                    .into_iter()
+                    .map(|case_typ| (case_typ.name, case_typ.typ.map(|x| Box::new(x.into()))))
+                    .collect(),
+            },
+            AnalysedType::Handle(type_handle) => {
+                panic!("Unexpected handle type: {:?}", type_handle)
             }
-            AnalysedType::Record(fields) => {
-                TypeName::Record(fields.into_iter().map(|(field, typ)| (field, Box::new(typ.into()))).collect())
-            }
-            AnalysedType::Flags(flags) => TypeName::Flags(flags),
-            AnalysedType::Enum(cases) => TypeName::Enum(cases),
-            AnalysedType::Variant(cases ) => {
-                TypeName::Variant {
-                    cases: cases.cases.into_iter().map(|case_typ| (case_typ.name, case_typ.typ.map(|x| Box::new(x.into())))).collect()
-                }
-            }
-            AnalysedType::Handle(type_handle) => panic!("Unexpected handle type: {:?}", type_handle),
         }
     }
 }
@@ -368,21 +383,24 @@ impl From<TypeName> for InferredType {
             TypeName::Option(type_name) => {
                 InferredType::Option(Box::new(type_name.deref().clone().into()))
             }
-            TypeName::Result(ok, error) => {
-                InferredType::Result {
-                    ok: Box::new(ok.deref().clone().into()),
-                    error: Box::new(error.deref().clone().into()),
-                }
-            }
-            TypeName::Record(fields) => {
-                InferredType::Record(fields.into_iter().map(|(field, typ)| (field, Box::new(typ.into()))).collect())
-            }
+            TypeName::Result { ok, error } => InferredType::Result {
+                ok: ok.map(|x| Box::new(x.deref().clone().into())),
+                error: error.map(|x| Box::new(x.deref().clone().into())),
+            },
+            TypeName::Record(fields) => InferredType::Record(
+                fields
+                    .into_iter()
+                    .map(|(field, typ)| (field, typ.deref().clone().into()))
+                    .collect(),
+            ),
             TypeName::Flags(flags) => InferredType::Flags(flags),
             TypeName::Enum(cases) => InferredType::Enum(cases),
-            TypeName::Variant {cases} => {
-                InferredType::Variant(cases.into_iter().map(|(case, typ)| (case, typ.map(|x| Box::new(x.into())))).collect())
-            }
-
+            TypeName::Variant { cases } => InferredType::Variant(
+                cases
+                    .into_iter()
+                    .map(|(case, typ)| (case, typ.map(|x| x.deref().clone().into())))
+                    .collect(),
+            ),
         }
     }
 }
@@ -485,7 +503,6 @@ parser! {
        parse_type_name_()
     }
 }
-
 
 #[cfg(test)]
 mod type_name_tests {
