@@ -78,7 +78,7 @@ mod type_check_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let metadata = internal::get_metadata();
+        let metadata = internal::get_metadata_record_arg();
 
         let result = compile(&expr, &metadata).unwrap_err();
 
@@ -95,11 +95,45 @@ mod type_check_tests {
 
         let expr = Expr::from_text(expr).unwrap();
 
-        let metadata = internal::get_metadata();
+        let metadata = internal::get_metadata_record_arg();
 
         let result = compile(&expr, &metadata).unwrap_err();
 
         let expected = "`foo` has invalid argument `{c: 3, b: 2}`: Un-inferred type for field `c` in record\nExpected type `record<a: s32, b: u64>` ";
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_invalid_keys_in_record_field() {
+        let expr = r#"
+          let result = foo({c: 3, d: 2});
+          result
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let metadata = internal::get_metadata_record_arg();
+
+        let result = compile(&expr, &metadata).unwrap_err();
+
+        let expected = "`foo` has invalid argument `{c: 3, d: 2}`: Un-inferred type for field `c` in record\nExpected type `record<a: s32, b: u64>` ";
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_invalid_value_in_record_nested_field() {
+        let expr = r#"
+          let result = foo({a: {b: "foo", c: 2}});
+          result
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let metadata = internal::get_metadata_nested_record_arg();
+
+        let result = compile(&expr, &metadata).unwrap_err();
+
+        let expected = "`foo` has invalid argument `{a: \"foo\", b: 2}`: Invalid type for field `a`\nExpected type `s32` ";
         assert_eq!(result, expected);
     }
 
@@ -110,7 +144,7 @@ mod type_check_tests {
             NameTypePair,
         };
 
-        pub(crate) fn get_metadata() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata_record_arg() -> Vec<AnalysedExport> {
             let analysed_export = AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
@@ -123,6 +157,36 @@ mod type_check_tests {
                         NameTypePair {
                             name: "b".to_string(),
                             typ: u64(),
+                        },
+                    ]),
+                }],
+                results: vec![AnalysedFunctionResult {
+                    name: None,
+                    typ: str(),
+                }],
+            });
+
+            vec![analysed_export]
+        }
+
+        pub(crate) fn get_metadata_nested_record_arg() -> Vec<AnalysedExport> {
+            let analysed_export = AnalysedExport::Function(AnalysedFunction {
+                name: "foo".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: record(vec![
+                        NameTypePair {
+                            name: "a".to_string(),
+                            typ: record(vec![
+                                NameTypePair {
+                                    name: "b".to_string(),
+                                    typ: s32(),
+                                },
+                                NameTypePair {
+                                    name: "c".to_string(),
+                                    typ: s32(),
+                                },
+                            ]),
                         },
                     ]),
                 }],

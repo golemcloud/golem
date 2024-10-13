@@ -184,7 +184,7 @@ mod internal {
         push_down_queue: &mut VecDeque<&'a mut Expr>,
     ) -> Result<(), String> {
         let refined_record_type =
-            RecordType::refine(outer_inferred_type).ok_or("Expected record type".to_string())?;
+            RecordType::refine(outer_inferred_type).ok_or(format!("Expcteed record type"))?;
 
         for (field, expr) in inner_expressions {
             let inner_type = refined_record_type.inner_type_by_name(field);
