@@ -11,7 +11,7 @@ pub fn check_type_mismatch(
 ) -> Result<(), TypeMismatchError> {
     match &expected_type {
         AnalysedType::Record(expected_type_record) => {
-            let resolved = RecordType::refine(&actual_type);
+            let resolved = RecordType::refine(actual_type);
             let expected_fields = expected_type_record.clone();
             match resolved {
                 Some(actual_record_type) => {
@@ -45,7 +45,7 @@ pub fn check_type_mismatch(
         | AnalysedType::U64(_)
         | AnalysedType::F32(_)
         | AnalysedType::F64(_) => {
-            NumberType::refine(&actual_type)
+            NumberType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
                     expected_type.clone(),
@@ -54,7 +54,7 @@ pub fn check_type_mismatch(
         }
 
         AnalysedType::Chr(_) => {
-            CharType::refine(&actual_type)
+            CharType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
                     expected_type.clone(),
@@ -63,7 +63,7 @@ pub fn check_type_mismatch(
         }
 
         AnalysedType::Variant(expected_variant) => {
-            let actual_variant_type = VariantType::refine(&actual_type);
+            let actual_variant_type = VariantType::refine(actual_type);
 
             match actual_variant_type {
                 Some(actual_variant) => {
@@ -87,8 +87,8 @@ pub fn check_type_mismatch(
             }
         }
         AnalysedType::Result(type_result) => {
-            let actual_type_ok = OkType::refine(&actual_type).map(|t| t.inner_type().clone());
-            let actual_type_err = ErrType::refine(&actual_type).map(|t| t.inner_type().clone());
+            let actual_type_ok = OkType::refine(actual_type).map(|t| t.inner_type().clone());
+            let actual_type_err = ErrType::refine(actual_type).map(|t| t.inner_type().clone());
 
             match (actual_type_ok, type_result.ok.clone()) {
                 (Some(actual_type_ok), Some(expected_type_ok)) => {
@@ -123,7 +123,7 @@ pub fn check_type_mismatch(
             Ok(())
         }
         AnalysedType::Option(inner_type) => {
-            let optional_type = OptionalType::refine(&actual_type).map(|t| t.inner_type().clone());
+            let optional_type = OptionalType::refine(actual_type).map(|t| t.inner_type().clone());
 
             if let Some(optional_type) = optional_type {
                 check_type_mismatch(inner_type.inner.deref(), &optional_type)
@@ -136,7 +136,7 @@ pub fn check_type_mismatch(
         }
 
         AnalysedType::Enum(_) => {
-            let actual_enum = EnumType::refine(&actual_type);
+            let actual_enum = EnumType::refine(actual_type);
 
             if let Some(_) = actual_enum {
                 Ok(())
@@ -156,7 +156,7 @@ pub fn check_type_mismatch(
                 ))
         }
         AnalysedType::Tuple(tuple) => {
-            let actual_tuple = TupleType::refine(&actual_type);
+            let actual_tuple = TupleType::refine(actual_type);
 
             if let Some(actual_tuple) = actual_tuple {
                 for (index, expected_type) in tuple.items.iter().enumerate() {
@@ -182,7 +182,7 @@ pub fn check_type_mismatch(
             }
         }
         AnalysedType::List(list_type) => {
-            let actual_list = ListType::refine(&actual_type);
+            let actual_list = ListType::refine(actual_type);
 
             if let Some(actual_list) = actual_list {
                 let actual_inner_type = actual_list.inner_type().clone();
@@ -197,7 +197,7 @@ pub fn check_type_mismatch(
             }
         }
         AnalysedType::Str(_) => {
-            StringType::refine(&actual_type)
+            StringType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
                     expected_type.clone(),
@@ -205,7 +205,7 @@ pub fn check_type_mismatch(
                 ))
         }
         AnalysedType::Bool(_) => {
-            BoolType::refine(&actual_type)
+            BoolType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
                     expected_type.clone(),

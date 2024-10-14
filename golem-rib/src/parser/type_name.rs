@@ -304,53 +304,54 @@ impl TryFrom<ProtoTypeName> for TypeName {
     }
 }
 
-impl From<AnalysedType> for TypeName {
-    fn from(analysed_type: AnalysedType) -> Self {
+impl TryFrom<AnalysedType> for TypeName {
+    type Error = String;
+    fn try_from(analysed_type: AnalysedType) -> Result<Self, Self::Error> {
         match analysed_type {
-            AnalysedType::Bool(_) => TypeName::Bool,
-            AnalysedType::S8(_) => TypeName::S8,
-            AnalysedType::U8(_) => TypeName::U8,
-            AnalysedType::S16(_) => TypeName::S16,
-            AnalysedType::U16(_) => TypeName::U16,
-            AnalysedType::S32(_) => TypeName::S32,
-            AnalysedType::U32(_) => TypeName::U32,
-            AnalysedType::S64(_) => TypeName::S64,
-            AnalysedType::U64(_) => TypeName::U64,
-            AnalysedType::F32(_) => TypeName::F32,
-            AnalysedType::F64(_) => TypeName::F64,
-            AnalysedType::Chr(_) => TypeName::Chr,
-            AnalysedType::Str(_) => TypeName::Str,
-            AnalysedType::List(inner_type) => {
-                TypeName::List(Box::new(inner_type.inner.deref().clone().into()))
-            }
-            AnalysedType::Tuple(inner_type) => {
-                TypeName::Tuple(inner_type.items.into_iter().map(|t| t.into()).collect())
-            }
-            AnalysedType::Option(type_option) => {
-                TypeName::Option(Box::new(type_option.inner.deref().clone().into()))
-            }
-            AnalysedType::Result(TypeResult { ok, err }) => TypeName::Result {
+            AnalysedType::Bool(_) => Ok(TypeName::Bool),
+            AnalysedType::S8(_) => Ok(TypeName::S8),
+            AnalysedType::U8(_) => Ok(TypeName::U8),
+            AnalysedType::S16(_) => Ok(TypeName::S16),
+            AnalysedType::U16(_) => Ok(TypeName::U16),
+            AnalysedType::S32(_) => Ok(TypeName::S32),
+            AnalysedType::U32(_) => Ok(TypeName::U32),
+            AnalysedType::S64(_) => Ok(TypeName::S64),
+            AnalysedType::U64(_) => Ok(TypeName::U64),
+            AnalysedType::F32(_) => Ok(TypeName::F32),
+            AnalysedType::F64(_) => Ok(TypeName::F64),
+            AnalysedType::Chr(_) => Ok(TypeName::Chr),
+            AnalysedType::Str(_) => Ok(TypeName::Str),
+            AnalysedType::List(inner_type) => Ok(TypeName::List(Box::new(
+                inner_type.inner.deref().clone().into(),
+            ))),
+            AnalysedType::Tuple(inner_type) => Ok(TypeName::Tuple(
+                inner_type.items.into_iter().map(|t| t.into()).collect(),
+            )),
+            AnalysedType::Option(type_option) => Ok(TypeName::Option(Box::new(
+                type_option.inner.deref().clone().into(),
+            ))),
+            AnalysedType::Result(TypeResult { ok, err }) => Ok(TypeName::Result {
                 ok: ok.map(|x| Box::new(x.deref().clone().into())),
                 error: err.map(|x| Box::new(x.deref().clone().into())),
-            },
-            AnalysedType::Record(fields) => TypeName::Record(
+            }),
+            AnalysedType::Record(fields) => Ok(TypeName::Record(
                 fields
                     .fields
                     .into_iter()
                     .map(|key_value| (key_value.name, Box::new(key_value.typ.into())))
                     .collect(),
-            ),
-            AnalysedType::Flags(flags) => TypeName::Flags(flags.names),
-            AnalysedType::Enum(cases) => TypeName::Enum(cases.cases),
-            AnalysedType::Variant(cases) => TypeName::Variant {
+            )),
+            AnalysedType::Flags(flags) => Ok(TypeName::Flags(flags.names)),
+            AnalysedType::Enum(cases) => Ok(TypeName::Enum(cases.cases)),
+            AnalysedType::Variant(cases) => Ok(TypeName::Variant {
                 cases: cases
                     .cases
                     .into_iter()
                     .map(|case_typ| (case_typ.name, case_typ.typ.map(|x| Box::new(x.into()))))
                     .collect(),
-            },
+            }),
             AnalysedType::Handle(type_handle) => {
-                panic!("Unexpected handle type: {:?}", type_handle)
+                Err(format!("Handle type not supported: {:?}", type_handle)).unwrap()
             }
         }
     }

@@ -99,57 +99,6 @@ pub struct TypeMismatchError {
     pub actual_type: InferredType,
 }
 
-#[derive(Clone, Debug)]
-pub struct Path(Vec<PathElem>);
-
-impl Path {
-    pub fn from_elem(elem: PathElem) -> Self {
-        Path(vec![elem])
-    }
-
-    pub fn push_front(&mut self, elem: PathElem) {
-        self.0.insert(0, elem);
-    }
-
-    pub fn push_back(&mut self, elem: PathElem) {
-        self.0.push(elem);
-    }
-}
-
-impl Default for Path {
-    fn default() -> Self {
-        Path(Vec::new())
-    }
-}
-
-impl Display for Path {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut is_first = true;
-        for elem in &self.0 {
-            match elem {
-                PathElem::Field(name) => {
-                    if is_first {
-                        write!(f, "{}", name)?;
-                        is_first = false;
-                    } else {
-                        write!(f, ".{}", name)?;
-                    }
-                }
-                PathElem::Index(index) => {
-                    write!(f, "[{}]", index)?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum PathElem {
-    Field(String),
-    Index(usize),
-}
-
 impl TypeMismatchError {
     pub fn updated_expected_type(&self, expected_type: &AnalysedType) -> TypeMismatchError {
         let mut mismatch_error: TypeMismatchError = self.clone();
@@ -184,7 +133,7 @@ impl Display for TypeMismatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         let field_path = self.field_path.to_string();
 
-        let expected_type = TypeName::try_from(self.expected_type.clone())
+        let expected_type = TypeName::from(self.expected_type.clone())
             .map(|x| x.to_string())
             .unwrap_or_default();
 
@@ -203,4 +152,49 @@ impl Display for TypeMismatchError {
             write!(f, "{}. Found `{:?}`", &base_error, self.actual_type)
         }
     }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Path(Vec<PathElem>);
+
+impl Path {
+    pub fn from_elem(elem: PathElem) -> Self {
+        Path(vec![elem])
+    }
+
+    pub fn push_front(&mut self, elem: PathElem) {
+        self.0.insert(0, elem);
+    }
+
+    pub fn push_back(&mut self, elem: PathElem) {
+        self.0.push(elem);
+    }
+}
+
+impl Display for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut is_first = true;
+        for elem in &self.0 {
+            match elem {
+                PathElem::Field(name) => {
+                    if is_first {
+                        write!(f, "{}", name)?;
+                        is_first = false;
+                    } else {
+                        write!(f, ".{}", name)?;
+                    }
+                }
+                PathElem::Index(index) => {
+                    write!(f, "[{}]", index)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum PathElem {
+    Field(String),
+    Index(usize),
 }

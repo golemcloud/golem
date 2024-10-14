@@ -27,7 +27,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
             }
             Expr::Sequence(exprs, inferred_type) => {
-                internal::unresolved_types_in_list(&exprs)?;
+                internal::unresolved_types_in_list(exprs)?;
 
                 if inferred_type.un_resolved() {
                     Err(UnResolvedTypesError::new(expr))
@@ -50,7 +50,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
             }
             Expr::Tuple(exprs, inferred_type) => {
-                internal::unresolved_types_in_tuple(&exprs)?;
+                internal::unresolved_types_in_tuple(exprs)?;
 
                 if inferred_type.un_resolved() {
                     Err(UnResolvedTypesError::new(expr))
@@ -94,7 +94,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
             }
             Expr::Concat(exprs, inferred_type) => {
-                internal::unresolved_type_for_concat(&exprs)?;
+                internal::unresolved_type_for_concat(exprs)?;
 
                 if inferred_type.un_resolved() {
                     Err(UnResolvedTypesError::new(expr))
@@ -172,9 +172,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::GetTag(_, _) => Ok(()),
         };
 
-        if let Err(error) = error {
-            return Err(error);
-        }
+        error
     }
 
     Ok(())
@@ -200,7 +198,7 @@ mod internal {
         Ok(())
     }
 
-    pub fn unresolved_types_in_tuple(expr_fields: &Vec<Expr>) -> Result<(), UnResolvedTypesError> {
+    pub fn unresolved_types_in_tuple(expr_fields: &[Expr]) -> Result<(), UnResolvedTypesError> {
         for (index, field_expr) in expr_fields.iter().enumerate() {
             let field_type = field_expr.inferred_type();
             if field_type.is_unknown() || field_type.is_one_of() {
@@ -213,7 +211,7 @@ mod internal {
         Ok(())
     }
 
-    pub fn unresolved_type_for_concat(expr_fields: &Vec<Expr>) -> Result<(), UnResolvedTypesError> {
+    pub fn unresolved_type_for_concat(expr_fields: &[Expr]) -> Result<(), UnResolvedTypesError> {
         for (index, field_expr) in expr_fields.iter().enumerate() {
             let field_type = field_expr.inferred_type();
             if field_type.is_unknown() || field_type.is_one_of() {
@@ -293,7 +291,7 @@ mod internal {
                 .clone()
                 .get_expr_literals()
                 .into_iter()
-                .map(|x| x.clone())
+                .cloned()
                 .collect();
 
             for expr in exprs {
@@ -344,7 +342,7 @@ mod internal {
         Ok(())
     }
 
-    pub fn unresolved_types_in_list(expr_fields: &Vec<Expr>) -> Result<(), UnResolvedTypesError> {
+    pub fn unresolved_types_in_list(expr_fields: &[Expr]) -> Result<(), UnResolvedTypesError> {
         for (index, field_expr) in expr_fields.iter().enumerate() {
             let field_type = field_expr.inferred_type();
             if field_type.is_unknown() || field_type.is_one_of() {

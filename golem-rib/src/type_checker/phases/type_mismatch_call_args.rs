@@ -26,11 +26,11 @@ mod internal {
     use crate::call_type::CallType;
     use crate::type_checker::{validate, Path, PathElem};
 
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 
     pub(crate) fn check_type_mismatch_in_call_args(
         call_type: &mut CallType,
-        args: &mut Vec<Expr>,
+        args: &mut [Expr],
         type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
         let registry_value = type_registry
@@ -61,9 +61,7 @@ mod internal {
             if !missing_fields.is_empty() {
                 return Err(format!(
                     "Invalid argument in `{}`: `{}`. Missing field `{}`",
-                    call_type,
-                    actual_arg.to_string(),
-                    missing_fields
+                    call_type, actual_arg, missing_fields
                 ));
             }
 
@@ -71,9 +69,7 @@ mod internal {
                 |type_check_error| {
                     format!(
                         "Invalid argument in `{}`: `{}`. {}",
-                        call_type,
-                        actual_arg.to_string(),
-                        type_check_error
+                        call_type, actual_arg, type_check_error
                     )
                 },
             )?;
@@ -85,46 +81,35 @@ mod internal {
     fn missing_fields_in_record(expr: &Expr, expected: &AnalysedType) -> Vec<Path> {
         let mut missing_paths = Vec::new();
 
-        match expected {
-            AnalysedType::Record(record) => {
-                for (field_name, analysed_type) in record
-                    .fields
-                    .iter()
-                    .map(|name_typ| (name_typ.name.clone(), name_typ.typ.clone()))
-                {
-                    match expr {
-                        Expr::Record(record, _) => {
-                            let value = record
-                                .iter()
-                                .find(|(name, _)| *name == field_name)
-                                .map(|(_, value)| value);
-                            if let Some(value) = value {
-                                match analysed_type {
-                                    AnalysedType::Record(record) => {
-                                        // Recursively check nested records
-                                        let nested_paths = missing_fields_in_record(
-                                            value,
-                                            &AnalysedType::Record(record.clone()),
-                                        );
-                                        for mut nested_path in nested_paths {
-                                            // Prepend the current field to the path for each missing nested field
-                                            nested_path
-                                                .push_front(PathElem::Field(field_name.clone()));
-                                            missing_paths.push(nested_path);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            } else {
-                                missing_paths
-                                    .push(Path::from_elem(PathElem::Field(field_name.clone())));
+        if let AnalysedType::Record(record) = expected {
+            for (field_name, analysed_type) in record
+                .fields
+                .iter()
+                .map(|name_typ| (name_typ.name.clone(), name_typ.typ.clone()))
+            {
+                if let Expr::Record(record, _) = expr {
+                    let value = record
+                        .iter()
+                        .find(|(name, _)| *name == field_name)
+                        .map(|(_, value)| value);
+                    if let Some(value) = value {
+                        if let AnalysedType::Record(record) = analysed_type {
+                            // Recursively check nested records
+                            let nested_paths = missing_fields_in_record(
+                                value,
+                                &AnalysedType::Record(record.clone()),
+                            );
+                            for mut nested_path in nested_paths {
+                                // Prepend the current field to the path for each missing nested field
+                                nested_path.push_front(PathElem::Field(field_name.clone()));
+                                missing_paths.push(nested_path);
                             }
                         }
-                        _ => {}
+                    } else {
+                        missing_paths.push(Path::from_elem(PathElem::Field(field_name.clone())));
                     }
                 }
             }
-            _ => {}
         }
 
         missing_paths

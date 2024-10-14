@@ -318,7 +318,6 @@ mod internal {
                     for pattern in patterns {
                         update_arm_pattern_type(pattern, &variant_arg_type, original_predicate)?;
                     }
-                } else {
                 }
             }
 
