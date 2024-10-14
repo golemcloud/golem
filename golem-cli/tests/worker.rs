@@ -19,6 +19,8 @@ use crate::{RefKind, Tracing};
 use anyhow::anyhow;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
+use golem_cli::model::text::fmt::TextFormat;
+use golem_cli::model::text::worker::WorkerGetView;
 use golem_cli::model::{Format, IdempotencyKey, WorkersMetadataResponseView};
 use golem_client::model::{PublicOplogEntry, UpdateRecord};
 use golem_common::model::TargetWorkerId;
@@ -29,8 +31,10 @@ use indoc::formatdoc;
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
+use std::thread::sleep;
 use std::time::Duration;
 use test_r::core::{DynamicTestRegistration, TestType};
+use tracing::debug;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 inherit_test_dep!(Tracing);
@@ -1037,6 +1041,25 @@ fn worker_update(
         UpdateRecord::FailedUpdate(_) => panic!("Update failed"),
     };
 
+    loop {
+        let mut cli_args = vec!["worker".to_owned(), "get".to_owned()];
+        cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+        let result: WorkerGetView = cli.run(&cli_args)?;
+
+        if result.0.component_version == target_version {
+            break;
+        } else {
+            debug!("Waiting for worker to update...");
+            sleep(Duration::from_secs(2));
+        }
+    }
+
+    let mut cli_args = vec!["worker".to_owned(), "oplog".to_owned()];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let result: Vec<(u64, PublicOplogEntry)> = cli.run(&cli_args)?;
+    result.print();
+
+    assert_eq!(result.len(), 3); // create, enqueue update, successful update
     assert_eq!(original_updates, 0);
     assert_eq!(target_version, 1);
     Ok(())
@@ -1105,6 +1128,11 @@ fn worker_invoke_indexed_resource(
         result,
         json!({"typ":{"items":[{"type":"U64"}],"type":"Tuple"},"value":[3]})
     );
+
+    let mut cli_args = vec!["worker".to_owned(), "oplog".to_owned()];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let result: Vec<(u64, PublicOplogEntry)> = cli.run(&cli_args)?;
+    result.print();
 
     Ok(())
 }
@@ -1231,7 +1259,11 @@ fn worker_get_oplog(
     let result: Vec<(u64, PublicOplogEntry)> =
         cli.run(&["worker", "oplog", &cfg.arg('W', "worker"), &url.to_string()])?;
 
-    assert_eq!(result.len(), 14);
+    result.print();
+
+    // Whether there is an "enqueued invocation" entry or just directly started invocation
+    // depends on timing
+    assert!(result.len() >= 12 && result.len() <= 14);
 
     Ok(())
 }

@@ -76,7 +76,9 @@ async fn get_oplog_1(
 
     drop(executor);
 
-    assert_eq!(oplog.len(), 14);
+    // Whether there is an "enqueued invocation" entry or just directly started invocation
+    // depends on timing
+    assert!(oplog.len() >= 12 && oplog.len() <= 14);
     assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
     assert_eq!(
         oplog

@@ -2393,6 +2393,8 @@ async fn counter_resource_test_2(
 
     let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
 
+    let _oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+
     drop(executor);
 
     check!(result1 == Ok(vec![Value::U64(5)]));
@@ -2461,6 +2463,7 @@ async fn counter_resource_test_2(
             )
         })
         .collect::<Vec<_>>();
+
     check!(resources2 == vec![]);
 }
 

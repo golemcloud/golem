@@ -1205,7 +1205,9 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let oplog = deps.get_oplog(&worker_id, OplogIndex::INITIAL).await;
 
-    assert_eq!(oplog.len(), 14);
+    // Whether there is an "enqueued invocation" entry or just directly started invocation
+    // depends on oplog
+    assert!(oplog.len() >= 12 && oplog.len() <= 14);
     assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
     assert_eq!(
         oplog
