@@ -52,6 +52,8 @@ mod type_binding;
 mod type_inference_tests {
 
     mod let_binding_tests {
+        use test_r::test;
+
         use crate::call_type::CallType;
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::type_inference::type_inference_tests::internal;
@@ -175,6 +177,8 @@ mod type_inference_tests {
         }
     }
     mod literal_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
@@ -240,6 +244,8 @@ mod type_inference_tests {
         }
     }
     mod comparison_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
@@ -345,6 +351,8 @@ mod type_inference_tests {
         }
     }
     mod enum_tests {
+        use test_r::test;
+
         use crate::type_inference::type_inference_tests::internal;
         use crate::type_inference::type_inference_tests::internal::{
             get_analysed_exports, get_analysed_type_enum,
@@ -353,7 +361,7 @@ mod type_inference_tests {
 
         use golem_wasm_ast::analysis::analysed_type::str;
 
-        #[tokio::test]
+        #[test]
         async fn test_enum_construction_and_pattern_match() {
             let input_enum_type = get_analysed_type_enum(vec!["foo", "bar", "foo-bar"]);
 
@@ -414,6 +422,8 @@ mod type_inference_tests {
     }
 
     mod variant_tests {
+        use test_r::test;
+
         use crate::type_inference::type_inference_tests::internal::{
             get_analysed_exports, get_analysed_type_variant,
         };
@@ -421,7 +431,7 @@ mod type_inference_tests {
 
         use golem_wasm_ast::analysis::analysed_type::{str, u64};
 
-        #[tokio::test]
+        #[test]
         async fn test_variant_construction_and_pattern_match() {
             let input_variant_type = get_analysed_type_variant(vec![
                 ("foo", Some(u64())),
@@ -486,6 +496,8 @@ mod type_inference_tests {
     }
 
     mod concat_tests {
+        use test_r::test;
+
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, VariableId};
 
@@ -530,6 +542,8 @@ mod type_inference_tests {
         }
     }
     mod boolean_tests {
+        use test_r::test;
+
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, VariableId};
 
@@ -562,6 +576,8 @@ mod type_inference_tests {
         }
     }
     mod cond_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
@@ -644,6 +660,8 @@ mod type_inference_tests {
         }
     }
     mod identifier_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
@@ -739,6 +757,8 @@ mod type_inference_tests {
         }
     }
     mod list_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
@@ -782,6 +802,8 @@ mod type_inference_tests {
         }
     }
     mod select_index_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
@@ -829,6 +851,8 @@ mod type_inference_tests {
         }
     }
     mod select_field_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
@@ -889,6 +913,8 @@ mod type_inference_tests {
         }
     }
     mod tuple_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
@@ -931,6 +957,8 @@ mod type_inference_tests {
         }
     }
     mod variable_conflict_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::{
             ArmPattern, Expr, FunctionTypeRegistry, InferredType, MatchArm, Number, VariableId,
@@ -1016,6 +1044,8 @@ mod type_inference_tests {
         }
     }
     mod pattern_match_tests {
+        use test_r::test;
+
         use crate::call_type::CallType;
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::parser::type_name::TypeName;
@@ -1476,6 +1506,8 @@ mod type_inference_tests {
         }
     }
     mod option_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, Number, VariableId};
@@ -1574,6 +1606,8 @@ mod type_inference_tests {
         }
     }
     mod record_tests {
+        use test_r::test;
+
         use crate::parser::type_name::TypeName;
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, FunctionTypeRegistry, InferredType, Number, VariableId};
@@ -1759,6 +1793,8 @@ mod type_inference_tests {
         }
     }
     mod result_type_tests {
+        use test_r::test;
+
         use crate::type_inference::type_inference_tests::internal;
         use crate::{Expr, InferredType, VariableId};
 
@@ -1863,6 +1899,7 @@ mod type_inference_tests {
         }
     }
     mod internal {
+
         use crate::call_type::CallType;
         use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
         use crate::parser::type_name::TypeName;

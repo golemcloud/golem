@@ -715,6 +715,8 @@ impl<'de> Deserialize<'de> for GolemUrl {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::uri::{GolemUri, GolemUrl, GolemUrn};
     use std::str::FromStr;
     use url::Url;

@@ -6,8 +6,11 @@ edition = "2021"
 [[bin]]
 name = "golem-component-service"
 path = "src/server.rs"
+harness = false
+test = false
 
 [lib]
+harness = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
@@ -53,3 +56,6 @@ tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

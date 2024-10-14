@@ -809,7 +809,11 @@ impl SqliteLabelledApi {
     }
 
     pub async fn list_dir(&self, namespace: &str, path: &str) -> Result<Vec<PathBuf>, Error> {
-        let path_like = format!("{}%", path);
+        let path_like = if path.ends_with("/") || path.is_empty() {
+            format!("{path}%")
+        } else {
+            format!("{path}/%")
+        };
         let query = sqlx::query_as(
             "SELECT path FROM blob_storage WHERE namespace = ? AND path LIKE ? AND path <> ?;",
         )

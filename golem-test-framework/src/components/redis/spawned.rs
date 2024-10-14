@@ -14,6 +14,7 @@
 
 use crate::components::redis::Redis;
 use crate::components::ChildProcessLogger;
+use async_trait::async_trait;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -67,8 +68,17 @@ impl SpawnedRedis {
             _logger: logger,
         }
     }
+
+    fn blocking_kill(&self) {
+        info!("Stopping Redis");
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            self.valid.store(false, Ordering::Release);
+            let _ = child.kill();
+        }
+    }
 }
 
+#[async_trait]
 impl Redis for SpawnedRedis {
     fn assert_valid(&self) {
         if !self.valid.load(Ordering::Acquire) {
@@ -88,17 +98,13 @@ impl Redis for SpawnedRedis {
         &self.prefix
     }
 
-    fn kill(&self) {
-        info!("Stopping Redis");
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            self.valid.store(false, Ordering::Release);
-            let _ = child.kill();
-        }
+    async fn kill(&self) {
+        self.blocking_kill();
     }
 }
 
 impl Drop for SpawnedRedis {
     fn drop(&mut self) {
-        self.kill()
+        self.blocking_kill();
     }
 }

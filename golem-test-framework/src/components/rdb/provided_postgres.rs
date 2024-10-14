@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::components::rdb::{DbInfo, PostgresInfo, Rdb};
+use async_trait::async_trait;
 use tracing::info;
 
 pub struct ProvidedPostgresRdb {
@@ -27,10 +28,11 @@ impl ProvidedPostgresRdb {
     }
 }
 
+#[async_trait]
 impl Rdb for ProvidedPostgresRdb {
     fn info(&self) -> DbInfo {
         DbInfo::Postgres(self.info.clone())
     }
 
-    fn kill(&self) {}
+    async fn kill(&self) {}
 }

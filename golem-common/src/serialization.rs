@@ -82,6 +82,8 @@ pub fn try_deserialize_with_version<T: Decode>(
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use bincode::{Decode, Encode};
     use rand::distributions::Alphanumeric;
     use rand::Rng;

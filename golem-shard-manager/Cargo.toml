@@ -5,10 +5,13 @@ edition = "2021"
 
 [lib]
 path = "src/lib.rs"
+harness = false
 
 [[bin]]
 name = "golem-shard-manager"
 path = "src/server.rs"
+harness = false
+test = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
@@ -45,6 +48,7 @@ warp = { workspace = true }
 
 [dev-dependencies]
 tracing-test = "0.2.4"
+test-r = { workspace = true }
 
 [features]
 default = ["kubernetes"]

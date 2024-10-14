@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::BASE_DEPS;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
 use golem_test_framework::components::redis::Redis;
@@ -24,8 +23,10 @@ use golem_worker_executor_base::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor_base::storage::sqlite_types::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 
+use crate::WorkerExecutorTestDependencies;
 use golem_worker_executor_base::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use std::sync::Arc;
+use test_r::inherit_test_dep;
 use uuid::Uuid;
 
 pub(crate) trait GetIndexedStorage {
@@ -42,7 +43,9 @@ impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
     }
 }
 
-pub(crate) async fn in_memory_storage() -> impl GetIndexedStorage {
+pub(crate) async fn in_memory_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> impl GetIndexedStorage {
     let kvs = InMemoryIndexedStorage::new();
     InMemoryIndexedStorageWrapper { kvs }
 }
@@ -59,9 +62,9 @@ impl GetIndexedStorage for RedisIndexedStorageWrapper {
     }
 }
 
-pub(crate) async fn redis_storage() -> impl GetIndexedStorage {
-    let redis = BASE_DEPS.redis();
-    let redis_monitor = BASE_DEPS.redis_monitor();
+pub(crate) async fn redis_storage(deps: &WorkerExecutorTestDependencies) -> impl GetIndexedStorage {
+    let redis = deps.redis();
+    let redis_monitor = deps.redis_monitor();
     redis.assert_valid();
     redis_monitor.assert_valid();
     let random_prefix = Uuid::new_v4();
@@ -96,7 +99,9 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
     }
 }
 
-pub(crate) async fn sqlite_storage() -> impl GetIndexedStorage {
+pub(crate) async fn sqlite_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> impl GetIndexedStorage {
     let sqlx_pool_sqlite = SqlitePoolOptions::new()
         .max_connections(10)
         .connect("sqlite::memory:")
@@ -118,17 +123,24 @@ pub fn ns2() -> IndexedStorageNamespace {
     IndexedStorageNamespace::CompressedOpLog { level: 1 }
 }
 
+inherit_test_dep!(WorkerExecutorTestDependencies);
+
 macro_rules! test_indexed_storage {
     ( $name:ident, $init:expr ) => {
         mod $name {
+            use test_r::{inherit_test_dep, test};
+
             use crate::indexed_storage::GetIndexedStorage;
+            use crate::WorkerExecutorTestDependencies;
             use assert2::check;
             use golem_worker_executor_base::storage::indexed::ScanCursor;
 
-            #[tokio::test]
+            inherit_test_dep!(WorkerExecutorTestDependencies);
+
+            #[test]
             #[tracing::instrument]
-            async fn exists_append() {
-                let test = $init.await;
+            async fn exists_append(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -146,10 +158,10 @@ macro_rules! test_indexed_storage {
                 check!(result2 == true);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn namespaces_are_separate() {
-                let test = $init.await;
+            async fn namespaces_are_separate(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns1 = crate::indexed_storage::ns();
                 let ns2 = crate::indexed_storage::ns2();
@@ -166,10 +178,10 @@ macro_rules! test_indexed_storage {
                 check!(result == false);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn can_append_and_get() {
-                let test = $init.await;
+            async fn can_append_and_get(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -199,10 +211,10 @@ macro_rules! test_indexed_storage {
                 check!(result == vec![(1, value1.into()), (2, value2.into()), (3, value3.into())]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn append_cannot_overwrite() {
-                let test = $init.await;
+            async fn append_cannot_overwrite(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -221,10 +233,10 @@ macro_rules! test_indexed_storage {
                 check!(result1.is_err());
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn append_can_skip() {
-                let test = $init.await;
+            async fn append_can_skip(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -249,10 +261,10 @@ macro_rules! test_indexed_storage {
                 check!(result == vec![(4, value1.into()), (8, value2.into())]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn length() {
-                let test = $init.await;
+            async fn length(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -277,10 +289,10 @@ macro_rules! test_indexed_storage {
                 check!(result3 == 2);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn scan_empty() {
-                let test = $init.await;
+            async fn scan_empty(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -301,10 +313,10 @@ macro_rules! test_indexed_storage {
                 check!(result == Vec::<String>::new());
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn scan_with_no_pattern_single_paged() {
-                let test = $init.await;
+            async fn scan_with_no_pattern_single_paged(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -340,10 +352,10 @@ macro_rules! test_indexed_storage {
                 check!(result == vec![key1.to_string(), key2.to_string()]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn scan_with_no_pattern_paginated() {
-                let test = $init.await;
+            async fn scan_with_no_pattern_paginated(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -400,10 +412,10 @@ macro_rules! test_indexed_storage {
                 check!(all == vec![key1.to_string(), key2.to_string()]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn scan_with_prefix_pattern_single_paged() {
-                let test = $init.await;
+            async fn scan_with_prefix_pattern_single_paged(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -445,10 +457,10 @@ macro_rules! test_indexed_storage {
                 check!(result == vec![key1.to_string(), key3.to_string()]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn scan_with_prefix_pattern_paginated() {
-                let test = $init.await;
+            async fn scan_with_prefix_pattern_paginated(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -511,10 +523,10 @@ macro_rules! test_indexed_storage {
                 check!(all == vec![key1.to_string(), key3.to_string()]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn exists_append_delete() {
-                let test = $init.await;
+            async fn exists_append_delete(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -533,10 +545,10 @@ macro_rules! test_indexed_storage {
                 check!(result2 == false);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn delete_is_per_namespace() {
-                let test = $init.await;
+            async fn delete_is_per_namespace(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns1 = crate::indexed_storage::ns();
                 let ns2 = crate::indexed_storage::ns2();
@@ -554,10 +566,10 @@ macro_rules! test_indexed_storage {
                 check!(result == true);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn delete_non_existing() {
-                let test = $init.await;
+            async fn delete_non_existing(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -568,10 +580,10 @@ macro_rules! test_indexed_storage {
                 check!(result.is_ok());
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn first() {
-                let test = $init.await;
+            async fn first(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -600,10 +612,10 @@ macro_rules! test_indexed_storage {
                 check!(result2 == Some((5, value1.into())));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn last() {
-                let test = $init.await;
+            async fn last(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -632,10 +644,10 @@ macro_rules! test_indexed_storage {
                 check!(result2 == Some((7, value2.into())));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn closest_low() {
-                let test = $init.await;
+            async fn closest_low(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -664,10 +676,10 @@ macro_rules! test_indexed_storage {
                 check!(result2 == Some((5, value1.into())));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn closest_match() {
-                let test = $init.await;
+            async fn closest_match(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -696,10 +708,10 @@ macro_rules! test_indexed_storage {
                 check!(result2 == Some((5, value1.into())));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn closest_mid() {
-                let test = $init.await;
+            async fn closest_mid(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -728,10 +740,10 @@ macro_rules! test_indexed_storage {
                 check!(result2 == Some((7, value2.into())));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn closest_high() {
-                let test = $init.await;
+            async fn closest_high(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -760,10 +772,10 @@ macro_rules! test_indexed_storage {
                 check!(result2 == None);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn drop_prefix_no_match() {
-                let test = $init.await;
+            async fn drop_prefix_no_match(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -804,10 +816,10 @@ macro_rules! test_indexed_storage {
                 );
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn drop_prefix_partial() {
-                let test = $init.await;
+            async fn drop_prefix_partial(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -841,10 +853,10 @@ macro_rules! test_indexed_storage {
                 check!(result == vec![(11, value2.into()), (12, value3.into())]);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
-            async fn drop_prefix_full() {
-                let test = $init.await;
+            async fn drop_prefix_full(deps: &WorkerExecutorTestDependencies) {
+                let test = $init(deps).await;
                 let is = test.get_indexed_storage();
                 let ns = crate::indexed_storage::ns();
 
@@ -881,6 +893,6 @@ macro_rules! test_indexed_storage {
     };
 }
 
-test_indexed_storage!(in_memory, crate::indexed_storage::in_memory_storage());
-test_indexed_storage!(redis, crate::indexed_storage::redis_storage());
-test_indexed_storage!(sqlite, crate::indexed_storage::sqlite_storage());
+test_indexed_storage!(in_memory, crate::indexed_storage::in_memory_storage);
+test_indexed_storage!(redis, crate::indexed_storage::redis_storage);
+test_indexed_storage!(sqlite, crate::indexed_storage::sqlite_storage);

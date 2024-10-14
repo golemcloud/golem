@@ -240,6 +240,8 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};

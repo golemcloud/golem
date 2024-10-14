@@ -28,6 +28,9 @@ pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
 
+#[cfg(test)]
+test_r::enable!();
+
 use crate::grpc::WorkerExecutorImpl;
 use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;

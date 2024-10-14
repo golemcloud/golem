@@ -302,6 +302,8 @@ impl RegisterApiDefinitionApi {
 
 #[cfg(test)]
 mod test {
+    use test_r::test;
+
     use super::*;
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
@@ -398,7 +400,7 @@ mod test {
         )
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_error_returned() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
@@ -428,7 +430,7 @@ mod test {
         response.assert_status(http::StatusCode::CONFLICT);
     }
 
-    #[tokio::test]
+    #[test]
     async fn update_non_existant() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
@@ -453,7 +455,7 @@ mod test {
         response.assert_status(http::StatusCode::NOT_FOUND);
     }
 
-    #[tokio::test]
+    #[test]
     async fn get_all() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
@@ -493,7 +495,7 @@ mod test {
     }
 
     #[ignore] // There is already sql tests that does this
-    #[tokio::test]
+    #[test]
     async fn decode_openapi_json() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);

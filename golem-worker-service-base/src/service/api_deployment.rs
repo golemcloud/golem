@@ -571,6 +571,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::service::api_deployment::ApiDeploymentError;
     use golem_common::SafeDisplay;
     use golem_service_base::repo::RepoError;

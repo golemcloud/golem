@@ -43,7 +43,7 @@ impl Benchmark for ColdStartEchoSmall {
     }
 
     async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.deps.kill_all()
+        benchmark_context.deps.kill_all().await
     }
 
     async fn create(params: CliParams, config: RunConfig) -> Self {

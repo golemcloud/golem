@@ -121,7 +121,7 @@ impl ComponentCompilationService for SpawnedComponentCompilationService {
         self.grpc_port
     }
 
-    fn kill(&self) {
+    async fn kill(&self) {
         info!("Stopping golem-component-compilation-service");
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let _ = child.kill();
@@ -131,6 +131,8 @@ impl ComponentCompilationService for SpawnedComponentCompilationService {
 
 impl Drop for SpawnedComponentCompilationService {
     fn drop(&mut self) {
-        self.kill();
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+        }
     }
 }

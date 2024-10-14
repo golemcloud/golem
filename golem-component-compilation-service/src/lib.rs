@@ -43,6 +43,9 @@ mod metrics;
 mod model;
 mod service;
 
+#[cfg(test)]
+test_r::enable!();
+
 pub fn server_main() -> Result<(), Box<dyn std::error::Error>> {
     match make_config_loader().load_or_dump_config() {
         Some(config) => {

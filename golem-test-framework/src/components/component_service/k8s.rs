@@ -21,8 +21,7 @@ use crate::components::k8s::{
 };
 use crate::components::rdb::Rdb;
 use crate::components::GolemEnvVars;
-use async_dropper_simple::{AsyncDrop, AsyncDropper};
-use async_scoped::TokioScope;
+use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -39,9 +38,9 @@ pub struct K8sComponentService {
     namespace: K8sNamespace,
     local_host: String,
     local_port: u16,
-    pod: Arc<Mutex<K8sPod>>,
-    service: Arc<Mutex<K8sService>>,
-    routing: Arc<Mutex<K8sRouting>>,
+    pod: Arc<Mutex<Option<K8sPod>>>,
+    service: Arc<Mutex<Option<K8sService>>>,
+    routing: Arc<Mutex<Option<K8sRouting>>>,
     client: Option<ComponentServiceClient<Channel>>,
 }
 
@@ -137,7 +136,7 @@ impl K8sComponentService {
                 ],
                 "containers": [{
                     "name": "service",
-                    "image": format!("golemservices/golem-component-service:latest"),
+                    "image": "golemservices/golem-component-service:latest".to_string(),
                     "env": env_vars
                 }]
             }
@@ -200,9 +199,9 @@ impl K8sComponentService {
             namespace: namespace.clone(),
             local_host: local_host.clone(),
             local_port,
-            pod: Arc::new(Mutex::new(managed_pod)),
-            service: Arc::new(Mutex::new(managed_service)),
-            routing: Arc::new(Mutex::new(managed_routing)),
+            pod: Arc::new(Mutex::new(Some(managed_pod))),
+            service: Arc::new(Mutex::new(Some(managed_service))),
+            routing: Arc::new(Mutex::new(Some(managed_routing))),
             client: if shared_client {
                 Some(new_client(&local_host, local_port).await)
             } else {
@@ -245,16 +244,9 @@ impl ComponentService for K8sComponentService {
         self.local_port
     }
 
-    fn kill(&self) {
-        TokioScope::scope_and_block(|s| {
-            s.spawn(async move {
-                let mut pod = self.pod.lock().await;
-                pod.inner_mut().async_drop().await;
-                let mut service = self.service.lock().await;
-                service.inner_mut().async_drop().await;
-                let mut routing = self.routing.lock().await;
-                routing.inner_mut().async_drop().await;
-            })
-        });
+    async fn kill(&self) {
+        let _ = self.pod.lock().await.take();
+        let _ = self.service.lock().await.take();
+        let _ = self.routing.lock().await.take();
     }
 }

@@ -23,8 +23,7 @@ use crate::components::worker_service::{
     new_client, wait_for_startup, WorkerService, WorkerServiceEnvVars,
 };
 use crate::components::GolemEnvVars;
-use async_dropper_simple::{AsyncDrop, AsyncDropper};
-use async_scoped::TokioScope;
+use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -41,9 +40,9 @@ pub struct K8sWorkerService {
     namespace: K8sNamespace,
     local_host: String,
     local_port: u16,
-    pod: Arc<Mutex<K8sPod>>,
-    service: Arc<Mutex<K8sService>>,
-    routing: Arc<Mutex<K8sRouting>>,
+    pod: Arc<Mutex<Option<K8sPod>>>,
+    service: Arc<Mutex<Option<K8sService>>>,
+    routing: Arc<Mutex<Option<K8sRouting>>>,
     client: Option<WorkerServiceClient<Channel>>,
 }
 
@@ -217,9 +216,9 @@ impl K8sWorkerService {
             namespace: namespace.clone(),
             local_host: local_host.clone(),
             local_port,
-            pod: Arc::new(Mutex::new(managed_pod)),
-            service: Arc::new(Mutex::new(managed_service)),
-            routing: Arc::new(Mutex::new(managed_routing)),
+            pod: Arc::new(Mutex::new(Some(managed_pod))),
+            service: Arc::new(Mutex::new(Some(managed_service))),
+            routing: Arc::new(Mutex::new(Some(managed_routing))),
             client: if shared_client {
                 Some(
                     new_client(&local_host, local_port)
@@ -274,16 +273,9 @@ impl WorkerService for K8sWorkerService {
         todo!()
     }
 
-    fn kill(&self) {
-        TokioScope::scope_and_block(|s| {
-            s.spawn(async move {
-                let mut pod = self.pod.lock().await;
-                pod.inner_mut().async_drop().await;
-                let mut service = self.service.lock().await;
-                service.inner_mut().async_drop().await;
-                let mut routing = self.routing.lock().await;
-                routing.inner_mut().async_drop().await;
-            })
-        });
+    async fn kill(&self) {
+        let _ = self.pod.lock().await.take();
+        let _ = self.service.lock().await.take();
+        let _ = self.routing.lock().await.take();
     }
 }

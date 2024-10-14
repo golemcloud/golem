@@ -5,14 +5,17 @@ edition = "2021"
 license = "Apache-2.0"
 homepage = "https://golem.cloud/"
 repository = "https://github.com/golemcloud/golem"
-authors = ["Simon Popugaev <simon.popugaev@ziverge.com>"]
 readme = "README.md"
 description = "Command line interface for Golem."
 autotests = false
 
+[lib]
+harness = false
+
 [[bin]]
 name = "golem-cli"
 path = "src/main.rs"
+test = false
 
 [[test]]
 name = "integration"
@@ -81,7 +84,6 @@ golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
 async-recursion = "1.0.5"
 env_logger = "0.11.1"
-libtest-mimic = { git = "https://github.com/senia-psm/libtest-mimic.git", branch = "async_and_context_tests" }
 log = "0.4.20"
 postgres = { workspace = true }
 rand = { workspace = true }
@@ -89,6 +91,7 @@ redis = { workspace = true }
 serde_json_path = "0.6.5"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+test-r = { workspace = true }
 tokio-postgres = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }

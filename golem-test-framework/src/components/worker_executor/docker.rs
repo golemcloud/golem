@@ -14,8 +14,9 @@
 
 use crate::components::redis::Redis;
 use crate::components::worker_executor::{new_client, WorkerExecutor, WorkerExecutorEnvVars};
-use crate::components::{GolemEnvVars, DOCKER, NETWORK};
+use crate::components::{GolemEnvVars, NETWORK};
 use async_trait::async_trait;
+use std::borrow::Cow;
 
 use crate::components::component_service::ComponentService;
 use crate::components::docker::KillContainer;
@@ -24,8 +25,10 @@ use crate::components::worker_service::WorkerService;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use std::collections::HashMap;
 use std::sync::Arc;
-use testcontainers::core::WaitFor;
-use testcontainers::{Container, Image, RunnableImage};
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, Image, ImageExt};
+use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
@@ -35,9 +38,10 @@ pub struct DockerWorkerExecutor {
     grpc_port: u16,
     public_http_port: u16,
     public_grpc_port: u16,
-    container: Container<'static, WorkerExecutorImage>,
+    container: Arc<Mutex<Option<ContainerAsync<WorkerExecutorImage>>>>,
     keep_container: bool,
     client: Option<WorkerExecutorClient<Channel>>,
+    env_vars: HashMap<String, String>,
 }
 
 impl DockerWorkerExecutor {
@@ -95,13 +99,25 @@ impl DockerWorkerExecutor {
 
         let name = format!("golem-worker-executor-{grpc_port}");
 
-        let image = RunnableImage::from(WorkerExecutorImage::new(grpc_port, http_port, env_vars))
-            .with_container_name(&name)
-            .with_network(NETWORK);
-        let container = DOCKER.run(image);
+        let container = WorkerExecutorImage::new(
+            ContainerPort::Tcp(grpc_port),
+            ContainerPort::Tcp(http_port),
+            env_vars.clone(),
+        )
+        .with_container_name(&name)
+        .with_network(NETWORK)
+        .start()
+        .await
+        .expect("Failed to start golem-worker-executor container");
 
-        let public_http_port = container.get_host_port_ipv4(http_port);
-        let public_grpc_port = container.get_host_port_ipv4(grpc_port);
+        let public_http_port = container
+            .get_host_port_ipv4(http_port)
+            .await
+            .expect("Failed to get public HTTP port");
+        let public_grpc_port = container
+            .get_host_port_ipv4(grpc_port)
+            .await
+            .expect("Failed to get public gRPC port");
 
         Self {
             name,
@@ -109,7 +125,7 @@ impl DockerWorkerExecutor {
             grpc_port,
             public_http_port,
             public_grpc_port,
-            container,
+            container: Arc::new(Mutex::new(Some(container))),
             keep_container,
             client: if shared_client {
                 Some(
@@ -120,6 +136,7 @@ impl DockerWorkerExecutor {
             } else {
                 None
             },
+            env_vars,
         }
     }
 }
@@ -157,31 +174,36 @@ impl WorkerExecutor for DockerWorkerExecutor {
         self.public_grpc_port
     }
 
-    fn kill(&self) {
-        self.container.kill(self.keep_container);
+    async fn kill(&self) {
+        self.container.kill(self.keep_container).await;
     }
 
     async fn restart(&self) {
-        self.container.start();
-    }
-}
+        let container = WorkerExecutorImage::new(
+            ContainerPort::Tcp(self.grpc_port),
+            ContainerPort::Tcp(self.http_port),
+            self.env_vars.clone(),
+        )
+        .with_container_name(&self.name)
+        .with_network(NETWORK)
+        .start()
+        .await
+        .expect("Failed to start golem-worker-executor container");
 
-impl Drop for DockerWorkerExecutor {
-    fn drop(&mut self) {
-        self.kill();
+        self.container.lock().await.replace(container);
     }
 }
 
 #[derive(Debug)]
 struct WorkerExecutorImage {
     env_vars: HashMap<String, String>,
-    expose_ports: [u16; 2],
+    expose_ports: [ContainerPort; 2],
 }
 
 impl WorkerExecutorImage {
     pub fn new(
-        grpc_port: u16,
-        http_port: u16,
+        grpc_port: ContainerPort,
+        http_port: ContainerPort,
         env_vars: HashMap<String, String>,
     ) -> WorkerExecutorImage {
         WorkerExecutorImage {
@@ -192,25 +214,25 @@ impl WorkerExecutorImage {
 }
 
 impl Image for WorkerExecutorImage {
-    type Args = ();
-
-    fn name(&self) -> String {
-        "golemservices/golem-worker-executor".to_string()
+    fn name(&self) -> &str {
+        "golemservices/golem-worker-executor"
     }
 
-    fn tag(&self) -> String {
-        "latest".to_string()
+    fn tag(&self) -> &str {
+        "latest"
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
         vec![WaitFor::message_on_stdout("Registering worker executor")]
     }
 
-    fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
-        Box::new(self.env_vars.iter())
+    fn env_vars(
+        &self,
+    ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
+        self.env_vars.iter()
     }
 
-    fn expose_ports(&self) -> Vec<u16> {
-        self.expose_ports.to_vec()
+    fn expose_ports(&self) -> &[ContainerPort] {
+        &self.expose_ports
     }
 }

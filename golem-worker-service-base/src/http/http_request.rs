@@ -103,6 +103,8 @@ pub mod router {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     };
@@ -367,7 +369,7 @@ mod tests {
         resolved_route.interpret_response_mapping(&evaluator).await
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_end_to_end_evaluation_simple() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
@@ -394,7 +396,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_request_resolution_with_concrete_params() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
@@ -430,7 +432,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_request_resolution_with_path_params() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
@@ -466,7 +468,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_request_resolution_with_path_and_query_params() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request(
@@ -504,7 +506,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_request_cond_expr_resolution() {
         let empty_headers = HeaderMap::new();
         let api_request = get_api_request(
@@ -544,7 +546,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_request_request_body_resolution() {
         let empty_headers = HeaderMap::new();
 
@@ -583,7 +585,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_resolution_for_cond_expr_fn_params() {
         let empty_headers = HeaderMap::new();
 
@@ -625,7 +627,7 @@ mod tests {
         assert_eq!(result, expected);
     }
     //
-    #[tokio::test]
+    #[test]
     async fn test_worker_resolution_for_cond_expr_req_body_fn_params() {
         let empty_headers = HeaderMap::new();
 
@@ -677,7 +679,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_resolution_for_cond_expr_req_body_direct_fn_params() {
         let empty_headers = HeaderMap::new();
 
@@ -729,7 +731,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_request_map_list_request_body_resolution() {
         let empty_headers = HeaderMap::new();
 
@@ -785,7 +787,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_request_request_body_direct() {
         let empty_headers = HeaderMap::new();
 
@@ -839,7 +841,7 @@ mod tests {
         assert_eq!(result, expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_request_resolution_paths() {
         async fn test_paths(definition_path: &str, request_path: &str, ok: bool) {
             let empty_headers = HeaderMap::new();
@@ -882,7 +884,7 @@ mod tests {
         test_paths("/getcartcontent/{cart-id}", "/getcartcontent/1", true).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_worker_idempotency_key_header() {
         async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
             let api_request = get_api_request("/getcartcontent/1", None, header_map, Value::Null);

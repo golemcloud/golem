@@ -11,8 +11,11 @@ description = "Golem Worker Service including API Gateway functionalities"
 [[bin]]
 name = "golem-worker-service"
 path = "src/main.rs"
+harness = false
+test = false
 
 [lib]
+harness = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc" }
@@ -61,3 +64,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

@@ -12,19 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
-
-use testcontainers::{Container, RunnableImage};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::redis::REDIS_PORT;
+use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::components::docker::KillContainer;
 use crate::components::redis::Redis;
-use crate::components::{DOCKER, NETWORK};
+use crate::components::NETWORK;
 
 pub struct DockerRedis {
-    container: Container<'static, testcontainers_modules::redis::Redis>,
+    container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::redis::Redis>>>>,
     keep_container: bool,
     prefix: String,
     valid: AtomicBool,
@@ -37,18 +40,23 @@ impl DockerRedis {
     pub async fn new(prefix: String, keep_container: bool) -> Self {
         info!("Starting Redis container");
 
-        let image = RunnableImage::from(testcontainers_modules::redis::Redis)
+        let container = testcontainers_modules::redis::Redis::default()
             .with_tag("7.2")
             .with_container_name(Self::NAME)
-            .with_network(NETWORK);
-        let container = DOCKER.run(image);
+            .with_network(NETWORK)
+            .start()
+            .await
+            .expect("Failed to start Redis container");
 
-        let public_port = container.get_host_port_ipv4(REDIS_PORT);
+        let public_port = container
+            .get_host_port_ipv4(REDIS_PORT)
+            .await
+            .expect("Failed to get host port");
 
         super::wait_for_startup("localhost", public_port, Duration::from_secs(10));
 
         Self {
-            container,
+            container: Arc::new(Mutex::new(Some(container))),
             keep_container,
             prefix,
             valid: AtomicBool::new(true),
@@ -57,6 +65,7 @@ impl DockerRedis {
     }
 }
 
+#[async_trait]
 impl Redis for DockerRedis {
     fn assert_valid(&self) {
         if !self.valid.load(Ordering::Acquire) {
@@ -84,14 +93,8 @@ impl Redis for DockerRedis {
         &self.prefix
     }
 
-    fn kill(&self) {
+    async fn kill(&self) {
         info!("Stopping Redis container");
-        self.container.kill(self.keep_container);
-    }
-}
-
-impl Drop for DockerRedis {
-    fn drop(&mut self) {
-        self.kill()
+        self.container.kill(self.keep_container).await;
     }
 }

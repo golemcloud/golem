@@ -77,6 +77,8 @@ pub fn make_config_loader() -> ConfigLoader<ComponentServiceConfig> {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::config::make_config_loader;
 
     #[test]

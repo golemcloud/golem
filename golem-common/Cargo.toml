@@ -9,7 +9,7 @@ description = "Shared code between Golem services"
 
 
 [lib]
-
+harness = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
@@ -54,4 +54,5 @@ wasm-wave = { workspace = true }
 itertools = { workspace = true }
 
 [dev-dependencies]
+test-r = { workspace = true }
 tracing-test = { workspace = true }

@@ -199,15 +199,18 @@ fn label(event: &WorkerEvent) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use test_r::{non_flaky, test};
 
+    use std::sync::Arc;
+    use tokio::sync::broadcast::error::RecvError;
     use tokio::sync::Mutex;
 
     use crate::services::worker_event::{
         WorkerEvent, WorkerEventService, WorkerEventServiceDefault,
     };
 
-    #[tokio::test]
+    #[test]
+    #[non_flaky(10)]
     pub async fn both_subscriber_gets_events_small() {
         let svc = Arc::new(WorkerEventServiceDefault::new(4, 16));
         let rx1_events = Arc::new(Mutex::new(Vec::<WorkerEvent>::new()));
@@ -219,11 +222,13 @@ mod tests {
             let mut rx1 = svc1.receiver();
             drop(svc1);
             loop {
-                match rx1.recv().await.unwrap() {
-                    WorkerEvent::Close => break,
-                    event => {
+                match rx1.recv().await {
+                    Ok(WorkerEvent::Close) => break,
+                    Ok(event) => {
                         rx1_events_clone.lock().await.push(event);
                     }
+                    Err(RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_n)) => {}
                 }
             }
         });
@@ -238,11 +243,13 @@ mod tests {
             let mut rx2 = svc2.receiver();
             drop(svc2);
             loop {
-                match rx2.recv().await.unwrap() {
-                    WorkerEvent::Close => break,
-                    event => {
+                match rx2.recv().await {
+                    Ok(WorkerEvent::Close) => break,
+                    Ok(event) => {
                         rx2_events_clone.lock().await.push(event);
                     }
+                    Err(RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_n)) => {}
                 }
             }
         });
@@ -283,7 +290,8 @@ mod tests {
         )
     }
 
-    #[tokio::test]
+    #[test]
+    #[non_flaky(10)]
     pub async fn both_subscriber_gets_events_large() {
         let svc = Arc::new(WorkerEventServiceDefault::new(4, 4));
         let rx1_events = Arc::new(Mutex::new(Vec::<WorkerEvent>::new()));
@@ -295,11 +303,13 @@ mod tests {
             let mut rx1 = svc1.receiver();
             drop(svc1);
             loop {
-                match rx1.recv().await.unwrap() {
-                    WorkerEvent::Close => break,
-                    event => {
+                match rx1.recv().await {
+                    Ok(WorkerEvent::Close) => break,
+                    Ok(event) => {
                         rx1_events_clone.lock().await.push(event);
                     }
+                    Err(RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_n)) => {}
                 }
             }
         });
@@ -315,11 +325,13 @@ mod tests {
             let mut rx2 = svc2.receiver();
             drop(svc2);
             loop {
-                match rx2.recv().await.unwrap() {
-                    WorkerEvent::Close => break,
-                    event => {
+                match rx2.recv().await {
+                    Ok(WorkerEvent::Close) => break,
+                    Ok(event) => {
                         rx2_events_clone.lock().await.push(event);
                     }
+                    Err(RecvError::Closed) => break,
+                    Err(RecvError::Lagged(_n)) => {}
                 }
             }
         });

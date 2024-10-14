@@ -186,9 +186,14 @@ impl BlobStorage for InMemoryBlobStorage {
                     .collect();
                 drop(directory);
 
+                let prefix = if dir.ends_with('/') || dir.is_empty() {
+                    dir.to_string()
+                } else {
+                    format!("{}/", dir)
+                };
                 namespace_data
                     .iter()
-                    .filter(|entry| entry.key() != &dir && entry.key().starts_with(&dir))
+                    .filter(|entry| entry.key() != &dir && entry.key().starts_with(&prefix))
                     .for_each(|entry| {
                         result.push(Path::new(entry.key()).to_path_buf());
                     });

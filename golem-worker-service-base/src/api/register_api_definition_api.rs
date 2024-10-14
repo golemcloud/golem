@@ -248,8 +248,7 @@ impl TryInto<crate::api_definition::http::Route> for Route {
     type Error = String;
 
     fn try_into(self) -> Result<crate::api_definition::http::Route, Self::Error> {
-        let path = crate::api_definition::http::AllPathPatterns::parse(self.path.as_str())
-            .map_err(|e| e.to_string())?;
+        let path = AllPathPatterns::parse(self.path.as_str()).map_err(|e| e.to_string())?;
         let binding = self.binding.try_into()?;
 
         Ok(crate::api_definition::http::Route {
@@ -361,8 +360,8 @@ impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http:
             .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
 
         let result = crate::api_definition::http::HttpApiDefinition {
-            id: crate::api_definition::ApiDefinitionId(id.value),
-            version: crate::api_definition::ApiVersion(value.version),
+            id: ApiDefinitionId(id.value),
+            version: ApiVersion(value.version),
             routes,
             draft: value.draft,
             created_at: created_at.into(),
@@ -389,8 +388,8 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
         let id = value.id.ok_or("Api Definition ID is missing")?;
 
         let result = crate::api_definition::http::HttpApiDefinitionRequest {
-            id: crate::api_definition::ApiDefinitionId(id.value),
-            version: crate::api_definition::ApiVersion(value.version),
+            id: ApiDefinitionId(id.value),
+            version: ApiVersion(value.version),
             routes,
             draft: value.draft,
         };
@@ -469,8 +468,7 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::api_definition::http::Rou
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
-        let path = crate::api_definition::http::AllPathPatterns::parse(value.path.as_str())
-            .map_err(|e| e.to_string())?;
+        let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
         let binding = value.binding.ok_or("binding is missing")?.try_into()?;
 
         let method: MethodPattern = value.method.try_into()?;
@@ -539,11 +537,18 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
     }
 }
 
-#[test]
-fn test_method_pattern() {
-    for method in 0..8 {
-        let method_pattern: MethodPattern = method.try_into().unwrap();
-        let method_grpc: grpc_apidefinition::HttpMethod = method_pattern.into();
-        assert_eq!(method, method_grpc as i32);
+#[cfg(test)]
+mod tests {
+    use crate::api_definition::http::MethodPattern;
+    use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+    use test_r::test;
+
+    #[test]
+    fn test_method_pattern() {
+        for method in 0..8 {
+            let method_pattern: MethodPattern = method.try_into().unwrap();
+            let method_grpc: grpc_apidefinition::HttpMethod = method_pattern.into();
+            assert_eq!(method, method_grpc as i32);
+        }
     }
 }

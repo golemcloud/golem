@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test, test_dep};
+
 use crate::api_definition::{
     golem_def, make_golem_file, make_shopping_cart_component, to_definition,
 };
 use crate::api_deployment::make_definition;
 use crate::cli::{Cli, CliLive};
 use crate::worker::add_environment_service_component;
+use crate::Tracing;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::WorkerMetadataView;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
@@ -27,55 +30,27 @@ use golem_common::uri::oss::url::{
 use golem_common::uri::oss::urn::{
     ApiDefinitionUrn, ApiDeploymentUrn, WorkerFunctionUrn, WorkerUrn,
 };
-use golem_test_framework::config::TestDependencies;
-use libtest_mimic::{Failed, Trial};
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::sync::Arc;
 
-fn make(cli: CliLive, deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let ctx = (deps, cli);
-    vec![
-        Trial::test_in_context(
-            "top_level_get_api_definition".to_string(),
-            ctx.clone(),
-            top_level_get_api_definition,
-        ),
-        Trial::test_in_context(
-            "top_level_get_api_deployment".to_string(),
-            ctx.clone(),
-            top_level_get_api_deployment,
-        ),
-        Trial::test_in_context(
-            "top_level_get_component".to_string(),
-            ctx.clone(),
-            top_level_get_component,
-        ),
-        Trial::test_in_context(
-            "top_level_get_worker".to_string(),
-            ctx.clone(),
-            top_level_get_worker,
-        ),
-        Trial::test_in_context(
-            "top_level_get_worker_function".to_string(),
-            ctx.clone(),
-            top_level_get_worker_function,
-        ),
-    ]
+inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &EnvBasedTestDependencies) -> CliLive {
+    CliLive::make("api_definition", Arc::new(deps.clone()))
+        .unwrap()
+        .with_long_args()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    make(
-        CliLive::make("top_level_get", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
-    )
-}
-
+#[test]
 fn top_level_get_api_definition(
-    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
+    deps: &EnvBasedTestDependencies,
+    cli: &CliLive,
+    _tracing: &Tracing,
+) -> Result<(), anyhow::Error> {
     let component_name = "top_level_get_api_definition";
-    let component = make_shopping_cart_component(deps, component_name, &cli)?;
+    let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
     let def = golem_def(component_name, &component_id);
     let path = make_golem_file(&def)?;
@@ -105,10 +80,13 @@ fn top_level_get_api_definition(
     Ok(())
 }
 
+#[test]
 fn top_level_get_api_deployment(
-    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
-    let definition = make_definition(deps, &cli, "top_level_get_api_deployment")?;
+    deps: &EnvBasedTestDependencies,
+    cli: &CliLive,
+    _tracing: &Tracing,
+) -> Result<(), anyhow::Error> {
+    let definition = make_definition(deps, cli, "top_level_get_api_deployment")?;
     let host = "get-host-top-level-get";
     let cfg = &cli.config;
 
@@ -140,9 +118,12 @@ fn top_level_get_api_deployment(
     Ok(())
 }
 
+#[test]
 fn top_level_get_component(
-    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
+    deps: &EnvBasedTestDependencies,
+    cli: &CliLive,
+    _tracing: &Tracing,
+) -> Result<(), anyhow::Error> {
     let component_name = "top_level_get_component";
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -167,10 +148,13 @@ fn top_level_get_component(
     Ok(())
 }
 
+#[test]
 fn top_level_get_worker(
-    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
-    let component = add_environment_service_component(deps, "top_level_get_worker", &cli)?;
+    deps: &EnvBasedTestDependencies,
+    cli: &CliLive,
+    _tracing: &Tracing,
+) -> Result<(), anyhow::Error> {
+    let component = add_environment_service_component(deps, "top_level_get_worker", cli)?;
     let worker_name = "top_level_get_worker";
     let cfg = &cli.config;
 
@@ -199,10 +183,13 @@ fn top_level_get_worker(
     Ok(())
 }
 
+#[test]
 fn top_level_get_worker_function(
-    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
-    let component = add_environment_service_component(deps, "top_level_get_worker_function", &cli)?;
+    deps: &EnvBasedTestDependencies,
+    cli: &CliLive,
+    _tracing: &Tracing,
+) -> Result<(), anyhow::Error> {
+    let component = add_environment_service_component(deps, "top_level_get_worker_function", cli)?;
     let worker_name = "top_level_get_worker_function";
     let cfg = &cli.config;
 

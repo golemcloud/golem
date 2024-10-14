@@ -160,6 +160,14 @@ impl SpawnedWorkerExecutor {
 
         (child, logger)
     }
+
+    fn blocking_kill(&self) {
+        info!("Stopping golem-worker-executor {}", self.grpc_port);
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+        let _logger = self.logger.lock().unwrap().take();
+    }
 }
 
 #[async_trait]
@@ -183,12 +191,8 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         self.grpc_port
     }
 
-    fn kill(&self) {
-        info!("Stopping golem-worker-executor {}", self.grpc_port);
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            let _ = child.kill();
-        }
-        let _logger = self.logger.lock().unwrap().take();
+    async fn kill(&self) {
+        self.blocking_kill();
     }
 
     async fn restart(&self) {
@@ -223,6 +227,6 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
 
 impl Drop for SpawnedWorkerExecutor {
     fn drop(&mut self) {
-        self.kill();
+        self.blocking_kill();
     }
 }

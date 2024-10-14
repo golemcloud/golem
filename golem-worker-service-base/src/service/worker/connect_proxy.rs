@@ -318,6 +318,8 @@ mod keep_alive {
 
     #[cfg(test)]
     mod test {
+        use test_r::test;
+
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Once;
 
@@ -343,7 +345,7 @@ mod keep_alive {
         }
 
         #[ignore]
-        #[tokio::test]
+        #[test]
         async fn test_websocket_keep_alive() {
             setup_tracing();
 

@@ -425,6 +425,8 @@ pub struct ObjectMetadata {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use std::path::Path;
     use std::sync::Arc;
 
@@ -612,52 +614,52 @@ mod tests {
         DefaultBlobStoreService::new(blob_storage)
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_container_exists_in_memory() {
         let blob_store = in_memory_blob_store();
         test_container_exists(&blob_store).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_container_exists_local() {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;
         test_container_exists(&blob_store).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_container_delete_in_memory() {
         let blob_store = in_memory_blob_store();
         test_container_delete(&blob_store).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_container_delete_local() {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;
         test_container_delete(&blob_store).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_container_has_write_read_has_in_memory() {
         let blob_store = in_memory_blob_store();
         test_container_has_write_read_has(&blob_store).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_container_has_write_read_has_local() {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;
         test_container_has_write_read_has(&blob_store).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_container_list_copy_move_list_in_memory() {
         let blob_store = in_memory_blob_store();
         test_container_list_copy_move_list(&blob_store).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_container_list_copy_move_list_local() {
         let tempdir = TempDir::new().unwrap();
         let blob_store = fs_blob_store(tempdir.path()).await;

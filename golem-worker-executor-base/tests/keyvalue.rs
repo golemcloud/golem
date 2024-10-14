@@ -12,16 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test};
+
 use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn readwrite_get_returns_the_value_that_was_set() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn readwrite_get_returns_the_value_that_was_set(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-1";
@@ -64,11 +75,15 @@ async fn readwrite_get_returns_the_value_that_was_set() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn readwrite_get_fails_if_the_value_was_not_set() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn readwrite_get_fails_if_the_value_was_not_set(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-2";
@@ -91,11 +106,15 @@ async fn readwrite_get_fails_if_the_value_was_not_set() {
     check!(result == vec![Value::Option(None)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn readwrite_set_replaces_the_value_if_it_was_already_set() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn readwrite_set_replaces_the_value_if_it_was_already_set(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-3";
@@ -151,11 +170,15 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn readwrite_delete_removes_the_value_if_it_was_already_set() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn readwrite_delete_removes_the_value_if_it_was_already_set(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-4";
@@ -203,11 +226,15 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set() {
     check!(result == vec![Value::Option(None)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn readwrite_exists_returns_true_if_the_value_was_set() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn readwrite_exists_returns_true_if_the_value_was_set(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-5";
@@ -243,11 +270,15 @@ async fn readwrite_exists_returns_true_if_the_value_was_set() {
     check!(result == vec![Value::Bool(true)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn readwrite_exists_returns_false_if_the_value_was_not_set() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn readwrite_exists_returns_false_if_the_value_was_not_set(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-6";
@@ -270,11 +301,15 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set() {
     check!(result == vec![Value::Bool(false)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn readwrite_buckets_can_be_shared_between_workers() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn readwrite_buckets_can_be_shared_between_workers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_id_1 = executor
@@ -321,11 +356,15 @@ async fn readwrite_buckets_can_be_shared_between_workers() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn batch_get_many_gets_multiple_values() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn batch_get_many_gets_multiple_values(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-9";
@@ -398,11 +437,15 @@ async fn batch_get_many_gets_multiple_values() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn batch_get_many_fails_if_any_value_was_not_set() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn batch_get_many_fails_if_any_value_was_not_set(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-10";
@@ -455,11 +498,15 @@ async fn batch_get_many_fails_if_any_value_was_not_set() {
     check!(result == vec![Value::Option(None)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn batch_set_many_sets_multiple_values() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn batch_set_many_sets_multiple_values(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-11";
@@ -554,11 +601,15 @@ async fn batch_set_many_sets_multiple_values() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn batch_delete_many_deletes_multiple_values() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn batch_delete_many_deletes_multiple_values(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-12";
@@ -662,11 +713,15 @@ async fn batch_delete_many_deletes_multiple_values() {
     check!(result3 == vec![Value::Option(None)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn batch_get_keys_returns_multiple_keys() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn batch_get_keys_returns_multiple_keys(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("key-value-service").await;
     let worker_name = "key-value-service-13";
