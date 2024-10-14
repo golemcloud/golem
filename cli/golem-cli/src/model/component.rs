@@ -302,6 +302,8 @@ pub fn function_params_types<'t>(
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::model::component::show_exported_function;
     use golem_wasm_ast::analysis::analysed_type::{
         bool, case, chr, f32, f64, field, flags, handle, list, option, r#enum, record, result,

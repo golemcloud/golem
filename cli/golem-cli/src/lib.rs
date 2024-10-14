@@ -44,6 +44,9 @@ pub mod oss;
 pub mod service;
 pub mod stubgen;
 
+#[cfg(test)]
+test_r::enable!();
+
 const VERSION: &str = golem_version!();
 
 pub trait MainArgs {
