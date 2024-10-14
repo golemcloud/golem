@@ -57,7 +57,9 @@ command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
 
 [tasks.build-bins-non-ci]
-condition = { env_not_set = ["CI"] } # on CI we always 'cargo make build' first so no need to recompile bins
+condition = { env_not_set = [
+    "CI",
+] } # on CI we always 'cargo make build' first so no need to recompile bins
 run_task = "build-bins"
 
 [tasks.build-bins]
@@ -108,7 +110,7 @@ command = "cargo"
 args = [
     "build",
     "-p",
-    "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
+    "golem-shard-manager",                                               # NOTE: Not all projects are cross-compilable because of an openssl dependency
     "-p",
     "golem-worker-executor",
     "-p",
@@ -380,10 +382,10 @@ args = ["-v", "./target/golem-service.yaml", "./openapi/golem-service.yaml"]
 description = "Publishes packages to crates.io"
 dependencies = [
     "build-release",
-    "publish-golem-client",
     "publish-golem-api-grpc",
     "publish-golem-rib",
     "publish-golem-common",
+    "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
     "publish-golem-cli",
@@ -633,9 +635,7 @@ export RUST_BACKTRACE=1
 
 [tasks.check-configs]
 description = "Generates configs from code and checks if it's committed"
-dependencies = [
-    "generate-configs"
-]
+dependencies = ["generate-configs"]
 
 script = '''
 git diff --exit-code \
