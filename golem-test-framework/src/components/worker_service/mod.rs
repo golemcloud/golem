@@ -210,7 +210,7 @@ pub trait WorkerService {
         self.private_custom_request_port()
     }
 
-    fn kill(&self);
+    async fn kill(&self);
 }
 
 async fn new_client(

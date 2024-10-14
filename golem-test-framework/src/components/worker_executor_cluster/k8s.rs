@@ -22,8 +22,9 @@ use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tracing::{info, Level};
 
 pub struct K8sWorkerExecutorCluster {
@@ -116,10 +117,10 @@ impl WorkerExecutorCluster for K8sWorkerExecutorCluster {
         self.worker_executors.len()
     }
 
-    fn kill_all(&self) {
+    async fn kill_all(&self) {
         info!("Killing all worker executors");
         for worker_executor in &self.worker_executors {
-            worker_executor.kill();
+            worker_executor.kill().await;
         }
     }
 
@@ -130,18 +131,18 @@ impl WorkerExecutorCluster for K8sWorkerExecutorCluster {
         }
     }
 
-    fn stop(&self, index: usize) {
-        let mut stopped = self.stopped_indices.lock().unwrap();
+    async fn stop(&self, index: usize) {
+        let mut stopped = self.stopped_indices.lock().await;
         if !stopped.contains(&index) {
-            self.worker_executors[index].kill();
+            self.worker_executors[index].kill().await;
             stopped.insert(index);
         }
     }
 
     async fn start(&self, index: usize) {
-        if self.stopped_indices().contains(&index) {
+        if self.stopped_indices().await.contains(&index) {
             self.worker_executors[index].restart().await;
-            self.stopped_indices.lock().unwrap().remove(&index);
+            self.stopped_indices.lock().await.remove(&index);
         }
     }
 
@@ -149,24 +150,18 @@ impl WorkerExecutorCluster for K8sWorkerExecutorCluster {
         self.worker_executors.to_vec()
     }
 
-    fn stopped_indices(&self) -> Vec<usize> {
+    async fn stopped_indices(&self) -> Vec<usize> {
         self.stopped_indices
             .lock()
-            .unwrap()
+            .await
             .iter()
             .copied()
             .collect()
     }
 
-    fn started_indices(&self) -> Vec<usize> {
+    async fn started_indices(&self) -> Vec<usize> {
         let all_indices = HashSet::from_iter(0..self.worker_executors.len());
-        let stopped_indices = self.stopped_indices.lock().unwrap();
+        let stopped_indices = self.stopped_indices.lock().await;
         all_indices.difference(&stopped_indices).copied().collect()
-    }
-}
-
-impl Drop for K8sWorkerExecutorCluster {
-    fn drop(&mut self) {
-        self.kill_all();
     }
 }

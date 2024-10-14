@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
 use crate::components::rdb::{DbInfo, PostgresInfo, Rdb};
 use tracing::info;
 
@@ -27,10 +28,11 @@ impl ProvidedPostgresRdb {
     }
 }
 
+#[async_trait]
 impl Rdb for ProvidedPostgresRdb {
     fn info(&self) -> DbInfo {
         DbInfo::Postgres(self.info.clone())
     }
 
-    fn kill(&self) {}
+    async fn kill(&self) {}
 }

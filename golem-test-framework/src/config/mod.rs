@@ -14,7 +14,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-
+use async_trait::async_trait;
 use crate::components::component_compilation_service::ComponentCompilationService;
 pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
@@ -32,6 +32,7 @@ use crate::components::worker_service::WorkerService;
 pub mod cli;
 mod env;
 
+#[async_trait]
 pub trait TestDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static>;
     fn redis(&self) -> Arc<dyn Redis + Send + Sync + 'static>;
@@ -45,15 +46,15 @@ pub trait TestDependencies {
     fn worker_service(&self) -> Arc<dyn WorkerService + Send + Sync + 'static>;
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>;
 
-    fn kill_all(&self) {
-        self.worker_executor_cluster().kill_all();
-        self.worker_service().kill();
-        self.component_compilation_service().kill();
-        self.component_service().kill();
-        self.shard_manager().kill();
-        self.rdb().kill();
+    async fn kill_all(&self) {
+        self.worker_executor_cluster().kill_all().await;
+        self.worker_service().kill().await;
+        self.component_compilation_service().kill().await;
+        self.component_service().kill().await;
+        self.shard_manager().kill().await;
+        self.rdb().kill().await;
         self.redis_monitor().kill();
-        self.redis().kill();
+        self.redis().kill().await;
     }
 }
 

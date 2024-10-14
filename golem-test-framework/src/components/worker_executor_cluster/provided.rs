@@ -40,15 +40,15 @@ impl WorkerExecutorCluster for ProvidedWorkerExecutorCluster {
         1
     }
 
-    fn kill_all(&self) {
-        self.worker_executor.kill()
+    async fn kill_all(&self) {
+        self.worker_executor.kill().await
     }
 
     async fn restart_all(&self) {
         self.worker_executor.restart().await
     }
 
-    fn stop(&self, _index: usize) {}
+    async fn stop(&self, _index: usize) {}
 
     async fn start(&self, _index: usize) {}
 
@@ -56,11 +56,11 @@ impl WorkerExecutorCluster for ProvidedWorkerExecutorCluster {
         vec![self.worker_executor.clone()]
     }
 
-    fn stopped_indices(&self) -> Vec<usize> {
+    async fn stopped_indices(&self) -> Vec<usize> {
         vec![]
     }
 
-    fn started_indices(&self) -> Vec<usize> {
+    async fn started_indices(&self) -> Vec<usize> {
         vec![0]
     }
 }

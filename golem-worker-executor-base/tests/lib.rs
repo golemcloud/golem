@@ -16,6 +16,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
+use async_trait::async_trait;
 use test_r::{tag_suite, test_dep};
 use tracing::Level;
 
@@ -93,6 +94,7 @@ pub struct WorkerExecutorPerTestDependencies {
     component_directory: PathBuf,
 }
 
+#[async_trait]
 impl TestDependencies for WorkerExecutorPerTestDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         panic!("Not supported")
@@ -200,6 +202,7 @@ impl WorkerExecutorTestDependencies {
     }
 }
 
+#[async_trait]
 impl TestDependencies for WorkerExecutorTestDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         panic!("Not supported")

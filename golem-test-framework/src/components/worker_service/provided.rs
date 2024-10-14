@@ -78,11 +78,5 @@ impl WorkerService for ProvidedWorkerService {
         self.custom_request_port
     }
 
-    fn kill(&self) {}
-}
-
-impl Drop for ProvidedWorkerService {
-    fn drop(&mut self) {
-        self.kill();
-    }
+    async fn kill(&self) {}
 }

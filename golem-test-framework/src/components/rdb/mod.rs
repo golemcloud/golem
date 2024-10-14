@@ -16,6 +16,7 @@ use clap::Args;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use async_trait::async_trait;
 use tracing::{debug, error, info};
 
 pub mod docker_postgres;
@@ -23,9 +24,10 @@ pub mod k8s_postgres;
 pub mod provided_postgres;
 pub mod sqlite;
 
+#[async_trait]
 pub trait Rdb {
     fn info(&self) -> DbInfo;
-    fn kill(&self);
+    async fn kill(&self);
 }
 
 #[derive(Debug)]

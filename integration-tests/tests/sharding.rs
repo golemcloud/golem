@@ -319,26 +319,30 @@ mod tests {
             workers: &[WorkerId],
         ) -> Result<(), worker::v1::worker_error::Error>;
         async fn start_all_worker_executors(&self);
-        fn stop_random_worker_executor(&self);
+        async fn stop_random_worker_executor(&self);
         async fn start_random_worker_executor(&self);
         async fn start_random_worker_executors(&self, n: usize);
-        fn stop_random_worker_executors(&self, n: usize);
-        fn stop_all_worker_executors(&self);
-        fn blocking_start_shard_manager(&self);
-        async fn start_shard_manager(&self, number_of_shards: usize);
-        fn stop_shard_manager(&self);
+        async fn stop_random_worker_executors(&self, n: usize);
+        async fn stop_all_worker_executors(&self);
+        async fn start_shard_manager(&self, number_of_shards: Option<usize>);
+        async fn stop_shard_manager(&self);
         async fn restart_shard_manager(&self);
         fn flush_redis_db(&self);
+    }
+
+    fn randomize<T>(slice: &mut [T]) {
+        let mut rng = thread_rng();
+        slice.shuffle(&mut rng);
     }
 
     #[async_trait]
     impl DepsOps for EnvBasedTestDependencies {
         async fn reset(&self, number_of_shards: usize) {
             info!("Reset started");
-            self.stop_all_worker_executors();
-            self.stop_shard_manager();
+            self.stop_all_worker_executors().await;
+            self.stop_shard_manager().await;
             self.flush_redis_db();
-            self.start_shard_manager(number_of_shards).await;
+            self.start_shard_manager(Some(number_of_shards)).await;
             self.start_all_worker_executors().await;
             info!("Reset done");
         }
@@ -409,7 +413,7 @@ mod tests {
         }
 
         async fn start_all_worker_executors(&self) {
-            let stopped = self.worker_executor_cluster().stopped_indices();
+            let stopped = self.worker_executor_cluster().stopped_indices().await;
             let mut tasks = JoinSet::new();
             for idx in stopped {
                 let self_clone = self.clone();
@@ -422,8 +426,8 @@ mod tests {
             }
         }
 
-        fn stop_random_worker_executor(&self) {
-            self.stop_random_worker_executors(1);
+        async fn stop_random_worker_executor(&self) {
+            self.stop_random_worker_executors(1).await;
         }
 
         async fn start_random_worker_executor(&self) {
@@ -431,7 +435,7 @@ mod tests {
         }
 
         async fn start_random_worker_executors(&self, n: usize) {
-            let mut stopped = self.worker_executor_cluster().stopped_indices();
+            let mut stopped = self.worker_executor_cluster().stopped_indices().await;
             if !stopped.is_empty() {
                 {
                     let mut rng = thread_rng();
@@ -456,41 +460,36 @@ mod tests {
             }
         }
 
-        fn stop_random_worker_executors(&self, n: usize) {
-            let mut started = self.worker_executor_cluster().started_indices();
+        async fn stop_random_worker_executors(&self, n: usize) {
+            let mut started = self.worker_executor_cluster().started_indices().await;
             if !started.is_empty() {
-                let mut rng = thread_rng();
-                started.shuffle(&mut rng);
+                randomize(&mut started);
 
                 let to_stop = &started[0..n];
 
                 for idx in to_stop {
-                    self.worker_executor_cluster().stop(*idx);
+                    self.worker_executor_cluster().stop(*idx).await;
                 }
             }
         }
 
-        fn stop_all_worker_executors(&self) {
-            let started = self.worker_executor_cluster().started_indices();
+        async fn stop_all_worker_executors(&self) {
+            let started = self.worker_executor_cluster().started_indices().await;
             for idx in started {
-                self.worker_executor_cluster().stop(idx);
+                self.worker_executor_cluster().stop(idx).await;
             }
         }
 
-        fn blocking_start_shard_manager(&self) {
-            self.shard_manager().blocking_restart(None);
+        async fn start_shard_manager(&self, number_of_shards: Option<usize>) {
+            self.shard_manager().restart(number_of_shards).await;
         }
 
-        async fn start_shard_manager(&self, number_of_shards: usize) {
-            self.shard_manager().restart(Some(number_of_shards)).await;
-        }
-
-        fn stop_shard_manager(&self) {
-            self.shard_manager().kill();
+        async fn stop_shard_manager(&self) {
+            self.shard_manager().kill().await;
         }
 
         async fn restart_shard_manager(&self) {
-            self.shard_manager().kill();
+            self.shard_manager().kill().await;
             self.shard_manager().restart(None).await;
         }
 
@@ -644,16 +643,16 @@ mod tests {
                     deps.start_random_worker_executors(n).await;
                 }
                 EnvCommand::StopWorkerExecutors(n) => {
-                    deps.stop_random_worker_executors(n);
+                    deps.stop_random_worker_executors(n).await;
                 }
                 EnvCommand::StopAllWorkerExecutor => {
-                    deps.stop_all_worker_executors();
+                    deps.stop_all_worker_executors().await;
                 }
                 EnvCommand::StartShardManager => {
-                    deps.blocking_start_shard_manager();
+                    deps.start_shard_manager(None).await;
                 }
                 EnvCommand::StopShardManager => {
-                    deps.stop_shard_manager();
+                    deps.stop_shard_manager().await;
                 }
                 EnvCommand::RestartShardManager => {
                     deps.restart_shard_manager().await;
@@ -711,7 +710,7 @@ mod tests {
                     deps.start_random_worker_executor().await;
                 }
                 Command::StopShard => {
-                    deps.stop_random_worker_executor();
+                    deps.stop_random_worker_executor().await;
                 }
                 Command::RestartShardManager => {
                     deps.restart_shard_manager().await;

@@ -14,9 +14,9 @@
 
 use golem_common::config::DbConfig;
 use golem_component_service::api::make_open_api_service;
-use golem_component_service::config::ComponentServiceConfig;
+use golem_component_service::config::{make_config_loader, ComponentServiceConfig};
 use golem_component_service::service::Services;
-use golem_component_service::{api, grpcapi};
+use golem_component_service::{api, grpcapi, metrics};
 use golem_service_base::db;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
@@ -24,8 +24,10 @@ use poem::EndpointExt;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::Arc;
+use opentelemetry::global;
 use tokio::select;
 use tracing::{error, info};
+use golem_common::tracing::init_tracing_with_default_env_filter;
 
 fn main() -> Result<(), std::io::Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::time::{Duration, Instant};
-
+use async_trait::async_trait;
 use redis::RedisResult;
 use tracing::info;
 
@@ -22,6 +22,7 @@ pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
+#[async_trait]
 pub trait Redis {
     fn assert_valid(&self);
 
@@ -37,7 +38,7 @@ pub trait Redis {
 
     fn prefix(&self) -> &str;
 
-    fn kill(&self);
+    async fn kill(&self);
 
     fn try_get_connection(&self, db: u16) -> RedisResult<redis::Connection> {
         let client = redis::Client::open(format!(

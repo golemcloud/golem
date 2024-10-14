@@ -184,6 +184,7 @@ impl Clone for TestWorkerExecutor {
     }
 }
 
+#[async_trait]
 impl TestDependencies for TestWorkerExecutor {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         self.deps.rdb()

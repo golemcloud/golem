@@ -15,7 +15,7 @@
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
+use async_trait::async_trait;
 use crate::components;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
@@ -162,23 +162,6 @@ impl Debug for EnvBasedTestDependencies {
 }
 
 impl EnvBasedTestDependencies {
-    pub fn blocking_new_from_config(config: EnvBasedTestDependenciesConfig) -> Self {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async move { Self::new(config).await })
-    }
-
-    pub fn blocking_new_from_worker_executor_cluster_size(
-        worker_executor_cluster_size: usize,
-    ) -> Self {
-        Self::blocking_new_from_config(EnvBasedTestDependenciesConfig {
-            worker_executor_cluster_size,
-            ..EnvBasedTestDependenciesConfig::new()
-        })
-    }
-
     async fn make_rdb(
         config: Arc<EnvBasedTestDependenciesConfig>,
     ) -> Arc<dyn Rdb + Send + Sync + 'static> {
@@ -272,7 +255,7 @@ impl EnvBasedTestDependencies {
                 DockerComponentService::new(
                     Some((
                         DockerComponentCompilationService::NAME,
-                        DockerComponentCompilationService::GRPC_PORT,
+                        DockerComponentCompilationService::GRPC_PORT.as_u16(),
                     )),
                     rdb,
                     config.default_verbosity(),
@@ -483,6 +466,7 @@ impl EnvBasedTestDependencies {
     }
 }
 
+#[async_trait]
 impl TestDependencies for EnvBasedTestDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         self.rdb.clone()

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-
+use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use golem_common::tracing::{init_tracing, TracingConfig};
 use itertools::Itertools;
@@ -346,7 +346,7 @@ impl CliTestDependencies {
             let component_compilation_service = if !compilation_service_disabled {
                 Some((
                     DockerComponentCompilationService::NAME,
-                    DockerComponentCompilationService::GRPC_PORT,
+                    DockerComponentCompilationService::GRPC_PORT.as_u16(),
                 ))
             } else {
                 None
@@ -1047,6 +1047,7 @@ impl CliTestDependencies {
     }
 }
 
+#[async_trait]
 impl TestDependencies for CliTestDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         self.rdb.clone()

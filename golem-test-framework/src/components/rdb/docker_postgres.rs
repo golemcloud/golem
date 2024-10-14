@@ -12,17 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use std::time::Duration;
-
-use testcontainers::{Container, RunnableImage};
+use async_trait::async_trait;
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, ImageExt};
+use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::components::docker::KillContainer;
 use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
-use crate::components::{DOCKER, NETWORK};
+use crate::components::NETWORK;
 
 pub struct DockerPostgresRdb {
-    container: Container<'static, testcontainers_modules::postgres::Postgres>,
+    container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::postgres::Postgres>>>>,
     keep_container: bool,
     host: String,
     port: u16,
@@ -37,8 +40,7 @@ impl DockerPostgresRdb {
         info!("Starting Postgres container");
 
         let name = "golem_postgres";
-        let image = RunnableImage::from(testcontainers_modules::postgres::Postgres::default())
-            .with_tag("12");
+        let image = testcontainers_modules::postgres::Postgres::default().with_tag("12");
 
         let image = if local_env {
             image
@@ -46,21 +48,30 @@ impl DockerPostgresRdb {
             image.with_container_name(name).with_network(NETWORK)
         };
 
-        let container = DOCKER.run(image);
+        let container = image
+            .start()
+            .await
+            .expect("Failed to start Postgres container");
 
         let host = if local_env { "localhost" } else { name };
         let port = if local_env {
-            container.get_host_port_ipv4(Self::DEFAULT_PORT)
+            container
+                .get_host_port_ipv4(Self::DEFAULT_PORT)
+                .await
+                .expect("Failed to get host port")
         } else {
             Self::DEFAULT_PORT
         };
 
-        let host_port = container.get_host_port_ipv4(Self::DEFAULT_PORT);
+        let host_port = container
+            .get_host_port_ipv4(Self::DEFAULT_PORT)
+            .await
+            .expect("Failed to get host port");
 
         wait_for_startup("localhost", host_port, Duration::from_secs(30)).await;
 
         Self {
-            container,
+            container: Arc::new(Mutex::new(Some(container))),
             keep_container,
             host: host.to_string(),
             port,
@@ -69,6 +80,7 @@ impl DockerPostgresRdb {
     }
 }
 
+#[async_trait]
 impl Rdb for DockerPostgresRdb {
     fn info(&self) -> DbInfo {
         DbInfo::Postgres(PostgresInfo {
@@ -81,14 +93,8 @@ impl Rdb for DockerPostgresRdb {
         })
     }
 
-    fn kill(&self) {
+    async fn kill(&self) {
         info!("Stopping Postgres container");
-        self.container.kill(self.keep_container);
-    }
-}
-
-impl Drop for DockerPostgresRdb {
-    fn drop(&mut self) {
-        self.kill();
+        self.container.kill(self.keep_container).await;
     }
 }

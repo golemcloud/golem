@@ -62,7 +62,7 @@ impl WorkerExecutor for ProvidedWorkerExecutor {
         self.grpc_port
     }
 
-    fn kill(&self) {
+    async fn kill(&self) {
         panic!("Cannot kill provided worker executor");
     }
 
