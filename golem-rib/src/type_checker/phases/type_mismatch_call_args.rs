@@ -52,12 +52,14 @@ mod internal {
         for (actual_arg, expected_arg_type) in args.iter_mut().zip(filtered_expected_types) {
             let actual_arg_type = &actual_arg.inferred_type();
 
-            if let Some(missing_field) = missing_fields_in_record(actual_arg, &expected_arg_type) {
+            let missing_fields = missing_fields_in_record(actual_arg, &expected_arg_type).iter().map(|path| path.to_string()).collect::<Vec<String>>().join(", ");
+
+            if  !missing_fields.is_empty() {
                 return Err(format!(
                     "Invalid argument in `{}`: `{}`. Missing field `{}`",
                     call_type,
                     actual_arg.to_string(),
-                    missing_field
+                    missing_fields
                 ));
             }
 
@@ -77,7 +79,9 @@ mod internal {
     fn missing_fields_in_record(
         expr: &Expr,
         expected: &AnalysedType
-    ) -> Option<Path> {
+    ) -> Vec<Path> {
+        let mut missing_paths = Vec::new();
+
         match expected {
             AnalysedType::Record(record) => {
                 for (field_name, analysed_type) in record.fields.iter().map(|name_typ| (name_typ.name.clone(), name_typ.typ.clone())) {
@@ -87,15 +91,20 @@ mod internal {
                             if let Some(value) = value {
                                 match analysed_type {
                                     AnalysedType::Record(record) => {
-                                        if let Some(mut nested_path) = missing_fields_in_record(value, &AnalysedType::Record(record.clone())) {
-                                            nested_path.push_front( PathElem::Field(field_name.clone()));
-                                            return Some(nested_path);
+                                        // Recursively check nested records
+                                        let nested_paths = missing_fields_in_record(value, &AnalysedType::Record(record.clone()));
+                                        for mut nested_path in nested_paths {
+                                            // Prepend the current field to the path for each missing nested field
+                                            nested_path.push_front(PathElem::Field(field_name.clone()));
+                                            missing_paths.push(nested_path);
                                         }
                                     }
                                     _ => {}
                                 }
                             } else {
-                                return Some(Path::from_elem(PathElem::Field(field_name.clone())));
+                                // Accumulate missing field path
+                                dbg!(field_name.clone());
+                                missing_paths.push(Path::from_elem(PathElem::Field(field_name.clone())));
                             }
                         }
                         _ => {}
@@ -105,7 +114,8 @@ mod internal {
             _ => {}
         }
 
-        None
+        missing_paths
     }
+
 
 }

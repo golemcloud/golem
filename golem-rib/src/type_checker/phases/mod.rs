@@ -41,11 +41,11 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_nested_record_arg();
+            let metadata = internal::get_metadata_record();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: \"foo\", c: [1, 2, 3], d: {da: 4}}`. Type mismatch for `b`. Expected `u64";
+            let expected = "Invalid argument in `foo`: `{a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: \"foo\", c: [1, 2, 3], d: {da: 4}}`. Type mismatch for `b`. Expected `u64`";
             assert_eq!(result, expected);
         }
 
@@ -58,7 +58,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_nested_record_arg();
+            let metadata = internal::get_metadata_record();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -75,7 +75,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_nested_record_arg();
+            let metadata = internal::get_metadata_record();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -92,7 +92,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_nested_record_arg();
+            let metadata = internal::get_metadata_record();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -109,7 +109,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_nested_record_arg();
+            let metadata = internal::get_metadata_record();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -126,7 +126,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_nested_record_arg();
+            let metadata = internal::get_metadata_record();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -143,7 +143,7 @@ mod type_check_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_nested_record_arg();
+            let metadata = internal::get_metadata_record();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
@@ -185,7 +185,7 @@ mod type_check_tests {
             vec![analysed_export]
         }
 
-        pub(crate) fn get_metadata_nested_record_arg() -> Vec<AnalysedExport> {
+        pub(crate) fn get_metadata_record() -> Vec<AnalysedExport> {
             let analysed_export = AnalysedExport::Function(AnalysedFunction {
                 name: "foo".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
