@@ -26,7 +26,7 @@ mod internal {
     use crate::call_type::CallType;
     use crate::type_checker::{validate, Path, PathElem};
 
-    use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+    use golem_wasm_ast::analysis::AnalysedType;
 
     pub(crate) fn check_type_mismatch_in_call_args(
         call_type: &mut CallType,

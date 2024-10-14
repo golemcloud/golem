@@ -322,36 +322,70 @@ impl TryFrom<AnalysedType> for TypeName {
             AnalysedType::Chr(_) => Ok(TypeName::Chr),
             AnalysedType::Str(_) => Ok(TypeName::Str),
             AnalysedType::List(inner_type) => Ok(TypeName::List(Box::new(
-                inner_type.inner.deref().clone().into(),
+                inner_type.inner.deref().clone().try_into()?,
             ))),
             AnalysedType::Tuple(inner_type) => Ok(TypeName::Tuple(
-                inner_type.items.into_iter().map(|t| t.into()).collect(),
+                inner_type
+                    .items
+                    .into_iter()
+                    .map(|x| x.try_into())
+                    .collect::<Result<_, _>>()?,
             )),
             AnalysedType::Option(type_option) => Ok(TypeName::Option(Box::new(
-                type_option.inner.deref().clone().into(),
+                type_option.inner.deref().clone().try_into()?,
             ))),
-            AnalysedType::Result(TypeResult { ok, err }) => Ok(TypeName::Result {
-                ok: ok.map(|x| Box::new(x.deref().clone().into())),
-                error: err.map(|x| Box::new(x.deref().clone().into())),
-            }),
-            AnalysedType::Record(fields) => Ok(TypeName::Record(
-                fields
-                    .fields
-                    .into_iter()
-                    .map(|key_value| (key_value.name, Box::new(key_value.typ.into())))
-                    .collect(),
-            )),
+            AnalysedType::Result(TypeResult { ok, err }) => match (ok, err) {
+                (Some(ok), Some(err)) => Ok(TypeName::Result {
+                    ok: Some(Box::new(ok.deref().clone().try_into()?)),
+                    error: Some(Box::new(err.deref().clone().try_into()?)),
+                }),
+                (Some(ok), None) => Ok(TypeName::Result {
+                    ok: Some(Box::new(ok.deref().clone().try_into()?)),
+                    error: None,
+                }),
+                (None, Some(err)) => Ok(TypeName::Result {
+                    ok: None,
+                    error: Some(Box::new(err.deref().clone().try_into()?)),
+                }),
+                (None, None) => Ok(TypeName::Result {
+                    ok: None,
+                    error: None,
+                }),
+            },
+            AnalysedType::Record(type_record) => {
+                let mut fields = vec![];
+                for field in type_record.fields {
+                    let name = field.name.clone();
+                    let typ = field.typ.clone();
+                    let type_name = typ.try_into()?;
+                    fields.push((name, Box::new(type_name)));
+                }
+
+                Ok(TypeName::Record(fields))
+            }
             AnalysedType::Flags(flags) => Ok(TypeName::Flags(flags.names)),
             AnalysedType::Enum(cases) => Ok(TypeName::Enum(cases.cases)),
-            AnalysedType::Variant(cases) => Ok(TypeName::Variant {
-                cases: cases
-                    .cases
-                    .into_iter()
-                    .map(|case_typ| (case_typ.name, case_typ.typ.map(|x| Box::new(x.into()))))
-                    .collect(),
-            }),
+            AnalysedType::Variant(cases) => {
+                let mut variant_cases = vec![];
+                for case in cases.cases {
+                    let name = case.name.clone();
+                    let typ = case.typ.clone();
+                    match typ {
+                        Some(typ) => {
+                            let type_name = typ.try_into()?;
+                            variant_cases.push((name, Some(Box::new(type_name))));
+                        }
+                        None => {
+                            variant_cases.push((name, None));
+                        }
+                    }
+                }
+                Ok(TypeName::Variant {
+                    cases: variant_cases,
+                })
+            }
             AnalysedType::Handle(type_handle) => {
-                Err(format!("Handle type not supported: {:?}", type_handle)).unwrap()
+                Err(format!("Handle type not supported: {:?}", type_handle))
             }
         }
     }

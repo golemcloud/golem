@@ -138,7 +138,7 @@ pub fn check_type_mismatch(
         AnalysedType::Enum(_) => {
             let actual_enum = EnumType::refine(actual_type);
 
-            if let Some(_) = actual_enum {
+            if actual_enum.is_some() {
                 Ok(())
             } else {
                 Err(TypeMismatchError::new(
@@ -148,7 +148,7 @@ pub fn check_type_mismatch(
             }
         }
         AnalysedType::Flags(_) => {
-            FlagsType::refine(&actual_type)
+            FlagsType::refine(actual_type)
                 .map(|_| ())
                 .ok_or(TypeMismatchError::new(
                     expected_type.clone(),
@@ -169,7 +169,7 @@ pub fn check_type_mismatch(
                         actual_type.clone(),
                     ))?;
 
-                    check_type_mismatch(expected_type, &actual_type)
+                    check_type_mismatch(expected_type, actual_type)
                         .map_err(|e| e.at_index(index))?;
                 }
 

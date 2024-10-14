@@ -133,7 +133,7 @@ impl Display for TypeMismatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         let field_path = self.field_path.to_string();
 
-        let expected_type = TypeName::from(self.expected_type.clone())
+        let expected_type = TypeName::try_from(self.expected_type.clone())
             .map(|x| x.to_string())
             .unwrap_or_default();
 

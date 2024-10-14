@@ -8,31 +8,27 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
     queue.push_back(expr);
 
     while let Some(expr) = queue.pop_back() {
-        let error = match expr {
-            Expr::Let(_, _, _, _) => Ok(()),
+        match expr {
+            Expr::Let(_, _, expr, _) => {
+                queue.push_back(expr);
+            }
             Expr::SelectField(expr, field, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr).at_field(field.clone()))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr).at_field(field.clone()));
                 }
             }
             Expr::SelectIndex(expr, index, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr).at_index(*index))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr).at_index(*index));
                 }
             }
             Expr::Sequence(exprs, inferred_type) => {
                 internal::unresolved_types_in_list(exprs)?;
 
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Record(field, inferred_type) => {
@@ -44,62 +40,46 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 )?;
 
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Tuple(exprs, inferred_type) => {
                 internal::unresolved_types_in_tuple(exprs)?;
 
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Literal(_, inferred_type) => {
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Number(_, _, inferred_type) => {
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Flags(_, inferred_type) => {
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Identifier(_, inferred_type) => {
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Boolean(_, inferred_type) => {
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Concat(exprs, inferred_type) => {
                 internal::unresolved_type_for_concat(exprs)?;
 
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Multiple(exprs, inferred_type) => {
@@ -109,49 +89,41 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
 
                 if inferred_type.un_resolved() {
                     if let Some(expr) = exprs.last() {
-                        Err(UnResolvedTypesError::new(expr))
+                        return Err(UnResolvedTypesError::new(expr));
                     } else {
-                        Err(UnResolvedTypesError::new(expr))
+                        return Err(UnResolvedTypesError::new(expr));
                     }
-                } else {
-                    Ok(())
                 }
             }
             Expr::Not(expr, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::GreaterThan(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)
+                internal::unresolved_type_for_binary_op(left, right)?;
             }
-            Expr::And(left, right, _) => internal::unresolved_type_for_binary_op(left, right),
-            Expr::Or(left, right, _) => internal::unresolved_type_for_binary_op(left, right),
+            Expr::And(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
+            Expr::Or(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
             Expr::GreaterThanOrEqualTo(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)
+                internal::unresolved_type_for_binary_op(left, right)?;
             }
             Expr::LessThanOrEqualTo(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)
+                internal::unresolved_type_for_binary_op(left, right)?;
             }
-            Expr::EqualTo(left, right, _) => internal::unresolved_type_for_binary_op(left, right),
-            Expr::LessThan(left, right, _) => internal::unresolved_type_for_binary_op(left, right),
+            Expr::EqualTo(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
+            Expr::LessThan(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
             Expr::Cond(cond, left, right, inferred_type) => {
                 internal::unresolved_type_for_if_condition(cond, left, right)?;
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::PatternMatch(cond, arms, inferred_type) => {
                 internal::unresolved_type_for_pattern_match(cond, arms)?;
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
             Expr::Option(option, inferred_type) => {
@@ -160,19 +132,15 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 }
 
                 if inferred_type.un_resolved() {
-                    Err(UnResolvedTypesError::new(expr))
-                } else {
-                    Ok(())
+                    return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Result(ok_err, _) => internal::unresolved_type_for_result(ok_err),
-            Expr::Call(_, _, _) => Ok(()),
-            Expr::Unwrap(_, _) => Ok(()),
-            Expr::Throw(_, _) => Ok(()),
-            Expr::GetTag(_, _) => Ok(()),
-        };
-
-        error
+            Expr::Result(ok_err, _) => internal::unresolved_type_for_result(ok_err)?,
+            Expr::Call(_, _, _) => {}
+            Expr::Unwrap(_, _) => {}
+            Expr::Throw(_, _) => {}
+            Expr::GetTag(_, _) => {}
+        }
     }
 
     Ok(())
