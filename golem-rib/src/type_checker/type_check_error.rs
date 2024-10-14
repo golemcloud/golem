@@ -185,7 +185,12 @@ impl Display for Path {
                     }
                 }
                 PathElem::Index(index) => {
-                    write!(f, "[{}]", index)?;
+                    if is_first {
+                        write!(f, "index: {}", index)?;
+                        is_first = false;
+                    } else {
+                        write!(f, "[{}]", index)?;
+                    }
                 }
             }
         }

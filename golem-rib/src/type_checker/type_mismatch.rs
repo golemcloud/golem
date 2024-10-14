@@ -90,34 +90,28 @@ pub fn check_type_mismatch(
             let actual_type_ok = OkType::refine(actual_type).map(|t| t.inner_type().clone());
             let actual_type_err = ErrType::refine(actual_type).map(|t| t.inner_type().clone());
 
-            match (actual_type_ok, type_result.ok.clone()) {
-                (Some(actual_type_ok), Some(expected_type_ok)) => {
-                    check_type_mismatch(&expected_type_ok, &actual_type_ok)?;
-                }
+            let mut is_ok = false;
 
-                (None, Some(_)) => {
-                    return Err(TypeMismatchError::new(
-                        expected_type.clone(),
-                        actual_type.clone(),
-                    ));
-                }
-
-                _ => {}
+            if let (Some(actual_type_ok), Some(expected_type_ok)) =
+                (actual_type_ok, type_result.ok.clone())
+            {
+                is_ok = true;
+                check_type_mismatch(&expected_type_ok, &actual_type_ok)?;
             }
 
-            match (actual_type_err, type_result.err.clone()) {
-                (Some(actual_type_err), Some(expected_type_err)) => {
-                    check_type_mismatch(&expected_type_err, &actual_type_err)?;
-                }
-
-                (None, Some(_)) => {
+            if let (Some(actual_type_err), Some(expected_type_err)) =
+                (actual_type_err, type_result.err.clone())
+            {
+                check_type_mismatch(&expected_type_err, &actual_type_err)?;
+            } else {
+                // Implies it the actual type is neither type of `ok`, nor the typ of `err`.
+                // The complexity of the code is due to the fact that the actual type can be either `ok` or `err` or neither.
+                if !is_ok {
                     return Err(TypeMismatchError::new(
                         expected_type.clone(),
                         actual_type.clone(),
                     ));
                 }
-
-                _ => {}
             }
 
             Ok(())
