@@ -12,6 +12,7 @@ description = "Golem Worker Service including API Gateway functionalities"
 name = "golem-worker-service"
 path = "src/main.rs"
 harness = false
+test = false
 
 [lib]
 harness = false

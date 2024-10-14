@@ -7,6 +7,7 @@ edition = "2021"
 name = "golem-component-service"
 path = "src/server.rs"
 harness = false
+test = false
 
 [lib]
 harness = false

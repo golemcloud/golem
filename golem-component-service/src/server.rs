@@ -27,10 +27,6 @@ use std::sync::Arc;
 use tokio::select;
 use tracing::{error, info};
 
-#[cfg(test)]
-test_r::enable!();
-
-#[cfg(not(test))]
 fn main() -> Result<(), std::io::Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         tokio::runtime::Builder::new_multi_thread()

@@ -11,6 +11,7 @@ harness = false
 harness = false
 name = "golem-component-compilation-service"
 path = "src/server.rs"
+test = false
 
 [dependencies]
 golem-api-grpc = { version = "0.0.0", path = "../golem-api-grpc" }

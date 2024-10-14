@@ -11,6 +11,7 @@ harness = false
 name = "golem-shard-manager"
 path = "src/server.rs"
 harness = false
+test = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
