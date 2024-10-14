@@ -449,16 +449,14 @@ fn get_result(
         Some(value) => {
             let value = validate(ok_type, value)?;
 
-            let result_value = value.map(|value| {
-                ResultValue::OkValue(Box::new(protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(value.deref().clone()),
-                }))
-            });
+            let result_value = ResultValue::OkValue(Box::new(protobuf::TypeAnnotatedValue {
+                type_annotated_value: value.map(|value| value.deref().clone()),
+            }));
 
             let typed_result = protobuf::TypedResult {
                 ok: ok_type.clone().map(|x| x.deref().into()),
                 error: err_type.clone().map(|x| x.deref().into()),
-                result_value,
+                result_value: Some(result_value),
             };
 
             Ok(TypeAnnotatedValue::Result(Box::new(typed_result)))
@@ -467,16 +465,15 @@ fn get_result(
             Some(value) => {
                 let value = validate(err_type, value)?;
 
-                let result_value = value.map(|value| {
+                let result_value =
                     ResultValue::ErrorValue(Box::new(protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(value.deref().clone()),
-                    }))
-                });
+                        type_annotated_value: value.map(|value| value.deref().clone()),
+                    }));
 
                 let typed_result = protobuf::TypedResult {
                     ok: ok_type.clone().map(|x| x.deref().into()),
                     error: err_type.clone().map(|x| x.deref().into()),
-                    result_value,
+                    result_value: Some(result_value),
                 };
 
                 Ok(TypeAnnotatedValue::Result(Box::new(typed_result)))
