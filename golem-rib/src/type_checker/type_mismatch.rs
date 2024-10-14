@@ -22,6 +22,7 @@ pub fn check_type_mismatch(
                             actual_record_type.inner_type_by_name(&expected_field_name);
 
                         check_type_mismatch(&expected_field_type, &actual_field_type).map_err(|e| {
+                            dbg!(e.clone());
                             e.at_field(expected_field_name.clone())
                         })?;
                     }

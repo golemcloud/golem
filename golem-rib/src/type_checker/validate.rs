@@ -12,10 +12,7 @@ pub fn validate(
         Err(TypeCheckError::unresolved_types_error(msg))
     } else {
         check_type_mismatch(expected_type, actual_type).map_err(|e| {
-            TypeCheckError::type_mismatch_error(
-                expected_type.clone(),
-                actual_type.clone(),
-            )
+            TypeCheckError::type_mismatch_error(e)
         })
     }
 }

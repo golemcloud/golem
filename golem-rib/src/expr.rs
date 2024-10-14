@@ -519,7 +519,7 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
-        type_checker::check_call_args(self, function_type_registry)
+        type_checker::check_type_mismatch_in_call_args(self, function_type_registry)
     }
 
     pub fn unify_types(&mut self) -> Result<(), Vec<String>> {

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::fmt::Display;
 use golem_wasm_ast::analysis::AnalysedType;
 use crate::{InferredType, TypeName};
@@ -15,24 +16,72 @@ impl TypeCheckError {
     }
 
     pub fn type_mismatch_error(
-        expected_type: AnalysedType,
-        actual_type: InferredType,
+       type_mismatch_error: TypeMismatchError
     ) -> Self {
-        TypeCheckError::TypeMismatchError(TypeMismatchError::new(
-            expected_type,
-            actual_type,
-        ))
+        TypeCheckError::TypeMismatchError(type_mismatch_error)
+    }
+}
+
+impl Display for TypeCheckError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeCheckError::UnResolvedTypesError(e) => write!(f, "{}", e),
+            TypeCheckError::TypeMismatchError(e) => write!(f, "{}", e),
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct UnResolvedTypesError(pub String);
 
+impl Display for UnResolvedTypesError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unresolved type: {}", self.0)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TypeMismatchError {
-    pub field_path: Vec<PathElem>,
+    pub field_path: Path,
     pub expected_type: AnalysedType,
     pub actual_type: InferredType,
+}
+
+#[derive(Clone, Debug)]
+pub struct Path(Vec<PathElem>);
+
+impl Path {
+    fn push_front(&mut self, elem: PathElem) {
+        self.0.insert(0, elem);
+    }
+}
+
+impl Default for Path {
+    fn default() -> Self {
+        Path(Vec::new())
+    }
+}
+
+impl Display for Path {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut is_first = true;
+        for elem in &self.0 {
+            match elem {
+                PathElem::Field(name) => {
+                    if is_first {
+                        write!(f, "{}", name)?;
+                        is_first = false;
+                    } else {
+                        write!(f, ".{}", name)?;
+                    }
+                }
+                PathElem::Index(index) => {
+                    write!(f, "[{}]", index)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -43,14 +92,14 @@ enum PathElem {
 
 impl TypeMismatchError {
     pub fn at_field(&self, field_name: String) -> TypeMismatchError {
-        let mut new_messages: TypeMismatchError = self.clone();
-        new_messages.field_path.insert(0, PathElem::Field(field_name));
-        new_messages
+        let mut mismatch_error: TypeMismatchError = self.clone();
+        mismatch_error.field_path.push_front(PathElem::Field(field_name));
+        mismatch_error
     }
 
     pub fn at_index(&self, index: usize) -> TypeMismatchError {
         let mut new_messages: TypeMismatchError = self.clone();
-        new_messages.field_path.insert(0, PathElem::Index(index));
+        new_messages.field_path.push_front(PathElem::Index(index));
         new_messages
     }
 
@@ -59,7 +108,7 @@ impl TypeMismatchError {
         actual_type: InferredType,
     ) -> Self {
         TypeMismatchError {
-            field_path: vec![],
+            field_path: Path::default(),
             expected_type,
             actual_type,
         }
@@ -67,22 +116,27 @@ impl TypeMismatchError {
 }
 
 impl Display for TypeMismatchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for detail in self.details.iter() {
-            write!(f, "{}\n", detail)?;
-        }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+
+        let field_path = self.field_path.to_string();
 
         let expected_type = TypeName::try_from(self.expected_type.clone())
             .map(|x| x.to_string())
             .unwrap_or_default();
 
+        let base_error = if field_path.is_empty() {
+            format!("Type mismatch. Expected `{}`", &expected_type)
+        } else {
+            format!("Type mismatch for `{}`. Expected `{}`", &field_path, &expected_type)
+        };
+
         if self.actual_type.is_one_of() || self.actual_type.is_all_of() {
-            write!(f, "Expected type `{}` ", &expected_type)
+            write!(f, "{}", &base_error)
         } else {
             write!(
                 f,
-                "Expected type `{}`, got `{:?}`",
-                &expected_type, self.actual_type
+                "{}. Found `{:?}`",
+                 &base_error, self.actual_type
             )
         }
     }
