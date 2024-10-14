@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 
 // When checking exhaustive pattern match, there is no need to ensure
 // if the pattern aligns with conditions because those checks are done
-// as part of previous phases of compilation, and all we need to worry about
+// as part of previous phases of compilation. All we need to worry about
 // is whether the arms in the pattern match is exhaustive.
 pub fn check_exhaustive_pattern_match(expr: &mut Expr) -> Result<(), String> {
     let mut queue = VecDeque::new();
@@ -31,9 +31,9 @@ mod internal {
     use std::collections::HashMap;
 
     pub fn check_exhaustive_pattern_match(arms: &[ArmPattern]) -> Result<(), String> {
-        let optional = check_exhaustivity(arms, &["some"], &["none"]).value()?;
+        let optional = check_exhaustive(arms, &["some"], &["none"]).value()?;
 
-        let result = check_exhaustivity(arms, &["ok"], &["err"]).value()?;
+        let result = check_exhaustive(arms, &["ok"], &["err"]).value()?;
 
         let constructor_patterns = optional.or(result);
 
@@ -76,7 +76,7 @@ mod internal {
         }
     }
 
-    pub fn check_exhaustivity(
+    pub fn check_exhaustive(
         patterns: &[ArmPattern],
         no_arg_constructors: &[&str],
         with_arg_constructors: &[&str],
