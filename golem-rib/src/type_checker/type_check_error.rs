@@ -2,9 +2,34 @@ use std::fmt::Display;
 use golem_wasm_ast::analysis::AnalysedType;
 use crate::{InferredType, TypeName};
 
+
 #[derive(Clone, Debug)]
-pub struct TypeCheckError {
-    pub details: Vec<String>,
+pub enum TypeCheckError {
+    UnResolvedTypesError(UnResolvedTypesError),
+    TypeMismatchError(TypeMismatchError),
+}
+
+impl TypeCheckError {
+    pub fn unresolved_types_error(msg: String) -> Self {
+        TypeCheckError::UnResolvedTypesError(UnResolvedTypesError(msg))
+    }
+
+    pub fn type_mismatch_error(
+        expected_type: AnalysedType,
+        actual_type: InferredType,
+    ) -> Self {
+        TypeCheckError::TypeMismatchError(TypeMismatchError::new(
+            expected_type,
+            actual_type,
+        ))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UnResolvedTypesError(pub String);
+
+#[derive(Clone, Debug)]
+pub struct TypeMismatchError {
     pub field_path: Vec<PathElem>,
     pub expected_type: AnalysedType,
     pub actual_type: InferredType,
@@ -16,32 +41,24 @@ enum PathElem {
     Index(usize),
 }
 
-impl TypeCheckError {
-    pub fn with_message(&self, message: String) -> TypeCheckError {
-        let mut new_messages: TypeCheckError = self.clone();
-        new_messages.details.push(message);
+impl TypeMismatchError {
+    pub fn at_field(&self, field_name: String) -> TypeMismatchError {
+        let mut new_messages: TypeMismatchError = self.clone();
+        new_messages.field_path.insert(0, PathElem::Field(field_name));
         new_messages
     }
 
-    pub fn with_field_name(&self, field_name: String) -> TypeCheckError {
-        let mut new_messages: TypeCheckError = self.clone();
-        new_messages.field_path.push(PathElem::Field(field_name));
-        new_messages
-    }
-
-    pub fn with_index(&self, index: usize) -> TypeCheckError {
-        let mut new_messages: TypeCheckError = self.clone();
-        new_messages.field_path.push(PathElem::Index(index));
+    pub fn at_index(&self, index: usize) -> TypeMismatchError {
+        let mut new_messages: TypeMismatchError = self.clone();
+        new_messages.field_path.insert(0, PathElem::Index(index));
         new_messages
     }
 
     pub fn new(
         expected_type: AnalysedType,
         actual_type: InferredType,
-        message: Option<String>,
     ) -> Self {
-        TypeCheckError {
-            details: message.map(|x| vec![x]).unwrap_or_default(),
+        TypeMismatchError {
             field_path: vec![],
             expected_type,
             actual_type,
@@ -49,7 +66,7 @@ impl TypeCheckError {
     }
 }
 
-impl Display for TypeCheckError {
+impl Display for TypeMismatchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for detail in self.details.iter() {
             write!(f, "{}\n", detail)?;
