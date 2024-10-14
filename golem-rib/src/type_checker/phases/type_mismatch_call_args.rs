@@ -24,8 +24,8 @@ pub fn check_type_mismatch_in_call_args(
 mod internal {
     use super::*;
     use crate::call_type::CallType;
-    use crate::type_checker::{check_type_mismatch, validate, Path, PathElem};
-    use crate::InferredType;
+    use crate::type_checker::{validate, Path, PathElem};
+
     use golem_wasm_ast::analysis::AnalysedType;
 
     pub(crate) fn check_type_mismatch_in_call_args(

@@ -3,7 +3,6 @@ mod type_mismatch_call_args;
 
 #[cfg(test)]
 mod type_check_tests {
-    use crate::{compile, Expr};
 
     mod unresolved_types_error {
         use crate::type_checker::phases::type_check_tests::internal;

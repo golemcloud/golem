@@ -1,6 +1,5 @@
 use crate::type_checker::UnResolvedTypesError;
 use crate::Expr;
-use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::VecDeque;
 use std::ops::Deref;
 
@@ -27,7 +26,15 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     Ok(())
                 }
             }
-            Expr::Sequence(exprs, inferred_type) => internal::unresolved_types_in_list(&exprs),
+            Expr::Sequence(exprs, inferred_type) => {
+                internal::unresolved_types_in_list(&exprs)?;
+
+                if inferred_type.un_resolved() {
+                    Err(UnResolvedTypesError::new(expr))
+                } else {
+                    Ok(())
+                }
+            }
             Expr::Record(field, inferred_type) => {
                 internal::unresolved_types_in_record(
                     &field
@@ -100,7 +107,15 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     queue.push_back(expr);
                 }
 
-                Ok(())
+                if inferred_type.un_resolved() {
+                    if let Some(expr) = exprs.last() {
+                        Err(UnResolvedTypesError::new(expr))
+                    } else {
+                        Err(UnResolvedTypesError::new(expr))
+                    }
+                } else {
+                    Ok(())
+                }
             }
             Expr::Not(expr, inferred_type) => {
                 queue.push_back(expr);
@@ -336,23 +351,6 @@ mod internal {
                 return Err(UnResolvedTypesError::new(field_expr).at_index(index));
             } else {
                 check_unresolved_types(field_expr)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn unresolved_types_in_variant(
-        expr_fields: &Vec<(String, Option<Expr>)>,
-    ) -> Result<(), UnResolvedTypesError> {
-        for (_, field_expr) in expr_fields {
-            if let Some(field_expr) = field_expr {
-                let field_type = field_expr.inferred_type();
-                if field_type.is_unknown() || field_type.is_one_of() {
-                    return Err(UnResolvedTypesError::new(field_expr));
-                } else {
-                    check_unresolved_types(field_expr)?;
-                }
             }
         }
 

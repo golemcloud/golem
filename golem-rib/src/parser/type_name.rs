@@ -513,7 +513,7 @@ mod type_name_tests {
         let result1 = parse_type_name().easy_parse(input);
         let result2 = parse_type_name().easy_parse(written.as_str());
         assert_eq!(result1, Ok((expected.clone(), "")));
-        assert_eq!(result1, Ok((expected, "")));
+        assert_eq!(result2, Ok((expected, "")));
     }
 
     #[test]

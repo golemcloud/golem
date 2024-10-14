@@ -1,6 +1,4 @@
-use crate::type_checker::{
-    check_type_mismatch, check_unresolved_types, TypeCheckError, TypeMismatchError,
-};
+use crate::type_checker::{check_type_mismatch, check_unresolved_types, TypeCheckError};
 use crate::{Expr, InferredType, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
 
