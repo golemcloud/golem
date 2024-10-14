@@ -116,8 +116,6 @@ mod internal {
                                     _ => {}
                                 }
                             } else {
-                                // Accumulate missing field path
-                                dbg!(field_name.clone());
                                 missing_paths
                                     .push(Path::from_elem(PathElem::Field(field_name.clone())));
                             }
