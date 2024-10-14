@@ -1,8 +1,8 @@
+use crate::type_checker::UnResolvedTypesError;
+use crate::Expr;
+use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::VecDeque;
 use std::ops::Deref;
-use golem_wasm_ast::analysis::AnalysedType;
-use crate::Expr;
-use crate::type_checker::UnResolvedTypesError;
 
 pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
     let mut queue = VecDeque::new();
@@ -10,9 +10,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
 
     while let Some(expr) = queue.pop_back() {
         let error = match expr {
-            Expr::Let(_, _, _, _) => {
-                Ok(())
-            }
+            Expr::Let(_, _, _, _) => Ok(()),
             Expr::SelectField(expr, field, inferred_type) => {
                 queue.push_back(expr);
                 if inferred_type.un_resolved() {
@@ -29,9 +27,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     Ok(())
                 }
             }
-            Expr::Sequence(exprs, inferred_type) => {
-                internal::unresolved_types_in_list(&exprs)
-            }
+            Expr::Sequence(exprs, inferred_type) => internal::unresolved_types_in_list(&exprs),
             Expr::Record(field, inferred_type) => {
                 internal::unresolved_types_in_record(
                     &field
@@ -58,7 +54,9 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Literal(_, inferred_type) => {
                 if inferred_type.un_resolved() {
                     Err(UnResolvedTypesError::new(expr))
-                } else { Ok(()) }
+                } else {
+                    Ok(())
+                }
             }
             Expr::Number(_, _, inferred_type) => {
                 if inferred_type.un_resolved() {
@@ -115,28 +113,20 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::GreaterThan(left, right, _) => {
                 internal::unresolved_type_for_binary_op(left, right)
             }
-            Expr::And(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)
-            }
-            Expr::Or(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)
-            }
+            Expr::And(left, right, _) => internal::unresolved_type_for_binary_op(left, right),
+            Expr::Or(left, right, _) => internal::unresolved_type_for_binary_op(left, right),
             Expr::GreaterThanOrEqualTo(left, right, _) => {
                 internal::unresolved_type_for_binary_op(left, right)
             }
             Expr::LessThanOrEqualTo(left, right, _) => {
                 internal::unresolved_type_for_binary_op(left, right)
             }
-            Expr::EqualTo(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)
-            }
-            Expr::LessThan(left, right, _) => {
-                internal::unresolved_type_for_binary_op(left, right)
-            }
+            Expr::EqualTo(left, right, _) => internal::unresolved_type_for_binary_op(left, right),
+            Expr::LessThan(left, right, _) => internal::unresolved_type_for_binary_op(left, right),
             Expr::Cond(cond, left, right, inferred_type) => {
                 internal::unresolved_type_for_if_condition(cond, left, right)?;
                 if inferred_type.un_resolved() {
-                     Err(UnResolvedTypesError::new(expr))
+                    Err(UnResolvedTypesError::new(expr))
                 } else {
                     Ok(())
                 }
@@ -144,8 +134,10 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::PatternMatch(cond, arms, inferred_type) => {
                 internal::unresolved_type_for_pattern_match(cond, arms)?;
                 if inferred_type.un_resolved() {
-                     Err(UnResolvedTypesError::new(expr))
-                } else { Ok(()) }
+                    Err(UnResolvedTypesError::new(expr))
+                } else {
+                    Ok(())
+                }
             }
             Expr::Option(option, inferred_type) => {
                 if let Some(expr) = option {
@@ -158,21 +150,11 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     Ok(())
                 }
             }
-            Expr::Result(ok_err, _) => {
-                internal::unresolved_type_for_result(ok_err)
-            }
-            Expr::Call(_, _, _) => {
-                Ok(())
-            }
-            Expr::Unwrap(_, _) => {
-                Ok(())
-            }
-            Expr::Throw(_, _) => {
-                Ok(())
-            }
-            Expr::GetTag(_, _) => {
-                Ok(())
-            }
+            Expr::Result(ok_err, _) => internal::unresolved_type_for_result(ok_err),
+            Expr::Call(_, _, _) => Ok(()),
+            Expr::Unwrap(_, _) => Ok(()),
+            Expr::Throw(_, _) => Ok(()),
+            Expr::GetTag(_, _) => Ok(()),
         };
 
         if let Err(error) = error {
@@ -184,11 +166,13 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
 }
 
 mod internal {
-    use std::ops::Deref;
     use crate::type_checker::{check_unresolved_types, UnResolvedTypesError};
     use crate::{Expr, MatchArm};
+    use std::ops::Deref;
 
-    pub fn unresolved_types_in_record(expr_fields: &Vec<(String, Expr)>) -> Result<(), UnResolvedTypesError> {
+    pub fn unresolved_types_in_record(
+        expr_fields: &Vec<(String, Expr)>,
+    ) -> Result<(), UnResolvedTypesError> {
         for (field_name, field_expr) in expr_fields {
             let field_type = field_expr.inferred_type();
             if field_type.is_unknown() || field_type.is_one_of() {
@@ -227,7 +211,10 @@ mod internal {
         Ok(())
     }
 
-    pub fn unresolved_type_for_binary_op(left: &Expr, right: &Expr) -> Result<(), UnResolvedTypesError> {
+    pub fn unresolved_type_for_binary_op(
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<(), UnResolvedTypesError> {
         let left_type = left.inferred_type();
         let right_type = right.inferred_type();
         if left_type.un_resolved() {
@@ -316,7 +303,9 @@ mod internal {
         Ok(())
     }
 
-    pub fn unresolved_type_for_result(ok_err: &Result<Box<Expr>, Box<Expr>>) -> Result<(), UnResolvedTypesError> {
+    pub fn unresolved_type_for_result(
+        ok_err: &Result<Box<Expr>, Box<Expr>>,
+    ) -> Result<(), UnResolvedTypesError> {
         let ok_expr = ok_err.clone().ok();
         let error_expr = ok_err.clone().err();
         if let Some(ok_expr) = ok_expr {

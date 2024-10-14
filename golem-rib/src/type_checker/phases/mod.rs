@@ -6,31 +6,30 @@ mod type_check_tests {
     use crate::{compile, Expr};
 
     mod unresolved_types_error {
-        use crate::{compile, Expr};
         use crate::type_checker::phases::type_check_tests::internal;
+        use crate::{compile, Expr};
 
         #[test]
         fn test_invalid_key_in_record_in_function_call() {
             let expr = r#"
-          let result = foo({c: 3, b: 2});
+          let result = foo({x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, "foo")}, b: "foo", c: [1, 2, 3], d: {da: 4}});
           result
         "#;
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let metadata = internal::get_metadata_record_arg();
+            let metadata = internal::get_metadata_record();
 
             let result = compile(&expr, &metadata).unwrap_err();
 
-            let expected = "Invalid argument in `foo`: `{c: 3, b: 2}`. Cannot infer the type of `3` in `c`. Expected type: record<a: s32, b: u64>";
+            let expected = "Invalid argument in `foo`: `{x: 3, a: {aa: 1, ab: 2, ac: [1, 2], ad: {ada: 1}, ae: (1, \"foo\")}, b: \"foo\", c: [1, 2, 3], d: {da: 4}}`. Cannot infer the type of `3` in `x`. Expected type: record<a: record<aa: s32, ab: s32, ac: list<s32>, ad: record<ada: s32>, ae: tuple<s32, str>>, b: u64, c: list<s32>, d: record<da: s32>>";
             assert_eq!(result, expected);
         }
-
     }
 
     mod type_mismatch_errors {
-        use crate::{compile, Expr};
         use crate::type_checker::phases::type_check_tests::internal;
+        use crate::{compile, Expr};
 
         #[test]
         fn test_type_mismatch_in_record_in_function_call1() {
@@ -158,32 +157,6 @@ mod type_check_tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             NameTypePair,
         };
-        use golem_wasm_ast::component::ComponentExternName::Name;
-
-        pub(crate) fn get_metadata_record_arg() -> Vec<AnalysedExport> {
-            let analysed_export = AnalysedExport::Function(AnalysedFunction {
-                name: "foo".to_string(),
-                parameters: vec![AnalysedFunctionParameter {
-                    name: "arg1".to_string(),
-                    typ: record(vec![
-                        NameTypePair {
-                            name: "a".to_string(),
-                            typ: s32(),
-                        },
-                        NameTypePair {
-                            name: "b".to_string(),
-                            typ: u64(),
-                        },
-                    ]),
-                }],
-                results: vec![AnalysedFunctionResult {
-                    name: None,
-                    typ: str(),
-                }],
-            });
-
-            vec![analysed_export]
-        }
 
         pub(crate) fn get_metadata_record() -> Vec<AnalysedExport> {
             let analysed_export = AnalysedExport::Function(AnalysedFunction {
@@ -208,12 +181,10 @@ mod type_check_tests {
                                 },
                                 NameTypePair {
                                     name: "ad".to_string(),
-                                    typ: record(vec![
-                                        NameTypePair {
-                                            name: "ada".to_string(),
-                                            typ: s32(),
-                                        },
-                                    ]),
+                                    typ: record(vec![NameTypePair {
+                                        name: "ada".to_string(),
+                                        typ: s32(),
+                                    }]),
                                 },
                                 NameTypePair {
                                     name: "ae".to_string(),
@@ -221,7 +192,6 @@ mod type_check_tests {
                                 },
                             ]),
                         },
-
                         NameTypePair {
                             name: "b".to_string(),
                             typ: u64(),
@@ -232,12 +202,10 @@ mod type_check_tests {
                         },
                         NameTypePair {
                             name: "d".to_string(),
-                            typ: record(vec![
-                                NameTypePair {
-                                    name: "da".to_string(),
-                                    typ: s32(),
-                                },
-                            ]),
+                            typ: record(vec![NameTypePair {
+                                name: "da".to_string(),
+                                typ: s32(),
+                            }]),
                         },
                     ]),
                 }],

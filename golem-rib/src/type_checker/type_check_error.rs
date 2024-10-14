@@ -1,8 +1,7 @@
+use crate::{Expr, InferredType, TypeName};
+use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
 use std::fmt::Display;
-use golem_wasm_ast::analysis::AnalysedType;
-use crate::{Expr, InferredType, TypeName};
-
 
 #[derive(Clone, Debug)]
 pub enum TypeCheckError {
@@ -15,9 +14,7 @@ impl TypeCheckError {
         TypeCheckError::UnResolvedTypesError(unresolved_type_error)
     }
 
-    pub fn type_mismatch_error(
-       type_mismatch_error: TypeMismatchError
-    ) -> Self {
+    pub fn type_mismatch_error(type_mismatch_error: TypeMismatchError) -> Self {
         TypeCheckError::TypeMismatchError(type_mismatch_error)
     }
 }
@@ -49,19 +46,25 @@ impl UnResolvedTypesError {
 
     pub fn add_message(&self, message: &str) -> Self {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.additional_messages.push(message.to_string());
+        unresolved_error
+            .additional_messages
+            .push(message.to_string());
         unresolved_error
     }
 
     pub fn at_field(&self, field_name: String) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.unresolved_path.push_back(PathElem::Field(field_name));
+        unresolved_error
+            .unresolved_path
+            .push_back(PathElem::Field(field_name));
         unresolved_error
     }
 
     pub fn at_index(&self, index: usize) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.unresolved_path.push_back(PathElem::Index(index));
+        unresolved_error
+            .unresolved_path
+            .push_back(PathElem::Index(index));
         unresolved_error
     }
 }
@@ -72,13 +75,17 @@ impl Display for UnResolvedTypesError {
         if field_path.is_empty() {
             write!(f, "Cannot infer the type of: `{}`", self.expr)?;
         } else {
-            write!(f, "Cannot infer the type of `{}` in `{}`", self.expr, field_path )?;
+            write!(
+                f,
+                "Cannot infer the type of `{}` in `{}`",
+                self.expr, field_path
+            )?;
         }
 
         if !self.additional_messages.is_empty() {
             for message in &self.additional_messages {
                 write!(f, ". {}", message)?;
-            };
+            }
         }
 
         Ok(())
@@ -144,7 +151,6 @@ pub enum PathElem {
 }
 
 impl TypeMismatchError {
-
     pub fn updated_expected_type(&self, expected_type: &AnalysedType) -> TypeMismatchError {
         let mut mismatch_error: TypeMismatchError = self.clone();
         mismatch_error.expected_type = expected_type.clone();
@@ -153,7 +159,9 @@ impl TypeMismatchError {
 
     pub fn at_field(&self, field_name: String) -> TypeMismatchError {
         let mut mismatch_error: TypeMismatchError = self.clone();
-        mismatch_error.field_path.push_front(PathElem::Field(field_name));
+        mismatch_error
+            .field_path
+            .push_front(PathElem::Field(field_name));
         mismatch_error
     }
 
@@ -163,10 +171,7 @@ impl TypeMismatchError {
         new_messages
     }
 
-    pub fn new(
-        expected_type: AnalysedType,
-        actual_type: InferredType,
-    ) -> Self {
+    pub fn new(expected_type: AnalysedType, actual_type: InferredType) -> Self {
         TypeMismatchError {
             field_path: Path::default(),
             expected_type,
@@ -177,7 +182,6 @@ impl TypeMismatchError {
 
 impl Display for TypeMismatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-
         let field_path = self.field_path.to_string();
 
         let expected_type = TypeName::try_from(self.expected_type.clone())
@@ -187,17 +191,16 @@ impl Display for TypeMismatchError {
         let base_error = if field_path.is_empty() {
             format!("Type mismatch. Expected `{}`", &expected_type)
         } else {
-            format!("Type mismatch for `{}`. Expected `{}`", &field_path, &expected_type)
+            format!(
+                "Type mismatch for `{}`. Expected `{}`",
+                &field_path, &expected_type
+            )
         };
 
         if self.actual_type.is_one_of() || self.actual_type.is_all_of() {
             write!(f, "{}", &base_error)
         } else {
-            write!(
-                f,
-                "{}. Found `{:?}`",
-                 &base_error, self.actual_type
-            )
+            write!(f, "{}. Found `{:?}`", &base_error, self.actual_type)
         }
     }
 }
