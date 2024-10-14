@@ -185,7 +185,7 @@ dependencies = [
 [tasks.unit-tests]
 description = "Runs unit tests only"
 command = "cargo"
-args = ["test", "--lib", "--bins", "--all-features"]
+args = ["test", "--lib", "--all-features"]
 
 [tasks.worker-executor-tests]
 description = "Runs worker executor tests only"
