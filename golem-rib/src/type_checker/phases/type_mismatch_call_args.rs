@@ -78,21 +78,19 @@ mod internal {
         expr: &Expr,
         expected: &AnalysedType
     ) -> Option<Path> {
-
-        dbg!(expr.to_string());
-        dbg!(expected);
         match expected {
             AnalysedType::Record(record) => {
                 for (field_name, analysed_type) in record.fields.iter().map(|name_typ| (name_typ.name.clone(), name_typ.typ.clone())) {
-                    dbg!(field_name.clone());
                     match expr {
                         Expr::Record(record, _) => {
                             let value = record.iter().find(|(name, _)| *name == field_name).map(|(_, value)| value);
-                            dbg!(value.clone());
                             if let Some(value) = value {
                                 match analysed_type {
                                     AnalysedType::Record(record) => {
-                                        missing_fields_in_record(value, &AnalysedType::Record(record.clone()));
+                                        if let Some(mut nested_path) = missing_fields_in_record(value, &AnalysedType::Record(record.clone())) {
+                                            nested_path.push_front( PathElem::Field(field_name.clone()));
+                                            return Some(nested_path);
+                                        }
                                     }
                                     _ => {}
                                 }
@@ -109,4 +107,5 @@ mod internal {
 
         None
     }
+
 }

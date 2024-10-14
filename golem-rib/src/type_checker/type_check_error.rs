@@ -100,11 +100,11 @@ impl Path {
         Path(vec![elem])
     }
 
-    fn push_front(&mut self, elem: PathElem) {
+    pub fn push_front(&mut self, elem: PathElem) {
         self.0.insert(0, elem);
     }
 
-    fn push_back(&mut self, elem: PathElem) {
+    pub fn push_back(&mut self, elem: PathElem) {
         self.0.push(elem);
     }
 }
