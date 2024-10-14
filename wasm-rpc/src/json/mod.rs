@@ -100,7 +100,7 @@ mod tests {
 
     use crate::protobuf::type_annotated_value::TypeAnnotatedValue;
     use crate::{TypeAnnotatedValueConstructors, Value};
-    use golem_wasm_ast::analysis::analysed_type::{str, tuple, u32};
+    use golem_wasm_ast::analysis::analysed_type::{result_err, result_ok, str, tuple, u32};
 
     use serde_json::json;
 
@@ -123,6 +123,68 @@ mod tests {
                     ]
                 },
                 "value": [10, "hello"]
+            })
+        );
+
+        let tav2: TypeAnnotatedValue = serde_json::from_value(json).unwrap();
+        assert_eq!(tav, tav2);
+    }
+
+    #[test]
+    fn example2() {
+        let tav = TypeAnnotatedValue::create(
+            &Value::Tuple(vec![Value::Result(Ok(None))]),
+            &tuple(vec![result_err(str())]),
+        )
+        .unwrap();
+        let json = serde_json::to_value(&tav).unwrap();
+        assert_eq!(
+            json,
+            json!({
+                "typ": {
+                    "type": "Tuple",
+                    "items": [
+                        {
+                            "type": "Result",
+                            "err": {
+                                "type": "Str"
+                            },
+                            "ok": null
+                        },
+                    ]
+                },
+                "value": [{ "ok": null }]
+            })
+        );
+
+        let tav2: TypeAnnotatedValue = serde_json::from_value(json).unwrap();
+        assert_eq!(tav, tav2);
+    }
+
+    #[test]
+    fn example3() {
+        let tav = TypeAnnotatedValue::create(
+            &Value::Tuple(vec![Value::Result(Err(None))]),
+            &tuple(vec![result_ok(str())]),
+        )
+        .unwrap();
+        let json = serde_json::to_value(&tav).unwrap();
+        assert_eq!(
+            json,
+            json!({
+                "typ": {
+                    "type": "Tuple",
+                    "items": [
+                        {
+                            "type": "Result",
+                            "ok": {
+                                "type": "Str"
+                            },
+                            "err": null
+                        },
+                    ]
+                },
+                "value": [{ "err": null }]
             })
         );
 
