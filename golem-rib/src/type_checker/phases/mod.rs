@@ -1,5 +1,15 @@
-pub(crate) use type_mismatch_call_args::*;
+use crate::{Expr, FunctionTypeRegistry};
+use crate::type_checker::{check_type_mismatch, TypeCheckError, unresolved_types};
+
 mod type_mismatch_call_args;
+mod exhaustive_pattern_match;
+
+pub fn type_check(expr: &mut Expr, metadata: &FunctionTypeRegistry) -> Result<(), String> {
+    unresolved_types::check_unresolved_types(expr).map_err(|err| err.to_string())?;
+    type_mismatch_call_args::check_type_mismatch_in_call_args(expr, metadata)?;
+    exhaustive_pattern_match::check_exhaustive_pattern_match(expr)?;
+    Ok(())
+}
 
 #[cfg(test)]
 mod type_check_tests {

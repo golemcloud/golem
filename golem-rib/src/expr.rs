@@ -519,7 +519,7 @@ impl Expr {
         &mut self,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
-        type_checker::check_type_mismatch_in_call_args(self, function_type_registry)
+        type_checker::type_check(self, function_type_registry)
     }
 
     pub fn unify_types(&mut self) -> Result<(), Vec<String>> {
@@ -729,6 +729,15 @@ pub enum ArmPattern {
 }
 
 impl ArmPattern {
+
+    pub fn is_wildcard(&self) -> bool {
+        matches!(self, ArmPattern::WildCard)
+    }
+
+    pub fn is_literal_identifier(&self) -> bool {
+        matches!(self, ArmPattern::Literal(expr) if expr.is_identifier())
+    }
+
     pub fn constructor(name: &str, patterns: Vec<ArmPattern>) -> ArmPattern {
         ArmPattern::Constructor(name.to_string(), patterns)
     }
