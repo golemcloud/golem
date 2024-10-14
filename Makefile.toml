@@ -110,7 +110,7 @@ command = "cargo"
 args = [
     "build",
     "-p",
-    "golem-shard-manager",                                               # NOTE: Not all projects are cross-compilable because of an openssl dependency
+    "golem-shard-manager", # NOTE: Not all projects are cross-compilable because of an openssl dependency
     "-p",
     "golem-worker-executor",
     "-p",
@@ -271,7 +271,6 @@ cargo test --package integration-tests --test integration -- --nocapture --repor
 description = "Runs sharding integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
-command = "cargo"
 script = '''
 cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
 '''
