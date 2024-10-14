@@ -15,7 +15,7 @@
 use test_r::{inherit_test_dep, test};
 
 use crate::common::{start, TestContext};
-use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::{worker_error_message, TestDslUnsafe};
 use golem_wasm_rpc::Value;

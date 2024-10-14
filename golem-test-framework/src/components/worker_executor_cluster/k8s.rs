@@ -22,7 +22,7 @@ use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 use std::collections::HashSet;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
@@ -151,12 +151,7 @@ impl WorkerExecutorCluster for K8sWorkerExecutorCluster {
     }
 
     async fn stopped_indices(&self) -> Vec<usize> {
-        self.stopped_indices
-            .lock()
-            .await
-            .iter()
-            .copied()
-            .collect()
+        self.stopped_indices.lock().await.iter().copied().collect()
     }
 
     async fn started_indices(&self) -> Vec<usize> {

@@ -19,7 +19,6 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
-use std::sync::Arc;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

@@ -20,7 +20,6 @@ use assert2::{check, let_assert};
 use chrono::Datelike;
 use golem_test_framework::dsl::{events_to_lines, TestDslUnsafe};
 use golem_wasm_rpc::Value;
-use std::sync::Arc;
 use std::time::Duration;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);

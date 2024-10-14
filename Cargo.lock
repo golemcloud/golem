@@ -3493,7 +3493,6 @@ dependencies = [
  "iso8601",
  "itertools 0.13.0",
  "lenient_bool",
- "libtest-mimic",
  "log",
  "native-tls",
  "openapiv3",
@@ -3510,6 +3509,7 @@ dependencies = [
  "strip-ansi-escapes",
  "strum",
  "strum_macros",
+ "test-r",
  "testcontainers",
  "testcontainers-modules",
  "textwrap 0.16.1",
@@ -5372,18 +5372,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libtest-mimic"
-version = "0.7.0"
-source = "git+https://github.com/senia-psm/libtest-mimic.git?branch=async_and_context_tests#904a9367691b7eb47dc25a876391ee4a958c0319"
-dependencies = [
- "clap 4.5.20",
- "escape8259",
- "termcolor",
- "threadpool",
- "tokio",
-]
-
-[[package]]
 name = "linked-hash-map"
 version = "0.5.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5916,16 +5904,6 @@ checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
  "libm",
-]
-
-[[package]]
-name = "num_cpus"
-version = "1.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4161fcb6d602d4d2081af7c3a45852d875a03dd337a6bfdd6e06407b61342a43"
-dependencies = [
- "hermit-abi 0.3.9",
- "libc",
 ]
 
 [[package]]
@@ -8878,15 +8856,6 @@ checksum = "8b9ef9bad013ada3808854ceac7b46812a6465ba368859a37e2100283d2d719c"
 dependencies = [
  "cfg-if",
  "once_cell",
-]
-
-[[package]]
-name = "threadpool"
-version = "1.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d050e60b33d41c19108b32cea32164033a9013fe3b46cbd4457559bfbf77afaa"
-dependencies = [
- "num_cpus",
 ]
 
 [[package]]

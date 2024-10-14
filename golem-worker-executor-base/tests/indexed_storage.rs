@@ -23,11 +23,11 @@ use golem_worker_executor_base::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor_base::storage::sqlite_types::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 
+use crate::WorkerExecutorTestDependencies;
 use golem_worker_executor_base::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use std::sync::Arc;
 use test_r::inherit_test_dep;
 use uuid::Uuid;
-use crate::WorkerExecutorTestDependencies;
 
 pub(crate) trait GetIndexedStorage {
     fn get_indexed_storage(&self) -> &dyn IndexedStorage;
@@ -43,7 +43,9 @@ impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
     }
 }
 
-pub(crate) async fn in_memory_storage(_deps: &WorkerExecutorTestDependencies) -> impl GetIndexedStorage {
+pub(crate) async fn in_memory_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> impl GetIndexedStorage {
     let kvs = InMemoryIndexedStorage::new();
     InMemoryIndexedStorageWrapper { kvs }
 }
@@ -97,7 +99,9 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
     }
 }
 
-pub(crate) async fn sqlite_storage(_deps: &WorkerExecutorTestDependencies) -> impl GetIndexedStorage {
+pub(crate) async fn sqlite_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> impl GetIndexedStorage {
     let sqlx_pool_sqlite = SqlitePoolOptions::new()
         .max_connections(10)
         .connect("sqlite::memory:")
@@ -126,11 +130,10 @@ macro_rules! test_indexed_storage {
         mod $name {
             use test_r::{inherit_test_dep, test};
 
-            use crate::WorkerExecutorTestDependencies;
             use crate::indexed_storage::GetIndexedStorage;
+            use crate::WorkerExecutorTestDependencies;
             use assert2::check;
             use golem_worker_executor_base::storage::indexed::ScanCursor;
-            use std::sync::Arc;
 
             inherit_test_dep!(WorkerExecutorTestDependencies);
 

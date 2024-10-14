@@ -248,8 +248,7 @@ impl TryInto<crate::api_definition::http::Route> for Route {
     type Error = String;
 
     fn try_into(self) -> Result<crate::api_definition::http::Route, Self::Error> {
-        let path = AllPathPatterns::parse(self.path.as_str())
-            .map_err(|e| e.to_string())?;
+        let path = AllPathPatterns::parse(self.path.as_str()).map_err(|e| e.to_string())?;
         let binding = self.binding.try_into()?;
 
         Ok(crate::api_definition::http::Route {
@@ -469,8 +468,7 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::api_definition::http::Rou
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
-        let path = AllPathPatterns::parse(value.path.as_str())
-            .map_err(|e| e.to_string())?;
+        let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
         let binding = value.binding.ok_or("binding is missing")?.try_into()?;
 
         let method: MethodPattern = value.method.try_into()?;

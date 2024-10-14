@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
 use clap::Args;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use async_trait::async_trait;
 use tracing::{debug, error, info};
 
 pub mod docker_postgres;

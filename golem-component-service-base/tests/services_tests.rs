@@ -17,20 +17,26 @@ use golem_component_service_base::service::component_compilation::{
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;
-use testcontainers::clients::Cli;
-use testcontainers::{Container, RunnableImage};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 test_r::enable!();
 
-fn start_docker_postgres<'d>(docker: &'d Cli) -> (DbPostgresConfig, Container<'d, Postgres>) {
-    let image = RunnableImage::from(Postgres::default()).with_tag("14.7-alpine");
-    let container: Container<'d, Postgres> = docker.run(image);
+async fn start_docker_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
+    let container = Postgres::default()
+        .with_tag("14.7-alpine")
+        .start()
+        .await
+        .expect("Failed to start postgres container");
 
     let config = DbPostgresConfig {
         host: "localhost".to_string(),
-        port: container.get_host_port_ipv4(5432),
+        port: container
+            .get_host_port_ipv4(5432)
+            .await
+            .expect("Failed to get port"),
         database: "postgres".to_string(),
         username: "postgres".to_string(),
         password: "postgres".to_string(),
@@ -61,8 +67,7 @@ impl Drop for SqliteDb {
 
 #[test]
 pub async fn test_with_postgres_db() {
-    let cli = Cli::default();
-    let (db_config, _container) = start_docker_postgres(&cli);
+    let (db_config, _container) = start_docker_postgres().await;
 
     db::postgres_migrate(
         &db_config,

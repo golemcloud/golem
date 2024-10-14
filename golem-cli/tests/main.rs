@@ -13,15 +13,14 @@
 // limitations under the License.
 
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
 
-use libtest_mimic::{Arguments, Conclusion, Failed};
-use strum_macros::EnumIter;
-use tracing::info;
-
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
+use strum_macros::EnumIter;
+use test_r::test_dep;
+use tracing::info;
 
 pub mod cli;
 
@@ -50,39 +49,34 @@ impl Display for RefKind {
     }
 }
 
-fn run(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Conclusion {
-    let args = Arguments::from_args();
+#[derive(Debug)]
+pub struct Tracing;
 
-    let mut tests = Vec::new();
-
-    tests.append(&mut component::all(deps.clone()));
-    tests.append(&mut worker::all(deps.clone()));
-    tests.append(&mut text::all(deps.clone()));
-    tests.append(&mut api_definition::all(deps.clone()));
-    tests.append(&mut api_deployment::all(deps.clone()));
-    tests.append(&mut profile::all(deps.clone()));
-    tests.append(&mut get::all(deps));
-
-    libtest_mimic::run(&args, tests)
+impl Tracing {
+    pub fn init() -> Self {
+        init_tracing_with_default_debug_env_filter(&TracingConfig::test("cli-tests"));
+        Self
+    }
 }
 
-fn main() -> Result<(), Failed> {
-    env_logger::init();
+#[test_dep]
+pub fn tracing() -> Tracing {
+    Tracing::init()
+}
 
-    let deps: Arc<dyn TestDependencies + Send + Sync + 'static> = Arc::new(
-        EnvBasedTestDependencies::blocking_new_from_config(EnvBasedTestDependenciesConfig {
-            worker_executor_cluster_size: 3,
-            keep_docker_containers: true, // will be dropped by testcontainers (current version does not support double rm)
-            ..EnvBasedTestDependenciesConfig::new()
-        }),
-    );
+#[test_dep]
+async fn test_dependencies(_tracing: &Tracing) -> EnvBasedTestDependencies {
+    let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
+        worker_executor_cluster_size: 3,
+        keep_docker_containers: false,
+        ..EnvBasedTestDependenciesConfig::new()
+    })
+    .await;
+
     let cluster = deps.worker_executor_cluster(); // forcing startup by getting it
     info!("Using cluster with {:?} worker executors", cluster.size());
 
-    let res = run(deps.clone());
-
-    drop(cluster);
-    drop(deps);
-
-    res.exit()
+    deps
 }
+
+test_r::enable!();

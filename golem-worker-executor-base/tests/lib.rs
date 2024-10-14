@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
-use async_trait::async_trait;
 use test_r::{tag_suite, test_dep};
 use tracing::Level;
 
@@ -83,7 +83,6 @@ tag_suite!(guest_languages3, group7);
 
 tag_suite!(ts_rpc2, group8);
 
-
 #[derive(Clone)]
 pub struct WorkerExecutorPerTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,
@@ -145,6 +144,12 @@ pub struct WorkerExecutorTestDependencies {
 impl Debug for WorkerExecutorTestDependencies {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "WorkerExecutorTestDependencies")
+    }
+}
+
+impl Default for WorkerExecutorTestDependencies {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -162,7 +162,9 @@ impl Image for GolemComponentCompilationServiceImage {
         vec![WaitFor::message_on_stdout("server started")]
     }
 
-    fn env_vars(&self) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
+    fn env_vars(
+        &self,
+    ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
         self.env_vars.iter()
     }
 

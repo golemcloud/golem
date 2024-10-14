@@ -228,8 +228,7 @@ mod tests {
                         rx1_events_clone.lock().await.push(event);
                     }
                     Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(_n)) => {
-                    }
+                    Err(RecvError::Lagged(_n)) => {}
                 }
             }
         });
@@ -250,8 +249,7 @@ mod tests {
                         rx2_events_clone.lock().await.push(event);
                     }
                     Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(_n)) => {
-                    }
+                    Err(RecvError::Lagged(_n)) => {}
                 }
             }
         });
@@ -311,8 +309,7 @@ mod tests {
                         rx1_events_clone.lock().await.push(event);
                     }
                     Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(_n)) => {
-                    }
+                    Err(RecvError::Lagged(_n)) => {}
                 }
             }
         });
@@ -334,8 +331,7 @@ mod tests {
                         rx2_events_clone.lock().await.push(event);
                     }
                     Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(_n)) => {
-                    }
+                    Err(RecvError::Lagged(_n)) => {}
                 }
             }
         });

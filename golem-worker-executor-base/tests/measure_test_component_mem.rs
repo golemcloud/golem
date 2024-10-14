@@ -15,7 +15,6 @@ use rand::thread_rng;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 use std::path::Path;
-use std::sync::Arc;
 use sysinfo::{Pid, System};
 use tracing::{error, info};
 

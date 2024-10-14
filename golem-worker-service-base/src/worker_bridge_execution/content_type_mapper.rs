@@ -541,7 +541,7 @@ mod tests {
     #[cfg(test)]
     mod no_content_type_header {
         use test_r::test;
-        
+
         use super::*;
         use golem_wasm_ast::analysis::analysed_type::{u16, u8};
 

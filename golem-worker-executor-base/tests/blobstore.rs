@@ -19,7 +19,6 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
-use std::sync::Arc;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -32,7 +31,7 @@ async fn blobstore_exists_return_true_if_the_container_was_created(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = TestContext::new(&last_unique_id);
+    let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("blob-store-service").await;
@@ -73,7 +72,7 @@ async fn blobstore_exists_return_false_if_the_container_was_not_created(
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = TestContext::new(&last_unique_id);
+    let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("blob-store-service").await;

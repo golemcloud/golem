@@ -50,4 +50,3 @@ impl ComponentCompilationService for ProvidedComponentCompilationService {
 
     async fn kill(&self) {}
 }
-

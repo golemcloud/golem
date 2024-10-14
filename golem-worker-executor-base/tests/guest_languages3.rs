@@ -21,7 +21,6 @@ use chrono::Datelike;
 use golem_test_framework::dsl::{events_to_lines, log_event_to_string, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);

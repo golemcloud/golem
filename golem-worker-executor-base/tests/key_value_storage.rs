@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::WorkerExecutorTestDependencies;
 use golem_common::config::RedisConfig;
 use golem_common::model::AccountId;
 use golem_common::redis::RedisPool;
@@ -27,7 +28,6 @@ use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 use test_r::inherit_test_dep;
 use uuid::Uuid;
-use crate::WorkerExecutorTestDependencies;
 
 pub(crate) trait GetKeyValueStorage {
     fn get_key_value_storage(&self) -> &dyn KeyValueStorage;
@@ -43,7 +43,9 @@ impl GetKeyValueStorage for InMemoryKeyValueStorageWrapper {
     }
 }
 
-pub(crate) async fn in_memory_storage(_deps: &WorkerExecutorTestDependencies) -> impl GetKeyValueStorage {
+pub(crate) async fn in_memory_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> impl GetKeyValueStorage {
     let kvs = InMemoryKeyValueStorage::new();
     InMemoryKeyValueStorageWrapper { kvs }
 }
@@ -60,7 +62,9 @@ impl GetKeyValueStorage for RedisKeyValueStorageWrapper {
     }
 }
 
-pub(crate) async fn redis_storage(deps: &WorkerExecutorTestDependencies) -> impl GetKeyValueStorage {
+pub(crate) async fn redis_storage(
+    deps: &WorkerExecutorTestDependencies,
+) -> impl GetKeyValueStorage {
     let redis = deps.redis();
     let redis_monitor = deps.redis_monitor();
     redis.assert_valid();
@@ -97,7 +101,9 @@ impl GetKeyValueStorage for SqliteKeyValueStorageWrapper {
     }
 }
 
-pub(crate) async fn sqlite_storage(_deps: &WorkerExecutorTestDependencies) -> impl GetKeyValueStorage {
+pub(crate) async fn sqlite_storage(
+    _deps: &WorkerExecutorTestDependencies,
+) -> impl GetKeyValueStorage {
     let sqlx_pool_sqlite = SqlitePoolOptions::new()
         .max_connections(10)
         .connect("sqlite::memory:")
@@ -130,9 +136,8 @@ macro_rules! test_kv_storage {
         mod $name {
             use test_r::{inherit_test_dep, test};
 
-            use crate::WorkerExecutorTestDependencies;
             use crate::key_value_storage::GetKeyValueStorage;
-            use std::sync::Arc;
+            use crate::WorkerExecutorTestDependencies;
 
             inherit_test_dep!(WorkerExecutorTestDependencies);
 

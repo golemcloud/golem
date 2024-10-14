@@ -19,7 +19,7 @@ use crate::components::k8s::{
 use crate::components::redis::Redis;
 use crate::components::shard_manager::{wait_for_startup, ShardManager, ShardManagerEnvVars};
 use crate::components::GolemEnvVars;
-use async_dropper_simple::{AsyncDropper};
+use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;

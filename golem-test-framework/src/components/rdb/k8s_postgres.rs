@@ -17,7 +17,7 @@ use crate::components::k8s::{
     Routing,
 };
 use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
-use async_dropper_simple::{AsyncDropper};
+use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;

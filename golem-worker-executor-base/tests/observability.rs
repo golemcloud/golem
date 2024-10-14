@@ -20,7 +20,6 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::dsl::TestDslUnsafe;
-use std::sync::Arc;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

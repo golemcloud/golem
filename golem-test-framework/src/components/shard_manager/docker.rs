@@ -143,9 +143,10 @@ impl ShardManager for DockerShardManager {
             panic!("number_of_shards_override not supported for docker")
         }
 
-        let mut image = ShardManagerImage::new(Self::GRPC_PORT, Self::HTTP_PORT, self.env_vars.clone())
-            .with_container_name(Self::NAME)
-            .with_network(NETWORK);
+        let mut image =
+            ShardManagerImage::new(Self::GRPC_PORT, Self::HTTP_PORT, self.env_vars.clone())
+                .with_container_name(Self::NAME)
+                .with_network(NETWORK);
 
         if let Some(number_of_shards) = number_of_shards_override {
             image = image.with_env_var("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string())

@@ -468,10 +468,7 @@ impl OplogArchive for BlobOplogArchive {
 
         self.blob_storage
             .with("blob_oplog", "drop_prefix")
-            .delete_many(
-                ns,
-                &to_drop,
-            )
+            .delete_many(ns, &to_drop)
             .await
             .unwrap_or_else(|err| {
                 panic!(

@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
-use std::sync::Arc;
-use async_trait::async_trait;
 use crate::components::component_compilation_service::ComponentCompilationService;
+use async_trait::async_trait;
 pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;

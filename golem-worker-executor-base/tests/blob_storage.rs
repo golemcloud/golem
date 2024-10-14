@@ -367,11 +367,10 @@ macro_rules! test_blob_storage {
                         "delete_many",
                         "delete-many",
                         namespace.clone(),
-                        &[
-                            path.join("test-file1"),
-                            path.join("test-file3"),
-                        ],
-                    ).await.unwrap();
+                        &[path.join("test-file1"), path.join("test-file3")],
+                    )
+                    .await
+                    .unwrap();
 
                 let mut entries = storage
                     .list_dir("delete_many", "entries", namespace.clone(), path)
@@ -388,7 +387,6 @@ macro_rules! test_blob_storage {
                         ]
                 );
             }
-
 
             #[test]
             #[tracing::instrument]
@@ -581,8 +579,14 @@ pub(crate) async fn fs() -> impl GetBlobStorage {
 }
 
 pub(crate) async fn s3() -> impl GetBlobStorage {
-    let container = MinIO::default().start().await.expect("Failed to start MinIO");
-    let host_port = container.get_host_port_ipv4(9000).await.expect("Failed to get host port");
+    let container = MinIO::default()
+        .start()
+        .await
+        .expect("Failed to start MinIO");
+    let host_port = container
+        .get_host_port_ipv4(9000)
+        .await
+        .expect("Failed to get host port");
 
     let config = S3BlobStorageConfig {
         retries: Default::default(),
@@ -600,8 +604,14 @@ pub(crate) async fn s3() -> impl GetBlobStorage {
 }
 
 pub(crate) async fn s3_prefixed() -> impl GetBlobStorage {
-    let container = MinIO::default().start().await.expect("Failed to start MinIO");
-    let host_port = container.get_host_port_ipv4(9000).await.expect("Failed to get host port");
+    let container = MinIO::default()
+        .start()
+        .await
+        .expect("Failed to start MinIO");
+    let host_port = container
+        .get_host_port_ipv4(9000)
+        .await
+        .expect("Failed to get host port");
 
     let config = S3BlobStorageConfig {
         retries: Default::default(),

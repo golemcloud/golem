@@ -21,14 +21,14 @@ use crate::components::k8s::{
     Routing,
 };
 use crate::components::GolemEnvVars;
-use async_dropper_simple::{AsyncDropper};
+use async_dropper_simple::AsyncDropper;
+use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
-use async_trait::async_trait;
 use tokio::sync::Mutex;
 use tracing::{info, Level};
 

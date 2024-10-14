@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use redis::RedisResult;
+use std::time::{Duration, Instant};
 use tracing::info;
 
 pub mod docker;

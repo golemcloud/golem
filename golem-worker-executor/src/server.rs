@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #[allow(unused_imports)]
-
 use std::sync::Arc;
 
 use golem_common::tracing::init_tracing_with_default_env_filter;

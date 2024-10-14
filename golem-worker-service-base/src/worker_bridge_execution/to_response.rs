@@ -251,7 +251,12 @@ mod test {
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
-    
+
+    use crate::worker_binding::{HttpRequestDetails, RequestDetails};
+    use crate::worker_bridge_execution::to_response::ToResponse;
+    use http::header::CONTENT_TYPE;
+    use http::StatusCode;
+    use rib::RibInterpreterResult;
     use std::collections::HashMap;
 
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {

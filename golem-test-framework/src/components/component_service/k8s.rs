@@ -21,7 +21,7 @@ use crate::components::k8s::{
 };
 use crate::components::rdb::Rdb;
 use crate::components::GolemEnvVars;
-use async_dropper_simple::{AsyncDropper};
+use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use k8s_openapi::api::core::v1::{Pod, Service};

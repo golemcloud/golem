@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Formatter};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use async_trait::async_trait;
 use crate::components;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
@@ -42,6 +38,10 @@ use crate::components::worker_service::docker::DockerWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::{DbType, TestDependencies};
+use async_trait::async_trait;
+use std::fmt::{Debug, Formatter};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::Level;
 
 pub struct EnvBasedTestDependenciesConfig {

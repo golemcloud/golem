@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::Duration;
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use golem_common::tracing::{init_tracing, TracingConfig};
 use itertools::Itertools;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::Level;
 
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;

@@ -86,9 +86,9 @@ fn literal_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
     use crate::api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
     use crate::parser::path_pattern_parser::parse_path_pattern;
+    use test_r::test;
 
     #[test]
     fn test_parse() {
