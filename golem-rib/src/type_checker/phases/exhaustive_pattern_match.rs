@@ -51,7 +51,7 @@ mod internal {
     }
 
     #[derive(Clone, Debug)]
-    struct ConstructorPatterns(HashMap<String, Vec<ArmPattern>>);
+    pub struct ConstructorPatterns(HashMap<String, Vec<ArmPattern>>);
 
     impl ConstructorPatterns {
 
