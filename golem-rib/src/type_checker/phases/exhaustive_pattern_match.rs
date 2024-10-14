@@ -26,7 +26,7 @@ pub fn check_exhaustive_pattern_match(expr: &mut Expr) -> Result<(), String> {
 
 mod internal {
     use std::collections::HashMap;
-    use crate::{ArmPattern, MatchArm};
+    use crate::ArmPattern;
 
     pub fn check_exhaustive_pattern_match(arms: &[ArmPattern]) -> Result<(), String> {
         let optional = check_exhaustivity(
@@ -71,7 +71,7 @@ mod internal {
         }
     }
 
-    struct ExhaustiveCheckResult(pub Result<ConstructorPatterns, String>);
+    pub struct ExhaustiveCheckResult(pub Result<ConstructorPatterns, String>);
 
     impl ExhaustiveCheckResult {
 

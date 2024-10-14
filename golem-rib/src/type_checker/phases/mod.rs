@@ -1,5 +1,5 @@
 use crate::{Expr, FunctionTypeRegistry};
-use crate::type_checker::{check_type_mismatch, TypeCheckError, unresolved_types};
+use crate::type_checker::unresolved_types;
 
 mod type_mismatch_call_args;
 mod exhaustive_pattern_match;
