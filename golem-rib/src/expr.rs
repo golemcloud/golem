@@ -729,7 +729,6 @@ pub enum ArmPattern {
 }
 
 impl ArmPattern {
-
     pub fn is_wildcard(&self) -> bool {
         matches!(self, ArmPattern::WildCard)
     }

@@ -24,7 +24,7 @@ pub fn check_type_mismatch_in_call_args(
 mod internal {
     use super::*;
     use crate::call_type::CallType;
-    use crate::type_checker::{Path, PathElem, check_type_mismatch};
+    use crate::type_checker::{check_type_mismatch, Path, PathElem};
 
     use golem_wasm_ast::analysis::AnalysedType;
 
@@ -65,7 +65,7 @@ mod internal {
                 ));
             }
 
-            check_type_mismatch(&expected_arg_type,&actual_arg_type).map_err(|x| x.to_string())?;
+            check_type_mismatch(&expected_arg_type, &actual_arg_type).map_err(|x| x.to_string())?;
         }
 
         Ok(())

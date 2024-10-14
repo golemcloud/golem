@@ -1,8 +1,8 @@
-use crate::{Expr, FunctionTypeRegistry};
 use crate::type_checker::unresolved_types;
+use crate::{Expr, FunctionTypeRegistry};
 
-mod type_mismatch_call_args;
 mod exhaustive_pattern_match;
+mod type_mismatch_call_args;
 
 pub fn type_check(expr: &mut Expr, metadata: &FunctionTypeRegistry) -> Result<(), String> {
     unresolved_types::check_unresolved_types(expr).map_err(|err| err.to_string())?;

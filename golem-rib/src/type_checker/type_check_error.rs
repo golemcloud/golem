@@ -43,14 +43,6 @@ impl UnResolvedTypesError {
         }
     }
 
-    pub fn add_message(&self, message: &str) -> Self {
-        let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error
-            .additional_messages
-            .push(message.to_string());
-        unresolved_error
-    }
-
     pub fn at_field(&self, field_name: String) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
         unresolved_error

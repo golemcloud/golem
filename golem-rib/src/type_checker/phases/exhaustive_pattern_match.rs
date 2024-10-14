@@ -1,6 +1,5 @@
-use std::collections::VecDeque;
 use crate::Expr;
-
+use std::collections::VecDeque;
 
 // When checking exhaustive pattern match, there is no need to ensure
 // if the pattern aligns with conditions because those checks are done
@@ -13,11 +12,14 @@ pub fn check_exhaustive_pattern_match(expr: &mut Expr) -> Result<(), String> {
     while let Some(expr) = queue.pop_back() {
         match expr {
             Expr::PatternMatch(_, patterns, _) => {
-                let match_arm = patterns.iter().map(|p| p.arm_pattern.clone()).collect::<Vec<_>>();
+                let match_arm = patterns
+                    .iter()
+                    .map(|p| p.arm_pattern.clone())
+                    .collect::<Vec<_>>();
                 internal::check_exhaustive_pattern_match(&match_arm)?;
             }
 
-            expr => expr.visit_children_mut_bottom_up(&mut queue)
+            expr => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
 
@@ -25,26 +27,18 @@ pub fn check_exhaustive_pattern_match(expr: &mut Expr) -> Result<(), String> {
 }
 
 mod internal {
-    use std::collections::HashMap;
     use crate::ArmPattern;
+    use std::collections::HashMap;
 
     pub fn check_exhaustive_pattern_match(arms: &[ArmPattern]) -> Result<(), String> {
-        let optional = check_exhaustivity(
-            arms,
-            &["some"],
-            &["none"],
-        ).value()?;
+        let optional = check_exhaustivity(arms, &["some"], &["none"]).value()?;
 
-        let result = check_exhaustivity(
-            arms,
-            &["ok"],
-            &["err"],
-        ).value()?;
+        let result = check_exhaustivity(arms, &["ok"], &["err"]).value()?;
 
         let constructor_patterns = optional.or(result);
 
         for (_, patterns) in constructor_patterns.value() {
-             check_exhaustive_pattern_match(patterns)?;
+            check_exhaustive_pattern_match(patterns)?;
         }
 
         Ok(())
@@ -54,7 +48,6 @@ mod internal {
     pub struct ConstructorPatterns(HashMap<String, Vec<ArmPattern>>);
 
     impl ConstructorPatterns {
-
         pub fn value(&self) -> &HashMap<String, Vec<ArmPattern>> {
             &self.0
         }
@@ -65,16 +58,11 @@ mod internal {
             }
             self
         }
-
-        pub fn non_empty(&self) -> bool {
-            !self.0.is_empty()
-        }
     }
 
     pub struct ExhaustiveCheckResult(pub Result<ConstructorPatterns, String>);
 
     impl ExhaustiveCheckResult {
-
         pub fn value(&self) -> Result<ConstructorPatterns, String> {
             self.0.clone()
         }
@@ -85,18 +73,6 @@ mod internal {
 
         pub fn succeed(constructor_patterns: ConstructorPatterns) -> Self {
             ExhaustiveCheckResult(Ok(constructor_patterns))
-        }
-
-
-        pub fn is_valid(&self) -> bool {
-            match &self.0 {
-                Ok(_) => true,
-                Err(_) => false,
-            }
-        }
-
-        pub fn is_invalid(&self) -> bool {
-            !self.is_valid()
         }
     }
 
@@ -172,14 +148,16 @@ mod internal {
                     .map(|(k, _)| k.clone())
                     .collect();
 
-                return ExhaustiveCheckResult::fail(format!(
-                    "Missing constructors: {:?}, {:?}",
-                    missing_with_arg, missing_no_arg
-                ).as_str());
+                return ExhaustiveCheckResult::fail(
+                    format!(
+                        "Missing constructors: {:?}, {:?}",
+                        missing_with_arg, missing_no_arg
+                    )
+                    .as_str(),
+                );
             }
         }
 
         ExhaustiveCheckResult::succeed(ConstructorPatterns(constructor_map))
     }
 }
-
