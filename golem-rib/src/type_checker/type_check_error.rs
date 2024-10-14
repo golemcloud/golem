@@ -1,7 +1,7 @@
 use std::fmt;
 use std::fmt::Display;
 use golem_wasm_ast::analysis::AnalysedType;
-use crate::{InferredType, TypeName};
+use crate::{Expr, InferredType, TypeName};
 
 
 #[derive(Clone, Debug)]
@@ -11,8 +11,8 @@ pub enum TypeCheckError {
 }
 
 impl TypeCheckError {
-    pub fn unresolved_types_error(msg: String) -> Self {
-        TypeCheckError::UnResolvedTypesError(UnResolvedTypesError(msg))
+    pub fn unresolved_types_error(unresolved_type_error: UnResolvedTypesError) -> Self {
+        TypeCheckError::UnResolvedTypesError(unresolved_type_error)
     }
 
     pub fn type_mismatch_error(
@@ -32,11 +32,56 @@ impl Display for TypeCheckError {
 }
 
 #[derive(Clone, Debug)]
-pub struct UnResolvedTypesError(pub String);
+pub struct UnResolvedTypesError {
+    pub expr: Expr,
+    pub unresolved_path: Path,
+    pub additional_messages: Vec<String>,
+}
+
+impl UnResolvedTypesError {
+    pub fn new(expr: &Expr) -> Self {
+        UnResolvedTypesError {
+            expr: expr.clone(),
+            unresolved_path: Path::default(),
+            additional_messages: Vec::new(),
+        }
+    }
+
+    pub fn add_message(&self, message: &str) -> Self {
+        let mut unresolved_error: UnResolvedTypesError = self.clone();
+        unresolved_error.additional_messages.push(message.to_string());
+        unresolved_error
+    }
+
+    pub fn at_field(&self, field_name: String) -> UnResolvedTypesError {
+        let mut unresolved_error: UnResolvedTypesError = self.clone();
+        unresolved_error.unresolved_path.push_back(PathElem::Field(field_name));
+        unresolved_error
+    }
+
+    pub fn at_index(&self, index: usize) -> UnResolvedTypesError {
+        let mut unresolved_error: UnResolvedTypesError = self.clone();
+        unresolved_error.unresolved_path.push_back(PathElem::Index(index));
+        unresolved_error
+    }
+}
 
 impl Display for UnResolvedTypesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Unresolved type: {}", self.0)
+        let field_path = self.unresolved_path.to_string();
+        if field_path.is_empty() {
+            write!(f, "Cannot infer the type of: `{}`", self.expr)?;
+        } else {
+            write!(f, "Cannot infer the type of `{}` in `{}`", self.expr, field_path )?;
+        }
+
+        if !self.additional_messages.is_empty() {
+            for message in &self.additional_messages {
+                write!(f, ". {}", message)?;
+            };
+        }
+
+        Ok(())
     }
 }
 
@@ -51,8 +96,16 @@ pub struct TypeMismatchError {
 pub struct Path(Vec<PathElem>);
 
 impl Path {
+    pub fn from_elem(elem: PathElem) -> Self {
+        Path(vec![elem])
+    }
+
     fn push_front(&mut self, elem: PathElem) {
         self.0.insert(0, elem);
+    }
+
+    fn push_back(&mut self, elem: PathElem) {
+        self.0.push(elem);
     }
 }
 
@@ -85,12 +138,19 @@ impl Display for Path {
 }
 
 #[derive(Clone, Debug)]
-enum PathElem {
+pub enum PathElem {
     Field(String),
     Index(usize),
 }
 
 impl TypeMismatchError {
+
+    pub fn updated_expected_type(&self, expected_type: &AnalysedType) -> TypeMismatchError {
+        let mut mismatch_error: TypeMismatchError = self.clone();
+        mismatch_error.expected_type = expected_type.clone();
+        mismatch_error
+    }
+
     pub fn at_field(&self, field_name: String) -> TypeMismatchError {
         let mut mismatch_error: TypeMismatchError = self.clone();
         mismatch_error.field_path.push_front(PathElem::Field(field_name));
