@@ -3,7 +3,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
 use std::fmt::Display;
 
-#[derive(Clone, Debug)]
 pub enum TypeCheckError {
     UnResolvedTypesError(UnResolvedTypesError),
     TypeMismatchError(TypeMismatchError),
