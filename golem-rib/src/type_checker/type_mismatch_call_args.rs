@@ -12,7 +12,7 @@ use std::fmt::Display;
 pub fn type_check_in_function_call(
     expr: &mut Expr,
     type_registry: &FunctionTypeRegistry,
-) -> Result<(), FunctionCallTypeCheckError> {
+) -> Result<(), FunctionCallTypeError> {
     let mut queue = VecDeque::new();
 
     queue.push_back(expr);
@@ -29,23 +29,21 @@ pub fn type_check_in_function_call(
     Ok(())
 }
 
-pub enum FunctionCallTypeCheckError {
-    // This can hardly happen as we disallow further compilation
-    // This can be removed in the earlier stages, and rely on type-check phase, if needed
-    InvalidFunctionCallError {
+pub enum FunctionCallTypeError {
+    InvalidFunctionCall {
         function_name: CallType,
     },
-    TypeCheckError {
+    TypeMisMatch {
         call_type: CallType,
         argument: Expr,
         error: TypeMismatchError,
     },
-    MissingRecordFieldsError {
+    MissingRecordFields {
         call_type: CallType,
         argument: Expr,
         missing_fields: Vec<Path>,
     },
-    UnResolvedTypesError {
+    UnResolvedTypes {
         call_type: CallType,
         argument: Expr,
         unresolved_error: UnResolvedTypesError,
@@ -53,17 +51,17 @@ pub enum FunctionCallTypeCheckError {
     },
 }
 
-impl Display for FunctionCallTypeCheckError {
+impl Display for FunctionCallTypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FunctionCallTypeCheckError::InvalidFunctionCallError { function_name } => {
+            FunctionCallTypeError::InvalidFunctionCall { function_name } => {
                 write!(
                     f,
                     "Function {} is not defined in the registry",
                     function_name
                 )
             }
-            FunctionCallTypeCheckError::TypeCheckError {
+            FunctionCallTypeError::TypeMisMatch {
                 call_type,
                 argument,
                 error,
@@ -74,7 +72,7 @@ impl Display for FunctionCallTypeCheckError {
                     call_type, argument, error
                 )
             }
-            FunctionCallTypeCheckError::MissingRecordFieldsError {
+            FunctionCallTypeError::MissingRecordFields {
                 call_type,
                 argument,
                 missing_fields,
@@ -93,7 +91,7 @@ impl Display for FunctionCallTypeCheckError {
                 )
             }
 
-            FunctionCallTypeCheckError::UnResolvedTypesError {
+            FunctionCallTypeError::UnResolvedTypes {
                 call_type,
                 argument,
                 unresolved_error,
@@ -123,11 +121,11 @@ mod internal {
         call_type: &mut CallType,
         args: &mut [Expr],
         type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), FunctionCallTypeCheckError> {
+    ) -> Result<(), FunctionCallTypeError> {
         let registry_value = type_registry
             .types
             .get(&RegistryKey::from_call_type(call_type))
-            .ok_or(FunctionCallTypeCheckError::InvalidFunctionCallError {
+            .ok_or(FunctionCallTypeError::InvalidFunctionCall {
                 function_name: call_type.clone(),
             })?;
 
@@ -150,7 +148,7 @@ mod internal {
             let unresolved_type = type_checker::find_unresolved_types(actual_arg);
 
             if let Err(unresolved_error) = unresolved_type {
-                return Err(FunctionCallTypeCheckError::UnResolvedTypesError {
+                return Err(FunctionCallTypeError::UnResolvedTypes {
                     call_type: call_type.clone(),
                     argument: actual_arg.clone(),
                     unresolved_error,
@@ -162,15 +160,15 @@ mod internal {
             let missing_fields = type_checker::find_missing_fields(actual_arg, &expected_arg_type);
 
             if !missing_fields.is_empty() {
-                return Err(FunctionCallTypeCheckError::MissingRecordFieldsError {
+                return Err(FunctionCallTypeError::MissingRecordFields {
                     call_type: call_type.clone(),
                     argument: actual_arg.clone(),
                     missing_fields,
                 });
             }
 
-            type_checker::check_type_mismatch(&expected_arg_type, &actual_arg_type).map_err(
-                |e| FunctionCallTypeCheckError::TypeCheckError {
+            type_checker::check_type_mismatch(&expected_arg_type, actual_arg_type).map_err(
+                |e| FunctionCallTypeError::TypeMisMatch {
                     call_type: call_type.clone(),
                     argument: actual_arg.clone(),
                     error: e,

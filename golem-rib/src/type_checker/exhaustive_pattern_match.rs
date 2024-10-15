@@ -38,7 +38,7 @@ mod internal {
 
         let inner_constructors = check_result.value()?;
 
-        for (_, patterns) in inner_constructors.value() {
+        for patterns in inner_constructors.inner().values() {
             check_exhaustive_pattern_match(patterns)?;
         }
 
@@ -49,7 +49,7 @@ mod internal {
     pub struct ConstructorPatterns(HashMap<String, Vec<ArmPattern>>);
 
     impl ConstructorPatterns {
-        pub fn value(&self) -> &HashMap<String, Vec<ArmPattern>> {
+        pub fn inner(&self) -> &HashMap<String, Vec<ArmPattern>> {
             &self.0
         }
 
@@ -130,17 +130,15 @@ mod internal {
         no_arg_constructors: &[&str],
         with_arg_constructors: &[&str],
     ) -> ExhaustiveCheckResult {
-        let mut constructor_map: HashMap<String, Vec<ArmPattern>> = HashMap::new();
-        let mut found_with_arg = HashMap::new();
-        let mut found_no_arg = HashMap::new();
-        let mut detected_wild_card_or_identifier = vec![];
+        let mut constructors_with_arg: ConstructorsWithArgTracker =
+            ConstructorsWithArgTracker::new();
+        let mut constructors_with_no_arg: NoArgConstructorsTracker =
+            NoArgConstructorsTracker::new();
+        let mut detected_wild_card_or_identifier: Vec<ArmPattern> = vec![];
+        let mut constructor_map_result: HashMap<String, Vec<ArmPattern>> = HashMap::new();
 
-        for constructor in with_arg_constructors {
-            found_with_arg.insert(constructor.to_string(), false);
-        }
-        for constructor in no_arg_constructors {
-            found_no_arg.insert(constructor.to_string(), false);
-        }
+        constructors_with_arg.initialise(with_arg_constructors);
+        constructors_with_no_arg.initialise(no_arg_constructors);
 
         for pattern in patterns {
             if !detected_wild_card_or_identifier.is_empty() {
@@ -154,25 +152,25 @@ mod internal {
             match pattern {
                 ArmPattern::Constructor(ctor_name, arm_patterns) => {
                     if with_arg_constructors.contains(&ctor_name.as_str()) {
-                        constructor_map
+                        constructor_map_result
                             .entry(ctor_name.clone())
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .extend(arm_patterns.clone());
-                        found_with_arg.insert(ctor_name.clone(), true);
+                        constructors_with_arg.register(ctor_name);
                     } else if no_arg_constructors.contains(&ctor_name.as_str()) {
-                        found_no_arg.insert(ctor_name.clone(), true);
+                        constructors_with_no_arg.register(ctor_name);
                     }
                 }
                 ArmPattern::As(_, inner_pattern) => {
                     if let ArmPattern::Constructor(ctor_name, arm_patterns) = &**inner_pattern {
                         if with_arg_constructors.contains(&ctor_name.as_str()) {
-                            constructor_map
+                            constructor_map_result
                                 .entry(ctor_name.clone())
-                                .or_insert_with(Vec::new)
+                                .or_default()
                                 .extend(arm_patterns.clone());
-                            found_with_arg.insert(ctor_name.clone(), true);
+                            constructors_with_arg.register(ctor_name);
                         } else if no_arg_constructors.contains(&ctor_name.as_str()) {
-                            found_no_arg.insert(ctor_name.clone(), true);
+                            constructors_with_no_arg.register(ctor_name);
                         }
                     }
                 }
@@ -187,38 +185,32 @@ mod internal {
             }
         }
 
-        let no_constructors_tracked =
-            found_with_arg.values().all(|&v| !v) && found_no_arg.values().all(|&v| !v);
-
-        let constructors_tracked = !no_constructors_tracked;
-
-        if constructors_tracked {
-            let all_with_arg_covered = found_with_arg.values().all(|&v| v);
-            let all_no_arg_covered = found_no_arg.values().all(|&v| v);
+        if constructors_with_arg.registered_any() || constructors_with_no_arg.registered_any() {
+            let all_with_arg_covered = constructors_with_arg.registered_all();
+            let all_no_arg_covered = constructors_with_no_arg.registered_all();
 
             if (!all_with_arg_covered || !all_no_arg_covered)
                 && detected_wild_card_or_identifier.is_empty()
             {
-                let mut missing_with_arg: Vec<_> = found_with_arg
-                    .iter()
-                    .filter(|(_, &v)| !v)
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                let missing_no_arg: Vec<_> = found_no_arg
-                    .iter()
-                    .filter(|(_, &v)| !v)
-                    .map(|(k, _)| k.clone())
-                    .collect();
+                let mut missing_constructors: Vec<_> =
+                    constructors_with_arg.unregistered_constructors();
+                let missing_no_arg_constructors: Vec<_> =
+                    constructors_with_no_arg.unregistered_constructors();
 
-                missing_with_arg.extend(missing_no_arg.clone());
+                missing_constructors.extend(missing_no_arg_constructors.clone());
 
-                return ExhaustiveCheckResult::missing_constructors(missing_with_arg);
+                return ExhaustiveCheckResult::missing_constructors(missing_constructors);
             }
         }
 
-        if !constructor_map.is_empty() {
+        // Mainly to handle the scenario of `match x { some(some(x)) => 1, _ => 0 }`. Here the constructor map
+        // is "some" -> vec[some(x)]. If we run another exhaustive check (recursively) on the inner pattern which is
+        // "some(x)", which becomes non-exhaustive unless we add the `wild-card` or `identifier` pattern into the pattern list before this recursion.
+        // In short, outer wild-pattern and identifier patterns have to be appended to every inner pattern before recursively running
+        // the exhaustive check. This needs to be done only constructor_map has some elements tracked by this time!
+        if !constructor_map_result.is_empty() {
             if !detected_wild_card_or_identifier.is_empty() {
-                constructor_map.values_mut().for_each(|patterns| {
+                constructor_map_result.values_mut().for_each(|patterns| {
                     if !patterns.iter().any(|arm_pattern| {
                         arm_pattern.is_literal_identifier() || arm_pattern.is_wildcard()
                     }) {
@@ -227,10 +219,85 @@ mod internal {
                 });
             }
 
-            return ExhaustiveCheckResult::succeed(ConstructorPatterns(constructor_map));
+            return ExhaustiveCheckResult::succeed(ConstructorPatterns(constructor_map_result));
         }
 
-        ExhaustiveCheckResult::succeed(ConstructorPatterns(constructor_map))
+        ExhaustiveCheckResult::succeed(ConstructorPatterns(constructor_map_result))
+    }
+
+    struct ConstructorsWithArgTracker {
+        status: HashMap<String, bool>,
+    }
+
+    impl ConstructorsWithArgTracker {
+        fn new() -> Self {
+            ConstructorsWithArgTracker {
+                status: HashMap::new(),
+            }
+        }
+
+        fn initialise(&mut self, with_arg_constructors: &[&str]) {
+            for constructor in with_arg_constructors {
+                self.status.insert(constructor.to_string(), false);
+            }
+        }
+
+        fn register(&mut self, constructor: &str) {
+            self.status.insert(constructor.to_string(), true);
+        }
+
+        fn registered_any(&self) -> bool {
+            self.status.values().any(|&v| v)
+        }
+
+        fn registered_all(&self) -> bool {
+            self.status.values().all(|&v| v)
+        }
+
+        fn unregistered_constructors(&self) -> Vec<String> {
+            get_false_entries(&self.status)
+        }
+    }
+
+    struct NoArgConstructorsTracker {
+        status: HashMap<String, bool>,
+    }
+
+    impl NoArgConstructorsTracker {
+        fn new() -> Self {
+            NoArgConstructorsTracker {
+                status: HashMap::new(),
+            }
+        }
+
+        fn initialise(&mut self, no_arg_constructors: &[&str]) {
+            for constructor in no_arg_constructors {
+                self.status.insert(constructor.to_string(), false);
+            }
+        }
+
+        fn register(&mut self, constructor: &str) {
+            self.status.insert(constructor.to_string(), true);
+        }
+
+        fn registered_any(&self) -> bool {
+            self.status.values().any(|&v| v)
+        }
+
+        fn registered_all(&self) -> bool {
+            self.status.values().all(|&v| v)
+        }
+
+        fn unregistered_constructors(&self) -> Vec<String> {
+            get_false_entries(&self.status)
+        }
+    }
+
+    fn get_false_entries(map: &HashMap<String, bool>) -> Vec<String> {
+        map.iter()
+            .filter(|(_, &v)| !v)
+            .map(|(k, _)| k.clone())
+            .collect()
     }
 }
 

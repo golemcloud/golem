@@ -31,7 +31,7 @@ pub fn write_arm_pattern(arm_pattern: &ArmPattern) -> Result<String, WriterError
     let mut buf = vec![];
     let mut writer = Writer::new(&mut buf);
 
-    internal::write_arm_pattern(&arm_pattern, &mut writer)?;
+    internal::write_arm_pattern(arm_pattern, &mut writer)?;
 
     String::from_utf8(buf)
         .map_err(|err| WriterError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, err)))
