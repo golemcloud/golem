@@ -21,7 +21,7 @@ use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
 use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
 use golem_wasm_rpc_stubgen::stub::StubDefinition;
-use golem_wasm_rpc_stubgen::wit_resolve::resolve_wit_dir;
+use golem_wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
 use tempfile::TempDir;
@@ -614,7 +614,7 @@ fn init_caller(name: &str) -> TempDir {
 }
 
 fn assert_valid_wit_root(wit_root: &Path) {
-    resolve_wit_dir(wit_root).unwrap();
+    ResolvedWitDir::new(wit_root).unwrap();
 }
 
 /// Asserts that the destination WIT root has a dependency with the given name and contents.

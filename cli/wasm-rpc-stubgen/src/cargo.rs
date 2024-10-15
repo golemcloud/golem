@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::commands::log::{log_action, log_warn_action};
 use crate::stub::StubDefinition;
@@ -261,7 +261,10 @@ pub fn add_workspace_members(path: &Path, members: &[String]) -> anyhow::Result<
     Ok(())
 }
 
-pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> anyhow::Result<()> {
+pub fn add_dependencies_to_cargo_toml(
+    cargo_path: &Path,
+    wit_sources: Vec<PathBuf>,
+) -> anyhow::Result<()> {
     let raw_manifest = std::fs::read_to_string(cargo_path)?;
     let mut manifest: Manifest<MetadataRoot> =
         Manifest::from_slice_with_metadata(raw_manifest.as_bytes())?;
@@ -271,7 +274,7 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
                 let mut new_target = ComponentTarget::default();
                 let target = component.target.as_mut().unwrap_or(&mut new_target);
                 let existing: BTreeSet<_> = target.dependencies.keys().cloned().collect();
-                for name in names {
+                /*for wit_source in wit_sources {
                     if !existing.contains(name) {
                         let relative_path = format!("wit/deps/{}", name);
                         let path = cargo_path
@@ -287,7 +290,8 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
                             },
                         );
                     }
-                }
+                }*/
+                // TODO
 
                 if component.target.is_none() {
                     component.target = Some(new_target);

@@ -1,15 +1,36 @@
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
-use wit_parser::{PackageId, Resolve, UnresolvedPackageGroup};
+use wit_parser::{Package, PackageId, Resolve, UnresolvedPackageGroup};
 
 pub struct ResolvedWitDir {
+    pub path: PathBuf,
     pub resolve: Resolve,
     pub package_id: PackageId,
     pub sources: IndexMap<PackageId, Vec<PathBuf>>,
 }
 
-pub fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
+impl ResolvedWitDir {
+    pub fn new(path: &Path) -> anyhow::Result<ResolvedWitDir> {
+        resolve_wit_dir(path)
+    }
+
+    pub fn package(&self, package_id: PackageId) -> anyhow::Result<&Package> {
+        self.resolve.packages.get(package_id).with_context(|| {
+            anyhow!(
+                "Failed to get package by id: {:?}, wit dir: {}",
+                package_id,
+                self.path.to_string_lossy()
+            )
+        })
+    }
+
+    pub fn main_package(&self) -> anyhow::Result<&Package> {
+        self.package(self.package_id)
+    }
+}
+
+fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
     // TODO: Can be removed once we fixed all docs and examples
     std::env::set_var("WIT_REQUIRE_F32_F64", "0");
 
@@ -22,6 +43,7 @@ pub fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
     let sources = partition_sources_by_package_ids(path, &resolve, package_id, sources)?;
 
     Ok(ResolvedWitDir {
+        path: path.to_path_buf(),
         resolve,
         package_id,
         sources,
@@ -35,8 +57,12 @@ pub fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
 // To solve this (until we can get a better API upstream) we could extract and replicate the logic used
 // there, but that would require many code duplication, as many functions and types are not public.
 //
-// Instead of that, we partition the returned sources following the accepted file and directory structure,
-// and also partially parsing again deps.
+// Instead of that, we partition the returned sources by following the accepted file and directory structure.
+//
+// Unfortunately we still have some duplication of performed operations: during partitioning we partially parse
+// the dependencies again - as UnresolvedPackageGroups - but similar partial "peeks" into deps already happened
+// in stubgen steps before. This way we try to pull and concentrate them here, so they only happen when creating
+// a new ResolvedWitDir, and parsing should only happen twice: while using Resolve::push_dir above, and here.
 fn partition_sources_by_package_ids(
     path: &Path,
     resolve: &Resolve,
