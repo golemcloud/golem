@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action_plan, log_warn_action};
-use crate::fs::{OverwriteSafeAction, OverwriteSafeActions};
+use crate::fs::{must_get_file_name, strip_path_prefix, OverwriteSafeAction, OverwriteSafeActions};
 use crate::wit::{generate_stub_wit_from_wit_dir, import_remover};
 use crate::wit_resolve::ResolvedWitDir;
 use crate::{cargo, naming};
@@ -75,18 +75,14 @@ pub fn add_stub_dependency(
             log_warn_action(
                 "Skipping",
                 format!("cyclic self dependency for {}", package_name),
-            )
+            );
         // Handle self stub packages: use regenerated stub with inlining, to break the recursive cycle
         } else if is_dest_stub_package {
-            let inlined_self_stub_wit = generate_stub_wit_from_wit_dir(dest_wit_root, true)?;
-
-            let target_stub_wit = dest_deps_dir
-                .join(naming::wit::package_dep_folder_name(package_name))
-                .join(naming::wit::STUB_WIT_FILE_NAME);
-
             actions.add(OverwriteSafeAction::WriteFile {
-                content: inlined_self_stub_wit,
-                target: target_stub_wit,
+                content: generate_stub_wit_from_wit_dir(dest_wit_root, true)?,
+                target: dest_deps_dir
+                    .join(naming::wit::package_dep_folder_name(package_name))
+                    .join(naming::wit::STUB_WIT_FILE_NAME),
             });
         // Non-self stub packages has to be copied into target deps
         } else if is_stub_main_package {
@@ -94,16 +90,7 @@ pub fn add_stub_dependency(
                 dest_deps_dir.join(naming::wit::package_dep_folder_name(package_name));
 
             for source in sources {
-                let file_name = source
-                    .file_name()
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "Failed to get file name for package source: {}",
-                            source.to_string_lossy(),
-                        )
-                    })?
-                    .to_os_string();
-
+                let file_name = must_get_file_name(&source)?;
                 actions.add(OverwriteSafeAction::CopyFile {
                     source,
                     target: target_stub_dep_dir.join(file_name),
@@ -112,18 +99,9 @@ pub fn add_stub_dependency(
         // Handle other package by copying while removing imports
         } else {
             for source in sources {
-                let relative_wit_path = source.strip_prefix(stub_wit_root).with_context(|| {
-                    anyhow!(
-                        "Failed to strip prefix for package source, stub wit root: {}, source: {}",
-                        stub_wit_root.to_string_lossy(),
-                        source.to_string_lossy()
-                    )
-                })?;
-                let target = dest_wit_root.join(relative_wit_path);
-
                 actions.add(OverwriteSafeAction::copy_file_transformed(
                     source.clone(),
-                    target,
+                    dest_wit_root.join(strip_path_prefix(source, stub_wit_root)?),
                     &dest_stub_import_remover,
                 )?);
             }
