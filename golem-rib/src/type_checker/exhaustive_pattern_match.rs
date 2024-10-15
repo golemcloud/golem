@@ -34,8 +34,9 @@ mod internal {
 
     pub fn check_exhaustive_pattern_match(arms: &[ArmPattern]) -> Result<(), ExhaustiveCheckError> {
         let check_result =
-            check_exhaustive(arms, &["none"], &["some"]).or(arms, &[], &["ok", "err"]);
+            check_exhaustive(arms, &["none"], &["some"]);//.or(arms, &[], &["ok", "err"]);
 
+        dbg!(check_result.clone());
         let inner_constructors = check_result.value()?;
 
         for (_, patterns) in inner_constructors.value() {
@@ -69,10 +70,10 @@ mod internal {
         }
     }
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     pub struct ExhaustiveCheckResult(pub Result<ConstructorPatterns, ExhaustiveCheckError>);
 
-    #[derive(Clone)]
+    #[derive(Debug, Clone)]
     pub enum ExhaustiveCheckError {
         MissingConstructors(Vec<String>),
         DeadCode {
@@ -107,8 +108,11 @@ mod internal {
             )))
         }
 
-        pub fn dead_code(cause: &ArmPattern, dead_code: &ArmPattern) -> Self {
-            ExhaustiveCheckResult(Ok(ConstructorPatterns::empty()))
+        pub fn dead_code(cause: &ArmPattern, dead_pattern: &ArmPattern) -> Self {
+            ExhaustiveCheckResult(Err(ExhaustiveCheckError::DeadCode {
+                cause: cause.clone(),
+                dead_pattern: dead_pattern.clone()
+            }))
         }
 
         pub fn succeed(constructor_patterns: ConstructorPatterns) -> Self {
@@ -150,6 +154,7 @@ mod internal {
         for pattern in patterns {
             dbg!(pattern.clone(), detected_wild_card_or_identifier.clone());
             if !detected_wild_card_or_identifier.is_empty()  {
+                dbg!("hre??");
                 return ExhaustiveCheckResult::dead_code(detected_wild_card_or_identifier.last().unwrap_or(&ArmPattern::WildCard), pattern);
             }
             match pattern {
@@ -270,7 +275,7 @@ mod pattern_match_exhaustive_tests {
         let x = some("afsal");
         match x {
             none => "none",
-            some(_) => a,
+            some(_) => a
 
         }
         "#;
@@ -327,7 +332,7 @@ mod pattern_match_exhaustive_tests {
     }
 
     #[test]
-    fn test_option_pattern_match_wild_card6() {
+    fn test_option_pattern_match_wild_card_invalid1() {
         let expr = r#"
         let x = some("afsal");
         match x {
@@ -338,7 +343,52 @@ mod pattern_match_exhaustive_tests {
 
         let expr = Expr::from_text(expr).unwrap();
         let result = compile(&expr, &vec![]);
-        assert!(result.is_ok())
+        assert!(result.is_err())
+    }
+
+    #[test]
+    fn test_option_pattern_match_wild_card_invalid2() {
+        let expr = r#"
+        let x = some("afsal");
+        match x {
+            _ => "none",
+            none => "a"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_err())
+    }
+
+    #[test]
+    fn test_option_pattern_match_identifier_invalid1() {
+        let expr = r#"
+        let x = some("afsal");
+        match x {
+            something => "none",
+            some(_) => a
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_err())
+    }
+
+    #[test]
+    fn test_option_pattern_match_identifier_invalid2() {
+        let expr = r#"
+        let x = some("afsal");
+        match x {
+            something => "none",
+            none => "a"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_err())
     }
 
 
