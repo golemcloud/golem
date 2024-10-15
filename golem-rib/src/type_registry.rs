@@ -101,11 +101,9 @@ impl FunctionTypeRegistry {
     pub fn get_variants(&self) -> Vec<TypeVariant> {
         let mut variants = vec![];
 
-        for (_, registry_value) in &self.types {
-            match registry_value {
-                RegistryValue::Variant { variant_type, .. } => variants.push(variant_type.clone()),
-
-                _ => {}
+        for registry_value in self.types.values() {
+            if let  RegistryValue::Variant { variant_type, .. } = registry_value {
+                variants.push(variant_type.clone())
             }
         }
 

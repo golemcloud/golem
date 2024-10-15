@@ -200,19 +200,19 @@ mod internal {
                 }
                 ArmPattern::As(_, inner_pattern) => {
                     if let ArmPattern::Constructor(ctor_name, arm_patterns) = &**inner_pattern {
-                        if with_arg_constructors.contains(&ctor_name) {
+                        if with_arg_constructors.contains(ctor_name) {
                             constructor_map_result
                                 .entry(ctor_name.clone())
                                 .or_default()
                                 .extend(arm_patterns.clone());
                             constructors_with_arg.register(ctor_name);
-                        } else if no_arg_constructors.contains(&ctor_name) {
+                        } else if no_arg_constructors.contains(ctor_name) {
                             constructors_with_no_arg.register(ctor_name);
                         }
                     }
                 }
-                ArmPattern::Literal(expr) => match expr.deref() {
-                    Expr::Call(call_type, args, _) => {
+                ArmPattern::Literal(expr) => {
+                    if let Expr::Call(call_type, args, _) = expr.deref() {
                         let ctor_name = call_type.to_string();
                         let arm_patterns = args
                             .iter()
@@ -228,8 +228,7 @@ mod internal {
                             constructors_with_no_arg.register(ctor_name.as_str());
                         }
                     }
-                    _ => {}
-                },
+                }
                 ArmPattern::WildCard => {
                     detected_wild_card_or_identifier.push(ArmPattern::WildCard);
                 }
