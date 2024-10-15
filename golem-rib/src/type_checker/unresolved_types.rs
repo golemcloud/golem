@@ -3,7 +3,7 @@ use crate::Expr;
 use std::collections::VecDeque;
 use std::ops::Deref;
 
-pub fn find_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
+pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -140,7 +140,7 @@ pub fn find_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
 }
 
 mod internal {
-    use crate::type_checker::unresolved_types::find_unresolved_types;
+    use crate::type_checker::unresolved_types::check_unresolved_types;
     use crate::type_checker::UnResolvedTypesError;
     use crate::{Expr, MatchArm};
     use std::ops::Deref;
@@ -153,7 +153,7 @@ mod internal {
             if field_type.is_unknown() || field_type.is_one_of() {
                 return Err(UnResolvedTypesError::new(field_expr).at_field(field_name.clone()));
             } else {
-                find_unresolved_types(field_expr)?;
+                check_unresolved_types(field_expr)?;
             }
         }
 
@@ -166,7 +166,7 @@ mod internal {
             if field_type.is_unknown() || field_type.is_one_of() {
                 return Err(UnResolvedTypesError::new(field_expr).at_index(index));
             } else {
-                find_unresolved_types(field_expr)?;
+                check_unresolved_types(field_expr)?;
             }
         }
 
@@ -179,7 +179,7 @@ mod internal {
             if field_type.is_unknown() || field_type.is_one_of() {
                 return Err(UnResolvedTypesError::new(field_expr).at_index(index));
             } else {
-                find_unresolved_types(field_expr)?;
+                check_unresolved_types(field_expr)?;
             }
         }
 
@@ -195,13 +195,13 @@ mod internal {
         if left_type.un_resolved() {
             return Err(UnResolvedTypesError::new(left));
         } else {
-            find_unresolved_types(left)?;
+            check_unresolved_types(left)?;
         }
 
         if right_type.un_resolved() {
             return Err(UnResolvedTypesError::new(right));
         } else {
-            find_unresolved_types(right)?;
+            check_unresolved_types(right)?;
         }
 
         Ok(())
@@ -218,19 +218,19 @@ mod internal {
         if cond_type.un_resolved() {
             return Err(UnResolvedTypesError::new(cond));
         } else {
-            find_unresolved_types(cond)?;
+            check_unresolved_types(cond)?;
         }
 
         if if_type.un_resolved() {
             return Err(UnResolvedTypesError::new(if_expr));
         } else {
-            find_unresolved_types(if_expr)?;
+            check_unresolved_types(if_expr)?;
         }
 
         if else_type.un_resolved() {
             return Err(UnResolvedTypesError::new(if_expr));
         } else {
-            find_unresolved_types(else_expr)?;
+            check_unresolved_types(else_expr)?;
         }
 
         Ok(())
@@ -244,7 +244,7 @@ mod internal {
         if cond_type.is_unknown() || cond_type.is_one_of() {
             return Err(UnResolvedTypesError::new(cond));
         } else {
-            find_unresolved_types(cond)?;
+            check_unresolved_types(cond)?;
         }
 
         for match_arm in match_arms {
@@ -261,7 +261,7 @@ mod internal {
                 if expr_type.is_unknown() || expr_type.is_one_of() {
                     return Err(UnResolvedTypesError::new(&expr));
                 } else {
-                    find_unresolved_types(&expr)?;
+                    check_unresolved_types(&expr)?;
                 }
             }
 
@@ -271,7 +271,7 @@ mod internal {
             if expr_type.un_resolved() {
                 return Err(UnResolvedTypesError::new(expr.deref()));
             } else {
-                find_unresolved_types(&expr)?;
+                check_unresolved_types(&expr)?;
             }
         }
 
@@ -288,7 +288,7 @@ mod internal {
             if ok_type.un_resolved() {
                 return Err(UnResolvedTypesError::new(ok_expr.deref()));
             } else {
-                find_unresolved_types(&ok_expr)?;
+                check_unresolved_types(&ok_expr)?;
             }
         }
 
@@ -297,7 +297,7 @@ mod internal {
             if error_type.un_resolved() {
                 return Err(UnResolvedTypesError::new(error_expr.deref()));
             } else {
-                find_unresolved_types(&error_expr)?;
+                check_unresolved_types(&error_expr)?;
             }
         }
 
@@ -310,7 +310,7 @@ mod internal {
             if field_type.is_unknown() || field_type.is_one_of() {
                 return Err(UnResolvedTypesError::new(field_expr).at_index(index));
             } else {
-                find_unresolved_types(field_expr)?;
+                check_unresolved_types(field_expr)?;
             }
         }
 

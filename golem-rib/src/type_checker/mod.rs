@@ -10,14 +10,18 @@ mod type_mismatch;
 mod type_mismatch_call_args;
 mod unresolved_types;
 
+use crate::type_checker::exhaustive_pattern_match::check_exhaustive_pattern_match;
+use crate::type_checker::type_mismatch_call_args::check_type_errors_in_function_call;
 use crate::{Expr, FunctionTypeRegistry};
 
-pub fn type_check(expr: &mut Expr, metadata: &FunctionTypeRegistry) -> Result<(), String> {
-    type_mismatch_call_args::type_check_in_function_call(expr, metadata)
+pub fn type_check(
+    expr: &mut Expr,
+    function_type_registry: &FunctionTypeRegistry,
+) -> Result<(), String> {
+    check_type_errors_in_function_call(expr, function_type_registry)
         .map_err(|function_call_type_check_error| function_call_type_check_error.to_string())?;
-    unresolved_types::find_unresolved_types(expr)
-        .map_err(|unresolved_error| unresolved_error.to_string())?;
-    exhaustive_pattern_match::check_exhaustive_pattern_match(expr)
+    check_unresolved_types(expr).map_err(|unresolved_error| unresolved_error.to_string())?;
+    check_exhaustive_pattern_match(expr, function_type_registry)
         .map_err(|exhaustive_check_error| exhaustive_check_error.to_string())?;
     Ok(())
 }

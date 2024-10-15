@@ -9,7 +9,7 @@ use std::fmt::Display;
 // we have this special phase to grab errors in the context function calls.
 // This is grab as many errors as possible.
 // Refer `FunctionCallTypeCheckError`.
-pub fn type_check_in_function_call(
+pub fn check_type_errors_in_function_call(
     expr: &mut Expr,
     type_registry: &FunctionTypeRegistry,
 ) -> Result<(), FunctionCallTypeError> {
@@ -145,7 +145,7 @@ mod internal {
             // Finding resolved types can be called from anywhere, but this is called
             // within a function-call type-check phase,
             // to grab as many details as possible
-            let unresolved_type = type_checker::find_unresolved_types(actual_arg);
+            let unresolved_type = type_checker::check_unresolved_types(actual_arg);
 
             if let Err(unresolved_error) = unresolved_type {
                 return Err(FunctionCallTypeError::UnResolvedTypes {

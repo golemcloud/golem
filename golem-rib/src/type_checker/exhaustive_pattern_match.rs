@@ -1,12 +1,14 @@
-use crate::type_checker::exhaustive_pattern_match::internal::ExhaustiveCheckError;
-use crate::Expr;
+use crate::{ArmPattern, Expr, FunctionTypeRegistry};
 use std::collections::VecDeque;
 
 // When checking exhaustive pattern match, there is no need to ensure
 // if the pattern aligns with conditions because those checks are done
 // as part of previous phases of compilation. All we need to worry about
 // is whether the arms in the pattern match is exhaustive.
-pub fn check_exhaustive_pattern_match(expr: &mut Expr) -> Result<(), ExhaustiveCheckError> {
+pub fn check_exhaustive_pattern_match(
+    expr: &mut Expr,
+    function_type_registry: &FunctionTypeRegistry,
+) -> Result<(), ExhaustiveCheckError> {
     let mut queue = VecDeque::new();
     queue.push_back(expr);
 
@@ -27,14 +29,26 @@ pub fn check_exhaustive_pattern_match(expr: &mut Expr) -> Result<(), ExhaustiveC
     Ok(())
 }
 
+#[derive(Debug, Clone)]
+pub enum ExhaustiveCheckError {
+    MissingConstructors(Vec<String>),
+    DeadCode {
+        cause: ArmPattern,
+        dead_pattern: ArmPattern,
+    },
+}
+
 mod internal {
+    use crate::type_checker::exhaustive_pattern_match::ExhaustiveCheckError;
     use crate::ArmPattern;
     use std::collections::HashMap;
     use std::fmt::Display;
 
-    pub fn check_exhaustive_pattern_match(arms: &[ArmPattern]) -> Result<(), ExhaustiveCheckError> {
-        let check_result =
-            check_exhaustive(arms, &["none"], &["some"]).or(arms, &[], &["ok", "err"]);
+    pub(crate) fn check_exhaustive_pattern_match(
+        arms: &[ArmPattern],
+    ) -> Result<(), ExhaustiveCheckError> {
+        let check_result = check_exhaustive(arms, ConstructorDetails::option())
+            .unwrap_or_run_with(arms, ConstructorDetails::result());
 
         let inner_constructors = check_result.value()?;
 
@@ -69,51 +83,43 @@ mod internal {
     }
 
     #[derive(Debug, Clone)]
-    pub struct ExhaustiveCheckResult(pub Result<ConstructorPatterns, ExhaustiveCheckError>);
-
-    #[derive(Debug, Clone)]
-    pub enum ExhaustiveCheckError {
-        MissingConstructors(Vec<String>),
-        DeadCode {
-            cause: ArmPattern,
-            dead_pattern: ArmPattern,
-        },
-    }
+    pub(crate) struct ExhaustiveCheckResult(
+        pub(crate) Result<ConstructorPatterns, ExhaustiveCheckError>,
+    );
 
     impl ExhaustiveCheckResult {
-        pub fn or(
+        fn unwrap_or_run_with(
             &self,
             patterns: &[ArmPattern],
-            no_arg_constructors: &[&str],
-            with_arg_constructors: &[&str],
+            constructor_details: ConstructorDetails,
         ) -> ExhaustiveCheckResult {
             match self {
                 ExhaustiveCheckResult(Ok(result)) if result.is_empty() => {
-                    check_exhaustive(patterns, no_arg_constructors, with_arg_constructors)
+                    check_exhaustive(patterns, constructor_details)
                 }
                 ExhaustiveCheckResult(Ok(_)) => self.clone(),
                 ExhaustiveCheckResult(Err(e)) => ExhaustiveCheckResult(Err(e.clone())),
             }
         }
 
-        pub fn value(&self) -> Result<ConstructorPatterns, ExhaustiveCheckError> {
+        fn value(&self) -> Result<ConstructorPatterns, ExhaustiveCheckError> {
             self.0.clone()
         }
 
-        pub fn missing_constructors(missing_constructors: Vec<String>) -> Self {
+        fn missing_constructors(missing_constructors: Vec<String>) -> Self {
             ExhaustiveCheckResult(Err(ExhaustiveCheckError::MissingConstructors(
                 missing_constructors,
             )))
         }
 
-        pub fn dead_code(cause: &ArmPattern, dead_pattern: &ArmPattern) -> Self {
+        fn dead_code(cause: &ArmPattern, dead_pattern: &ArmPattern) -> Self {
             ExhaustiveCheckResult(Err(ExhaustiveCheckError::DeadCode {
                 cause: cause.clone(),
                 dead_pattern: dead_pattern.clone(),
             }))
         }
 
-        pub fn succeed(constructor_patterns: ConstructorPatterns) -> Self {
+        fn succeed(constructor_patterns: ConstructorPatterns) -> Self {
             ExhaustiveCheckResult(Ok(constructor_patterns))
         }
     }
@@ -135,11 +141,13 @@ mod internal {
         }
     }
 
-    pub fn check_exhaustive(
+    fn check_exhaustive(
         patterns: &[ArmPattern],
-        no_arg_constructors: &[&str],
-        with_arg_constructors: &[&str],
+        pattern_mach_args: ConstructorDetails,
     ) -> ExhaustiveCheckResult {
+        let with_arg_constructors = pattern_mach_args.with_arg_constructors;
+        let no_arg_constructors = pattern_mach_args.no_arg_constructors;
+
         let mut constructors_with_arg: ConstructorsWithArgTracker =
             ConstructorsWithArgTracker::new();
         let mut constructors_with_no_arg: NoArgConstructorsTracker =
@@ -147,8 +155,8 @@ mod internal {
         let mut detected_wild_card_or_identifier: Vec<ArmPattern> = vec![];
         let mut constructor_map_result: HashMap<String, Vec<ArmPattern>> = HashMap::new();
 
-        constructors_with_arg.initialise(with_arg_constructors);
-        constructors_with_no_arg.initialise(no_arg_constructors);
+        constructors_with_arg.initialise(with_arg_constructors.clone());
+        constructors_with_no_arg.initialise(no_arg_constructors.clone());
 
         for pattern in patterns {
             if !detected_wild_card_or_identifier.is_empty() {
@@ -246,7 +254,7 @@ mod internal {
             }
         }
 
-        fn initialise(&mut self, with_arg_constructors: &[&str]) {
+        fn initialise(&mut self, with_arg_constructors: Vec<&str>) {
             for constructor in with_arg_constructors {
                 self.status.insert(constructor.to_string(), false);
             }
@@ -280,7 +288,7 @@ mod internal {
             }
         }
 
-        fn initialise(&mut self, no_arg_constructors: &[&str]) {
+        fn initialise(&mut self, no_arg_constructors: Vec<&str>) {
             for constructor in no_arg_constructors {
                 self.status.insert(constructor.to_string(), false);
             }
@@ -308,6 +316,27 @@ mod internal {
             .filter(|(_, &v)| !v)
             .map(|(k, _)| k.clone())
             .collect()
+    }
+
+    struct ConstructorDetails {
+        no_arg_constructors: Vec<&'static str>,
+        with_arg_constructors: Vec<&'static str>,
+    }
+
+    impl ConstructorDetails {
+        fn option() -> Self {
+            ConstructorDetails {
+                no_arg_constructors: vec!["none"],
+                with_arg_constructors: vec!["some"],
+            }
+        }
+
+        fn result() -> Self {
+            ConstructorDetails {
+                no_arg_constructors: vec!["err"],
+                with_arg_constructors: vec!["ok"],
+            }
+        }
     }
 }
 
