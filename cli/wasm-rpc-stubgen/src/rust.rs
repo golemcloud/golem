@@ -30,12 +30,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         Span::call_site(),
     );
 
-    // TODO: naming into stub def
     let root_name = Ident::new(
         &format!("{}_stub", def.source_package_name.name.to_snake_case()),
         Span::call_site(),
     );
-    // TODO: naming into stub def
     let stub_interface_name = format!("stub-{}", def.source_world_name());
     let stub_interface_name = Ident::new(
         &to_rust_ident(&stub_interface_name).to_snake_case(),

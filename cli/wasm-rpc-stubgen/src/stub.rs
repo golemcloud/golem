@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::wit_resolve::ResolvedWitDir;
-use crate::WasmRpcOverride;
+use crate::{naming, WasmRpcOverride};
 use anyhow::anyhow;
 use indexmap::IndexMap;
 use std::cell::OnceCell;
@@ -26,7 +26,6 @@ use wit_parser::{
 /// All the gathered information for generating the stub crate.
 pub struct StubDefinition {
     resolve: Resolve,
-    source_package_id: PackageId,
     source_world_id: WorldId,
     sources: IndexMap<PackageId, Vec<PathBuf>>,
     source_interfaces: OnceCell<Vec<InterfaceStub>>,
@@ -69,7 +68,6 @@ impl StubDefinition {
 
         Ok(Self {
             resolve: resolved_source.resolve,
-            source_package_id: resolved_source.package_id,
             source_world_id,
             sources: resolved_source.sources,
             source_interfaces: OnceCell::new(),
@@ -92,14 +90,9 @@ impl StubDefinition {
     //       and similar reasoning is used when in one function we get and resolve an ID, since
     //       these would be internal arena errors.
 
-    fn source_package(&self) -> &Package {
-        self.resolve
-            .packages
-            .get(self.source_package_id)
-            .unwrap_or_else(|| panic!("root package not found"))
-    }
-
-    pub fn source_packages_with_sources(&self) -> impl Iterator<Item = (&Package, &Vec<PathBuf>)> {
+    pub fn source_packages_with_wit_sources(
+        &self,
+    ) -> impl Iterator<Item = (&Package, &Vec<PathBuf>)> {
         self.resolve
             .topological_packages()
             .into_iter()
@@ -116,8 +109,8 @@ impl StubDefinition {
             })
     }
 
-    pub fn stub_package_name(&self) -> String {
-        format!("{}-stub", self.source_package().name)
+    pub fn stub_package_name(&self) -> PackageName {
+        naming::wit::stub_package_name(&self.source_package_name)
     }
 
     pub fn source_world(&self) -> &World {
@@ -148,11 +141,11 @@ impl StubDefinition {
     }
 
     pub fn target_wit_root(&self) -> PathBuf {
-        self.target_root.join("wit")
+        self.target_root.join(naming::wit::WIT_DIR)
     }
 
     pub fn target_wit_path(&self) -> PathBuf {
-        self.target_wit_root().join("_stub.wit")
+        self.target_wit_root().join(naming::wit::STUB_WIT_FILE_NAME)
     }
 
     pub fn resolve_target_wit(&self) -> anyhow::Result<ResolvedWitDir> {
@@ -391,11 +384,10 @@ impl StubDefinition {
             .package
             .and_then(|id| self.resolve.packages.get(id));
 
-        // TODO: unknown?
         let interface_name = owner_interface
             .name
             .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+            .unwrap_or_else(|| panic!("Failed to get owner interface name"));
 
         let interface_path = package
             .map(|p| p.name.interface_id(&interface_name))

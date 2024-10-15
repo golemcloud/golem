@@ -15,6 +15,7 @@
 use crate::cargo::generate_cargo_toml;
 use crate::compilation::compile;
 use crate::fs::copy;
+use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
 use crate::wit::{copy_wit_files, generate_stub_wit};
@@ -44,7 +45,7 @@ pub async fn build(
     fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
 
     fs_extra::dir::copy(
-        stub_def.target_root.join("wit"),
+        stub_def.target_root.join(naming::wit::WIT_DIR),
         dest_wit_root,
         &CopyOptions::new().content_only(true).overwrite(true),
     )
