@@ -27,7 +27,7 @@ use wit_parser::{
 pub struct StubDefinition {
     resolve: Resolve,
     source_world_id: WorldId,
-    sources: IndexMap<PackageId, Vec<PathBuf>>,
+    sources: IndexMap<PackageId, (PathBuf, Vec<PathBuf>)>,
     source_interfaces: OnceCell<Vec<InterfaceStub>>,
 
     pub source_package_name: PackageName,
@@ -90,7 +90,9 @@ impl StubDefinition {
     //       and similar reasoning is used when in one function we get and resolve an ID, since
     //       these would be internal arena errors.
 
-    pub fn packages_with_wit_sources(&self) -> impl Iterator<Item = (&Package, &Vec<PathBuf>)> {
+    pub fn packages_with_wit_sources(
+        &self,
+    ) -> impl Iterator<Item = (&Package, &(PathBuf, Vec<PathBuf>))> {
         self.resolve
             .topological_packages()
             .into_iter()

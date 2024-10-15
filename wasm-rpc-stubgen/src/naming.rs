@@ -1,4 +1,5 @@
 pub mod wit {
+    use std::path::{Path, PathBuf};
     use wit_parser::PackageName;
 
     pub static DEPS_DIR: &str = "deps";
@@ -26,7 +27,15 @@ pub mod wit {
         }
     }
 
-    pub fn package_dep_folder_name(package_name: &PackageName) -> String {
+    pub fn package_dep_dir_name(package_name: &PackageName) -> String {
         format!("{}_{}", package_name.namespace, package_name.name)
+    }
+
+    pub fn package_wit_dep_dir_from_package_dir_name(package_dir_name: &str) -> PathBuf {
+        Path::new(WIT_DIR).join(DEPS_DIR).join(package_dir_name)
+    }
+
+    pub fn package_wit_dep_dir_from_package_name(package_name: &PackageName) -> PathBuf {
+        package_wit_dep_dir_from_package_dir_name(&package_dep_dir_name(package_name))
     }
 }

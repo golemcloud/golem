@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Context};
 use std::cmp::PartialEq;
-use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -145,22 +144,28 @@ pub fn has_same_string_content<P: AsRef<Path>, Q: AsRef<Path>>(a: P, b: Q) -> an
     Ok(content_a == content_b)
 }
 
-pub fn must_get_file_name<P: AsRef<Path>>(path: P) -> anyhow::Result<OsString> {
+pub fn get_file_name<P: AsRef<Path>>(path: P) -> anyhow::Result<String> {
     let path = path.as_ref();
-    Ok(path
-        .file_name()
+    path.file_name()
         .ok_or_else(|| {
             anyhow!(
                 "Failed to get file name for package source: {}",
                 path.to_string_lossy(),
             )
         })?
-        .to_os_string())
+        .to_os_string()
+        .into_string()
+        .map_err(|_| {
+            anyhow!(
+                "Failed to convert filename for path: {}",
+                path.to_string_lossy()
+            )
+        })
 }
 
 pub fn strip_path_prefix<P: AsRef<Path>, Q: AsRef<Path>>(
-    path: P,
     prefix: Q,
+    path: P,
 ) -> anyhow::Result<PathBuf> {
     let path = path.as_ref();
     let prefix = prefix.as_ref();
@@ -169,9 +174,9 @@ pub fn strip_path_prefix<P: AsRef<Path>, Q: AsRef<Path>>(
         .strip_prefix(prefix)
         .with_context(|| {
             anyhow!(
-                "Failed to strip prefix from path, path: {}, prefix: {}",
-                path.to_string_lossy(),
-                prefix.to_string_lossy()
+                "Failed to strip prefix from path, prefix: {}, path: {}",
+                prefix.to_string_lossy(),
+                path.to_string_lossy()
             )
         })?
         .to_path_buf())

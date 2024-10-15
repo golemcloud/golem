@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action_plan, log_warn_action};
-use crate::fs::{must_get_file_name, strip_path_prefix, OverwriteSafeAction, OverwriteSafeActions};
+use crate::fs::{get_file_name, strip_path_prefix, OverwriteSafeAction, OverwriteSafeActions};
 use crate::wit::{generate_stub_wit_from_wit_dir, import_remover};
 use crate::wit_resolve::ResolvedWitDir;
 use crate::{cargo, naming};
 use anyhow::{anyhow, Context};
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use wit_parser::PackageName;
 
 #[derive(PartialEq, Eq)]
 pub enum UpdateCargoToml {
@@ -57,14 +59,15 @@ pub fn add_stub_dependency(
     }
 
     let mut actions = OverwriteSafeActions::new();
+    let mut package_names_to_package_path = BTreeMap::<PackageName, PathBuf>::new();
+
     for (package_name, package_id) in &stub_resolved_wit_root.resolve.package_names {
-        let sources = stub_resolved_wit_root
+        let (package_path, package_sources) = stub_resolved_wit_root
             .sources
             .get(package_id)
-            .ok_or_else(|| anyhow!("Failed to get package sources for {}", package_name))?
-            .iter()
-            .map(|source| source.to_path_buf())
-            .collect::<Vec<_>>();
+            .ok_or_else(|| anyhow!("Failed to get package sources for {}", package_name))?;
+        let package_path =
+            naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(package_path)?);
 
         let is_stub_main_package = *package_id == stub_resolved_wit_root.package_id;
         let is_dest_package = *package_name == dest_package.name;
@@ -76,43 +79,44 @@ pub fn add_stub_dependency(
                 "Skipping",
                 format!("cyclic self dependency for {}", package_name),
             );
-        // Handle self stub packages: use regenerated stub with inlining, to break the recursive cycle
-        } else if is_dest_stub_package {
-            actions.add(OverwriteSafeAction::WriteFile {
-                content: generate_stub_wit_from_wit_dir(dest_wit_root, true)?,
-                target: dest_deps_dir
-                    .join(naming::wit::package_dep_folder_name(package_name))
-                    .join(naming::wit::STUB_WIT_FILE_NAME),
-            });
-        // Non-self stub packages has to be copied into target deps
-        } else if is_stub_main_package {
-            let target_stub_dep_dir =
-                dest_deps_dir.join(naming::wit::package_dep_folder_name(package_name));
+        } else if is_dest_stub_package || is_stub_main_package {
+            let package_dep_dir_name = naming::wit::package_dep_dir_name(package_name);
+            let package_path = naming::wit::package_wit_dep_dir_from_package_name(package_name);
 
-            for source in sources {
-                let file_name = must_get_file_name(&source)?;
-                actions.add(OverwriteSafeAction::CopyFile {
-                    source,
-                    target: target_stub_dep_dir.join(file_name),
+            package_names_to_package_path.insert(package_name.clone(), package_path);
+
+            // Handle self stub packages: use regenerated stub with inlining, to break the recursive cycle
+            if is_dest_stub_package {
+                actions.add(OverwriteSafeAction::WriteFile {
+                    content: generate_stub_wit_from_wit_dir(dest_wit_root, true)?,
+                    target: dest_deps_dir
+                        .join(&package_dep_dir_name)
+                        .join(naming::wit::STUB_WIT_FILE_NAME),
                 });
+            // Non-self stub package has to be copied into target deps
+            } else {
+                for source in package_sources {
+                    actions.add(OverwriteSafeAction::CopyFile {
+                        source: source.clone(),
+                        target: dest_deps_dir
+                            .join(&package_dep_dir_name)
+                            .join(get_file_name(&source)?),
+                    });
+                }
             }
         // Handle other package by copying while removing imports
         } else {
-            for source in sources {
+            package_names_to_package_path.insert(package_name.clone(), package_path);
+
+            for source in package_sources {
                 actions.add(OverwriteSafeAction::copy_file_transformed(
                     source.clone(),
-                    dest_wit_root.join(strip_path_prefix(source, stub_wit_root)?),
+                    dest_wit_root.join(strip_path_prefix(stub_wit_root, source)?),
                     &dest_stub_import_remover,
                 )?);
             }
         }
     }
-
-    let targets = actions
-        .targets()
-        .iter()
-        .map(|path| path.to_path_buf())
-        .collect::<Vec<_>>();
 
     let forbidden_overwrites = actions.run(overwrite, log_action_plan)?;
     if !forbidden_overwrites.is_empty() {
@@ -133,7 +137,10 @@ pub fn add_stub_dependency(
                 cargo::is_cargo_component_toml(&target_cargo_toml).context(format!(
                     "The file {target_cargo_toml:?} is not a valid cargo-component project"
                 ))?;
-                cargo::add_dependencies_to_cargo_toml(&target_cargo_toml, targets)?;
+                cargo::add_dependencies_to_cargo_toml(
+                    &target_cargo_toml,
+                    package_names_to_package_path,
+                )?;
             }
         } else if update_cargo_toml == UpdateCargoToml::Update {
             return Err(anyhow!(
