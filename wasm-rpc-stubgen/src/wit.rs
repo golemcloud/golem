@@ -514,9 +514,7 @@ pub fn copy_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
         for source in sources {
             if is_source_package {
                 let dest = target_deps
-                    .join(naming::wit::package_dep_dir_name(
-                        &def.source_package_name,
-                    ))
+                    .join(naming::wit::package_dep_dir_name(&def.source_package_name))
                     .join(get_file_name(source)?);
                 log_action(
                     "  Copying",

@@ -100,7 +100,7 @@ pub fn add_stub_dependency(
                         source: source.clone(),
                         target: dest_deps_dir
                             .join(&package_dep_dir_name)
-                            .join(get_file_name(&source)?),
+                            .join(get_file_name(source)?),
                     });
                 }
             }
