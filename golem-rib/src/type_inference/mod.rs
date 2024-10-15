@@ -1342,7 +1342,8 @@ mod type_inference_tests {
             let expr_str = r#"
               let x = { foo : "bar" };
               match some(x) {
-                some(x) => x.foo
+                some(x) => x.foo,
+                none => "baz"
               }
             "#;
 
@@ -1394,6 +1395,9 @@ mod type_inference_tests {
                                 "foo".to_string(),
                                 InferredType::Str,
                             ),
+                        ), MatchArm::new(
+                            ArmPattern::constructor("none", vec![]),
+                            Expr::literal("baz"),
                         )],
                         InferredType::Str,
                     ),
