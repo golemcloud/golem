@@ -26,6 +26,8 @@ pub fn type_check(expr: &mut Expr, metadata: &FunctionTypeRegistry) -> Result<()
 mod type_check_tests {
 
     mod unresolved_types_error {
+        use test_r::test;
+
         use crate::type_checker::type_check_tests::internal;
         use crate::{compile, Expr};
 
@@ -48,6 +50,8 @@ mod type_check_tests {
     }
 
     mod type_mismatch_errors {
+        use test_r::test;
+
         use crate::type_checker::type_check_tests::internal;
         use crate::{compile, Expr};
 

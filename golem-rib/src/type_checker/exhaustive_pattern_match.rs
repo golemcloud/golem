@@ -219,13 +219,11 @@ mod internal {
         if !constructor_map.is_empty() {
             if !detected_wild_card_or_identifier.is_empty() {
                 constructor_map.values_mut().for_each(|patterns| {
-                    detected_wild_card_or_identifier.iter().for_each(|pattern| {
-                        if !patterns.iter().any(|arm_pattern| {
-                            arm_pattern.is_literal_identifier() || arm_pattern.is_wildcard()
-                        }) {
-                            patterns.extend(detected_wild_card_or_identifier.clone());
-                        }
-                    });
+                    if !patterns.iter().any(|arm_pattern| {
+                        arm_pattern.is_literal_identifier() || arm_pattern.is_wildcard()
+                    }) {
+                        patterns.extend(detected_wild_card_or_identifier.clone());
+                    }
                 });
             }
 
@@ -238,9 +236,8 @@ mod internal {
 
 #[cfg(test)]
 mod pattern_match_exhaustive_tests {
-    use test_r::test;
     use crate::{compile, Expr};
-
+    use test_r::test;
 
     #[test]
     fn test_option_pattern_match1() {
