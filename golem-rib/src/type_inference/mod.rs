@@ -1368,32 +1368,35 @@ mod type_inference_tests {
                                 InferredType::Str,
                             )]))),
                         )),
-                        vec![MatchArm::new(
-                            ArmPattern::constructor(
-                                "some",
-                                vec![ArmPattern::literal(Expr::Identifier(
-                                    VariableId::match_identifier("x".to_string(), 1),
-                                    InferredType::Record(vec![(
-                                        "foo".to_string(),
-                                        InferredType::Str,
-                                    )]),
-                                ))],
+                        vec![
+                            MatchArm::new(
+                                ArmPattern::constructor(
+                                    "some",
+                                    vec![ArmPattern::literal(Expr::Identifier(
+                                        VariableId::match_identifier("x".to_string(), 1),
+                                        InferredType::Record(vec![(
+                                            "foo".to_string(),
+                                            InferredType::Str,
+                                        )]),
+                                    ))],
+                                ),
+                                Expr::SelectField(
+                                    Box::new(Expr::Identifier(
+                                        VariableId::match_identifier("x".to_string(), 1),
+                                        InferredType::Record(vec![(
+                                            "foo".to_string(),
+                                            InferredType::Str,
+                                        )]),
+                                    )),
+                                    "foo".to_string(),
+                                    InferredType::Str,
+                                ),
                             ),
-                            Expr::SelectField(
-                                Box::new(Expr::Identifier(
-                                    VariableId::match_identifier("x".to_string(), 1),
-                                    InferredType::Record(vec![(
-                                        "foo".to_string(),
-                                        InferredType::Str,
-                                    )]),
-                                )),
-                                "foo".to_string(),
-                                InferredType::Str,
+                            MatchArm::new(
+                                ArmPattern::constructor("none", vec![]),
+                                Expr::literal("baz"),
                             ),
-                        ), MatchArm::new(
-                            ArmPattern::constructor("none", vec![]),
-                            Expr::literal("baz"),
-                        )],
+                        ],
                         InferredType::Str,
                     ),
                 ],
@@ -1459,32 +1462,35 @@ mod type_inference_tests {
                                 InferredType::Str,
                             )]))),
                         )),
-                        vec![MatchArm::new(
-                            ArmPattern::Constructor(
-                                "some".to_string(),
-                                vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                    VariableId::match_identifier("x".to_string(), 1),
-                                    InferredType::Record(vec![(
-                                        "foo".to_string(),
-                                        InferredType::Str,
-                                    )]),
-                                )))],
+                        vec![
+                            MatchArm::new(
+                                ArmPattern::Constructor(
+                                    "some".to_string(),
+                                    vec![ArmPattern::Literal(Box::new(Expr::Identifier(
+                                        VariableId::match_identifier("x".to_string(), 1),
+                                        InferredType::Record(vec![(
+                                            "foo".to_string(),
+                                            InferredType::Str,
+                                        )]),
+                                    )))],
+                                ),
+                                Expr::SelectField(
+                                    Box::new(Expr::Identifier(
+                                        VariableId::match_identifier("x".to_string(), 1),
+                                        InferredType::Record(vec![(
+                                            "foo".to_string(),
+                                            InferredType::Str,
+                                        )]),
+                                    )),
+                                    "foo".to_string(),
+                                    InferredType::Str,
+                                ),
                             ),
-                            Expr::SelectField(
-                                Box::new(Expr::Identifier(
-                                    VariableId::match_identifier("x".to_string(), 1),
-                                    InferredType::Record(vec![(
-                                        "foo".to_string(),
-                                        InferredType::Str,
-                                    )]),
-                                )),
-                                "foo".to_string(),
-                                InferredType::Str,
+                            MatchArm::new(
+                                ArmPattern::constructor("none", vec![]),
+                                Expr::literal("baz"),
                             ),
-                        ), MatchArm::new(
-                            ArmPattern::constructor("none", vec![]),
-                            Expr::literal("baz"),
-                        )],
+                        ],
                         InferredType::Str,
                     ),
                     Expr::PatternMatch(
@@ -1497,26 +1503,33 @@ mod type_inference_tests {
                                 InferredType::U64,
                             )))),
                         )),
-                        vec![MatchArm::new(
-                            ArmPattern::Constructor(
-                                "some".to_string(),
-                                vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                    VariableId::match_identifier("y".to_string(), 3),
-                                    InferredType::List(Box::new(InferredType::U64)),
-                                )))],
+                        vec![
+                            MatchArm::new(
+                                ArmPattern::Constructor(
+                                    "some".to_string(),
+                                    vec![ArmPattern::Literal(Box::new(Expr::Identifier(
+                                        VariableId::match_identifier("y".to_string(), 3),
+                                        InferredType::List(Box::new(InferredType::U64)),
+                                    )))],
+                                ),
+                                Expr::SelectIndex(
+                                    Box::new(Expr::Identifier(
+                                        VariableId::match_identifier("y".to_string(), 3),
+                                        InferredType::List(Box::new(InferredType::U64)),
+                                    )),
+                                    0,
+                                    InferredType::U64,
+                                ),
                             ),
-                            Expr::SelectIndex(
-                                Box::new(Expr::Identifier(
-                                    VariableId::match_identifier("y".to_string(), 3),
-                                    InferredType::List(Box::new(InferredType::U64)),
-                                )),
-                                0,
-                                InferredType::U64,
+                            MatchArm::new(
+                                ArmPattern::constructor("none", vec![]),
+                                Expr::Number(
+                                    Number { value: 0f64 },
+                                    Some(TypeName::U64),
+                                    InferredType::U64,
+                                ),
                             ),
-                        ), MatchArm::new(
-                            ArmPattern::constructor("none", vec![]),
-                            Expr::Number(Number { value: 0f64 }, Some(TypeName::U64), InferredType::U64),
-                        )],
+                        ],
                         InferredType::U64,
                     ),
                 ],

@@ -27,7 +27,10 @@ pub fn desugar_pattern_match(
         }
     }
 
-    internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type))
+    let expr =
+        internal::build_expr_from(if_else_branches).map(|expr| expr.add_infer_type(expr_type));
+    dbg!(expr.clone().map(|x| x.to_string()));
+    expr
 }
 
 mod internal {
@@ -336,13 +339,27 @@ mod internal {
                 }
             }
 
-            InferredType::Option(_) if constructor_name == "none" => Some(IfThenBranch {
-                condition: Expr::equal_to(
-                    Expr::get_tag(pred_expr.clone()),
-                    Expr::literal(constructor_name),
-                ),
-                body: resolution.clone(),
-            }),
+            InferredType::Option(_) if constructor_name == "none" => {
+                let cond = if let Some(t) = tag {
+                    Expr::and(
+                        t,
+                        Expr::equal_to(
+                            Expr::get_tag(pred_expr.clone()),
+                            Expr::literal(constructor_name),
+                        ),
+                    )
+                } else {
+                    Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    )
+                };
+
+                Some(IfThenBranch {
+                    condition: cond,
+                    body: resolution.clone(),
+                })
+            }
 
             InferredType::Result { ok, error } => {
                 let inner_variant_arg_type = if constructor_name == "ok" {
