@@ -38,8 +38,18 @@ mod internal {
 
         let inner_constructors = check_result.value()?;
 
-        for patterns in inner_constructors.inner().values() {
-            check_exhaustive_pattern_match(patterns)?;
+        for (field, patterns) in inner_constructors.inner() {
+            check_exhaustive_pattern_match(patterns).map_err(|e| match e {
+                ExhaustiveCheckError::MissingConstructors(missing_constructors) => {
+                    let mut new_missing_constructors = vec![];
+                    missing_constructors.iter().for_each(|missing_constructor| {
+                        new_missing_constructors
+                            .push(format!("{}({})", field, missing_constructor));
+                    });
+                    ExhaustiveCheckError::MissingConstructors(new_missing_constructors)
+                }
+                e => e,
+            })?;
         }
 
         Ok(())
@@ -504,6 +514,22 @@ mod pattern_match_exhaustive_tests {
         assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `some`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
     }
 
+    #[test]
+    fn test_option_nested_invalid1() {
+        let expr = r#"
+        let x = some(some("foo"));
+        match x {
+            some(some(a)) => a,
+            none => "bar"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+
+        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `some(none)`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+    }
+
     /// Result
     #[test]
     fn test_result_pattern_match1() {
@@ -703,5 +729,85 @@ mod pattern_match_exhaustive_tests {
         let result = compile(&expr, &vec![]).unwrap_err();
 
         assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `ok`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+    }
+
+    #[test]
+    fn test_result_nested_invalid1() {
+        let expr = r#"
+        let x = ok(err("foo"));
+        match x {
+            ok(err(a)) => a,
+            err(_) => "bar"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+
+        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `ok(ok)`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+    }
+
+    #[test]
+    fn test_result_nested_invalid2() {
+        let expr = r#"
+        let x = ok(ok("foo"));
+        match x {
+            ok(ok(a)) => a,
+            err(_) => "bar"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+
+        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `ok(err)`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+    }
+
+    #[test]
+    fn test_result_wild_card_with_nested1() {
+        let expr = r#"
+        let x = ok(ok("foo"));
+        match x {
+            ok(ok(a)) => a,
+            _ => "bar"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_result_wild_card_with_nested2() {
+        let expr = r#"
+        let x = err(err("foo"));
+        match x {
+            err(err(a)) => a,
+            _ => "bar"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_option_wild_card_with_nested1() {
+        let expr = r#"
+        let x = some(some("foo"));
+        match x {
+            some(some(a)) => a,
+            _ => "bar"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+
+        assert!(result.is_ok());
     }
 }
