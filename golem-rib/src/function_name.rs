@@ -930,11 +930,11 @@ impl DynamicParsedFunctionName {
     }
 
     pub fn function_name(&self) -> String {
-        self.to_static().function.function_name()
+        self.to_parsed_function_name().function.function_name()
     }
 
     //
-    pub fn to_static(&self) -> ParsedFunctionName {
+    pub fn to_parsed_function_name(&self) -> ParsedFunctionName {
         ParsedFunctionName {
             site: self.site.clone(),
             function: self.function.to_static(),
@@ -944,7 +944,7 @@ impl DynamicParsedFunctionName {
 
 impl Display for DynamicParsedFunctionName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let function_name = self.to_static().to_string();
+        let function_name = self.to_parsed_function_name().to_string();
         write!(f, "{}", function_name)
     }
 }
@@ -1006,7 +1006,7 @@ impl ParsedFunctionName {
             parser.easy_parse(name);
 
         match result {
-            Ok((parsed, _)) => Ok(parsed.to_static()),
+            Ok((parsed, _)) => Ok(parsed.to_parsed_function_name()),
             Err(error) => {
                 let error_message = error
                     .map_position(|p| p.translate_position(name))

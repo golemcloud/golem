@@ -54,7 +54,7 @@ mod internal {
     ) -> Result<(), String> {
         match call_type {
             CallType::Function(dynamic_parsed_function_name) => {
-                let parsed_function_static = dynamic_parsed_function_name.clone().to_static();
+                let parsed_function_static = dynamic_parsed_function_name.clone().to_parsed_function_name();
                 let function = parsed_function_static.clone().function;
                 if function.resource_name().is_some() {
                     let resource_name =
