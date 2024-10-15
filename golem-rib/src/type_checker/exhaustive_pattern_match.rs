@@ -19,7 +19,7 @@ pub fn check_exhaustive_pattern_match(
                     .iter()
                     .map(|p| p.arm_pattern.clone())
                     .collect::<Vec<_>>();
-                internal::check_exhaustive_pattern_match(&match_arm)?;
+                internal::check_exhaustive_pattern_match(&match_arm, function_type_registry)?;
             }
 
             expr => expr.visit_children_mut_bottom_up(&mut queue),
@@ -40,20 +40,38 @@ pub enum ExhaustiveCheckError {
 
 mod internal {
     use crate::type_checker::exhaustive_pattern_match::ExhaustiveCheckError;
-    use crate::ArmPattern;
+    use crate::{ArmPattern, Expr, FunctionTypeRegistry};
+    use golem_wasm_ast::analysis::TypeVariant;
     use std::collections::HashMap;
     use std::fmt::Display;
+    use std::ops::Deref;
 
     pub(crate) fn check_exhaustive_pattern_match(
         arms: &[ArmPattern],
+        function_registry: &FunctionTypeRegistry,
     ) -> Result<(), ExhaustiveCheckError> {
-        let check_result = check_exhaustive(arms, ConstructorDetails::option())
-            .unwrap_or_run_with(arms, ConstructorDetails::result());
+        let mut exhaustive_check_result = check_exhaustive(arms, ConstructorDetail::option());
 
-        let inner_constructors = check_result.value()?;
+        let variants = function_registry.get_variants();
+
+        let mut constructor_details = vec![];
+
+        for variant in variants {
+            let detail = ConstructorDetail::from_variant(variant);
+            constructor_details.push(detail);
+        }
+
+        constructor_details.push(ConstructorDetail::option());
+        constructor_details.push(ConstructorDetail::result());
+
+        for detail in constructor_details {
+            exhaustive_check_result = exhaustive_check_result.unwrap_or_run_with(arms, detail);
+        }
+
+        let inner_constructors = exhaustive_check_result.value()?;
 
         for (field, patterns) in inner_constructors.inner() {
-            check_exhaustive_pattern_match(patterns).map_err(|e| match e {
+            check_exhaustive_pattern_match(patterns, function_registry).map_err(|e| match e {
                 ExhaustiveCheckError::MissingConstructors(missing_constructors) => {
                     let mut new_missing_constructors = vec![];
                     missing_constructors.iter().for_each(|missing_constructor| {
@@ -62,7 +80,7 @@ mod internal {
                     });
                     ExhaustiveCheckError::MissingConstructors(new_missing_constructors)
                 }
-                e => e,
+                other_errors => other_errors,
             })?;
         }
 
@@ -91,7 +109,7 @@ mod internal {
         fn unwrap_or_run_with(
             &self,
             patterns: &[ArmPattern],
-            constructor_details: ConstructorDetails,
+            constructor_details: ConstructorDetail,
         ) -> ExhaustiveCheckResult {
             match self {
                 ExhaustiveCheckResult(Ok(result)) if result.is_empty() => {
@@ -143,7 +161,7 @@ mod internal {
 
     fn check_exhaustive(
         patterns: &[ArmPattern],
-        pattern_mach_args: ConstructorDetails,
+        pattern_mach_args: ConstructorDetail,
     ) -> ExhaustiveCheckResult {
         let with_arg_constructors = pattern_mach_args.with_arg_constructors;
         let no_arg_constructors = pattern_mach_args.no_arg_constructors;
@@ -159,6 +177,7 @@ mod internal {
         constructors_with_no_arg.initialise(no_arg_constructors.clone());
 
         for pattern in patterns {
+            dbg!(pattern.clone());
             if !detected_wild_card_or_identifier.is_empty() {
                 return ExhaustiveCheckResult::dead_code(
                     detected_wild_card_or_identifier
@@ -169,29 +188,48 @@ mod internal {
             }
             match pattern {
                 ArmPattern::Constructor(ctor_name, arm_patterns) => {
-                    if with_arg_constructors.contains(&ctor_name.as_str()) {
+                    if with_arg_constructors.contains(ctor_name) {
                         constructor_map_result
                             .entry(ctor_name.clone())
                             .or_default()
                             .extend(arm_patterns.clone());
                         constructors_with_arg.register(ctor_name);
-                    } else if no_arg_constructors.contains(&ctor_name.as_str()) {
+                    } else if no_arg_constructors.contains(ctor_name) {
                         constructors_with_no_arg.register(ctor_name);
                     }
                 }
                 ArmPattern::As(_, inner_pattern) => {
                     if let ArmPattern::Constructor(ctor_name, arm_patterns) = &**inner_pattern {
-                        if with_arg_constructors.contains(&ctor_name.as_str()) {
+                        if with_arg_constructors.contains(&ctor_name) {
                             constructor_map_result
                                 .entry(ctor_name.clone())
                                 .or_default()
                                 .extend(arm_patterns.clone());
                             constructors_with_arg.register(ctor_name);
-                        } else if no_arg_constructors.contains(&ctor_name.as_str()) {
+                        } else if no_arg_constructors.contains(&ctor_name) {
                             constructors_with_no_arg.register(ctor_name);
                         }
                     }
                 }
+                ArmPattern::Literal(expr) => match expr.deref() {
+                    Expr::Call(call_type, args, _) => {
+                        let ctor_name = call_type.to_string();
+                        let arm_patterns = args
+                            .iter()
+                            .map(|arg| ArmPattern::Literal(Box::new(arg.clone())))
+                            .collect::<Vec<_>>();
+                        if with_arg_constructors.contains(&ctor_name) {
+                            constructor_map_result
+                                .entry(ctor_name.clone())
+                                .or_default()
+                                .extend(arm_patterns);
+                            constructors_with_arg.register(ctor_name.as_str());
+                        } else if no_arg_constructors.contains(&ctor_name) {
+                            constructors_with_no_arg.register(ctor_name.as_str());
+                        }
+                    }
+                    _ => {}
+                },
                 ArmPattern::WildCard => {
                     detected_wild_card_or_identifier.push(ArmPattern::WildCard);
                 }
@@ -254,7 +292,7 @@ mod internal {
             }
         }
 
-        fn initialise(&mut self, with_arg_constructors: Vec<&str>) {
+        fn initialise(&mut self, with_arg_constructors: Vec<String>) {
             for constructor in with_arg_constructors {
                 self.status.insert(constructor.to_string(), false);
             }
@@ -288,7 +326,7 @@ mod internal {
             }
         }
 
-        fn initialise(&mut self, no_arg_constructors: Vec<&str>) {
+        fn initialise(&mut self, no_arg_constructors: Vec<String>) {
             for constructor in no_arg_constructors {
                 self.status.insert(constructor.to_string(), false);
             }
@@ -318,23 +356,42 @@ mod internal {
             .collect()
     }
 
-    struct ConstructorDetails {
-        no_arg_constructors: Vec<&'static str>,
-        with_arg_constructors: Vec<&'static str>,
+    #[derive(Clone, Debug)]
+    struct ConstructorDetail {
+        no_arg_constructors: Vec<String>,
+        with_arg_constructors: Vec<String>,
     }
 
-    impl ConstructorDetails {
+    impl ConstructorDetail {
+        fn from_variant(variant: TypeVariant) -> ConstructorDetail {
+            let cases = variant.cases;
+
+            let (no_arg_constructors, with_arg_constructors): (Vec<_>, Vec<_>) =
+                cases.into_iter().partition(|c| c.typ.is_none());
+
+            let result = ConstructorDetail {
+                no_arg_constructors: no_arg_constructors.iter().map(|c| c.name.clone()).collect(),
+                with_arg_constructors: with_arg_constructors
+                    .iter()
+                    .map(|c| c.name.clone())
+                    .collect(),
+            };
+
+            dbg!(result.clone());
+            result
+        }
+
         fn option() -> Self {
-            ConstructorDetails {
-                no_arg_constructors: vec!["none"],
-                with_arg_constructors: vec!["some"],
+            ConstructorDetail {
+                no_arg_constructors: vec!["none".to_string()],
+                with_arg_constructors: vec!["some".to_string()],
             }
         }
 
         fn result() -> Self {
-            ConstructorDetails {
-                no_arg_constructors: vec!["err"],
-                with_arg_constructors: vec!["ok"],
+            ConstructorDetail {
+                no_arg_constructors: vec!["err".to_string()],
+                with_arg_constructors: vec!["ok".to_string()],
             }
         }
     }

@@ -98,6 +98,20 @@ pub struct FunctionTypeRegistry {
 }
 
 impl FunctionTypeRegistry {
+    pub fn get_variants(&self) -> Vec<TypeVariant> {
+        let mut variants = vec![];
+
+        for (_, registry_value) in &self.types {
+            match registry_value {
+                RegistryValue::Variant { variant_type, .. } => variants.push(variant_type.clone()),
+
+                _ => {}
+            }
+        }
+
+        variants
+    }
+
     pub fn get(&self, key: &CallType) -> Option<&RegistryValue> {
         match key {
             CallType::Function(parsed_fn_name) => self.types.get(&RegistryKey::from_function_name(
