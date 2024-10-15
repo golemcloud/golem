@@ -8,7 +8,7 @@ pub struct ResolvedWitDir {
     pub path: PathBuf,
     pub resolve: Resolve,
     pub package_id: PackageId,
-    pub sources: IndexMap<PackageId, Vec<PathBuf>>,
+    pub sources: IndexMap<PackageId, (PathBuf, Vec<PathBuf>)>,
 }
 
 impl ResolvedWitDir {
@@ -69,7 +69,7 @@ fn partition_sources_by_package_ids(
     resolve: &Resolve,
     root_package_id: PackageId,
     sources: Vec<PathBuf>,
-) -> anyhow::Result<IndexMap<PackageId, Vec<PathBuf>>> {
+) -> anyhow::Result<IndexMap<PackageId, (PathBuf, Vec<PathBuf>)>> {
     // Based on Resolve::push_dir ():
     //
     // The deps folder may contain:
@@ -80,16 +80,16 @@ fn partition_sources_by_package_ids(
     // Disabling "wasm" and "wat" sources could be done by disabling default features, but they are also required through other dependencies,
     // so we filter out currently not supported path patterns here, including the single file format (for now).
 
-    let mut partitioned_sources = IndexMap::<PackageId, Vec<PathBuf>>::new();
-    let mut dep_path_to_package_id = IndexMap::<PathBuf, PackageId>::new();
+    let mut partitioned_sources = IndexMap::<PackageId, (PathBuf, Vec<PathBuf>)>::new();
+    let mut dep_package_path_to_package_id = IndexMap::<PathBuf, PackageId>::new();
 
     for source in sources {
-        let relative_source = strip_path_prefix(&source, path)?;
+        let relative_source = strip_path_prefix(path, &source)?;
 
         let segments = relative_source.iter().collect::<Vec<_>>();
 
-        let package_id = match segments.len() {
-            1 => root_package_id,
+        let (package_path, package_id) = match segments.len() {
+            1 => (path, root_package_id),
             2 => {
                 bail!(
                     "Single file with packages not supported, source: {}",
@@ -104,8 +104,8 @@ fn partition_sources_by_package_ids(
                     )
                 })?;
 
-                match dep_path_to_package_id.get(dep_package_path) {
-                    Some(package_id) => *package_id,
+                match dep_package_path_to_package_id.get(dep_package_path) {
+                    Some(package_id) => (dep_package_path, *package_id),
                     None => {
                         let package_id = *resolve
                             .package_names
@@ -121,9 +121,10 @@ fn partition_sources_by_package_ids(
                                 )
                             })?;
 
-                        dep_path_to_package_id.insert(dep_package_path.to_path_buf(), package_id);
+                        dep_package_path_to_package_id
+                            .insert(dep_package_path.to_path_buf(), package_id);
 
-                        package_id
+                        (dep_package_path, package_id)
                     }
                 }
             }
@@ -137,8 +138,8 @@ fn partition_sources_by_package_ids(
 
         partitioned_sources
             .entry(package_id)
-            .and_modify(|sources| sources.push(source.to_path_buf()))
-            .or_insert_with(|| vec![source.to_path_buf()]);
+            .and_modify(|(_, sources)| sources.push(source.to_path_buf()))
+            .or_insert_with(|| (package_path.to_path_buf(), vec![source.to_path_buf()]));
     }
 
     Ok(partitioned_sources)

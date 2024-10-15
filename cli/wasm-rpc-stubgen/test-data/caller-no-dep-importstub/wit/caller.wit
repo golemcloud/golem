@@ -5,7 +5,7 @@ interface api {
 }
 
 world caller {
-    import test:main-stub/stub-api;
+//!!    import test:main-stub/stub-api;
 
     export api;
 }
