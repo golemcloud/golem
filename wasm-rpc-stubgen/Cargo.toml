@@ -18,7 +18,7 @@ harness = false
 [[bin]]
 name = "wasm-rpc-stubgen"
 path = "src/main.rs"
-harness = false
+test = false
 
 [[test]]
 name = "wit"

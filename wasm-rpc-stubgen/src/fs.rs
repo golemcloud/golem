@@ -192,9 +192,9 @@ impl OverwriteSafeAction {
 
     pub fn target(&self) -> &Path {
         match self {
-            OverwriteSafeAction::CopyFile { target, .. } => &target,
-            OverwriteSafeAction::CopyFileTransformed { target, .. } => &target,
-            OverwriteSafeAction::WriteFile { target, .. } => &target,
+            OverwriteSafeAction::CopyFile { target, .. } => target,
+            OverwriteSafeAction::CopyFileTransformed { target, .. } => target,
+            OverwriteSafeAction::WriteFile { target, .. } => target,
         }
     }
 }
@@ -207,6 +207,12 @@ pub enum OverwriteSafeActionPlan {
 }
 
 pub struct OverwriteSafeActions(Vec<OverwriteSafeAction>);
+
+impl Default for OverwriteSafeActions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl OverwriteSafeActions {
     pub fn new() -> Self {

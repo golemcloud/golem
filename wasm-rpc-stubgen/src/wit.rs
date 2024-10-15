@@ -21,12 +21,10 @@ use crate::stub::{
 use anyhow::{anyhow, bail};
 use indexmap::IndexMap;
 use regex::Regex;
-use std::fmt::{Display, Write};
+use std::fmt::Write;
 use std::fs;
-use std::path::{Path, PathBuf};
-use wit_parser::{
-    Enum, Field, Flags, Handle, PackageName, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant,
-};
+use std::path::Path;
+use wit_parser::{Enum, Field, Flags, Handle, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
@@ -653,28 +651,6 @@ impl TypeExtensions for Type {
             }
         }
     }
-}
-
-// TODO: remove
-pub fn get_dep_dirs(wit_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    let mut result = Vec::new();
-    let deps = wit_root.join("deps");
-    if deps.exists() && deps.is_dir() {
-        for entry in fs::read_dir(deps)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                result.push(entry.path());
-            }
-        }
-    }
-    Ok(result)
-}
-
-// TODO: remove
-pub fn get_package_name(_wit: &Path) -> anyhow::Result<PackageName> {
-    /*let pkg = UnresolvedPackage::parse_path(wit)?;
-    Ok(pkg.name)*/
-    todo!()
 }
 
 pub fn import_remover(package_name: &str) -> impl Fn(String) -> anyhow::Result<String> {
