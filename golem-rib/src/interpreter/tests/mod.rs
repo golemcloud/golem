@@ -328,12 +328,14 @@ mod comprehensive_test {
 
               let ok_of_variant_response_processed = match ok_of_variant_response {
                 ok(case-str(a)) => a,
-                err(case-str(b)) => b
+                err(case-str(b)) => b,
+                _ => "not found"
               };
 
                 let err_of_variant_response_processed = match err_of_variant_response {
                     ok(case-str(a)) => a,
-                    err(case-str(b)) => b
+                    err(case-str(b)) => b,
+                    _ => "not found"
                 };
 
               let ok_of_enum_response_processed = match ok_of_enum_response {

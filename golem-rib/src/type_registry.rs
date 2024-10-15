@@ -102,7 +102,7 @@ impl FunctionTypeRegistry {
         let mut variants = vec![];
 
         for registry_value in self.types.values() {
-            if let  RegistryValue::Variant { variant_type, .. } = registry_value {
+            if let RegistryValue::Variant { variant_type, .. } = registry_value {
                 variants.push(variant_type.clone())
             }
         }

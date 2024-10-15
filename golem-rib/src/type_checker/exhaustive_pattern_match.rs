@@ -177,7 +177,6 @@ mod internal {
         constructors_with_no_arg.initialise(no_arg_constructors.clone());
 
         for pattern in patterns {
-            dbg!(pattern.clone());
             if !detected_wild_card_or_identifier.is_empty() {
                 return ExhaustiveCheckResult::dead_code(
                     detected_wild_card_or_identifier
@@ -211,7 +210,7 @@ mod internal {
                         }
                     }
                 }
-                ArmPattern::Literal(expr) => {
+                arm_pattern @ ArmPattern::Literal(expr) => {
                     if let Expr::Call(call_type, args, _) = expr.deref() {
                         let ctor_name = call_type.to_string();
                         let arm_patterns = args
@@ -227,15 +226,14 @@ mod internal {
                         } else if no_arg_constructors.contains(&ctor_name) {
                             constructors_with_no_arg.register(ctor_name.as_str());
                         }
+                    } else if arm_pattern.is_literal_identifier() {
+                        detected_wild_card_or_identifier.push(arm_pattern.clone());
                     }
                 }
                 ArmPattern::WildCard => {
                     detected_wild_card_or_identifier.push(ArmPattern::WildCard);
                 }
 
-                arm_pattern if arm_pattern.is_literal_identifier() => {
-                    detected_wild_card_or_identifier.push(arm_pattern.clone());
-                }
                 _ => {}
             }
         }
@@ -368,16 +366,13 @@ mod internal {
             let (no_arg_constructors, with_arg_constructors): (Vec<_>, Vec<_>) =
                 cases.into_iter().partition(|c| c.typ.is_none());
 
-            let result = ConstructorDetail {
+            ConstructorDetail {
                 no_arg_constructors: no_arg_constructors.iter().map(|c| c.name.clone()).collect(),
                 with_arg_constructors: with_arg_constructors
                     .iter()
                     .map(|c| c.name.clone())
                     .collect(),
-            };
-
-            dbg!(result.clone());
-            result
+            }
         }
 
         fn option() -> Self {
