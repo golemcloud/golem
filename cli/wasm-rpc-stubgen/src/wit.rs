@@ -14,11 +14,11 @@
 
 use crate::commands::log::{log_action, log_warn_action};
 use crate::fs::{copy, copy_transformed};
-use crate::naming;
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
     InterfaceStubTypeDef, StubDefinition,
 };
+use crate::{naming, WasmRpcOverride};
 use anyhow::{anyhow, bail};
 use indexmap::IndexMap;
 use regex::Regex;
@@ -29,33 +29,33 @@ use wit_parser::{
     Enum, Field, Flags, Handle, PackageName, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant,
 };
 
-pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
+pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
         "Generating",
         format!("stub WIT to {}", def.target_wit_path().to_string_lossy()),
     );
 
-    let type_gen_strategy = if def.always_inline_types {
-        StubTypeGen::InlineRootTypes
-    } else {
-        StubTypeGen::ImportRootTypes
-    };
-
-    let out = get_stub_wit(def, type_gen_strategy)?;
+    let out = generate_stub_wit_from_stub_def(def)?;
     fs::create_dir_all(def.target_wit_root())?;
     fs::write(def.target_wit_path(), out)?;
     Ok(())
 }
 
-pub enum StubTypeGen {
-    InlineRootTypes,
-    ImportRootTypes,
+pub fn generate_stub_wit_from_wit_dir(
+    source_wit_root: &Path,
+    inline_root_types: bool,
+) -> anyhow::Result<String> {
+    generate_stub_wit_from_stub_def(&StubDefinition::new(
+        source_wit_root,
+        source_wit_root,             // Not used
+        &None,                       // Not used
+        "0.0.1",                     // Not used
+        &WasmRpcOverride::default(), // Not used
+        inline_root_types,
+    )?)
 }
 
-pub fn get_stub_wit(
-    def: &StubDefinition,
-    type_gen_strategy: StubTypeGen,
-) -> anyhow::Result<String> {
+pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<String> {
     let world = def.source_world();
 
     let mut out = String::new();
@@ -77,31 +77,28 @@ pub fn get_stub_wit(
         "  use wasi:io/poll@0.2.0.{{pollable as wasi-io-pollable}};"
     )?;
 
-    match type_gen_strategy {
-        StubTypeGen::ImportRootTypes => {
-            for (import, _) in all_imports {
-                writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
-            }
-            writeln!(out)?;
-        }
-        StubTypeGen::InlineRootTypes => {
-            let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
+    if def.always_inline_types {
+        let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
 
-            for (import, type_def_info) in all_imports {
-                match &type_def_info.package_name {
-                    Some(package) if package == &def.source_package_name => {
-                        inline_types.push(type_def_info.clone());
-                    }
-                    _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?,
+        for (import, type_def_info) in all_imports {
+            match &type_def_info.package_name {
+                Some(package) if package == &def.source_package_name => {
+                    inline_types.push(type_def_info.clone());
                 }
-            }
-
-            writeln!(out)?;
-
-            for typ in inline_types {
-                write_type_def(&mut out, &typ.type_def, typ.name.as_str(), def)?;
+                _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?,
             }
         }
+
+        writeln!(out)?;
+
+        for typ in inline_types {
+            write_type_def(&mut out, &typ.type_def, typ.name.as_str(), def)?;
+        }
+    } else {
+        for (import, _) in all_imports {
+            writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
+        }
+        writeln!(out)?;
     }
 
     // Generating async return types
