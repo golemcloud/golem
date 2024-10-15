@@ -53,6 +53,10 @@ mod internal {
         pub fn value(&self) -> &HashMap<String, Vec<ArmPattern>> {
             &self.0
         }
+
+        fn is_empty(&self) -> bool {
+            self.0.is_empty()
+        }
     }
 
     #[derive(Debug, Clone)]

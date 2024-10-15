@@ -36,7 +36,7 @@ pub enum FunctionCallTypeCheckError {
         call_type: CallType,
         argument: Expr,
         missing_fields: Vec<Path>,
-        expected_type: AnalysedType,
+        _expected_type: AnalysedType,
     },
 }
 
