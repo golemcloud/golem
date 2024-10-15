@@ -3,30 +3,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
 use std::fmt::Display;
 
-pub enum TypeCheckError {
-    UnResolvedTypesError(UnResolvedTypesError),
-    TypeMismatchError(TypeMismatchError),
-}
-
-impl TypeCheckError {
-    pub fn unresolved_types_error(unresolved_type_error: UnResolvedTypesError) -> Self {
-        TypeCheckError::UnResolvedTypesError(unresolved_type_error)
-    }
-
-    pub fn type_mismatch_error(type_mismatch_error: TypeMismatchError) -> Self {
-        TypeCheckError::TypeMismatchError(type_mismatch_error)
-    }
-}
-
-impl Display for TypeCheckError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TypeCheckError::UnResolvedTypesError(e) => write!(f, "{}", e),
-            TypeCheckError::TypeMismatchError(e) => write!(f, "{}", e),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct UnResolvedTypesError {
     pub expr: Expr,

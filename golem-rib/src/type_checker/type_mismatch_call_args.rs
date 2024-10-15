@@ -1,10 +1,14 @@
+use crate::call_type::CallType;
+use crate::type_checker::{Path, TypeMismatchError};
 use crate::{Expr, FunctionTypeRegistry, RegistryKey};
+use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::VecDeque;
+use std::fmt::Display;
 
 pub fn check_type_mismatch_in_call_args(
     expr: &mut Expr,
     type_registry: &FunctionTypeRegistry,
-) -> Result<(), String> {
+) -> Result<(), FunctionCallTypeCheckError> {
     let mut queue = VecDeque::new();
 
     queue.push_back(expr);
@@ -21,10 +25,60 @@ pub fn check_type_mismatch_in_call_args(
     Ok(())
 }
 
+pub enum FunctionCallTypeCheckError {
+    // This can hardly happen as we disallow further compilation
+    // This can be removed in the earlier stages, and rely on type-check phase, if needed
+    InvalidFunctionCallError {
+        function_name: CallType,
+    },
+    TypeCheckError(TypeMismatchError),
+    MissingRecordFieldsError {
+        call_type: CallType,
+        argument: Expr,
+        missing_fields: Vec<Path>,
+        expected_type: AnalysedType,
+    },
+}
+
+impl Display for FunctionCallTypeCheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FunctionCallTypeCheckError::InvalidFunctionCallError { function_name } => {
+                write!(
+                    f,
+                    "Function {} is not defined in the registry",
+                    function_name
+                )
+            }
+            FunctionCallTypeCheckError::TypeCheckError(error) => {
+                write!(f, "{}", error)
+            }
+            FunctionCallTypeCheckError::MissingRecordFieldsError {
+                call_type,
+                argument,
+                missing_fields,
+                ..
+            } => {
+                let missing_fields = missing_fields
+                    .iter()
+                    .map(|path| path.to_string())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                write!(
+                    f,
+                    "Invalid argument in `{}`: `{}`. Missing field `{}`",
+                    call_type, argument, missing_fields
+                )
+            }
+        }
+    }
+}
+
 mod internal {
     use super::*;
     use crate::call_type::CallType;
-    use crate::type_checker::{check_type_mismatch, Path, PathElem};
+    use crate::type_checker::{check_type_mismatch, Path, PathElem, TypeMismatchError};
 
     use golem_wasm_ast::analysis::AnalysedType;
 
@@ -32,14 +86,13 @@ mod internal {
         call_type: &mut CallType,
         args: &mut [Expr],
         type_registry: &FunctionTypeRegistry,
-    ) -> Result<(), String> {
+    ) -> Result<(), FunctionCallTypeCheckError> {
         let registry_value = type_registry
             .types
             .get(&RegistryKey::from_call_type(call_type))
-            .ok_or(format!(
-                "Function {} is not defined in the registry",
-                call_type
-            ))?;
+            .ok_or(FunctionCallTypeCheckError::InvalidFunctionCallError {
+                function_name: call_type.clone(),
+            })?;
 
         let expected_arg_types = registry_value.argument_types();
 
@@ -52,20 +105,20 @@ mod internal {
         for (actual_arg, expected_arg_type) in args.iter_mut().zip(filtered_expected_types) {
             let actual_arg_type = &actual_arg.inferred_type();
 
-            let missing_fields = missing_fields_in_record(actual_arg, &expected_arg_type)
-                .iter()
-                .map(|path| path.to_string())
-                .collect::<Vec<String>>()
-                .join(", ");
+            let missing_fields = missing_fields_in_record(actual_arg, &expected_arg_type);
 
             if !missing_fields.is_empty() {
-                return Err(format!(
-                    "Invalid argument in `{}`: `{}`. Missing field `{}`",
-                    call_type, actual_arg, missing_fields
-                ));
+                return Err(FunctionCallTypeCheckError::MissingRecordFieldsError {
+                    call_type: call_type.clone(),
+                    argument: actual_arg.clone(),
+                    missing_fields,
+                    expected_type: expected_arg_type.clone(),
+                });
             }
 
-            check_type_mismatch(&expected_arg_type, &actual_arg_type).map_err(|x| x.to_string())?;
+            check_type_mismatch(&expected_arg_type, &actual_arg_type).map_err(
+                |e| FunctionCallTypeCheckError::TypeCheckError(e),
+            )?;
         }
 
         Ok(())

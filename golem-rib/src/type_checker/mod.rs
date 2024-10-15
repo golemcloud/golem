@@ -1,19 +1,21 @@
 pub(crate) use type_check_error::*;
 pub(crate) use type_mismatch::*;
 
-mod unresolved_types;
+mod exhaustive_pattern_match;
 mod type_check_error;
 mod type_mismatch;
-mod exhaustive_pattern_match;
 mod type_mismatch_call_args;
-
+mod unresolved_types;
 
 use crate::{Expr, FunctionTypeRegistry};
 
 pub fn type_check(expr: &mut Expr, metadata: &FunctionTypeRegistry) -> Result<(), String> {
-    unresolved_types::check_unresolved_types(expr).map_err(|err| err.to_string())?;
-    type_mismatch_call_args::check_type_mismatch_in_call_args(expr, metadata)?;
-    exhaustive_pattern_match::check_exhaustive_pattern_match(expr)?;
+    unresolved_types::check_unresolved_types(expr)
+        .map_err(|unresolved_error| unresolved_error.to_string())?;
+    type_mismatch_call_args::check_type_mismatch_in_call_args(expr, metadata)
+        .map_err(|function_call_type_check_error| function_call_type_check_error.to_string())?;
+    exhaustive_pattern_match::check_exhaustive_pattern_match(expr)
+        .map_err(|exhaustive_check_error| exhaustive_check_error.to_string())?;
     Ok(())
 }
 
@@ -21,8 +23,8 @@ pub fn type_check(expr: &mut Expr, metadata: &FunctionTypeRegistry) -> Result<()
 mod type_check_tests {
 
     mod unresolved_types_error {
-        use crate::{compile, Expr};
         use crate::type_checker::type_check_tests::internal;
+        use crate::{compile, Expr};
 
         #[test]
         fn test_invalid_key_in_record_in_function_call() {
@@ -43,8 +45,8 @@ mod type_check_tests {
     }
 
     mod type_mismatch_errors {
-        use crate::{compile, Expr};
         use crate::type_checker::type_check_tests::internal;
+        use crate::{compile, Expr};
 
         #[test]
         fn test_type_mismatch_in_record_in_function_call1() {

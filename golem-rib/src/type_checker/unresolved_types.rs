@@ -147,7 +147,8 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
 }
 
 mod internal {
-    use crate::type_checker::{check_unresolved_types, UnResolvedTypesError};
+    use crate::type_checker::unresolved_types::check_unresolved_types;
+    use crate::type_checker::UnResolvedTypesError;
     use crate::{Expr, MatchArm};
     use std::ops::Deref;
 
