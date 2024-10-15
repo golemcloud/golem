@@ -36,7 +36,6 @@ mod internal {
         let check_result =
             check_exhaustive(arms, &["none"], &["some"]).or(arms, &[], &["ok", "err"]);
 
-        dbg!(check_result.clone());
         let inner_constructors = check_result.value()?;
 
         for (_, patterns) in inner_constructors.value() {
@@ -144,9 +143,7 @@ mod internal {
         }
 
         for pattern in patterns {
-            dbg!(pattern.clone(), detected_wild_card_or_identifier.clone());
             if !detected_wild_card_or_identifier.is_empty() {
-                dbg!("hre??");
                 return ExhaustiveCheckResult::dead_code(
                     detected_wild_card_or_identifier
                         .last()
@@ -190,25 +187,33 @@ mod internal {
             }
         }
 
-        let all_with_arg_covered = found_with_arg.values().all(|&v| v);
-        let all_no_arg_covered = found_no_arg.values().all(|&v| v);
 
-        if !all_with_arg_covered || !all_no_arg_covered {
-            if detected_wild_card_or_identifier.is_empty() {
-                let mut missing_with_arg: Vec<_> = found_with_arg
-                    .iter()
-                    .filter(|(_, &v)| !v)
-                    .map(|(k, _)| k.clone())
-                    .collect();
-                let missing_no_arg: Vec<_> = found_no_arg
-                    .iter()
-                    .filter(|(_, &v)| !v)
-                    .map(|(k, _)| k.clone())
-                    .collect();
+        let no_constructors_tracked =
+            found_with_arg.values().all(|&v| !v) && found_no_arg.values().all(|&v| !v);
 
-                missing_with_arg.extend(missing_no_arg.clone());
+        let constructors_tracked = !no_constructors_tracked;
 
-                return ExhaustiveCheckResult::missing_constructors(missing_with_arg);
+        if constructors_tracked {
+            let all_with_arg_covered = found_with_arg.values().all(|&v| v);
+            let all_no_arg_covered = found_no_arg.values().all(|&v| v);
+
+            if !all_with_arg_covered || !all_no_arg_covered {
+                if detected_wild_card_or_identifier.is_empty() {
+                    let mut missing_with_arg: Vec<_> = found_with_arg
+                        .iter()
+                        .filter(|(_, &v)| !v)
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    let missing_no_arg: Vec<_> = found_no_arg
+                        .iter()
+                        .filter(|(_, &v)| !v)
+                        .map(|(k, _)| k.clone())
+                        .collect();
+
+                    missing_with_arg.extend(missing_no_arg.clone());
+
+                    return ExhaustiveCheckResult::missing_constructors(missing_with_arg);
+                }
             }
         }
 

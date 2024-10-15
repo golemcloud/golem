@@ -1,10 +1,14 @@
 use crate::call_type::CallType;
-use crate::type_checker::{Path, TypeMismatchError};
-use crate::{Expr, FunctionTypeRegistry, RegistryKey};
+use crate::type_checker::{Path, TypeMismatchError, UnResolvedTypesError};
+use crate::{Expr, FunctionTypeRegistry, RegistryKey, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::collections::VecDeque;
 use std::fmt::Display;
 
+
+// We grab as many errors as possible within the context of a function call
+// to grab as many error details as possible. Refer `FunctionCallTypeCheckError` and therefore,
+// this step is going to be step 1 of the type-checking process.
 pub fn check_type_mismatch_in_call_args(
     expr: &mut Expr,
     type_registry: &FunctionTypeRegistry,
@@ -31,13 +35,23 @@ pub enum FunctionCallTypeCheckError {
     InvalidFunctionCallError {
         function_name: CallType,
     },
-    TypeCheckError(TypeMismatchError),
+    TypeCheckError {
+        call_type: CallType,
+        argument: Expr,
+        error: TypeMismatchError,
+    },
     MissingRecordFieldsError {
         call_type: CallType,
         argument: Expr,
         missing_fields: Vec<Path>,
-        _expected_type: AnalysedType,
+        expected_type: AnalysedType,
     },
+    UnResolvedTypesError {
+        call_type: CallType,
+        argument: Expr,
+        unresolved_error: UnResolvedTypesError,
+        expected_type: AnalysedType,
+    }
 }
 
 impl Display for FunctionCallTypeCheckError {
@@ -50,8 +64,12 @@ impl Display for FunctionCallTypeCheckError {
                     function_name
                 )
             }
-            FunctionCallTypeCheckError::TypeCheckError(error) => {
-                write!(f, "{}", error)
+            FunctionCallTypeCheckError::TypeCheckError{call_type, argument, error} => {
+                write!(
+                    f,
+                    "Invalid argument in `{}`: `{}`. {}",
+                    call_type, argument, error
+                )
             }
             FunctionCallTypeCheckError::MissingRecordFieldsError {
                 call_type,
@@ -71,6 +89,19 @@ impl Display for FunctionCallTypeCheckError {
                     call_type, argument, missing_fields
                 )
             }
+
+            FunctionCallTypeCheckError::UnResolvedTypesError {
+                call_type,
+                argument,
+                unresolved_error,
+                expected_type,
+            } => {
+                write!(
+                    f,
+                    "Invalid argument in `{}`: `{}`. {}. Expected type: {}",
+                    call_type, argument, unresolved_error, TypeName::try_from(expected_type.clone()).map(|t| t.to_string()).unwrap_or_default()
+                )
+            }
         }
     }
 }
@@ -78,9 +109,10 @@ impl Display for FunctionCallTypeCheckError {
 mod internal {
     use super::*;
     use crate::call_type::CallType;
-    use crate::type_checker::{check_type_mismatch, Path, PathElem};
+    use crate::type_checker::{Path, PathElem};
 
     use golem_wasm_ast::analysis::AnalysedType;
+    use crate::type_checker;
 
     pub(crate) fn check_type_mismatch_in_call_args(
         call_type: &mut CallType,
@@ -105,7 +137,26 @@ mod internal {
         for (actual_arg, expected_arg_type) in args.iter_mut().zip(filtered_expected_types) {
             let actual_arg_type = &actual_arg.inferred_type();
 
-            let missing_fields = missing_fields_in_record(actual_arg, &expected_arg_type);
+            // See if there are unresolved types in function arguments,
+            // if so, tie them to the details specific to the function.
+            // Finding resolved types can be called from anywhere, but this is called
+            // within a function-call type-check phase,
+            // to grab as many details as possible
+            let unresolved_type =
+                type_checker::find_unresolved_types(actual_arg);
+
+            if let Err(unresolved_error) = unresolved_type {
+                return Err(FunctionCallTypeCheckError::UnResolvedTypesError {
+                    call_type: call_type.clone(),
+                    argument: actual_arg.clone(),
+                    unresolved_error,
+                    expected_type: expected_arg_type.clone(),
+                });
+            }
+
+            // Find possible missing fields in the arguments that are records
+            let missing_fields =
+                type_checker::find_missing_fields(actual_arg, &expected_arg_type);
 
             if !missing_fields.is_empty() {
                 return Err(FunctionCallTypeCheckError::MissingRecordFieldsError {
@@ -116,47 +167,14 @@ mod internal {
                 });
             }
 
-            check_type_mismatch(&expected_arg_type, &actual_arg_type)
-                .map_err(|e| FunctionCallTypeCheckError::TypeCheckError(e))?;
+            type_checker::check_type_mismatch(&expected_arg_type, &actual_arg_type)
+                .map_err(|e| FunctionCallTypeCheckError::TypeCheckError{
+                    call_type: call_type.clone(),
+                    argument: actual_arg.clone(),
+                    error: e,
+                })?;
         }
 
         Ok(())
-    }
-
-    fn missing_fields_in_record(expr: &Expr, expected: &AnalysedType) -> Vec<Path> {
-        let mut missing_paths = Vec::new();
-
-        if let AnalysedType::Record(record) = expected {
-            for (field_name, analysed_type) in record
-                .fields
-                .iter()
-                .map(|name_typ| (name_typ.name.clone(), name_typ.typ.clone()))
-            {
-                if let Expr::Record(record, _) = expr {
-                    let value = record
-                        .iter()
-                        .find(|(name, _)| *name == field_name)
-                        .map(|(_, value)| value);
-                    if let Some(value) = value {
-                        if let AnalysedType::Record(record) = analysed_type {
-                            // Recursively check nested records
-                            let nested_paths = missing_fields_in_record(
-                                value,
-                                &AnalysedType::Record(record.clone()),
-                            );
-                            for mut nested_path in nested_paths {
-                                // Prepend the current field to the path for each missing nested field
-                                nested_path.push_front(PathElem::Field(field_name.clone()));
-                                missing_paths.push(nested_path);
-                            }
-                        }
-                    } else {
-                        missing_paths.push(Path::from_elem(PathElem::Field(field_name.clone())));
-                    }
-                }
-            }
-        }
-
-        missing_paths
     }
 }

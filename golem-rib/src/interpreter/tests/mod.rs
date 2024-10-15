@@ -140,11 +140,13 @@ mod comprehensive_test {
 
               let some_option_response_processed = match some_option_response {
                  some(some(x)) => x,
+                 some(none) => "not found",
                  none => "not found"
               };
 
               let none_option_response_processed = match none_option_response {
                  some(some(x)) => x,
+                 some(none) => "not found",
                  none => "not found"
               };
 

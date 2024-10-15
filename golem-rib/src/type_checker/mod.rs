@@ -1,19 +1,22 @@
 pub(crate) use type_check_error::*;
 pub(crate) use type_mismatch::*;
+pub(crate) use missing_fields::*;
+pub(crate) use unresolved_types::*;
 
 mod exhaustive_pattern_match;
 mod type_check_error;
 mod type_mismatch;
 mod type_mismatch_call_args;
 mod unresolved_types;
+mod missing_fields;
 
 use crate::{Expr, FunctionTypeRegistry};
 
 pub fn type_check(expr: &mut Expr, metadata: &FunctionTypeRegistry) -> Result<(), String> {
-    unresolved_types::check_unresolved_types(expr)
-        .map_err(|unresolved_error| unresolved_error.to_string())?;
     type_mismatch_call_args::check_type_mismatch_in_call_args(expr, metadata)
         .map_err(|function_call_type_check_error| function_call_type_check_error.to_string())?;
+    unresolved_types::find_unresolved_types(expr)
+        .map_err(|unresolved_error| unresolved_error.to_string())?;
     exhaustive_pattern_match::check_exhaustive_pattern_match(expr)
         .map_err(|exhaustive_check_error| exhaustive_check_error.to_string())?;
     Ok(())
