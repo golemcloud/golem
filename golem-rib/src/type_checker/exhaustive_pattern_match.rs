@@ -309,7 +309,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match1() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             some(a) => a,
             none => "none"
@@ -325,7 +325,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match2() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             none => "none",
             some(a) => a
@@ -341,7 +341,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match_wild_card1() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             some(_) => a,
             none => "none"
@@ -355,7 +355,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match_wild_card2() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             none => "none",
             some(_) => a
@@ -371,7 +371,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match_wild_card3() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             some(a) => a,
             _ => "none"
@@ -386,7 +386,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match_wild_card4() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             none => "none",
             _ => "none"
@@ -401,7 +401,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match_wild_card5() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             some(_) => a,
             _ => "none"
@@ -416,7 +416,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match_wild_card_invalid1() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             _ => "none",
             some(_) => a
@@ -432,7 +432,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match_wild_card_invalid2() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             _ => "none",
             none => "a"
@@ -447,7 +447,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match_identifier_invalid1() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             something => "none",
             some(_) => a
@@ -462,7 +462,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_pattern_match_identifier_invalid2() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             something => "none",
             none => "a"
@@ -477,7 +477,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_none_absent() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
             some(a) => a
         }
@@ -492,7 +492,7 @@ mod pattern_match_exhaustive_tests {
     #[test]
     fn test_option_some_absent() {
         let expr = r#"
-        let x = some("afsal");
+        let x = some("foo");
         match x {
            none => "none"
         }
@@ -502,5 +502,206 @@ mod pattern_match_exhaustive_tests {
         let result = compile(&expr, &vec![]).unwrap_err();
 
         assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `some`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+    }
+
+    /// Result
+    #[test]
+    fn test_result_pattern_match1() {
+        let expr = r#"
+        let x: result<str, str> = ok("foo");
+        match x {
+            ok(a) => a,
+            err(msg) =>  msg
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_result_pattern_match2() {
+        let expr = r#"
+        let x: result<str, str> = ok("foo");
+        match x {
+            err(a) => a,
+            ok(a) => a
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_result_pattern_match_wild_card1() {
+        let expr = r#"
+        let x = ok("foo");
+        match x {
+            err(_) => "error",
+            ok(msg) => msg
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+    #[test]
+    fn test_result_pattern_match_wild_card2() {
+        let expr = r#"
+        let x: result<str, str> = ok("foo");
+        match x {
+            err(msg) => msg,
+            ok(_) => a
+
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_result_pattern_match_wild_card3() {
+        let expr = r#"
+        let x = ok("foo");
+        match x {
+            ok(a) => a,
+            _ => "none"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_result_pattern_match_wild_card4() {
+        let expr = r#"
+        let x = err("foo");
+        match x {
+            err(msg) => "none",
+            _ => "none"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_result_pattern_match_wild_card5() {
+        let expr = r#"
+        let x = ok("foo");
+        match x {
+            ok(_) => a,
+            _ => "none"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_result_pattern_match_wild_card_invalid1() {
+        let expr = r#"
+        let x = ok("foo");
+        match x {
+            _ => "none",
+            ok(_) => a
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+
+        assert_eq!(result, "Error: Dead code detected. The pattern `ok(_)` is unreachable due to the existence of the pattern `_` prior to it")
+    }
+
+    #[test]
+    fn test_result_pattern_match_wild_card_invalid2() {
+        let expr = r#"
+        let x = err("foo");
+        match x {
+            _ => "none",
+            err(msg) => "a"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(result, "Error: Dead code detected. The pattern `err(msg)` is unreachable due to the existence of the pattern `_` prior to it")
+    }
+
+    #[test]
+    fn test_result_pattern_match_identifier_invalid1() {
+        let expr = r#"
+        let x = ok("foo");
+        match x {
+            something => "none",
+            ok(_) => "a"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(result, "Error: Dead code detected. The pattern `ok(_)` is unreachable due to the existence of the pattern `something` prior to it")
+    }
+
+    #[test]
+    fn test_result_pattern_match_identifier_invalid2() {
+        let expr = r#"
+        let x = err("foo");
+        match x {
+            something => "none",
+            err(msg) => "a"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(result, "Error: Dead code detected. The pattern `err(msg)` is unreachable due to the existence of the pattern `something` prior to it")
+    }
+
+    /// Result
+    #[test]
+    fn test_result_err_absent() {
+        let expr = r#"
+        let x = ok("foo");
+        match x {
+            ok(a) => a
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+
+        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `err`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+    }
+
+    #[test]
+    fn test_result_ok_absent() {
+        // Explicit type annotation is required here otherwise `str` in `err` cannot be inferred
+        let expr = r#"
+        let x: result<str, str> = ok("foo");
+        match x {
+           err(str) => str
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+
+        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `ok`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
     }
 }

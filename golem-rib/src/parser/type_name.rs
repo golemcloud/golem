@@ -497,6 +497,30 @@ where
         .map(|inner_type| TypeName::Option(Box::new(inner_type)))
 }
 
+pub fn parse_result_type<Input>() -> impl Parser<Input, Output = TypeName>
+where
+    Input: combine::Stream<Token = char>,
+    RibParseError: Into<
+        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
+    >,
+{
+    string("result")
+        .skip(spaces())
+        .with(between(
+            char('<').skip(spaces()),
+            char('>').skip(spaces()),
+            (
+                parse_type_name().skip(spaces()),
+                char(',').skip(spaces()),
+                parse_type_name().skip(spaces()),
+            ),
+        ))
+        .map(|(ok, _, error)| TypeName::Result {
+            ok: Some(Box::new(ok)),
+            error: Some(Box::new(error)),
+        })
+}
+
 pub fn parse_tuple_type<Input>() -> impl Parser<Input, Output = TypeName>
 where
     Input: combine::Stream<Token = char>,
@@ -526,6 +550,7 @@ where
         attempt(parse_list_type()),
         attempt(parse_tuple_type()),
         attempt(parse_option_type()),
+        attempt(parse_result_type()),
     )))
 }
 
