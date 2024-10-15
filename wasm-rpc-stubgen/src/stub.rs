@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::wit_resolve::{resolve_wit_dir, ResolvedWitDir};
+use crate::wit_resolve::ResolvedWitDir;
 use crate::WasmRpcOverride;
 use anyhow::anyhow;
 use indexmap::IndexMap;
@@ -48,7 +48,7 @@ impl StubDefinition {
         wasm_rpc_override: &WasmRpcOverride,
         always_inline_types: bool,
     ) -> anyhow::Result<Self> {
-        let resolved_source = resolve_wit_dir(source_wit_root)?;
+        let resolved_source = ResolvedWitDir::new(source_wit_root)?;
 
         let source_world_id = resolved_source
             .resolve
@@ -156,7 +156,7 @@ impl StubDefinition {
     }
 
     pub fn resolve_target_wit(&self) -> anyhow::Result<ResolvedWitDir> {
-        resolve_wit_dir(&self.target_wit_root())
+        ResolvedWitDir::new(&self.target_wit_root())
     }
 
     pub fn fix_inlined_owner(&self, typedef: &TypeDef) -> StubTypeOwner {

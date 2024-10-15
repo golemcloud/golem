@@ -13,16 +13,15 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action, log_warn_action};
-use crate::copy::{copy, copy_transformed};
+use crate::fs::{copy, copy_transformed};
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
     InterfaceStubTypeDef, StubDefinition,
 };
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use indexmap::IndexMap;
 use regex::Regex;
-use std::ffi::OsStr;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Write};
 use std::fs;
 use std::path::{Path, PathBuf};
 use wit_parser::{
@@ -504,21 +503,8 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
 
     // TODO: naming to def
     let stub_package_name = format!("{}-stub", def.source_package_name);
-    let pattern_import_stub_package_name = Regex::new(
-        format!(
-            r"import\s+{}(/[^;]*)?;",
-            regex::escape(stub_package_name.as_str())
-        )
-        .as_str(),
-    )
-    .context(anyhow!("Failed to compile stub import regex"))?;
 
-    // Used for removing self stub imports from the source component's wit definition
-    let remove_stub_imports = |src: String| -> anyhow::Result<String> {
-        Ok(pattern_import_stub_package_name
-            .replace_all(&src, "")
-            .to_string())
-    };
+    let remove_stub_imports = import_remover(&stub_package_name);
 
     for (package, sources) in def.source_packages_with_sources() {
         let should_skip = package.name.to_string() == stub_package_name;
@@ -552,7 +538,7 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
                         dest.to_string_lossy()
                     ),
                 );
-                copy_transformed(source, &dest, remove_stub_imports)?;
+                copy_transformed(source, &dest, &remove_stub_imports)?;
             } else {
                 let relative = source.strip_prefix(&def.source_wit_root)?;
                 let dest = target_wit_root.join(relative);
@@ -669,6 +655,7 @@ impl TypeExtensions for Type {
     }
 }
 
+// TODO: remove
 pub fn get_dep_dirs(wit_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     let mut result = Vec::new();
     let deps = wit_root.join("deps");
@@ -683,206 +670,21 @@ pub fn get_dep_dirs(wit_root: &Path) -> anyhow::Result<Vec<PathBuf>> {
     Ok(result)
 }
 
+// TODO: remove
 pub fn get_package_name(_wit: &Path) -> anyhow::Result<PackageName> {
     /*let pkg = UnresolvedPackage::parse_path(wit)?;
     Ok(pkg.name)*/
     todo!()
 }
 
-#[allow(clippy::enum_variant_names)]
-pub enum WitAction {
-    CopyDepDir {
-        source_dir: PathBuf,
-    },
-    WriteWit {
-        source_wit: String,
-        dir_name: String,
-        file_name: String,
-    },
-    CopyDepWit {
-        source_wit: PathBuf,
-        dir_name: String,
-    },
-}
+pub fn import_remover(package_name: &str) -> impl Fn(String) -> anyhow::Result<String> {
+    let pattern_import_stub_package_name =
+        Regex::new(format!(r"import\s+{}(/[^;]*)?;", regex::escape(package_name)).as_str())
+            .unwrap_or_else(|err| panic!("Failed to compile package import regex: {}", err));
 
-impl Display for WitAction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WitAction::WriteWit {
-                dir_name,
-                file_name,
-                ..
-            } => {
-                write!(
-                    f,
-                    "copy stub WIT string to relative path {}/{}",
-                    dir_name, file_name
-                )
-            }
-            WitAction::CopyDepDir { source_dir } => {
-                write!(
-                    f,
-                    "copy WIT dependency from {}",
-                    source_dir.to_string_lossy()
-                )
-            }
-            WitAction::CopyDepWit {
-                source_wit,
-                dir_name,
-            } => {
-                write!(
-                    f,
-                    "copy stub WIT from {} as dependency {}",
-                    source_wit.to_string_lossy(),
-                    dir_name
-                )
-            }
-        }
-    }
-}
-
-impl WitAction {
-    pub fn perform(&self, target_wit_root: &Path) -> anyhow::Result<()> {
-        match self {
-            WitAction::WriteWit {
-                source_wit,
-                dir_name,
-                file_name,
-            } => {
-                let target_dir = target_wit_root.join("deps").join(dir_name);
-                if !target_dir.exists() {
-                    fs::create_dir_all(&target_dir).context("Create target directory")?;
-                }
-                fs::write(target_dir.join(OsStr::new(file_name)), source_wit)
-                    .context("Copy the WIT string")?;
-            }
-
-            WitAction::CopyDepDir { source_dir } => {
-                let dep_name = source_dir
-                    .file_name()
-                    .context("Get wit dependency directory name")?;
-                let target_path = target_wit_root.join("deps").join(dep_name);
-                if !target_path.exists() {
-                    fs::create_dir_all(&target_path).context("Create target directory")?;
-                }
-                log_action("Copying", format!("{source_dir:?} to {target_path:?}"));
-                fs_extra::dir::copy(
-                    source_dir,
-                    &target_path,
-                    &fs_extra::dir::CopyOptions::new()
-                        .content_only(true)
-                        .overwrite(true),
-                )
-                .context("Failed to copy the dependency directory")?;
-            }
-            WitAction::CopyDepWit {
-                source_wit,
-                dir_name,
-            } => {
-                let target_dir = target_wit_root.join("deps").join(dir_name);
-                copy(source_wit, target_dir.join(source_wit.file_name().unwrap()))
-                    .context("Copy the WIT file")?;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn get_dep_dir_name(&self) -> anyhow::Result<String> {
-        match self {
-            WitAction::CopyDepDir { source_dir } => Ok(source_dir
-                .file_name()
-                .context("Get wit dependency directory name")?
-                .to_string_lossy()
-                .to_string()),
-            WitAction::WriteWit { dir_name, .. } => Ok(dir_name.clone()),
-            WitAction::CopyDepWit { dir_name, .. } => Ok(dir_name.clone()),
-        }
-    }
-}
-
-pub fn verify_action(
-    action: &WitAction,
-    target_wit_root: &Path,
-    overwrite: bool,
-) -> anyhow::Result<bool> {
-    match action {
-        WitAction::WriteWit {
-            source_wit,
-            dir_name,
-            file_name,
-        } => {
-            let target_dir = target_wit_root.join("deps").join(dir_name);
-            let target_wit = target_dir.join(file_name);
-            if target_dir.exists() && target_dir.is_dir() {
-                let target_contents = fs::read_to_string(&target_wit)?;
-                if source_wit == &target_contents {
-                    Ok(true)
-                } else if overwrite {
-                    log_warn_action("Overwriting", target_wit.to_string_lossy());
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            } else {
-                Ok(true)
-            }
-        }
-
-        WitAction::CopyDepDir { source_dir } => {
-            let dep_name = source_dir
-                .file_name()
-                .context("Get wit dependency directory name")?;
-            let target_path = target_wit_root.join("deps").join(dep_name);
-            if target_path.exists() && target_path.is_dir() {
-                if !dir_diff::is_different(source_dir, &target_path)? {
-                    Ok(true)
-                } else if overwrite {
-                    log_warn_action("Overwriting", target_path.to_string_lossy());
-                    Ok(true)
-                } else {
-                    Ok(false)
-                }
-            } else {
-                Ok(true)
-            }
-        }
-        WitAction::CopyDepWit {
-            source_wit,
-            dir_name,
-        } => {
-            let target_dir = target_wit_root.join("deps").join(dir_name);
-            let source_file_name = source_wit.file_name().context("Get source wit file name")?;
-            let target_wit = target_dir.join(source_file_name);
-            if target_dir.exists() && target_dir.is_dir() {
-                let mut existing_entries = Vec::new();
-                for entry in fs::read_dir(&target_dir)? {
-                    let entry = entry?;
-                    let name = entry
-                        .path()
-                        .file_name()
-                        .context("Get existing wit directory's name")?
-                        .to_string_lossy()
-                        .to_string();
-                    existing_entries.push(name);
-                }
-                if existing_entries.contains(&source_file_name.to_string_lossy().to_string()) {
-                    let source_contents = fs::read_to_string(source_wit)?;
-                    let target_contents = fs::read_to_string(&target_wit)?;
-                    if source_contents == target_contents {
-                        Ok(true)
-                    } else if overwrite {
-                        log_warn_action("Overwriting", target_wit.to_string_lossy());
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
-                } else {
-                    Ok(true)
-                }
-            } else {
-                Ok(true)
-            }
-        }
+    move |src: String| -> anyhow::Result<String> {
+        Ok(pattern_import_stub_package_name
+            .replace_all(&src, "")
+            .to_string())
     }
 }

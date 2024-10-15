@@ -14,7 +14,7 @@
 
 use crate::cargo::generate_cargo_toml;
 use crate::compilation::compile;
-use crate::copy::copy;
+use crate::fs::copy;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
 use crate::wit::{copy_wit_files, generate_stub_wit};

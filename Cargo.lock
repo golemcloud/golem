@@ -4401,9 +4401,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "0.0.6"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce4f9076be412de335c06832a0a72b3261a2a91a2925f9d47363643e7b7a015a"
+checksum = "7f503de241983649990311e28573ce1e98f62ed65f2b6fb7bdf2496d2ba1c978"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -4413,9 +4413,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "0.0.6"
+version = "0.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2ad71c85134f87fc11617d92fec4320d3154ecd117871a866116813d6a1ece8"
+checksum = "bf42476bec5da760737467562f6169dc126d3716b74ca072f08246fbcb332000"
 dependencies = [
  "anstream",
  "anstyle",
@@ -4434,13 +4434,14 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "0.0.6"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a638ef4ccf6d0d5b92d06e5c827ef4e941eb59bf4192101a3b8c29b7540a878"
+checksum = "198b6d8536c41236c3bc5dec066dd4d63ff01fab76596a9738d8bf60b050afdb"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
  "quote",
+ "rand",
  "syn 2.0.79",
  "test-r-core",
 ]
