@@ -18,7 +18,7 @@ use crate::stub::StubDefinition;
 use crate::wit::{get_stub_wit, import_remover, StubTypeGen};
 use crate::wit_resolve::ResolvedWitDir;
 use crate::{cargo, WasmRpcOverride};
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, Context};
 use std::path::Path;
 use tempfile::TempDir;
 use wit_parser::PackageName;

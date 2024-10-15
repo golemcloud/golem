@@ -18,8 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::log::{log_action, log_warn_action};
 use crate::stub::StubDefinition;
-use crate::wit;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail};
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
     Profiles, StripSetting,
