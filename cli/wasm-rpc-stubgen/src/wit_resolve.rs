@@ -1,3 +1,4 @@
+use crate::fs::strip_path_prefix;
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
@@ -83,7 +84,7 @@ fn partition_sources_by_package_ids(
     let mut dep_path_to_package_id = IndexMap::<PathBuf, PackageId>::new();
 
     for source in sources {
-        let relative_source = source.strip_prefix(path)?;
+        let relative_source = strip_path_prefix(&source, path)?;
 
         let segments = relative_source.iter().collect::<Vec<_>>();
 
