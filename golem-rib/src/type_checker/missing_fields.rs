@@ -1,6 +1,6 @@
-use golem_wasm_ast::analysis::AnalysedType;
-use crate::Expr;
 use crate::type_checker::{Path, PathElem};
+use crate::Expr;
+use golem_wasm_ast::analysis::AnalysedType;
 
 pub fn find_missing_fields(expr: &Expr, expected: &AnalysedType) -> Vec<Path> {
     let mut missing_paths = Vec::new();

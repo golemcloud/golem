@@ -187,7 +187,6 @@ mod internal {
             }
         }
 
-
         let no_constructors_tracked =
             found_with_arg.values().all(|&v| !v) && found_no_arg.values().all(|&v| !v);
 

@@ -1236,7 +1236,8 @@ mod type_inference_tests {
             let expr_str = r#"
               let x = { foo : "bar" };
               match some(x) {
-                some(x) => x
+                some(x) => x,
+                none => { foo : "baz" }
               }
             "#;
 
@@ -1266,22 +1267,37 @@ mod type_inference_tests {
                                 InferredType::Str,
                             )]))),
                         )),
-                        vec![MatchArm::new(
-                            ArmPattern::Constructor(
-                                "some".to_string(),
-                                vec![ArmPattern::Literal(Box::new(Expr::Identifier(
+                        vec![
+                            MatchArm::new(
+                                ArmPattern::Constructor(
+                                    "some".to_string(),
+                                    vec![ArmPattern::Literal(Box::new(Expr::Identifier(
+                                        VariableId::match_identifier("x".to_string(), 1),
+                                        InferredType::Record(vec![(
+                                            "foo".to_string(),
+                                            InferredType::Str,
+                                        )]),
+                                    )))],
+                                ),
+                                Expr::Identifier(
                                     VariableId::match_identifier("x".to_string(), 1),
                                     InferredType::Record(vec![(
                                         "foo".to_string(),
                                         InferredType::Str,
                                     )]),
-                                )))],
+                                ),
                             ),
-                            Expr::Identifier(
-                                VariableId::match_identifier("x".to_string(), 1),
-                                InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
+                            MatchArm::new(
+                                ArmPattern::constructor("none", vec![]),
+                                Expr::Record(
+                                    vec![("foo".to_string(), Box::new(Expr::literal("baz")))],
+                                    InferredType::Record(vec![(
+                                        "foo".to_string(),
+                                        InferredType::Str,
+                                    )]),
+                                ),
                             ),
-                        )],
+                        ],
                         InferredType::Record(vec![("foo".to_string(), InferredType::Str)]),
                     ),
                 ],

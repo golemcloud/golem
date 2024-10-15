@@ -551,7 +551,7 @@ mod desugar_tests {
           let x: option<u64> = some(1);
           match x {
             some(x) => x,
-            some(y) => y
+            none => 1u64
           }
         "#;
 
@@ -581,7 +581,7 @@ mod desugar_tests {
         }
     }
     mod expectations {
-        use crate::{Expr, InferredType, VariableId};
+        use crate::{Expr, InferredType, Number, TypeName, VariableId};
         pub(crate) fn expected_condition_with_identifiers() -> Expr {
             Expr::Cond(
                 Box::new(Expr::EqualTo(
@@ -625,28 +625,12 @@ mod desugar_tests {
                             )),
                             InferredType::Unknown,
                         )),
-                        Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
+                        Box::new(Expr::Literal("none".to_string(), InferredType::Str)),
                         InferredType::Bool,
                     )),
-                    Box::new(Expr::Multiple(
-                        vec![
-                            Expr::Let(
-                                VariableId::match_identifier("y".to_string(), 2),
-                                None,
-                                Box::new(Expr::Unwrap(
-                                    Box::new(Expr::Identifier(
-                                        VariableId::local("x", 0),
-                                        InferredType::Option(Box::new(InferredType::U64)),
-                                    )),
-                                    InferredType::Unknown,
-                                )),
-                                InferredType::U64,
-                            ),
-                            Expr::Identifier(
-                                VariableId::match_identifier("y".to_string(), 2),
-                                InferredType::U64,
-                            ),
-                        ],
+                    Box::new(Expr::Number(
+                        Number { value: 1f64 },
+                        Some(TypeName::U64),
                         InferredType::U64,
                     )),
                     Box::new(Expr::Throw(
