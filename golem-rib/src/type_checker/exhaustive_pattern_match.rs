@@ -196,23 +196,23 @@ mod internal {
             let all_with_arg_covered = found_with_arg.values().all(|&v| v);
             let all_no_arg_covered = found_no_arg.values().all(|&v| v);
 
-            if !all_with_arg_covered || !all_no_arg_covered {
-                if detected_wild_card_or_identifier.is_empty() {
-                    let mut missing_with_arg: Vec<_> = found_with_arg
-                        .iter()
-                        .filter(|(_, &v)| !v)
-                        .map(|(k, _)| k.clone())
-                        .collect();
-                    let missing_no_arg: Vec<_> = found_no_arg
-                        .iter()
-                        .filter(|(_, &v)| !v)
-                        .map(|(k, _)| k.clone())
-                        .collect();
+            if (!all_with_arg_covered || !all_no_arg_covered)
+                && detected_wild_card_or_identifier.is_empty()
+            {
+                let mut missing_with_arg: Vec<_> = found_with_arg
+                    .iter()
+                    .filter(|(_, &v)| !v)
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                let missing_no_arg: Vec<_> = found_no_arg
+                    .iter()
+                    .filter(|(_, &v)| !v)
+                    .map(|(k, _)| k.clone())
+                    .collect();
 
-                    missing_with_arg.extend(missing_no_arg.clone());
+                missing_with_arg.extend(missing_no_arg.clone());
 
-                    return ExhaustiveCheckResult::missing_constructors(missing_with_arg);
-                }
+                return ExhaustiveCheckResult::missing_constructors(missing_with_arg);
             }
         }
 
@@ -238,7 +238,9 @@ mod internal {
 
 #[cfg(test)]
 mod pattern_match_exhaustive_tests {
+    use test_r::test;
     use crate::{compile, Expr};
+
 
     #[test]
     fn test_option_pattern_match1() {
