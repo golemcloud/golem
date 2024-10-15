@@ -75,6 +75,10 @@ mod internal {
     #[derive(Clone)]
     pub enum ExhaustiveCheckError {
         MissingConstructors(Vec<String>),
+        DeadCode {
+            cause: ArmPattern,
+            dead_pattern: ArmPattern
+        }
     }
 
     impl ExhaustiveCheckResult {
@@ -97,10 +101,14 @@ mod internal {
             self.0.clone()
         }
 
-        pub fn fail(missing_constructors: Vec<String>) -> Self {
+        pub fn missing_constructors(missing_constructors: Vec<String>) -> Self {
             ExhaustiveCheckResult(Err(ExhaustiveCheckError::MissingConstructors(
                 missing_constructors,
             )))
+        }
+
+        pub fn dead_code(cause: &ArmPattern, dead_code: &ArmPattern) -> Self {
+            ExhaustiveCheckResult(Ok(ConstructorPatterns::empty()))
         }
 
         pub fn succeed(constructor_patterns: ConstructorPatterns) -> Self {
@@ -115,6 +123,9 @@ mod internal {
                     let constructors = constructors.join(", ");
                     write!(f, "Error: Non-exhaustive pattern match. The following patterns are not covered: `{}`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.", constructors)
                 }
+                ExhaustiveCheckError::DeadCode {cause, dead_pattern} => {
+                    write!(f, "Error: Dead code detected. The pattern `{}` is unreachable due to the existence of the pattern `{}` prior to it", dead_pattern, cause)
+                }
             }
         }
     }
@@ -127,9 +138,8 @@ mod internal {
         let mut constructor_map: HashMap<String, Vec<ArmPattern>> = HashMap::new();
         let mut found_with_arg = HashMap::new();
         let mut found_no_arg = HashMap::new();
-        let mut has_wildcard_or_literal = false;
+        let mut detected_wild_card_or_identifier = vec![];
 
-        // Initialize the tracking for all constructors
         for constructor in with_arg_constructors {
             found_with_arg.insert(constructor.to_string(), false);
         }
@@ -138,23 +148,22 @@ mod internal {
         }
 
         for pattern in patterns {
+            dbg!(pattern.clone(), detected_wild_card_or_identifier.clone());
+            if !detected_wild_card_or_identifier.is_empty()  {
+                return ExhaustiveCheckResult::dead_code(detected_wild_card_or_identifier.last().unwrap_or(&ArmPattern::WildCard), pattern);
+            }
             match pattern {
-                // Handle with-argument constructors
                 ArmPattern::Constructor(ctor_name, arm_patterns) => {
-                    dbg!(ctor_name.clone());
-                    dbg!(with_arg_constructors.clone());
                     if with_arg_constructors.contains(&ctor_name.as_str()) {
                         constructor_map
                             .entry(ctor_name.clone())
                             .or_insert_with(Vec::new)
                             .extend(arm_patterns.clone());
-                        dbg!(constructor_map.clone());
                         found_with_arg.insert(ctor_name.clone(), true);
                     } else if no_arg_constructors.contains(&ctor_name.as_str()) {
                         found_no_arg.insert(ctor_name.clone(), true);
                     }
                 }
-                // Handle `As` pattern for with-argument or no-argument constructors
                 ArmPattern::As(_, inner_pattern) => {
                     if let ArmPattern::Constructor(ctor_name, arm_patterns) = &**inner_pattern {
                         if with_arg_constructors.contains(&ctor_name.as_str()) {
@@ -168,26 +177,22 @@ mod internal {
                         }
                     }
                 }
-                // Check for wildcard or literal presence
-                ArmPattern::WildCard | ArmPattern::Literal(_) => {
-                    has_wildcard_or_literal = true;
+                ArmPattern::WildCard   => {
+                    detected_wild_card_or_identifier.push(ArmPattern::WildCard);
                 }
-                _ => {} // Ignore other patterns
+
+                arm_pattern if arm_pattern.is_literal_identifier() => {
+                    detected_wild_card_or_identifier.push(arm_pattern.clone());
+                }
+                _ => {}
             }
         }
 
-        dbg!(constructor_map.clone());
-
-        // Check if all necessary constructors are covered
         let all_with_arg_covered = found_with_arg.values().all(|&v| v);
         let all_no_arg_covered = found_no_arg.values().all(|&v| v);
 
-        dbg!(all_no_arg_covered);
-        dbg!(all_with_arg_covered);
-
-        // If both with-arg and no-arg constructors are absent, ensure a wildcard or literal is present
         if !all_with_arg_covered || !all_no_arg_covered {
-            if !has_wildcard_or_literal {
+            if detected_wild_card_or_identifier.is_empty() {
                 let mut missing_with_arg: Vec<_> = found_with_arg
                     .iter()
                     .filter(|(_, &v)| !v)
@@ -201,9 +206,7 @@ mod internal {
 
                 missing_with_arg.extend(missing_no_arg.clone());
 
-                dbg!(missing_with_arg.clone());
-
-                return ExhaustiveCheckResult::fail(missing_with_arg);
+                return ExhaustiveCheckResult::missing_constructors(missing_with_arg);
             }
         }
 
@@ -216,7 +219,7 @@ mod pattern_match_exhaustive_tests {
     use crate::{compile, Expr};
 
     #[test]
-    fn test_option_pattern_match() {
+    fn test_option_pattern_match1() {
         let expr = r#"
         let x = some("afsal");
         match x {
@@ -232,7 +235,23 @@ mod pattern_match_exhaustive_tests {
     }
 
     #[test]
-    fn test_option_pattern_match_wild_card() {
+    fn test_option_pattern_match2() {
+        let expr = r#"
+        let x = some("afsal");
+        match x {
+            none => "none",
+            some(a) => a
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_option_pattern_match_wild_card1() {
         let expr = r#"
         let x = some("afsal");
         match x {
@@ -245,14 +264,14 @@ mod pattern_match_exhaustive_tests {
         let result = compile(&expr, &vec![]);
         assert!(result.is_ok())
     }
-
     #[test]
-    fn test_option_pattern_match_inverted() {
+    fn test_option_pattern_match_wild_card2() {
         let expr = r#"
         let x = some("afsal");
         match x {
             none => "none",
-            some(a) => a
+            some(_) => a,
+
         }
         "#;
 
@@ -262,11 +281,57 @@ mod pattern_match_exhaustive_tests {
     }
 
     #[test]
-    fn test_option_pattern_match_wild_card_inverted() {
+    fn test_option_pattern_match_wild_card3() {
+        let expr = r#"
+        let x = some("afsal");
+        match x {
+            some(a) => a,
+            _ => "none"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_option_pattern_match_wild_card4() {
         let expr = r#"
         let x = some("afsal");
         match x {
             none => "none",
+            _ => "none"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+
+    #[test]
+    fn test_option_pattern_match_wild_card5() {
+        let expr = r#"
+        let x = some("afsal");
+        match x {
+            some(_) => a,
+            _ => "none"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]);
+        assert!(result.is_ok())
+    }
+
+    #[test]
+    fn test_option_pattern_match_wild_card6() {
+        let expr = r#"
+        let x = some("afsal");
+        match x {
+            _ => "none",
             some(_) => a
         }
         "#;
@@ -275,6 +340,7 @@ mod pattern_match_exhaustive_tests {
         let result = compile(&expr, &vec![]);
         assert!(result.is_ok())
     }
+
 
     #[test]
     fn test_option_none_absent() {
@@ -288,7 +354,21 @@ mod pattern_match_exhaustive_tests {
         let expr = Expr::from_text(expr).unwrap();
         let result = compile(&expr, &vec![]).unwrap_err();
 
-        dbg!(result.clone().to_string());
-        assert_eq!(result, "Missing constructors: [\"none\"], []")
+        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `none`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
+    }
+
+    #[test]
+    fn test_option_some_absent() {
+        let expr = r#"
+        let x = some("afsal");
+        match x {
+           none => "none"
+        }
+        "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let result = compile(&expr, &vec![]).unwrap_err();
+
+        assert_eq!(result, "Error: Non-exhaustive pattern match. The following patterns are not covered: `some`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.")
     }
 }

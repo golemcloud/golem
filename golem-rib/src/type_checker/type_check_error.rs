@@ -37,7 +37,7 @@ impl UnResolvedTypesError {
 }
 
 impl Display for UnResolvedTypesError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let field_path = self.unresolved_path.to_string();
         if field_path.is_empty() {
             write!(f, "Cannot infer the type of: `{}`", self.expr)?;

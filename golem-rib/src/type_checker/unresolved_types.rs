@@ -86,14 +86,6 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 for expr in exprs {
                     queue.push_back(expr);
                 }
-
-                if inferred_type.un_resolved() {
-                    if let Some(expr) = exprs.last() {
-                        return Err(UnResolvedTypesError::new(expr));
-                    } else {
-                        return Err(UnResolvedTypesError::new(expr));
-                    }
-                }
             }
             Expr::Not(expr, inferred_type) => {
                 queue.push_back(expr);
@@ -122,9 +114,6 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             }
             Expr::PatternMatch(cond, arms, inferred_type) => {
                 internal::unresolved_type_for_pattern_match(cond, arms)?;
-                if inferred_type.un_resolved() {
-                    return Err(UnResolvedTypesError::new(expr));
-                }
             }
             Expr::Option(option, inferred_type) => {
                 if let Some(expr) = option {

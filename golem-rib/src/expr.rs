@@ -1533,6 +1533,12 @@ impl Display for Expr {
     }
 }
 
+impl Display for ArmPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", text::to_string_arm_pattern(self).unwrap())
+    }
+}
+
 impl<'de> Deserialize<'de> for Expr {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
