@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::type_refinement::{ExtractInnerType, ExtractInnerTypes, GetInferredTypeByField};
+use crate::type_refinement::{ExtractInnerType, ExtractInnerTypes, GetInferredTypeByName};
 use crate::InferredType;
 use std::vec::IntoIter;
 
@@ -24,6 +24,12 @@ pub enum RefinedType<A> {
 }
 
 pub struct HeterogeneousCollectionType(pub Vec<InferredType>);
+
+impl HeterogeneousCollectionType {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
 
 impl IntoIterator for HeterogeneousCollectionType {
     type Item = InferredType;
@@ -137,15 +143,15 @@ impl<A> RefinedType<A> {
 
     // Example: Given `RefinedType::AllOf(RecordType(x -> y), RecordType(x -> z))`
     // inner_type_by_field("x") returns InferredTyp::AllOf(y, z)
-    pub fn inner_type_by_field(&self, field_name: &str) -> InferredType
+    pub fn inner_type_by_name(&self, field_name: &str) -> InferredType
     where
-        A: GetInferredTypeByField,
+        A: GetInferredTypeByName,
     {
         match self {
             RefinedType::OneOf(inner) => {
                 let collected_types = inner
                     .iter()
-                    .map(|v| v.inner_type_by_field(field_name))
+                    .map(|v| v.inner_type_by_name(field_name))
                     .collect::<Vec<_>>();
 
                 InferredType::one_of(collected_types).unwrap_or(InferredType::Unknown)
@@ -153,7 +159,7 @@ impl<A> RefinedType<A> {
             RefinedType::AllOf(inner) => {
                 let collected_types = inner
                     .iter()
-                    .map(|v| v.inner_type_by_field(field_name))
+                    .map(|v| v.inner_type_by_name(field_name))
                     .collect::<Vec<_>>();
 
                 InferredType::all_of(collected_types).unwrap_or(InferredType::Unknown)

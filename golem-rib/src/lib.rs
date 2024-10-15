@@ -31,6 +31,7 @@ mod inferred_type;
 mod interpreter;
 mod parser;
 mod text;
+mod type_checker;
 mod type_inference;
 mod type_refinement;
 mod type_registry;

@@ -24,6 +24,19 @@ pub enum CallType {
     EnumConstructor(String),
 }
 
+impl CallType {
+    pub fn is_resource_method(&self) -> bool {
+        match self {
+            CallType::Function(parsed_fn_name) => parsed_fn_name
+                .to_parsed_function_name()
+                .function
+                .resource_method_name()
+                .is_some(),
+            _ => false,
+        }
+    }
+}
+
 impl Display for CallType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

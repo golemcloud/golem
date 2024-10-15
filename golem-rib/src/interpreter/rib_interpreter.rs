@@ -1280,8 +1280,10 @@ mod interpreter_tests {
            let x: option<option<u64>> = none;
 
            match x {
-              some(some(x)) => x,
+              some(some(t)) => t,
+              some(none) => 0u64,
               none => 0u64
+
            }
         "#;
 
