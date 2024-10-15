@@ -549,5 +549,5 @@ impl WorkerService for ForwardingWorkerService {
         panic!("No real golem-worker-service, forwarding requests to worker-executor");
     }
 
-    fn kill(&self) {}
+    async fn kill(&self) {}
 }

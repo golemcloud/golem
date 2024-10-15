@@ -17,23 +17,25 @@ use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::Client;
 use golem_worker_executor_base::storage::blob::sqlite::SqliteBlobStorage;
-use once_cell::sync::Lazy;
 use tempfile::{tempdir, TempDir};
-use testcontainers::Container;
 use testcontainers_modules::minio::MinIO;
 use uuid::Uuid;
 
 use golem_common::model::{AccountId, ComponentId};
 use golem_worker_executor_base::services::golem_config::S3BlobStorageConfig;
 use golem_worker_executor_base::storage::blob::{
-    fs, memory, s3, sqlite, BlobStorage, BlobStorageNamespace,
+    fs, memory, s3, BlobStorage, BlobStorageNamespace,
 };
 use golem_worker_executor_base::storage::sqlite_types::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
+use testcontainers::runners::AsyncRunner;
+use testcontainers::ContainerAsync;
 
 macro_rules! test_blob_storage {
     ( $name:ident, $init:expr, $ns:expr ) => {
         mod $name {
+            use test_r::test;
+
             use assert2::check;
             use bytes::Bytes;
             use golem_worker_executor_base::storage::blob::*;
@@ -41,7 +43,7 @@ macro_rules! test_blob_storage {
 
             use crate::blob_storage::GetBlobStorage;
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
             async fn get_put_get_root() {
                 let test = $init().await;
@@ -76,7 +78,7 @@ macro_rules! test_blob_storage {
                 check!(result2 == Some(data));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
             async fn get_put_get_new_dir() {
                 let test = $init().await;
@@ -111,7 +113,7 @@ macro_rules! test_blob_storage {
                 check!(result2 == Some(data));
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
             async fn create_delete_exists_dir() {
                 let test = $init().await;
@@ -171,7 +173,7 @@ macro_rules! test_blob_storage {
                 check!(result3 == ExistsResult::DoesNotExist);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
             async fn create_delete_exists_dir_and_file() {
                 let test = $init().await;
@@ -251,7 +253,7 @@ macro_rules! test_blob_storage {
                 check!(result4 == ExistsResult::DoesNotExist);
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
             async fn list_dir() {
                 let test = $init().await;
@@ -309,7 +311,84 @@ macro_rules! test_blob_storage {
                 );
             }
 
-            #[tokio::test]
+            #[test]
+            #[tracing::instrument]
+            async fn delete_many() {
+                let test = $init().await;
+                let storage = test.get_blob_storage();
+                let namespace = $ns();
+
+                let path = Path::new("test-dir");
+                storage
+                    .create_dir("list_dir", "create-dir", namespace.clone(), path)
+                    .await
+                    .unwrap();
+                storage
+                    .put_raw(
+                        "delete_many",
+                        "put-raw",
+                        namespace.clone(),
+                        &path.join("test-file1"),
+                        &Bytes::from("test-data1"),
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .put_raw(
+                        "delete_many",
+                        "put-raw",
+                        namespace.clone(),
+                        &path.join("test-file2"),
+                        &Bytes::from("test-data2"),
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .put_raw(
+                        "delete_many",
+                        "put-raw",
+                        namespace.clone(),
+                        &path.join("test-file3"),
+                        &Bytes::from("test-data3"),
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .create_dir(
+                        "delete_many",
+                        "create-dir",
+                        namespace.clone(),
+                        &path.join("inner-dir"),
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .delete_many(
+                        "delete_many",
+                        "delete-many",
+                        namespace.clone(),
+                        &[path.join("test-file1"), path.join("test-file3")],
+                    )
+                    .await
+                    .unwrap();
+
+                let mut entries = storage
+                    .list_dir("delete_many", "entries", namespace.clone(), path)
+                    .await
+                    .unwrap();
+
+                entries.sort();
+
+                check!(
+                    entries
+                        == vec![
+                            Path::new("test-dir/inner-dir").to_path_buf(),
+                            Path::new("test-dir/test-file2").to_path_buf(),
+                        ]
+                );
+            }
+
+            #[test]
             #[tracing::instrument]
             async fn list_dir_root() {
                 let test = $init().await;
@@ -367,7 +446,7 @@ macro_rules! test_blob_storage {
                 );
             }
 
-            #[tokio::test]
+            #[test]
             #[tracing::instrument]
             async fn list_dir_same_prefix() {
                 let test = $init().await;
@@ -439,7 +518,7 @@ macro_rules! test_blob_storage {
 }
 
 pub(crate) trait GetBlobStorage {
-    fn get_blob_storage(&self) -> &dyn BlobStorage;
+    fn get_blob_storage(&self) -> &(dyn BlobStorage + Send + Sync);
 }
 
 struct InMemoryTest {
@@ -447,7 +526,7 @@ struct InMemoryTest {
 }
 
 impl GetBlobStorage for InMemoryTest {
-    fn get_blob_storage(&self) -> &dyn BlobStorage {
+    fn get_blob_storage(&self) -> &(dyn BlobStorage + Send + Sync) {
         &self.storage
     }
 }
@@ -458,28 +537,28 @@ struct FsTest {
 }
 
 impl GetBlobStorage for FsTest {
-    fn get_blob_storage(&self) -> &dyn BlobStorage {
+    fn get_blob_storage(&self) -> &(dyn BlobStorage + Send + Sync) {
         &self.storage
     }
 }
 
 struct S3Test {
-    _container: Container<'static, MinIO>,
+    _container: ContainerAsync<MinIO>,
     storage: s3::S3BlobStorage,
 }
 
 impl GetBlobStorage for S3Test {
-    fn get_blob_storage(&self) -> &dyn BlobStorage {
+    fn get_blob_storage(&self) -> &(dyn BlobStorage + Send + Sync) {
         &self.storage
     }
 }
 
 struct SqliteTest {
-    storage: sqlite::SqliteBlobStorage,
+    storage: SqliteBlobStorage,
 }
 
 impl GetBlobStorage for SqliteTest {
-    fn get_blob_storage(&self) -> &dyn BlobStorage {
+    fn get_blob_storage(&self) -> &(dyn BlobStorage + Send + Sync) {
         &self.storage
     }
 }
@@ -499,15 +578,15 @@ pub(crate) async fn fs() -> impl GetBlobStorage {
     }
 }
 
-// Using a global docker client to avoid the restrictions of the testcontainers library,
-// binding the container lifetime to the client.
-static DOCKER: Lazy<testcontainers::clients::Cli> =
-    Lazy::new(testcontainers::clients::Cli::default);
-
 pub(crate) async fn s3() -> impl GetBlobStorage {
-    let minio = MinIO::default();
-    let node = DOCKER.run(minio);
-    let host_port = node.get_host_port_ipv4(9000);
+    let container = MinIO::default()
+        .start()
+        .await
+        .expect("Failed to start MinIO");
+    let host_port = container
+        .get_host_port_ipv4(9000)
+        .await
+        .expect("Failed to get host port");
 
     let config = S3BlobStorageConfig {
         retries: Default::default(),
@@ -519,15 +598,20 @@ pub(crate) async fn s3() -> impl GetBlobStorage {
     };
     create_buckets(host_port, &config).await;
     S3Test {
-        _container: node,
+        _container: container,
         storage: s3::S3BlobStorage::new(config.clone()).await,
     }
 }
 
 pub(crate) async fn s3_prefixed() -> impl GetBlobStorage {
-    let minio = MinIO::default();
-    let node = DOCKER.run(minio);
-    let host_port = node.get_host_port_ipv4(9000);
+    let container = MinIO::default()
+        .start()
+        .await
+        .expect("Failed to start MinIO");
+    let host_port = container
+        .get_host_port_ipv4(9000)
+        .await
+        .expect("Failed to get host port");
 
     let config = S3BlobStorageConfig {
         retries: Default::default(),
@@ -539,7 +623,7 @@ pub(crate) async fn s3_prefixed() -> impl GetBlobStorage {
     };
     create_buckets(host_port, &config).await;
     S3Test {
-        _container: node,
+        _container: container,
         storage: s3::S3BlobStorage::new(config.clone()).await,
     }
 }

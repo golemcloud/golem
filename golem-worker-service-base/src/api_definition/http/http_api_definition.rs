@@ -421,6 +421,8 @@ impl From<CompiledRoute> for Route {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
     use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 

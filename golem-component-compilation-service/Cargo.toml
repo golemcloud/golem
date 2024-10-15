@@ -5,10 +5,13 @@ edition = "2021"
 
 [lib]
 path = "src/lib.rs"
+harness = false
 
 [[bin]]
+harness = false
 name = "golem-component-compilation-service"
 path = "src/server.rs"
+test = false
 
 [dependencies]
 golem-api-grpc = { version = "0.0.0", path = "../golem-api-grpc" }
@@ -34,3 +37,6 @@ tracing-subscriber = { workspace = true }
 prometheus = { workspace = true }
 futures-util = "0.3.30"
 lazy_static.workspace = true
+
+[dev-dependencies]
+test-r = { workspace = true }

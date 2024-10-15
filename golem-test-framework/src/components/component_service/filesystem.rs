@@ -167,5 +167,5 @@ impl ComponentService for FileSystemComponentService {
         panic!("No real component service running")
     }
 
-    fn kill(&self) {}
+    async fn kill(&self) {}
 }

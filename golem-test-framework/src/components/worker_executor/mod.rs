@@ -54,7 +54,7 @@ pub trait WorkerExecutor {
         self.private_grpc_port()
     }
 
-    fn kill(&self);
+    async fn kill(&self);
     async fn restart(&self);
 }
 

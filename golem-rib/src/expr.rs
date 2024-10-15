@@ -1573,6 +1573,8 @@ impl Serialize for Expr {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::ParsedFunctionSite::PackagedInterface;
     use crate::{
         ArmPattern, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, MatchArm,

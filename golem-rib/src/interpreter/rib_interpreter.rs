@@ -1007,13 +1007,15 @@ mod internal {
 
 #[cfg(test)]
 mod interpreter_tests {
+    use test_r::test;
+
     use super::*;
     use crate::{InstructionId, VariableId};
     use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedList, TypedRecord};
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_literal() {
         let mut interpreter = Interpreter::default();
 
@@ -1025,7 +1027,7 @@ mod interpreter_tests {
         assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(1));
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_equal_to() {
         let mut interpreter = Interpreter::default();
 
@@ -1041,7 +1043,7 @@ mod interpreter_tests {
         assert!(result.get_bool().unwrap());
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_greater_than() {
         let mut interpreter = Interpreter::default();
 
@@ -1057,7 +1059,7 @@ mod interpreter_tests {
         assert!(result.get_bool().unwrap());
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_less_than() {
         let mut interpreter = Interpreter::default();
 
@@ -1073,7 +1075,7 @@ mod interpreter_tests {
         assert!(result.get_bool().unwrap());
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_greater_than_or_equal_to() {
         let mut interpreter = Interpreter::default();
 
@@ -1089,7 +1091,7 @@ mod interpreter_tests {
         assert!(result.get_bool().unwrap());
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_less_than_or_equal_to() {
         let mut interpreter = Interpreter::default();
 
@@ -1105,7 +1107,7 @@ mod interpreter_tests {
         assert!(result.get_bool().unwrap());
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_assign_and_load_var() {
         let mut interpreter = Interpreter::default();
 
@@ -1121,7 +1123,7 @@ mod interpreter_tests {
         assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(1));
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_jump() {
         let mut interpreter = Interpreter::default();
 
@@ -1137,7 +1139,7 @@ mod interpreter_tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_jump_if_false() {
         let mut interpreter = Interpreter::default();
 
@@ -1156,7 +1158,7 @@ mod interpreter_tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_record() {
         let mut interpreter = Interpreter::default();
 
@@ -1200,7 +1202,7 @@ mod interpreter_tests {
         assert_eq!(result.get_val().unwrap(), expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_sequence() {
         let mut interpreter = Interpreter::default();
 
@@ -1227,7 +1229,7 @@ mod interpreter_tests {
         assert_eq!(result.get_val().unwrap(), expected);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_select_field() {
         let mut interpreter = Interpreter::default();
 
@@ -1245,7 +1247,7 @@ mod interpreter_tests {
         assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_for_select_index() {
         let mut interpreter = Interpreter::default();
 
@@ -1263,12 +1265,14 @@ mod interpreter_tests {
     }
 
     mod pattern_match_tests {
+        use test_r::test;
+
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr, FunctionTypeRegistry, Interpreter};
         use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple, u16, u64};
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_for_pattern_match_on_option_nested() {
             let mut interpreter = Interpreter::default();
 
@@ -1290,7 +1294,7 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::U64(0));
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_for_pattern_match_on_tuple() {
             let mut interpreter = Interpreter::default();
 
@@ -1313,7 +1317,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_for_pattern_match_on_tuple_with_option_some() {
             let mut interpreter = Interpreter::default();
 
@@ -1338,7 +1342,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_for_pattern_match_on_tuple_with_option_none() {
             let mut interpreter = Interpreter::default();
 
@@ -1361,7 +1365,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_for_pattern_match_on_tuple_with_all_types() {
             let mut interpreter = Interpreter::default();
 
@@ -1392,7 +1396,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_for_pattern_match_on_tuple_with_wild_pattern() {
             let mut interpreter = Interpreter::default();
 
@@ -1422,7 +1426,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_record_output_in_pattern_match() {
             let input_analysed_type = internal::get_analysed_type_record();
             let output_analysed_type = internal::get_analysed_type_result();
@@ -1461,7 +1465,7 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), expected);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_tuple_output_in_pattern_match() {
             let input_analysed_type = internal::get_analysed_type_record();
             let output_analysed_type = internal::get_analysed_type_result();
@@ -1502,6 +1506,8 @@ mod interpreter_tests {
     }
 
     mod dynamic_resource_parameter_tests {
+        use test_r::test;
+
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
         use crate::{compiler, Expr, Interpreter};
         use golem_wasm_ast::analysis::analysed_type::{
@@ -1509,7 +1515,7 @@ mod interpreter_tests {
         };
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_indexed_resource_drop() {
             let expr = r#"
            let user_id = "user";
@@ -1531,7 +1537,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_indexed_resource_checkout() {
             let expr = r#"
            let user_id = "foo";
@@ -1563,7 +1569,7 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), result_value);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_indexed_resource_get_cart_contents() {
             let expr = r#"
            let user_id = "bar";
@@ -1600,7 +1606,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_indexed_resource_update_item_quantity() {
             let expr = r#"
            let user_id = "jon";
@@ -1626,7 +1632,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_indexed_resource_add_item() {
             let expr = r#"
            let user_id = "foo";
@@ -1653,7 +1659,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_resource_add_item() {
             let expr = r#"
            let user_id = "foo";
@@ -1679,7 +1685,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_resource_get_cart_contents() {
             let expr = r#"
            let result = golem:it/api.{cart.get-cart-contents}();
@@ -1714,7 +1720,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_resource_update_item() {
             let expr = r#"
            let product_id = "mac";
@@ -1738,7 +1744,7 @@ mod interpreter_tests {
             );
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_resource_checkout() {
             let expr = r#"
            let result = golem:it/api.{cart.checkout}();
@@ -1768,7 +1774,7 @@ mod interpreter_tests {
             assert_eq!(result.get_val().unwrap(), result_value);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_interpreter_with_resource_drop() {
             let expr = r#"
            golem:it/api.{cart.drop}();

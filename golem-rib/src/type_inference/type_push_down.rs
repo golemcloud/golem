@@ -371,6 +371,8 @@ mod internal {
 
 #[cfg(test)]
 mod type_push_down_tests {
+    use test_r::test;
+
     use crate::{Expr, InferredType, VariableId};
 
     #[test]

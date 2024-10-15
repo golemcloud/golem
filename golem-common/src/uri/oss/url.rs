@@ -432,6 +432,8 @@ impl Display for ResourceUrl {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::uri::oss::url::{
         ApiDefinitionUrl, ApiDeploymentUrl, ComponentOrVersionUrl, ComponentUrl,
         ComponentVersionUrl, ResourceUrl, WorkerFunctionUrl, WorkerOrFunctionUrl, WorkerUrl,

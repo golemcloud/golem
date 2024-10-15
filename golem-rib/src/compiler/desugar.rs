@@ -513,6 +513,8 @@ mod internal {
 
 #[cfg(test)]
 mod desugar_tests {
+    use test_r::test;
+
     use crate::compiler::desugar::desugar_tests::expectations::expected_condition_with_identifiers;
     use crate::type_registry::FunctionTypeRegistry;
     use crate::Expr;

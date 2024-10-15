@@ -136,6 +136,13 @@ impl SpawnedWorkerService {
             },
         }
     }
+
+    fn blocking_kill(&self) {
+        info!("Stopping golem-worker-service");
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+    }
 }
 
 #[async_trait]
@@ -163,16 +170,13 @@ impl WorkerService for SpawnedWorkerService {
         self.custom_request_port
     }
 
-    fn kill(&self) {
-        info!("Stopping golem-worker-service");
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            let _ = child.kill();
-        }
+    async fn kill(&self) {
+        self.blocking_kill()
     }
 }
 
 impl Drop for SpawnedWorkerService {
     fn drop(&mut self) {
-        self.kill();
+        self.blocking_kill()
     }
 }

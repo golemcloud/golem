@@ -743,6 +743,8 @@ mod internal {
 
 #[cfg(test)]
 mod type_pull_up_tests {
+    use test_r::test;
+
     use crate::call_type::CallType;
     use crate::function_name::DynamicParsedFunctionName;
     use crate::DynamicParsedFunctionReference::IndexedResourceMethod;

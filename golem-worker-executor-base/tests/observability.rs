@@ -12,17 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test};
+
 use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_test_framework::dsl::TestDslUnsafe;
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn get_oplog_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn get_oplog_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("runtime-service").await;
 
@@ -65,7 +76,9 @@ async fn get_oplog_1() {
 
     drop(executor);
 
-    assert_eq!(oplog.len(), 14);
+    // Whether there is an "enqueued invocation" entry or just directly started invocation
+    // depends on timing
+    assert!(oplog.len() >= 12 && oplog.len() <= 14);
     assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
     assert_eq!(
         oplog

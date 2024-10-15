@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test};
+
 use std::collections::HashMap;
 use std::env;
 use std::io::Write;
@@ -36,6 +38,7 @@ use golem_common::model::{
 use golem_wasm_rpc::Value;
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
@@ -48,11 +51,19 @@ use tracing::{debug, info};
 use warp::Filter;
 use wasmtime_wasi::runtime::spawn;
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn interruption() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn interruption(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("interruption").await;
     let worker_id = executor.start_worker(&component_id, "interruption-1").await;
@@ -80,11 +91,15 @@ async fn interruption() {
     check!(worker_error_message(&result.err().unwrap()).contains("Interrupted via the Golem API"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn simulated_crash() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn simulated_crash(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("interruption").await;
     let worker_id = executor
@@ -123,11 +138,14 @@ async fn simulated_crash() {
     check!(elapsed.as_secs() < 13);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn shopping_cart_example() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn shopping_cart_example(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("shopping-cart").await;
     let worker_id = executor
@@ -224,11 +242,14 @@ async fn shopping_cart_example() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn dynamic_worker_creation() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn dynamic_worker_creation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("environment-service").await;
     let worker_id = WorkerId {
@@ -295,11 +316,14 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
     }
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn dynamic_worker_creation_without_name() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn dynamic_worker_creation_without_name(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("environment-service").await;
     let worker_id = TargetWorkerId {
@@ -330,11 +354,14 @@ async fn dynamic_worker_creation_without_name() {
     check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn ephemeral_worker_creation_without_name() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn ephemeral_worker_creation_without_name(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor
         .store_ephemeral_component("environment-service")
@@ -367,11 +394,14 @@ async fn ephemeral_worker_creation_without_name() {
     check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn ephemeral_worker_creation_with_name_is_not_persistent() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn ephemeral_worker_creation_with_name_is_not_persistent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_ephemeral_component("counters").await;
     let worker_id = TargetWorkerId {
@@ -402,11 +432,15 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent() {
     check!(result == vec![Value::U64(0)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn promise() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn promise(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("promise").await;
     let worker_id = executor.start_worker(&component_id, "promise-1").await;
@@ -451,11 +485,15 @@ async fn promise() {
     check!(result == Ok(vec![Value::List(vec![Value::U8(42)])]));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn get_self_uri() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn get_self_uri(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("runtime-service").await;
     let worker_id = executor
@@ -481,11 +519,14 @@ async fn get_self_uri() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn get_workers_from_worker() {
-    let context = TestContext::new();
-    let mut executor = start(&context).await.unwrap();
+async fn get_workers_from_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("runtime-service").await;
 
@@ -557,11 +598,14 @@ async fn get_workers_from_worker() {
     drop(executor);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn get_metadata_from_worker() {
-    let context = TestContext::new();
-    let mut executor = start(&context).await.unwrap();
+async fn get_metadata_from_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("runtime-service").await;
 
@@ -647,11 +691,14 @@ async fn get_metadata_from_worker() {
     drop(executor);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn invoking_with_same_idempotency_key_is_idempotent() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn invoking_with_same_idempotency_key_is_idempotent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("shopping-cart").await;
     let worker_id = executor
@@ -707,11 +754,14 @@ async fn invoking_with_same_idempotency_key_is_idempotent() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("shopping-cart").await;
     let worker_id = executor
@@ -735,7 +785,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let _result2 = executor
         .invoke_and_await_with_key(
@@ -770,11 +820,15 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn optional_parameters() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn optional_parameters(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("option-service").await;
     let worker_id = executor
@@ -834,11 +888,15 @@ async fn optional_parameters() {
     check!(todo_none == vec![Value::String("todo".to_string())]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn flags_parameters() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn flags_parameters(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("flags-service").await;
     let worker_id = executor
@@ -886,11 +944,14 @@ async fn flags_parameters() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn variants_with_no_payloads() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn variants_with_no_payloads(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("variant-service").await;
     let worker_id = executor
@@ -906,11 +967,15 @@ async fn variants_with_no_payloads() {
     check!(result.is_ok());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn delete_worker() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn delete_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("option-service").await;
     let worker_id = executor
@@ -953,9 +1018,13 @@ async fn delete_worker() {
     check!(metadata2.is_none());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn get_workers() {
+async fn get_workers(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
     async fn get_check(
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
@@ -972,8 +1041,8 @@ async fn get_workers() {
         values
     }
 
-    let context = TestContext::new();
-    let mut executor = start(&context).await.unwrap();
+    let context = TestContext::new(last_unique_id);
+    let mut executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("option-service").await;
 
@@ -1088,11 +1157,14 @@ async fn get_workers() {
     get_check(&component_id, None, 0, &mut executor).await;
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_parameters() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_parameters(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("option-service").await;
     let worker_id = executor
@@ -1106,11 +1178,14 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
     check!(failure.is_err());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameters() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameters(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("option-service").await;
     let worker_id = executor
@@ -1132,11 +1207,15 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
     check!(failure.is_err());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn get_worker_metadata() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn get_worker_metadata(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("clock-service").await;
     let worker_id = executor
@@ -1183,11 +1262,14 @@ async fn get_worker_metadata() {
     check!(metadata2.last_known_status.total_linear_memory_size == 1245184);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn create_invoke_delete_create_invoke() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn create_invoke_delete_create_invoke(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("shopping-cart").await;
     let worker_id = executor
@@ -1232,11 +1314,14 @@ async fn create_invoke_delete_create_invoke() {
     check!(r2.is_ok());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn recovering_an_old_worker_after_updating_a_component() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn recovering_an_old_worker_after_updating_a_component(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_unique_component("shopping-cart").await;
     let worker_id = executor
@@ -1286,7 +1371,7 @@ async fn recovering_an_old_worker_after_updating_a_component() {
 
     // Restarting the server to force worker recovery
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     // Call the first worker again to check if it is still working
     let r3 = executor
@@ -1312,11 +1397,14 @@ async fn recovering_an_old_worker_after_updating_a_component() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn recreating_a_worker_after_it_got_deleted_with_a_different_version() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_unique_component("shopping-cart").await;
     let worker_id = executor
@@ -1377,13 +1465,16 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn trying_to_use_an_old_wasm_provides_good_error_message() {
-    let context = TestContext::new();
+async fn trying_to_use_an_old_wasm_provides_good_error_message(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
     // case: WASM is an old version, rejected by protector
 
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component_unverified("old-component").await;
     let result = executor
@@ -1401,12 +1492,15 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message() {
     ));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message() {
-    let context = TestContext::new();
+async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
     // case: WASM can be parsed but wasmtime does not support it
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
     let component_id = executor.store_component("write-stdout").await;
 
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -1438,12 +1532,14 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     ));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery()
-{
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
     let component_id = executor.store_component("write-stdout").await;
 
     let worker_id = executor
@@ -1453,7 +1549,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
     // worker is idle. if we restart the server it won't get recovered
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     // corrupting the uploaded WASM
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -1494,11 +1590,14 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     ));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn long_running_poll_loop_works_as_expected() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn long_running_poll_loop_works_as_expected(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1560,11 +1659,14 @@ async fn long_running_poll_loop_works_as_expected() {
     check!(status2.last_known_status.status == WorkerStatus::Idle);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1684,11 +1786,14 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation()
     check!(status5.last_known_status.status == WorkerStatus::Idle); // second finished
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn long_running_poll_loop_connection_breaks_on_interrupt() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn long_running_poll_loop_connection_breaks_on_interrupt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1749,11 +1854,14 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt() {
         .any(|e| stdout_event_matching(e, "Received initial\n")));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_worker() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1814,11 +1922,14 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     check!(status2.last_known_status.status == WorkerStatus::Interrupted);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn long_running_poll_loop_connection_can_be_restored_after_resume(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1906,11 +2017,14 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume() {
         .any(|e| stdout_event_matching(e, "Poll loop finished\n")));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -1968,11 +2082,14 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt() {
     check!(metadata.is_none());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn shopping_cart_resource_example() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn shopping_cart_resource_example(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("shopping-cart-resource").await;
     let worker_id = executor
@@ -2092,11 +2209,14 @@ async fn shopping_cart_resource_example() {
     )
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn counter_resource_test_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("counters").await;
     let worker_id = executor.start_worker(&component_id, "counters-1").await;
@@ -2199,11 +2319,14 @@ async fn counter_resource_test_1() {
     check!(resources2 == vec![]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_2() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn counter_resource_test_2(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("counters").await;
     let worker_id = executor.start_worker(&component_id, "counters-2").await;
@@ -2269,6 +2392,8 @@ async fn counter_resource_test_2() {
         .await;
 
     let (metadata2, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
+
+    let _oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
 
     drop(executor);
 
@@ -2338,14 +2463,18 @@ async fn counter_resource_test_2() {
             )
         })
         .collect::<Vec<_>>();
+
     check!(resources2 == vec![]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn reconstruct_interrupted_state() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn reconstruct_interrupted_state(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("interruption").await;
     let worker_id = executor.start_worker(&component_id, "interruption-1").await;
@@ -2390,11 +2519,14 @@ async fn reconstruct_interrupted_state() {
     check!(status == WorkerStatus::Interrupted);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn invocation_queue_is_persistent() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn invocation_queue_is_persistent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2457,7 +2589,7 @@ async fn invocation_queue_is_persistent() {
     sleep(Duration::from_secs(2)).await;
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     executor
         .invoke(&worker_id, "golem:it/api.{increment}", vec![])
@@ -2484,11 +2616,14 @@ async fn invocation_queue_is_persistent() {
     check!(result == vec![Value::U64(4)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn invoke_with_non_existing_function() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn invoke_with_non_existing_function(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("option-service").await;
     let worker_id = executor
@@ -2520,11 +2655,14 @@ async fn invoke_with_non_existing_function() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn stderr_returned_for_failed_component() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn stderr_returned_for_failed_component(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("failing-component").await;
     let worker_id = executor

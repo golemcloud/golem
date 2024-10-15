@@ -12,18 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test};
+
 use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
 use chrono::Datelike;
 use golem_test_framework::dsl::{events_to_lines, TestDslUnsafe};
 use golem_wasm_rpc::Value;
 use std::time::Duration;
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn javascript_example_3() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn javascript_example_3(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("js-3").await;
     let worker_id = executor.start_worker(&component_id, "js-3").await;
@@ -44,11 +55,15 @@ async fn javascript_example_3() {
     assert!(result_body.contains("google.com"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn javascript_example_4() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn javascript_example_4(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("js-4").await;
     let worker_id = executor.start_worker(&component_id, "js-4").await;
@@ -63,11 +78,15 @@ async fn javascript_example_4() {
     let_assert!(Some(Value::Record(_)) = result.into_iter().next());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn python_example_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn python_example_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("python-1").await;
     let worker_id = executor.start_worker(&component_id, "python-1").await;
@@ -92,11 +111,15 @@ async fn python_example_1() {
     check!(result == vec![Value::U64(11)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn swift_example_1() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn swift_example_1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("swift-1").await;
     let worker_id = executor.start_worker(&component_id, "swift-1").await;

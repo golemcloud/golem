@@ -248,6 +248,8 @@ impl Display for Rebalance {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use tracing_test::traced_test;
 
     use golem_common::model::ShardId;

@@ -29,6 +29,8 @@ impl StdError for RibParseError {
 // to not regress user-facing error messages with changing parsing logic
 #[cfg(test)]
 mod invalid_syntax_tests {
+    use test_r::test;
+
     use crate::Expr;
 
     #[test]

@@ -807,10 +807,7 @@ fn encode_host_function_request_as_value(
             Ok(payload.into_value_and_type())
         }
         "golem::rpc::wasm-rpc::generate_unique_local_worker_id" => no_payload(),
-        "cli::preopens::get_directories" => {
-            let payload: Result<Vec<String>, SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
-        }
+        "cli::preopens::get_directories" => no_payload(),
         "filesystem::types::descriptor::stat" => {
             let payload: String = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())

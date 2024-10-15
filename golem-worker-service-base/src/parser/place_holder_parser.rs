@@ -59,16 +59,22 @@ fn take_until_unbalanced(
     }
 }
 
-#[test]
-fn test_parse_place_holder() {
-    assert_eq!(("", "test"), parse_place_holder("{test}").unwrap());
-    assert_eq!(
-        ("", "test{test}"),
-        parse_place_holder("{test{test}}").unwrap(),
-    );
-    assert!(parse_place_holder("{test").is_err());
-    assert!(parse_place_holder("test}").is_err());
-    assert!(parse_place_holder("}").is_err());
+#[cfg(test)]
+mod tests {
+    use crate::parser::place_holder_parser::parse_place_holder;
+    use test_r::test;
 
-    assert_eq!(("}", "test"), parse_place_holder("{test}}").unwrap());
+    #[test]
+    fn test_parse_place_holder() {
+        assert_eq!(("", "test"), parse_place_holder("{test}").unwrap());
+        assert_eq!(
+            ("", "test{test}"),
+            parse_place_holder("{test{test}}").unwrap(),
+        );
+        assert!(parse_place_holder("{test").is_err());
+        assert!(parse_place_holder("test}").is_err());
+        assert!(parse_place_holder("}").is_err());
+
+        assert_eq!(("}", "test"), parse_place_holder("{test}}").unwrap());
+    }
 }

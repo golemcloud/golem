@@ -249,11 +249,13 @@ impl ComponentObjectStore for FsComponentObjectStore {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::config::ComponentStoreLocalConfig;
     use crate::service::component_object_store::{ComponentObjectStore, FsComponentObjectStore};
     use futures::TryStreamExt;
 
-    #[tokio::test]
+    #[test]
     pub async fn test_fs_object_store() {
         let config = ComponentStoreLocalConfig {
             root_path: "/tmp/cloud-service".to_string(),

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::components::rdb::{DbInfo, Rdb};
+use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -33,12 +34,13 @@ impl SqliteRdb {
     }
 }
 
+#[async_trait]
 impl Rdb for SqliteRdb {
     fn info(&self) -> DbInfo {
         DbInfo::Sqlite(self.path.clone())
     }
 
-    fn kill(&self) {
+    async fn kill(&self) {
         remove_path(&self.path);
     }
 }
@@ -59,6 +61,6 @@ fn remove_path(path: &Path) {
 
 impl Drop for SqliteRdb {
     fn drop(&mut self) {
-        self.kill();
+        remove_path(&self.path);
     }
 }

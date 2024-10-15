@@ -79,7 +79,7 @@ pub trait ComponentCompilationService {
         self.private_grpc_port()
     }
 
-    fn kill(&self);
+    async fn kill(&self);
 }
 
 async fn new_client(host: &str, grpc_port: u16) -> ComponentCompilationServiceClient<Channel> {

@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use testcontainers::core::WaitFor;
-use testcontainers::{Container, Image, RunnableImage};
+use testcontainers::core::{ContainerPort, WaitFor};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, Image, ImageExt};
+use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
@@ -28,10 +31,10 @@ use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{new_client, WorkerService, WorkerServiceEnvVars};
-use crate::components::{GolemEnvVars, DOCKER, NETWORK};
+use crate::components::{GolemEnvVars, NETWORK};
 
 pub struct DockerWorkerService {
-    container: Container<'static, GolemWorkerServiceImage>,
+    container: Arc<Mutex<Option<ContainerAsync<GolemWorkerServiceImage>>>>,
     keep_container: bool,
     public_http_port: u16,
     public_grpc_port: u16,
@@ -41,9 +44,9 @@ pub struct DockerWorkerService {
 
 impl DockerWorkerService {
     const NAME: &'static str = "golem_worker_service";
-    const HTTP_PORT: u16 = 8082;
-    const GRPC_PORT: u16 = 9092;
-    const CUSTOM_REQUEST_PORT: u16 = 9093;
+    const HTTP_PORT: ContainerPort = ContainerPort::Tcp(8082);
+    const GRPC_PORT: ContainerPort = ContainerPort::Tcp(9092);
+    const CUSTOM_REQUEST_PORT: ContainerPort = ContainerPort::Tcp(9093);
 
     pub async fn new(
         component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
@@ -78,9 +81,9 @@ impl DockerWorkerService {
 
         let env_vars = env_vars
             .env_vars(
-                Self::HTTP_PORT,
-                Self::GRPC_PORT,
-                Self::CUSTOM_REQUEST_PORT,
+                Self::HTTP_PORT.as_u16(),
+                Self::GRPC_PORT.as_u16(),
+                Self::CUSTOM_REQUEST_PORT.as_u16(),
                 component_service,
                 shard_manager,
                 rdb,
@@ -88,22 +91,33 @@ impl DockerWorkerService {
             )
             .await;
 
-        let image = RunnableImage::from(GolemWorkerServiceImage::new(
+        let container = GolemWorkerServiceImage::new(
             Self::GRPC_PORT,
             Self::HTTP_PORT,
             Self::CUSTOM_REQUEST_PORT,
             env_vars,
-        ))
+        )
         .with_container_name(Self::NAME)
-        .with_network(NETWORK);
-        let container = DOCKER.run(image);
+        .with_network(NETWORK)
+        .start()
+        .await
+        .expect("Failed to start golem-worker-service container");
 
-        let public_http_port = container.get_host_port_ipv4(Self::HTTP_PORT);
-        let public_grpc_port = container.get_host_port_ipv4(Self::GRPC_PORT);
-        let public_custom_request_port = container.get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT);
+        let public_http_port = container
+            .get_host_port_ipv4(Self::HTTP_PORT)
+            .await
+            .expect("Failed to get public HTTP port");
+        let public_grpc_port = container
+            .get_host_port_ipv4(Self::GRPC_PORT)
+            .await
+            .expect("Failed to get public gRPC port");
+        let public_custom_request_port = container
+            .get_host_port_ipv4(Self::CUSTOM_REQUEST_PORT)
+            .await
+            .expect("Failed to get public custom request port");
 
         Self {
-            container,
+            container: Arc::new(Mutex::new(Some(container))),
             public_http_port,
             public_grpc_port,
             public_custom_request_port,
@@ -135,15 +149,15 @@ impl WorkerService for DockerWorkerService {
     }
 
     fn private_http_port(&self) -> u16 {
-        Self::HTTP_PORT
+        Self::HTTP_PORT.as_u16()
     }
 
     fn private_grpc_port(&self) -> u16 {
-        Self::GRPC_PORT
+        Self::GRPC_PORT.as_u16()
     }
 
     fn private_custom_request_port(&self) -> u16 {
-        Self::CUSTOM_REQUEST_PORT
+        Self::CUSTOM_REQUEST_PORT.as_u16()
     }
 
     fn public_host(&self) -> String {
@@ -162,28 +176,22 @@ impl WorkerService for DockerWorkerService {
         self.public_custom_request_port
     }
 
-    fn kill(&self) {
-        self.container.kill(self.keep_container);
-    }
-}
-
-impl Drop for DockerWorkerService {
-    fn drop(&mut self) {
-        self.kill();
+    async fn kill(&self) {
+        self.container.kill(self.keep_container).await;
     }
 }
 
 #[derive(Debug)]
 struct GolemWorkerServiceImage {
     env_vars: HashMap<String, String>,
-    expose_ports: [u16; 3],
+    expose_ports: [ContainerPort; 3],
 }
 
 impl GolemWorkerServiceImage {
     pub fn new(
-        grpc_port: u16,
-        http_port: u16,
-        custom_request_port: u16,
+        grpc_port: ContainerPort,
+        http_port: ContainerPort,
+        custom_request_port: ContainerPort,
         env_vars: HashMap<String, String>,
     ) -> GolemWorkerServiceImage {
         GolemWorkerServiceImage {
@@ -194,25 +202,25 @@ impl GolemWorkerServiceImage {
 }
 
 impl Image for GolemWorkerServiceImage {
-    type Args = ();
-
-    fn name(&self) -> String {
-        "golemservices/golem-worker-service".to_string()
+    fn name(&self) -> &str {
+        "golemservices/golem-worker-service"
     }
 
-    fn tag(&self) -> String {
-        "latest".to_string()
+    fn tag(&self) -> &str {
+        "latest"
     }
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
         vec![WaitFor::message_on_stdout("server started")]
     }
 
-    fn env_vars(&self) -> Box<dyn Iterator<Item = (&String, &String)> + '_> {
-        Box::new(self.env_vars.iter())
+    fn env_vars(
+        &self,
+    ) -> impl IntoIterator<Item = (impl Into<Cow<'_, str>>, impl Into<Cow<'_, str>>)> {
+        self.env_vars.iter()
     }
 
-    fn expose_ports(&self) -> Vec<u16> {
-        self.expose_ports.to_vec()
+    fn expose_ports(&self) -> &[ContainerPort] {
+        &self.expose_ports
     }
 }

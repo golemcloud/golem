@@ -48,11 +48,5 @@ impl ComponentCompilationService for ProvidedComponentCompilationService {
         self.grpc_port
     }
 
-    fn kill(&self) {}
-}
-
-impl Drop for ProvidedComponentCompilationService {
-    fn drop(&mut self) {
-        self.kill();
-    }
+    async fn kill(&self) {}
 }

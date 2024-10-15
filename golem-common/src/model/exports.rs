@@ -108,7 +108,10 @@ pub fn find_resource_site(
                 resource: resource_name.to_string(),
             },
         );
-        if functions.iter().any(|f| f.name == constructor.to_string()) {
+        if functions
+            .iter()
+            .any(|f| f.name == constructor.function().function_name())
+        {
             Some(site)
         } else {
             None

@@ -36,3 +36,6 @@ mod type_inference;
 mod type_refinement;
 mod type_registry;
 mod variable_id;
+
+#[cfg(test)]
+test_r::enable!();

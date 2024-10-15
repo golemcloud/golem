@@ -17,18 +17,17 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use evicting_cache_map::EvictingCacheMap;
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
-use tokio::sync::RwLock;
-
 use crate::error::GolemError;
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService};
 use crate::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
 };
+use async_trait::async_trait;
+use evicting_cache_map::EvictingCacheMap;
+use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
+use tokio::sync::RwLock;
 
 /// An oplog archive implementation that uses the configured blob storage to store compressed
 /// chunks of the oplog.
@@ -433,6 +432,18 @@ impl OplogArchive for BlobOplogArchive {
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         let mut entries = self.entries.write().await;
+        let mut cache = self.cache.write().await;
+
+        let idx_to_evict = cache
+            .iter()
+            .filter(|(idx, _)| **idx <= last_dropped_id)
+            .map(|(idx, _)| *idx)
+            .collect::<Vec<_>>();
+
+        for idx in idx_to_evict {
+            cache.remove(&idx);
+        }
+
         let idx_to_drop = entries
             .keys()
             .filter(|key| **key <= last_dropped_id)
@@ -449,16 +460,15 @@ impl OplogArchive for BlobOplogArchive {
             })
             .collect::<Vec<_>>();
 
+        let ns = BlobStorageNamespace::CompressedOplog {
+            account_id: self.owned_worker_id.account_id(),
+            component_id: self.owned_worker_id.component_id(),
+            level: self.level,
+        };
+
         self.blob_storage
             .with("blob_oplog", "drop_prefix")
-            .delete_many(
-                BlobStorageNamespace::CompressedOplog {
-                    account_id: self.owned_worker_id.account_id(),
-                    component_id: self.owned_worker_id.component_id(),
-                    level: self.level,
-                },
-                &to_drop,
-            )
+            .delete_many(ns, &to_drop)
             .await
             .unwrap_or_else(|err| {
                 panic!(

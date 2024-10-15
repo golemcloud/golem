@@ -62,11 +62,5 @@ impl ComponentService for ProvidedComponentService {
         self.grpc_port
     }
 
-    fn kill(&self) {}
-}
-
-impl Drop for ProvidedComponentService {
-    fn drop(&mut self) {
-        self.kill();
-    }
+    async fn kill(&self) {}
 }

@@ -12,16 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test};
+
 use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn blobstore_exists_return_true_if_the_container_was_created() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn blobstore_exists_return_true_if_the_container_was_created(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("blob-store-service").await;
     let worker_name = "blob-store-service-1";
@@ -54,11 +65,15 @@ async fn blobstore_exists_return_true_if_the_container_was_created() {
     check!(result == vec![Value::Bool(true)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn blobstore_exists_return_false_if_the_container_was_not_created() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn blobstore_exists_return_false_if_the_container_was_not_created(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("blob-store-service").await;
     let worker_name = "blob-store-service-1";

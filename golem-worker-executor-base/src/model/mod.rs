@@ -344,6 +344,8 @@ pub enum LookupResult {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use uuid::Uuid;
 
     use golem_common::model::ComponentId;

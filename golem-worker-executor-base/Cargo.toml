@@ -12,6 +12,7 @@ autotests = false
 
 [lib]
 path = "src/lib.rs"
+harness = false
 
 [features]
 
@@ -93,7 +94,6 @@ golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
 assert2 = { workspace = true }
 console-subscriber = { workspace = true }
-ctor = { workspace = true }
 goldenfile = "1.7.1"
 golem-wasm-ast = { workspace = true }
 once_cell = { workspace = true }
@@ -103,6 +103,7 @@ redis = { workspace = true }
 serde_json = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+test-r = { workspace = true }
 tracing-subscriber = { workspace = true }
 warp = { workspace = true }
 
@@ -112,3 +113,4 @@ cargo_metadata = "0.18.1"
 [[test]]
 name = "integration"
 path = "tests/lib.rs"
+harness = false

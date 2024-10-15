@@ -19,6 +19,8 @@
 //! The tests are assuming composability of the serializer implementation, so if a given type A has a field of type B,
 //! the test for A only contains an example value of B but there exists a separate test that tests the serialization of B.
 
+use test_r::test;
+
 use bincode::{Decode, Encode};
 use goldenfile::Mint;
 use golem_common::config::RetryConfig;

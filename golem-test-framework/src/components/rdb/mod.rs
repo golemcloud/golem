@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
 use clap::Args;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,9 +24,10 @@ pub mod k8s_postgres;
 pub mod provided_postgres;
 pub mod sqlite;
 
+#[async_trait]
 pub trait Rdb {
     fn info(&self) -> DbInfo;
-    fn kill(&self);
+    async fn kill(&self);
 }
 
 #[derive(Debug)]
