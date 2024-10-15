@@ -132,6 +132,17 @@ pub trait ComponentService {
         }
     }
 
+    async fn add_component_with_id(
+        &self,
+        _local_path: &Path,
+        _component_id: &ComponentId,
+        _component_type: ComponentType,
+    ) -> Result<(), AddComponentError> {
+        panic!(
+            "Adding a component with a specific Component ID is only supported in filesystem mode"
+        )
+    }
+
     async fn add_component(
         &self,
         local_path: &Path,

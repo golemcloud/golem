@@ -1732,7 +1732,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes 1.7.2",
+ "futures-core",
  "memchr",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3900,9 +3904,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0eaaa79a22a141a9da6c09f6efb7f55f52d8a231c12bbff187b703d204002a5e"
+checksum = "886e833ca2e13f2fe0909ae1f5f7cae6af7e6f4db0f02f771d5c696741f6f8f2"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -3926,9 +3930,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "1.0.5"
+version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66dfadd37cb4737ce892b0a2b73df597d3f56c319984b7989f84763dde0157d3"
+checksum = "518bb1314e17f363d00c3344201397957c15ffcbb2b2a50888c59b6c3b030fd3"
 dependencies = [
  "anyhow",
  "assert2",
@@ -7194,12 +7198,18 @@ version = "0.25.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e0d7a6955c7511f60f3ba9e86c6d02b3c3f144f8c24b288d1f4e18074ab8bbec"
 dependencies = [
+ "async-trait",
+ "bytes 1.7.2",
  "combine",
+ "futures-util",
  "itoa",
  "percent-encoding",
+ "pin-project-lite",
  "ryu",
  "sha1_smol",
  "socket2 0.5.7",
+ "tokio",
+ "tokio-util",
  "url",
 ]
 

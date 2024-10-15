@@ -57,6 +57,7 @@ pub trait TestDsl {
     async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
+    async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
@@ -216,6 +217,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         self.component_service()
             .get_or_add_component(&source_path, ComponentType::Durable)
             .await
+    }
+
+    async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let _ = dump_component_info(&source_path);
+        self.component_service()
+            .add_component_with_id(&source_path, component_id, ComponentType::Durable)
+            .await
+            .expect("Failed to store component with id {component_id}");
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
@@ -1158,6 +1168,7 @@ pub trait TestDslUnsafe {
     async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
+    async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
@@ -1263,6 +1274,10 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
 
     async fn store_component_unverified(&self, name: &str) -> ComponentId {
         <T as TestDsl>::store_component_unverified(self, name).await
+    }
+
+    async fn store_component_with_id(&self, name: &str, component_id: &ComponentId) {
+        <T as TestDsl>::store_component_with_id(self, name, component_id).await
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
