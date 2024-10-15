@@ -384,8 +384,8 @@ mod internal {
 
         fn result() -> Self {
             ConstructorDetail {
-                no_arg_constructors: vec!["err".to_string()],
-                with_arg_constructors: vec!["ok".to_string()],
+                no_arg_constructors: vec![],
+                with_arg_constructors: vec!["ok".to_string(), "err".to_string()],
             }
         }
     }
