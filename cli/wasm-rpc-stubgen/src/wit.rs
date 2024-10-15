@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action, log_warn_action};
-use crate::fs::{copy, copy_transformed};
+use crate::fs::{copy, copy_transformed, must_get_file_name};
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
     InterfaceStubTypeDef, StubDefinition,
@@ -495,14 +495,14 @@ fn write_param_list(
     Ok(())
 }
 
-pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
+pub fn copy_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
     let stub_package_name = def.stub_package_name();
     let remove_stub_imports = import_remover(&stub_package_name);
 
     let target_wit_root = def.target_wit_root();
     let target_deps = target_wit_root.join(naming::wit::DEPS_DIR);
 
-    for (package, sources) in def.source_packages_with_wit_sources() {
+    for (package, sources) in def.packages_with_wit_sources() {
         if package.name == stub_package_name {
             log_warn_action("Skipping", format!("package {}", package.name));
             continue;
@@ -513,18 +513,11 @@ pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
         log_action("Copying", format!("source package {}", package.name));
         for source in sources {
             if is_source_package {
-                // TODO: naming to def and review this naming
                 let dest = target_deps
-                    .join(format!(
-                        "{}_{}",
-                        def.source_package_name.namespace, def.source_package_name.name
+                    .join(naming::wit::package_dep_folder_name(
+                        &def.source_package_name,
                     ))
-                    .join(source.file_name().ok_or_else(|| {
-                        anyhow!(
-                            "Failed to get file name for source: {}",
-                            source.to_string_lossy()
-                        )
-                    })?);
+                    .join(must_get_file_name(source)?);
                 log_action(
                     "  Copying",
                     format!(
