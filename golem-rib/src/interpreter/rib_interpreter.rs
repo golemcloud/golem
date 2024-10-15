@@ -1281,8 +1281,9 @@ mod interpreter_tests {
 
            match x {
               some(some(x)) => x,
-              some(none) => 0u64,
-              none => 0u64
+              none => 0u64,
+              _ => 0u64
+
            }
         "#;
 

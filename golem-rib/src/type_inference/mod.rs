@@ -970,7 +970,7 @@ mod type_inference_tests {
 
               match z {
                  some(z) => y,
-                 some(z) => z
+                 none => 0u64
               }
             "#;
 
@@ -1019,15 +1019,10 @@ mod type_inference_tests {
                                 Expr::Identifier(VariableId::local("y", 0), InferredType::U64),
                             ),
                             MatchArm::new(
-                                ArmPattern::constructor(
-                                    "some",
-                                    vec![ArmPattern::literal(Expr::Identifier(
-                                        VariableId::match_identifier("z".to_string(), 2),
-                                        InferredType::U64,
-                                    ))],
-                                ),
-                                Expr::Identifier(
-                                    VariableId::match_identifier("z".to_string(), 2),
+                                ArmPattern::constructor("none", vec![]),
+                                Expr::Number(
+                                    Number { value: 0f64 },
+                                    Some(TypeName::U64),
                                     InferredType::U64,
                                 ),
                             ),
@@ -1415,11 +1410,13 @@ mod type_inference_tests {
               let y: list<u64> = [1, 2, 3];
 
               match some(x) {
-                some(x) => x.foo
+                some(x) => x.foo,
+                none => "baz"
               };
 
               match some(y) {
-                 some(y) => y[0]
+                 some(y) => y[0],
+                 none => 0u64
               }
             "#;
 
@@ -1484,6 +1481,9 @@ mod type_inference_tests {
                                 "foo".to_string(),
                                 InferredType::Str,
                             ),
+                        ), MatchArm::new(
+                            ArmPattern::constructor("none", vec![]),
+                            Expr::literal("baz"),
                         )],
                         InferredType::Str,
                     ),
@@ -1501,18 +1501,21 @@ mod type_inference_tests {
                             ArmPattern::Constructor(
                                 "some".to_string(),
                                 vec![ArmPattern::Literal(Box::new(Expr::Identifier(
-                                    VariableId::match_identifier("y".to_string(), 2),
+                                    VariableId::match_identifier("y".to_string(), 3),
                                     InferredType::List(Box::new(InferredType::U64)),
                                 )))],
                             ),
                             Expr::SelectIndex(
                                 Box::new(Expr::Identifier(
-                                    VariableId::match_identifier("y".to_string(), 2),
+                                    VariableId::match_identifier("y".to_string(), 3),
                                     InferredType::List(Box::new(InferredType::U64)),
                                 )),
                                 0,
                                 InferredType::U64,
                             ),
+                        ), MatchArm::new(
+                            ArmPattern::constructor("none", vec![]),
+                            Expr::Number(Number { value: 0f64 }, Some(TypeName::U64), InferredType::U64),
                         )],
                         InferredType::U64,
                     ),
