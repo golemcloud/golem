@@ -90,9 +90,7 @@ impl StubDefinition {
     //       and similar reasoning is used when in one function we get and resolve an ID, since
     //       these would be internal arena errors.
 
-    pub fn source_packages_with_wit_sources(
-        &self,
-    ) -> impl Iterator<Item = (&Package, &Vec<PathBuf>)> {
+    pub fn packages_with_wit_sources(&self) -> impl Iterator<Item = (&Package, &Vec<PathBuf>)> {
         self.resolve
             .topological_packages()
             .into_iter()

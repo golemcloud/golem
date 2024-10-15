@@ -18,7 +18,7 @@ use crate::fs::copy;
 use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit::{copy_wit_files, generate_stub_wit_to_target};
+use crate::wit::{copy_wit_dependencies, generate_stub_wit_to_target};
 use crate::wit_resolve::ResolvedWitDir;
 use anyhow::Context;
 use fs_extra::dir::CopyOptions;
@@ -56,7 +56,7 @@ pub async fn build(
 
 pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
     generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
-    copy_wit_files(stub_def).context("Failed to copy the dependent wit files")?;
+    copy_wit_dependencies(stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .resolve_target_wit()
         .context("Failed to resolve the result WIT root")

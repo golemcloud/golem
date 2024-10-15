@@ -1,6 +1,6 @@
+use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
 use crate::model::validation::ValidatedResult;
 use colored::Colorize;
-use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
 
 pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
     println!("{} {}", action.green(), subject.as_ref())
