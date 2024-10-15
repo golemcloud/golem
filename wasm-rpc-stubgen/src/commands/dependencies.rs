@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::{log_action, log_warn_action};
-use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan, OverwriteSafeActions};
-use crate::stub::StubDefinition;
-use crate::wit::{get_stub_wit, import_remover, StubTypeGen};
+use crate::commands::log::{log_action_plan, log_warn_action};
+use crate::fs::{OverwriteSafeAction, OverwriteSafeActions};
+use crate::wit::{generate_stub_wit_from_wit_dir, import_remover};
 use crate::wit_resolve::ResolvedWitDir;
-use crate::{cargo, naming, WasmRpcOverride};
+use crate::{cargo, naming};
 use anyhow::{anyhow, Context};
 use std::path::Path;
-use tempfile::TempDir;
 
 #[derive(PartialEq, Eq)]
 pub enum UpdateCargoToml {
@@ -63,7 +61,7 @@ pub fn add_stub_dependency(
         let sources = stub_resolved_wit_root
             .sources
             .get(package_id)
-            .unwrap_or_else(|| panic!("Failed to get package sources for {}", package_name))
+            .ok_or_else(|| anyhow!("Failed to get package sources for {}", package_name))?
             .iter()
             .map(|source| source.to_path_buf())
             .collect::<Vec<_>>();
@@ -80,17 +78,7 @@ pub fn add_stub_dependency(
             )
         // Handle self stub packages: use regenerated stub with inlining, to break the recursive cycle
         } else if is_dest_stub_package {
-            let inlined_self_stub_wit = get_stub_wit(
-                &StubDefinition::new(
-                    dest_wit_root,
-                    dest_wit_root,
-                    &None,
-                    "0.0.1", // Version is unused when it comes to re-generating stub at this stage
-                    &WasmRpcOverride::default(), // wasm-rpc path is unused when it comes to re-generating stub during dependency addition
-                    true,
-                )?,
-                StubTypeGen::InlineRootTypes,
-            )?;
+            let inlined_self_stub_wit = generate_stub_wit_from_wit_dir(dest_wit_root, true)?;
 
             let target_stub_wit = dest_deps_dir
                 .join(naming::wit::package_dep_folder_name(package_name))
@@ -185,107 +173,10 @@ pub fn add_stub_dependency(
 /// Checks whether `stub_wit` is a stub generated for `dest_wit_root`
 fn is_self_stub(stub_wit: &Path, dest_wit_root: &Path) -> anyhow::Result<bool> {
     // TODO: can we make it diff exports instead of generated content?
-    let temp_root = TempDir::new()?;
-    let canonical_temp_root = temp_root.path().canonicalize()?;
-    let dest_stub_def = StubDefinition::new(
-        dest_wit_root,
-        &canonical_temp_root,
-        &None,
-        "0.0.1",
-        &WasmRpcOverride::default(),
-        false,
-    )?;
-    let dest_stub_wit_imported = get_stub_wit(&dest_stub_def, StubTypeGen::ImportRootTypes)?;
-    let dest_stub_wit_inlined = get_stub_wit(&dest_stub_def, StubTypeGen::InlineRootTypes)?;
-
+    let dest_stub_wit_imported = generate_stub_wit_from_wit_dir(dest_wit_root, false)?;
+    let dest_stub_wit_inlined = generate_stub_wit_from_wit_dir(dest_wit_root, true)?;
     let stub_wit = std::fs::read_to_string(stub_wit)?;
 
     // TODO: this can also be false in case the stub is lagging
     Ok(stub_wit == dest_stub_wit_imported || stub_wit == dest_stub_wit_inlined)
-}
-
-fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPlan) {
-    match plan {
-        OverwriteSafeActionPlan::Create => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_action(
-                    "Copying",
-                    format!(
-                        "{} to {}",
-                        source.to_string_lossy(),
-                        target.to_string_lossy()
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_action(
-                    "Copying",
-                    format!(
-                        "{} to {} transformed",
-                        source.to_string_lossy(),
-                        target.to_string_lossy()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { target, .. } => {
-                log_action("Creating", format!("{}", target.to_string_lossy()));
-            }
-        },
-        OverwriteSafeActionPlan::Overwrite => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_warn_action(
-                    "Overwriting",
-                    format!(
-                        "{} with {}",
-                        target.to_string_lossy(),
-                        source.to_string_lossy()
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_warn_action(
-                    "Overwriting",
-                    format!(
-                        "{} with {} transformed",
-                        target.to_string_lossy(),
-                        source.to_string_lossy()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action("Overwriting", format!("{}", target.to_string_lossy()));
-            }
-        },
-        OverwriteSafeActionPlan::SkipSameContent => match action {
-            OverwriteSafeAction::CopyFile { source, target } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "copying {} to {}, content already up-to-date",
-                        source.to_string_lossy(),
-                        target.to_string_lossy(),
-                    ),
-                );
-            }
-            OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "copying {} to {} transformed, content already up-to-date",
-                        source.to_string_lossy(),
-                        target.to_string_lossy()
-                    ),
-                );
-            }
-            OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action(
-                    "Skipping",
-                    format!(
-                        "generating {}, content already up-to-date",
-                        target.to_string_lossy()
-                    ),
-                );
-            }
-        },
-    }
 }
