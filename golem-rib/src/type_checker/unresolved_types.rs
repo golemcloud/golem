@@ -82,7 +82,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Multiple(exprs, inferred_type) => {
+            Expr::Multiple(exprs, _) => {
                 for expr in exprs {
                     queue.push_back(expr);
                 }
@@ -112,7 +112,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::PatternMatch(cond, arms, inferred_type) => {
+            Expr::PatternMatch(cond, arms, _) => {
                 internal::unresolved_type_for_pattern_match(cond, arms)?;
             }
             Expr::Option(option, inferred_type) => {

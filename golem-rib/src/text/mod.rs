@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::ArmPattern;
 use crate::expr::Expr;
+use crate::ArmPattern;
 
 mod writer;
 

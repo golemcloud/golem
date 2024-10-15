@@ -34,7 +34,7 @@ mod internal {
 
     pub fn check_exhaustive_pattern_match(arms: &[ArmPattern]) -> Result<(), ExhaustiveCheckError> {
         let check_result =
-            check_exhaustive(arms, &["none"], &["some"]);//.or(arms, &[], &["ok", "err"]);
+            check_exhaustive(arms, &["none"], &["some"]).or(arms, &[], &["ok", "err"]);
 
         dbg!(check_result.clone());
         let inner_constructors = check_result.value()?;
@@ -50,23 +50,8 @@ mod internal {
     pub struct ConstructorPatterns(HashMap<String, Vec<ArmPattern>>);
 
     impl ConstructorPatterns {
-        pub fn empty() -> Self {
-            ConstructorPatterns(HashMap::new())
-        }
-
         pub fn value(&self) -> &HashMap<String, Vec<ArmPattern>> {
             &self.0
-        }
-
-        pub fn or(self, other: ConstructorPatterns) -> ConstructorPatterns {
-            if self.0.keys().len() == 0 {
-                return other;
-            }
-            self
-        }
-
-        pub fn is_empty(&self) -> bool {
-            self.0.keys().len() == 0
         }
     }
 
@@ -78,8 +63,8 @@ mod internal {
         MissingConstructors(Vec<String>),
         DeadCode {
             cause: ArmPattern,
-            dead_pattern: ArmPattern
-        }
+            dead_pattern: ArmPattern,
+        },
     }
 
     impl ExhaustiveCheckResult {
@@ -111,7 +96,7 @@ mod internal {
         pub fn dead_code(cause: &ArmPattern, dead_pattern: &ArmPattern) -> Self {
             ExhaustiveCheckResult(Err(ExhaustiveCheckError::DeadCode {
                 cause: cause.clone(),
-                dead_pattern: dead_pattern.clone()
+                dead_pattern: dead_pattern.clone(),
             }))
         }
 
@@ -127,7 +112,10 @@ mod internal {
                     let constructors = constructors.join(", ");
                     write!(f, "Error: Non-exhaustive pattern match. The following patterns are not covered: `{}`. To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.", constructors)
                 }
-                ExhaustiveCheckError::DeadCode {cause, dead_pattern} => {
+                ExhaustiveCheckError::DeadCode {
+                    cause,
+                    dead_pattern,
+                } => {
                     write!(f, "Error: Dead code detected. The pattern `{}` is unreachable due to the existence of the pattern `{}` prior to it", dead_pattern, cause)
                 }
             }
@@ -153,9 +141,14 @@ mod internal {
 
         for pattern in patterns {
             dbg!(pattern.clone(), detected_wild_card_or_identifier.clone());
-            if !detected_wild_card_or_identifier.is_empty()  {
+            if !detected_wild_card_or_identifier.is_empty() {
                 dbg!("hre??");
-                return ExhaustiveCheckResult::dead_code(detected_wild_card_or_identifier.last().unwrap_or(&ArmPattern::WildCard), pattern);
+                return ExhaustiveCheckResult::dead_code(
+                    detected_wild_card_or_identifier
+                        .last()
+                        .unwrap_or(&ArmPattern::WildCard),
+                    pattern,
+                );
             }
             match pattern {
                 ArmPattern::Constructor(ctor_name, arm_patterns) => {
@@ -182,7 +175,7 @@ mod internal {
                         }
                     }
                 }
-                ArmPattern::WildCard   => {
+                ArmPattern::WildCard => {
                     detected_wild_card_or_identifier.push(ArmPattern::WildCard);
                 }
 
@@ -315,7 +308,6 @@ mod pattern_match_exhaustive_tests {
         assert!(result.is_ok())
     }
 
-
     #[test]
     fn test_option_pattern_match_wild_card5() {
         let expr = r#"
@@ -342,8 +334,9 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]);
-        assert!(result.is_err())
+        let result = compile(&expr, &vec![]).unwrap_err();
+
+        assert_eq!(result, "Error: Dead code detected. The pattern `some(_)` is unreachable due to the existence of the pattern `_` prior to it")
     }
 
     #[test]
@@ -357,8 +350,8 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]);
-        assert!(result.is_err())
+        let result = compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(result, "Error: Dead code detected. The pattern `none` is unreachable due to the existence of the pattern `_` prior to it")
     }
 
     #[test]
@@ -372,8 +365,8 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]);
-        assert!(result.is_err())
+        let result = compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(result, "Error: Dead code detected. The pattern `some(_)` is unreachable due to the existence of the pattern `something` prior to it")
     }
 
     #[test]
@@ -387,10 +380,9 @@ mod pattern_match_exhaustive_tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let result = compile(&expr, &vec![]);
-        assert!(result.is_err())
+        let result = compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(result, "Error: Dead code detected. The pattern `none` is unreachable due to the existence of the pattern `something` prior to it")
     }
-
 
     #[test]
     fn test_option_none_absent() {

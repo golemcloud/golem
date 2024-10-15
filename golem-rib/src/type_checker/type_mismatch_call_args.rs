@@ -78,7 +78,7 @@ impl Display for FunctionCallTypeCheckError {
 mod internal {
     use super::*;
     use crate::call_type::CallType;
-    use crate::type_checker::{check_type_mismatch, Path, PathElem, TypeMismatchError};
+    use crate::type_checker::{check_type_mismatch, Path, PathElem};
 
     use golem_wasm_ast::analysis::AnalysedType;
 
@@ -116,9 +116,8 @@ mod internal {
                 });
             }
 
-            check_type_mismatch(&expected_arg_type, &actual_arg_type).map_err(
-                |e| FunctionCallTypeCheckError::TypeCheckError(e),
-            )?;
+            check_type_mismatch(&expected_arg_type, &actual_arg_type)
+                .map_err(|e| FunctionCallTypeCheckError::TypeCheckError(e))?;
         }
 
         Ok(())
