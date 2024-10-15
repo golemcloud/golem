@@ -14,6 +14,7 @@
 
 use crate::commands::log::{log_action, log_warn_action};
 use crate::fs::{copy, copy_transformed};
+use crate::naming;
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
     InterfaceStubTypeDef, StubDefinition,
@@ -24,7 +25,9 @@ use regex::Regex;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
-use wit_parser::{Enum, Field, Flags, Handle, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant};
+use wit_parser::{
+    Enum, Field, Flags, Handle, PackageName, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant,
+};
 
 pub fn generate_stub_wit(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
@@ -496,17 +499,14 @@ fn write_param_list(
 }
 
 pub fn copy_wit_files(def: &StubDefinition) -> anyhow::Result<()> {
-    let target_wit_root = def.target_wit_root();
-    let target_deps = target_wit_root.join("deps");
-
-    // TODO: naming to def
-    let stub_package_name = format!("{}-stub", def.source_package_name);
-
+    let stub_package_name = def.stub_package_name();
     let remove_stub_imports = import_remover(&stub_package_name);
 
-    for (package, sources) in def.source_packages_with_sources() {
-        let should_skip = package.name.to_string() == stub_package_name;
-        if should_skip {
+    let target_wit_root = def.target_wit_root();
+    let target_deps = target_wit_root.join(naming::wit::DEPS_DIR);
+
+    for (package, sources) in def.source_packages_with_wit_sources() {
+        if package.name == stub_package_name {
             log_warn_action("Skipping", format!("package {}", package.name));
             continue;
         }
@@ -653,10 +653,15 @@ impl TypeExtensions for Type {
     }
 }
 
-pub fn import_remover(package_name: &str) -> impl Fn(String) -> anyhow::Result<String> {
-    let pattern_import_stub_package_name =
-        Regex::new(format!(r"import\s+{}(/[^;]*)?;", regex::escape(package_name)).as_str())
-            .unwrap_or_else(|err| panic!("Failed to compile package import regex: {}", err));
+pub fn import_remover(package_name: &PackageName) -> impl Fn(String) -> anyhow::Result<String> {
+    let pattern_import_stub_package_name = Regex::new(
+        format!(
+            r"import\s+{}(/[^;]*)?;",
+            regex::escape(&package_name.to_string())
+        )
+        .as_str(),
+    )
+    .unwrap_or_else(|err| panic!("Failed to compile package import regex: {}", err));
 
     move |src: String| -> anyhow::Result<String> {
         Ok(pattern_import_stub_package_name

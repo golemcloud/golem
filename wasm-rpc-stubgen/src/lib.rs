@@ -18,6 +18,7 @@ pub mod compilation;
 pub mod fs;
 pub mod make;
 pub mod model;
+pub mod naming;
 pub mod rust;
 pub mod stub;
 pub mod wit;

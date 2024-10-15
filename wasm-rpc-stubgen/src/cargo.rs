@@ -96,10 +96,10 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     );
 
     let stub_package_name = def.stub_package_name();
-    for (dep_package, dep_package_sources) in def.source_packages_with_sources() {
+    for (dep_package, dep_package_sources) in def.source_packages_with_wit_sources() {
         let dep_package_name = &dep_package.name;
 
-        if dep_package_name.to_string() == stub_package_name {
+        if *dep_package_name == stub_package_name {
             log_warn_action(
                 "Skipping",
                 format!("updating WIT dependency for {}", dep_package_name),

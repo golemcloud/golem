@@ -2,6 +2,7 @@ use crate::model::oam;
 use crate::model::oam::TypedTraitProperties;
 use crate::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
 use crate::model::validation::{ValidatedResult, ValidationBuilder};
+use crate::naming;
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -651,7 +652,7 @@ impl Application {
             .unwrap_or_else(|| {
                 self.stub_build_dir(component_name)
                     .join(component_name)
-                    .join("wit")
+                    .join(naming::wit::WIT_DIR)
             })
     }
 

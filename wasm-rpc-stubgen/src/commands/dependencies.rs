@@ -17,11 +17,10 @@ use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan, OverwriteSafeActio
 use crate::stub::StubDefinition;
 use crate::wit::{get_stub_wit, import_remover, StubTypeGen};
 use crate::wit_resolve::ResolvedWitDir;
-use crate::{cargo, WasmRpcOverride};
+use crate::{cargo, naming, WasmRpcOverride};
 use anyhow::{anyhow, Context};
 use std::path::Path;
 use tempfile::TempDir;
-use wit_parser::PackageName;
 
 #[derive(PartialEq, Eq)]
 pub enum UpdateCargoToml {
@@ -37,46 +36,24 @@ pub fn add_stub_dependency(
     update_cargo_toml: UpdateCargoToml,
 ) -> anyhow::Result<()> {
     let stub_resolved_wit_root = ResolvedWitDir::new(stub_wit_root)?;
-    let stub_main_package = stub_resolved_wit_root.main_package()?;
+    let stub_package = stub_resolved_wit_root.main_package()?;
+    let stub_wit = stub_wit_root.join(naming::wit::STUB_WIT_FILE_NAME);
 
-    let dest_deps_dir = dest_wit_root.join("deps");
+    let dest_deps_dir = dest_wit_root.join(naming::wit::DEPS_DIR);
     let dest_resolved_wit_root = ResolvedWitDir::new(dest_wit_root)?;
-    let dest_main_package = dest_resolved_wit_root.main_package()?;
-
-    // TODO: naming
-    let dest_stub_import_remover = import_remover(&format!(
-        "{}:{}-stub",
-        dest_main_package.name.namespace, dest_main_package.name
-    ));
-
-    // TODO: move naming to one place?
-    let stub_wit = stub_wit_root.join("_stub.wit");
-
-    // TODO: naming
-    let dest_stub_package_name = PackageName {
-        name: format!("{}-stub", dest_main_package.name.name),
-        ..dest_main_package.name.clone()
-    };
+    let dest_package = dest_resolved_wit_root.main_package()?;
+    let dest_stub_package_name = naming::wit::stub_package_name(&dest_package.name);
+    let dest_stub_import_remover = import_remover(&dest_stub_package_name);
 
     {
-        // TODO: move naming to one place?
-        let stub_target_package_name = PackageName {
-            name: stub_main_package
-                .name
-                .name
-                .strip_suffix("-stub")
-                .expect("Unexpected stub package name")
-                .to_string(),
-            ..stub_main_package.name.clone()
-        };
-
-        let is_self_stub_by_name = dest_main_package.name == stub_target_package_name;
+        let is_self_stub_by_name =
+            dest_package.name == naming::wit::stub_target_package_name(&stub_package.name);
         let is_self_stub_by_content = is_self_stub(&stub_wit, dest_wit_root);
 
         if is_self_stub_by_name && !is_self_stub_by_content? {
             return Err(anyhow!(
             "Both the caller and the target components are using the same package name ({}), which is not supported.",
-            stub_target_package_name
+            dest_package.name
         ));
         }
     }
@@ -92,7 +69,7 @@ pub fn add_stub_dependency(
             .collect::<Vec<_>>();
 
         let is_stub_main_package = *package_id == stub_resolved_wit_root.package_id;
-        let is_dest_package = *package_name == dest_main_package.name;
+        let is_dest_package = *package_name == dest_package.name;
         let is_dest_stub_package = *package_name == dest_stub_package_name;
 
         // We skip self as a dependency
@@ -115,10 +92,9 @@ pub fn add_stub_dependency(
                 StubTypeGen::InlineRootTypes,
             )?;
 
-            // TODO: naming
             let target_stub_wit = dest_deps_dir
-                .join(format!("{}_{}", package_name.namespace, package_name.name))
-                .join("_stub.wit");
+                .join(naming::wit::package_dep_folder_name(package_name))
+                .join(naming::wit::STUB_WIT_FILE_NAME);
 
             actions.add(OverwriteSafeAction::WriteFile {
                 content: inlined_self_stub_wit,
@@ -127,7 +103,7 @@ pub fn add_stub_dependency(
         // Non-self stub packages has to be copied into target deps
         } else if is_stub_main_package {
             let target_stub_dep_dir =
-                dest_deps_dir.join(format!("{}_{}", package_name.namespace, package_name.name));
+                dest_deps_dir.join(naming::wit::package_dep_folder_name(package_name));
 
             for source in sources {
                 let file_name = source
