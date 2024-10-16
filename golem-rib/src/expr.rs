@@ -17,8 +17,8 @@ use crate::parser::rib_expr::rib_program;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
-    from_string, text, type_inference, DynamicParsedFunctionName, InferredType, ParsedFunctionName,
-    VariableId,
+    from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType,
+    ParsedFunctionName, VariableId,
 };
 use bincode::{Decode, Encode};
 use combine::stream::position;
@@ -66,6 +66,17 @@ pub enum Expr {
 }
 
 impl Expr {
+    pub fn as_record(&self) -> Option<Vec<(String, Expr)>> {
+        match self {
+            Expr::Record(fields, _) => Some(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.deref().clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        }
+    }
     /// Parse a text directly as Rib expression
     /// Example of a Rib expression:
     ///
@@ -431,6 +442,9 @@ impl Expr {
             .map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
+
+        self.check_types(function_type_registry)
+            .map_err(|x| vec![x])?;
         self.unify_types()?;
         Ok(())
     }
@@ -456,9 +470,7 @@ impl Expr {
         self.infer_all_identifiers()?;
         let expr = self.pull_types_up()?;
         *self = expr;
-        self.unify_types().unwrap_or(());
         self.infer_global_inputs();
-
         Ok(())
     }
 
@@ -503,8 +515,11 @@ impl Expr {
         type_inference::bind_type(self);
     }
 
-    pub fn type_check(&self) -> Result<(), Vec<String>> {
-        type_inference::type_check(self)
+    pub fn check_types(
+        &mut self,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> Result<(), String> {
+        type_checker::type_check(self, function_type_registry)
     }
 
     pub fn unify_types(&mut self) -> Result<(), Vec<String>> {
@@ -714,6 +729,14 @@ pub enum ArmPattern {
 }
 
 impl ArmPattern {
+    pub fn is_wildcard(&self) -> bool {
+        matches!(self, ArmPattern::WildCard)
+    }
+
+    pub fn is_literal_identifier(&self) -> bool {
+        matches!(self, ArmPattern::Literal(expr) if expr.is_identifier())
+    }
+
     pub fn constructor(name: &str, patterns: Vec<ArmPattern>) -> ArmPattern {
         ArmPattern::Constructor(name.to_string(), patterns)
     }
@@ -1507,6 +1530,12 @@ impl From<MatchArm> for golem_api_grpc::proto::golem::rib::MatchArm {
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", text::to_string(self).unwrap())
+    }
+}
+
+impl Display for ArmPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", text::to_string_arm_pattern(self).unwrap())
     }
 }
 

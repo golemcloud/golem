@@ -725,7 +725,7 @@ mod internal {
             select_field, select_from_type
         ))?;
 
-        Ok(refined_record.inner_type_by_field(select_field))
+        Ok(refined_record.inner_type_by_name(select_field))
     }
 
     pub(crate) fn get_inferred_type_of_selection_index(

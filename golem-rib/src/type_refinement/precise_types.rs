@@ -17,17 +17,36 @@ use crate::InferredType;
 // Standalone precise types
 #[derive(Clone, PartialEq, Debug)]
 pub struct RecordType(pub Vec<(String, InferredType)>);
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct OptionalType(pub InferredType);
-#[derive(Clone, PartialEq, Debug)]
 
+#[derive(Clone, PartialEq, Debug)]
 pub struct OkType(pub InferredType);
-#[derive(Clone, PartialEq, Debug)]
 
+#[derive(Clone, PartialEq, Debug)]
 pub struct ErrType(pub InferredType);
-#[derive(Clone, PartialEq, Debug)]
 
+#[derive(Clone, PartialEq, Debug)]
 pub struct ListType(pub InferredType);
-#[derive(Clone, PartialEq, Debug)]
 
+#[derive(Clone, PartialEq, Debug)]
 pub struct TupleType(pub Vec<InferredType>);
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct VariantType(pub Vec<(String, Option<InferredType>)>);
+#[derive(Clone, PartialEq, Debug)]
+pub struct StringType;
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct NumberType;
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct CharType;
+#[derive(Clone, PartialEq, Debug)]
+pub struct BoolType;
+
+#[derive(Clone, PartialEq, Debug)]
+pub struct FlagsType(pub Vec<String>);
+#[derive(Clone, PartialEq, Debug)]
+pub struct EnumType(pub Vec<String>);

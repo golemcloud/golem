@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::expr::Expr;
+use crate::ArmPattern;
 
 mod writer;
 
@@ -35,6 +36,10 @@ pub fn from_string(input: impl AsRef<str>) -> Result<Expr, String> {
 
 pub fn to_string(expr: &Expr) -> Result<String, WriterError> {
     writer::write_expr(expr)
+}
+
+pub fn to_string_arm_pattern(arm_pattern: &ArmPattern) -> Result<String, WriterError> {
+    writer::write_arm_pattern(arm_pattern)
 }
 
 #[cfg(test)]
