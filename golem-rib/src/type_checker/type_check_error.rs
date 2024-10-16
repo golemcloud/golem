@@ -6,18 +6,26 @@ use std::fmt::Display;
 
 #[derive(Clone, Debug)]
 pub struct UnResolvedTypesError {
-    pub expr: Expr,
+    pub unresolved_expr: Expr,
     pub unresolved_path: Path,
     pub additional_messages: Vec<String>,
+    pub parent_expr: Option<Expr>,
 }
 
 impl UnResolvedTypesError {
     pub fn new(expr: &Expr) -> Self {
         UnResolvedTypesError {
-            expr: expr.clone(),
+            unresolved_expr: expr.clone(),
             unresolved_path: Path::default(),
             additional_messages: Vec::new(),
+            parent_expr: None,
         }
+    }
+
+    pub fn with_parent_expr(&self, expr: &Expr) -> UnResolvedTypesError {
+        let mut unresolved_error: UnResolvedTypesError = self.clone();
+        unresolved_error.parent_expr = Some(expr.clone());
+        unresolved_error
     }
 
     pub fn with_additional_message(&self, message: impl AsRef<str>) -> UnResolvedTypesError {
@@ -48,24 +56,35 @@ impl UnResolvedTypesError {
 impl Display for UnResolvedTypesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let path_type = PathType::from_path(&self.unresolved_path);
+        let parent_expr_opt = self.parent_expr.clone();
 
         match path_type {
             Some(PathType::RecordPath(path)) => {
                 write!(
                     f,
                     "Unable to determine the type of `{}` in the record at path `{}`",
-                    self.expr, path
+                    self.unresolved_expr, path
                 )
             }
             Some(PathType::IndexPath(path)) => {
                 write!(
                     f,
                     "Unable to determine the type of `{}` at index `{}`",
-                    self.expr, path
+                    self.unresolved_expr, path
                 )
             }
             None => {
-                write!(f, "Unable to determine the type of `{}`", self.expr)
+                write!(
+                    f,
+                    "Unable to determine the type of `{}`",
+                    self.unresolved_expr
+                )?;
+
+                if let Some(parent) = parent_expr_opt {
+                    write!(f, "in {}", parent)?;
+                }
+
+                Ok(())
             }
         }?;
 

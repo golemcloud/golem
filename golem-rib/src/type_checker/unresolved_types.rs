@@ -43,12 +43,8 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Tuple(exprs, inferred_type) => {
+            Expr::Tuple(exprs, _) => {
                 internal::unresolved_types_in_tuple(exprs)?;
-
-                if inferred_type.un_resolved() {
-                    return Err(UnResolvedTypesError::new(expr));
-                }
             }
             Expr::Literal(_, inferred_type) => {
                 if inferred_type.un_resolved() {
@@ -70,7 +66,8 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Identifier(_, inferred_type) => {
                 if inferred_type.un_resolved() {
                     return Err(UnResolvedTypesError::new(expr).with_additional_message(
-                        format!("`{}` is unknown identifier. Use 'let' to declare it and annotate the type if it's value is a global input", expr).as_str(),                    ));
+                        format!("`{}` is unknown identifier", expr).as_str(),
+                    ));
                 }
             }
             Expr::Boolean(_, inferred_type) => {
@@ -127,7 +124,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Result(ok_err, _) => internal::unresolved_type_for_result(ok_err)?,
+            expr @ Expr::Result(ok_err, _) => internal::unresolved_type_for_result(ok_err, expr)?,
             Expr::Call(_, args, _) => {
                 for arg in args {
                     queue.push_back(arg);
@@ -161,12 +158,11 @@ mod internal {
 
     pub fn unresolved_types_in_tuple(expr_fields: &[Expr]) -> Result<(), UnResolvedTypesError> {
         for (index, field_expr) in expr_fields.iter().enumerate() {
-            let field_type = field_expr.inferred_type();
-            if field_type.is_unknown() || field_type.is_one_of() {
-                return Err(UnResolvedTypesError::new(field_expr).at_index(index));
-            } else {
-                check_unresolved_types(field_expr)?;
-            }
+            check_unresolved_types(field_expr).map_err(|error| {
+                error
+                    .at_index(index.clone())
+                    .with_additional_message("Invalid element in Tuple")
+            })?;
         }
 
         Ok(())
@@ -279,25 +275,18 @@ mod internal {
 
     pub fn unresolved_type_for_result(
         ok_err: &Result<Box<Expr>, Box<Expr>>,
+        parent_expr: &Expr,
     ) -> Result<(), UnResolvedTypesError> {
         let ok_expr = ok_err.clone().ok();
         let error_expr = ok_err.clone().err();
-        if let Some(ok_expr) = ok_expr {
-            let ok_type = ok_expr.inferred_type();
-            if ok_type.un_resolved() {
-                return Err(UnResolvedTypesError::new(ok_expr.deref()));
-            } else {
-                check_unresolved_types(&ok_expr)?;
-            }
+        if let Some(ok_expr_inner) = ok_expr.clone() {
+            check_unresolved_types(&ok_expr_inner)
+                .map_err(|error| error.with_parent_expr(parent_expr))?;
         }
 
-        if let Some(error_expr) = error_expr {
-            let error_type = error_expr.inferred_type();
-            if error_type.un_resolved() {
-                return Err(UnResolvedTypesError::new(error_expr.deref()));
-            } else {
-                check_unresolved_types(&error_expr)?;
-            }
+        if let Some(error_expr_inner) = error_expr.clone() {
+            check_unresolved_types(&error_expr_inner)
+                .map_err(|error| error.with_parent_expr(parent_expr))?;
         }
 
         Ok(())
@@ -326,7 +315,10 @@ mod unresolved_types_tests {
     fn test_unresolved_types_identifier() {
         let expr = Expr::from_text("hello").unwrap();
         compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `hello`. `hello` is unknown identifier. Use 'let' to declare it and annotate the type if it's value is a global input");
+        assert_eq!(
+            compile(&expr, &vec![]).unwrap_err().to_string(),
+            "Unable to determine the type of `hello`. `hello` is unknown identifier"
+        );
     }
 
     #[test]
@@ -349,7 +341,25 @@ mod unresolved_types_tests {
         compile(&expr, &vec![]).unwrap_err();
         assert_eq!(
             compile(&expr, &vec![]).unwrap_err().to_string(),
-            "Unable to determine the type of `hello` in the record at path `foo.b[1]`"
+            "Unable to determine the type of `hello` in the record at path `foo.b[1]`. `hello` is unknown identifier. Invalid element in Tuple"
+        );
+    }
+
+    #[test]
+    fn test_unresolved_type_result_ok() {
+        let expr = Expr::from_text("ok(hello)").unwrap();
+        assert_eq!(
+            compile(&expr, &vec![]).unwrap_err().to_string(),
+            "Unable to determine the type of `hello`in ok(hello). `hello` is unknown identifier"
+        );
+    }
+
+    #[test]
+    fn test_unresolved_type_result_err() {
+        let expr = Expr::from_text("err(hello)").unwrap();
+        assert_eq!(
+            compile(&expr, &vec![]).unwrap_err().to_string(),
+            "Unable to determine the type of `hello`in err(hello). `hello` is unknown identifier"
         );
     }
 }
