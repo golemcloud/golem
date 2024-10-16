@@ -81,7 +81,7 @@ impl Display for UnResolvedTypesError {
                 )?;
 
                 if let Some(parent) = parent_expr_opt {
-                    write!(f, "in {}", parent)?;
+                    write!(f, " in {}", parent)?;
                 }
 
                 Ok(())

@@ -350,7 +350,7 @@ mod unresolved_types_tests {
         let expr = Expr::from_text("ok(hello)").unwrap();
         assert_eq!(
             compile(&expr, &vec![]).unwrap_err().to_string(),
-            "Unable to determine the type of `hello`in ok(hello). `hello` is unknown identifier"
+            "Unable to determine the type of `hello` in ok(hello). `hello` is unknown identifier"
         );
     }
 
@@ -359,7 +359,7 @@ mod unresolved_types_tests {
         let expr = Expr::from_text("err(hello)").unwrap();
         assert_eq!(
             compile(&expr, &vec![]).unwrap_err().to_string(),
-            "Unable to determine the type of `hello`in err(hello). `hello` is unknown identifier"
+            "Unable to determine the type of `hello` in err(hello). `hello` is unknown identifier"
         );
     }
 }
