@@ -14,7 +14,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -25,14 +24,11 @@ use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
-use crate::components::component_service::{
-    new_client, AddComponentError, ComponentService, ComponentServiceEnvVars,
-};
+use crate::components::component_service::{new_client, ComponentService, ComponentServiceEnvVars};
 use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
 use crate::components::{GolemEnvVars, NETWORK};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_common::model::{ComponentId, ComponentType};
 
 pub struct DockerComponentService {
     container: Arc<Mutex<Option<ContainerAsync<GolemComponentServiceImage>>>>,

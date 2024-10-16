@@ -63,7 +63,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let now = Durability::<Ctx, (), Instant, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadLocal,
-            "monotonic_clock::subscribe_duration",
+            "monotonic_clock::now", // should be 'subscribe_duration' but have to keep for backward compatibility with Golem 1.0
             (),
             |ctx| Box::pin(async { Host::now(&mut ctx.as_wasi_view()).await }),
         )

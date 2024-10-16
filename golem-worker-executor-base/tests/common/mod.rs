@@ -6,12 +6,11 @@ use golem_wasm_rpc::{Uri, Value};
 use prometheus::Registry;
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
-
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor,

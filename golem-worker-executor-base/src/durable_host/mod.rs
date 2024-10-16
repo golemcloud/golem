@@ -1997,7 +1997,7 @@ macro_rules! get_oplog_entry {
                 entry if entry.is_hint() => {}
                 _ => {
                     break Err($crate::error::GolemError::unexpected_oplog_entry(
-                        stringify!($case),
+                        stringify!($($cases |)+),
                         format!("{:?}", oplog_entry),
                     ));
                 }

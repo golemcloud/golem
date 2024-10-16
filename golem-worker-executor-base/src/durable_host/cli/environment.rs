@@ -55,7 +55,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Durability::<Ctx, (), Option<String>, SerializableError>::wrap(
             self,
             WrappedFunctionType::ReadLocal,
-            "golem_environment::initial_cwd",
+            "golem_environment::get_arguments", // NOTE: for backward compatibility with Golem 1.0
             (),
             |ctx| Box::pin(async { Host::initial_cwd(&mut ctx.as_wasi_view()).await }),
         )
