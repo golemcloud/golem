@@ -152,9 +152,8 @@ mod internal {
         expr_fields: &Vec<(String, Expr)>,
     ) -> Result<(), UnResolvedTypesError> {
         for (field_name, field_expr) in expr_fields {
-            check_unresolved_types(field_expr).map_err(|error| {
-                error.at_field(field_name.clone())
-            })?;
+            check_unresolved_types(field_expr)
+                .map_err(|error| error.at_field(field_name.clone()))?;
         }
 
         Ok(())
@@ -320,8 +319,8 @@ mod internal {
 
 #[cfg(test)]
 mod unresolved_types_tests {
-    use test_r::test;
     use crate::{compile, Expr};
+    use test_r::test;
 
     #[test]
     fn test_unresolved_types_identifier() {
@@ -348,7 +347,9 @@ mod unresolved_types_tests {
     fn test_unresolved_type_nested_record_index() {
         let expr = Expr::from_text("{foo: {a: \"bar\", b: (\"foo\", hello)}}").unwrap();
         compile(&expr, &vec![]).unwrap_err();
-        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `hello` in the record at path `foo.b[1]`");
+        assert_eq!(
+            compile(&expr, &vec![]).unwrap_err().to_string(),
+            "Unable to determine the type of `hello` in the record at path `foo.b[1]`"
+        );
     }
-
 }

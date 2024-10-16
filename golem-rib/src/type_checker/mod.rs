@@ -1,10 +1,12 @@
 pub(crate) use missing_fields::*;
+pub(crate) use path::*;
 pub(crate) use type_check_error::*;
 pub(crate) use type_mismatch::*;
 pub(crate) use unresolved_types::*;
 
 mod exhaustive_pattern_match;
 mod missing_fields;
+mod path;
 mod type_check_error;
 mod type_mismatch;
 mod type_mismatch_call_args;

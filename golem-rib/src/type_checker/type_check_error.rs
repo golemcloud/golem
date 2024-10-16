@@ -1,3 +1,4 @@
+use crate::type_checker::{Path, PathElem, PathType};
 use crate::{Expr, InferredType, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
 use std::fmt;
@@ -21,7 +22,9 @@ impl UnResolvedTypesError {
 
     pub fn with_additional_message(&self, message: impl AsRef<str>) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
-        unresolved_error.additional_messages.push(message.as_ref().to_string());
+        unresolved_error
+            .additional_messages
+            .push(message.as_ref().to_string());
         unresolved_error
     }
 
@@ -48,10 +51,18 @@ impl Display for UnResolvedTypesError {
 
         match path_type {
             Some(PathType::RecordPath(path)) => {
-                write!(f, "Unable to determine the type of `{}` in the record at path `{}`", self.expr, path)
+                write!(
+                    f,
+                    "Unable to determine the type of `{}` in the record at path `{}`",
+                    self.expr, path
+                )
             }
             Some(PathType::IndexPath(path)) => {
-                write!(f, "Unable to determine the type of `{}` at index `{}`", self.expr, path)
+                write!(
+                    f,
+                    "Unable to determine the type of `{}` at index `{}`",
+                    self.expr, path
+                )
             }
             None => {
                 write!(f, "Unable to determine the type of `{}`", self.expr)
@@ -127,80 +138,5 @@ impl Display for TypeMismatchError {
         } else {
             write!(f, "{}. Found `{:?}`", &base_error, self.actual_type)
         }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct Path(Vec<PathElem>);
-
-impl Path {
-
-    pub fn from_elem(elem: PathElem) -> Self {
-        Path(vec![elem])
-    }
-
-    pub fn push_front(&mut self, elem: PathElem) {
-        self.0.insert(0, elem);
-    }
-}
-
-pub enum PathType {
-    RecordPath(Path),
-    IndexPath(Path),
-}
-
-impl PathType {
-    pub fn from_path(path: &Path) -> Option<PathType> {
-        if path.0.first().map(|elem| elem.is_field()).unwrap_or(false) {
-            Some(PathType::RecordPath(path.clone()))
-        } else if path.0.first().map(|elem| elem.is_index()).unwrap_or(false) {
-            Some(PathType::IndexPath(path.clone()))
-        } else {
-            None
-        }
-    }
-}
-
-impl Display for Path {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut is_first = true;
-
-        for elem in &self.0 {
-            match elem {
-                PathElem::Field(name) => {
-                    if is_first {
-                        write!(f, "{}", name)?;
-                        is_first = false;
-                    } else {
-                        write!(f, ".{}", name)?;
-                    }
-                }
-                PathElem::Index(index) => {
-                    if is_first {
-                        write!(f, "index: {}", index)?;
-                        is_first = false;
-                    } else {
-                        write!(f, "[{}]", index)?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum PathElem {
-    Field(String),
-    Index(usize),
-}
-
-impl PathElem {
-    pub fn is_field(&self) -> bool {
-        matches!(self, PathElem::Field(_))
-    }
-
-    pub fn is_index(&self) -> bool {
-        matches!(self, PathElem::Index(_))
     }
 }
