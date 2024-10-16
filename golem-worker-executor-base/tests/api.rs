@@ -38,6 +38,7 @@ use golem_common::model::{
 use golem_wasm_rpc::Value;
 
 use crate::common::{start, TestContext, TestWorkerExecutor};
+use crate::compatibility::worker_recovery::save_recovery_golden_file;
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use golem_common::model::oplog::{IndexedResourceKey, OplogIndex, WorkerResourceId};
 use golem_test_framework::config::TestDependencies;
@@ -215,6 +216,7 @@ async fn shopping_cart_example(
         .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
         .await;
 
+    save_recovery_golden_file(&executor, "shopping_cart_example", &worker_id).await;
     drop(executor);
 
     check!(

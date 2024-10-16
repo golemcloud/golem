@@ -24,12 +24,11 @@ use tokio::sync::Mutex;
 use tonic::transport::Channel;
 use tracing::{info, Level};
 
-use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-
 use crate::components::component_service::{new_client, ComponentService, ComponentServiceEnvVars};
 use crate::components::docker::KillContainer;
 use crate::components::rdb::Rdb;
 use crate::components::{GolemEnvVars, NETWORK};
+use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 
 pub struct DockerComponentService {
     container: Arc<Mutex<Option<ContainerAsync<GolemComponentServiceImage>>>>,

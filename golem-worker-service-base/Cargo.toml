@@ -10,6 +10,10 @@ description = "Base functionalities of Golem Worker Service"
 [lib]
 harness = false
 
+[[test]]
+name = "services_tests"
+harness = false
+
 [dependencies]
 golem-common = { path = "../golem-common" }
 golem-api-grpc = { path = "../golem-api-grpc" }

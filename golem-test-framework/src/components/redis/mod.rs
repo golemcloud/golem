@@ -46,14 +46,31 @@ pub trait Redis {
             self.public_host(),
             self.public_port(),
             db
-        ))
-        .unwrap();
+        ))?;
         client.get_connection()
+    }
+
+    async fn try_get_async_connection(
+        &self,
+        db: u16,
+    ) -> RedisResult<redis::aio::MultiplexedConnection> {
+        let client = redis::Client::open(format!(
+            "redis://{}:{}/{}",
+            self.public_host(),
+            self.public_port(),
+            db
+        ))?;
+        client.get_multiplexed_async_connection().await
     }
 
     fn get_connection(&self, db: u16) -> redis::Connection {
         self.assert_valid();
         self.try_get_connection(db).unwrap()
+    }
+
+    async fn get_async_connection(&self, db: u16) -> redis::aio::MultiplexedConnection {
+        self.assert_valid();
+        self.try_get_async_connection(db).await.unwrap()
     }
 
     fn flush_db(&self, db: u16) {

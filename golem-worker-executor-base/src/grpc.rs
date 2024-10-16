@@ -525,8 +525,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
 
         match &worker_status.status {
-            WorkerStatus::Suspended | WorkerStatus::Interrupted => {
-                info!("Activating ${worker_status:?} worker {worker_id} due to explicit resume request");
+            WorkerStatus::Suspended | WorkerStatus::Interrupted | WorkerStatus::Idle => {
+                info!(
+                    "Activating {:?} worker {worker_id} due to explicit resume request",
+                    worker_status.status
+                );
                 let _ = Worker::get_or_create_running(
                     &self.services,
                     &owned_worker_id,
@@ -539,7 +542,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(())
             }
             _ => Err(GolemError::invalid_request(format!(
-                "Worker {worker_id} is not suspended or interrupted",
+                "Worker {worker_id} is not suspended, interrupted or idle",
                 worker_id = worker_id
             ))),
         }
