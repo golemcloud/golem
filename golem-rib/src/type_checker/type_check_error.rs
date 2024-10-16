@@ -19,11 +19,17 @@ impl UnResolvedTypesError {
         }
     }
 
+    pub fn with_additional_message(&self, message: impl AsRef<str>) -> UnResolvedTypesError {
+        let mut unresolved_error: UnResolvedTypesError = self.clone();
+        unresolved_error.additional_messages.push(message.as_ref().to_string());
+        unresolved_error
+    }
+
     pub fn at_field(&self, field_name: String) -> UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
         unresolved_error
             .unresolved_path
-            .push_back(PathElem::Field(field_name));
+            .push_front(PathElem::Field(field_name));
         unresolved_error
     }
 
@@ -31,23 +37,26 @@ impl UnResolvedTypesError {
         let mut unresolved_error: UnResolvedTypesError = self.clone();
         unresolved_error
             .unresolved_path
-            .push_back(PathElem::Index(index));
+            .push_front(PathElem::Index(index));
         unresolved_error
     }
 }
 
 impl Display for UnResolvedTypesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let field_path = self.unresolved_path.to_string();
-        if field_path.is_empty() {
-            write!(f, "Cannot infer the type of: `{}`", self.expr)?;
-        } else {
-            write!(
-                f,
-                "Cannot infer the type of `{}` in `{}`",
-                self.expr, field_path
-            )?;
-        }
+        let path_type = PathType::from_path(&self.unresolved_path);
+
+        match path_type {
+            Some(PathType::RecordPath(path)) => {
+                write!(f, "Unable to determine the type of `{}` in the record at path `{}`", self.expr, path)
+            }
+            Some(PathType::IndexPath(path)) => {
+                write!(f, "Unable to determine the type of `{}` at index `{}`", self.expr, path)
+            }
+            None => {
+                write!(f, "Unable to determine the type of `{}`", self.expr)
+            }
+        }?;
 
         if !self.additional_messages.is_empty() {
             for message in &self.additional_messages {
@@ -125,6 +134,7 @@ impl Display for TypeMismatchError {
 pub struct Path(Vec<PathElem>);
 
 impl Path {
+
     pub fn from_elem(elem: PathElem) -> Self {
         Path(vec![elem])
     }
@@ -138,9 +148,27 @@ impl Path {
     }
 }
 
+pub enum PathType {
+    RecordPath(Path),
+    IndexPath(Path),
+}
+
+impl PathType {
+    pub fn from_path(path: &Path) -> Option<PathType> {
+        if path.0.first().map(|elem| elem.is_field()).unwrap_or(false) {
+            Some(PathType::RecordPath(path.clone()))
+        } else if path.0.first().map(|elem| elem.is_index()).unwrap_or(false) {
+            Some(PathType::IndexPath(path.clone()))
+        } else {
+            None
+        }
+    }
+}
+
 impl Display for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut is_first = true;
+
         for elem in &self.0 {
             match elem {
                 PathElem::Field(name) => {
@@ -169,4 +197,14 @@ impl Display for Path {
 pub enum PathElem {
     Field(String),
     Index(usize),
+}
+
+impl PathElem {
+    pub fn is_field(&self) -> bool {
+        matches!(self, PathElem::Field(_))
+    }
+
+    pub fn is_index(&self) -> bool {
+        matches!(self, PathElem::Index(_))
+    }
 }

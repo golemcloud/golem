@@ -57,7 +57,9 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             }
             Expr::Number(_, _, inferred_type) => {
                 if inferred_type.un_resolved() {
-                    return Err(UnResolvedTypesError::new(expr));
+                    return Err(UnResolvedTypesError::new(expr).with_additional_message(
+                        "Number literals must have a type annotation. Example: `1u64`",
+                    ));
                 }
             }
             Expr::Flags(_, inferred_type) => {
@@ -67,7 +69,8 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             }
             Expr::Identifier(_, inferred_type) => {
                 if inferred_type.un_resolved() {
-                    return Err(UnResolvedTypesError::new(expr));
+                    return Err(UnResolvedTypesError::new(expr).with_additional_message(
+                        format!("`{}` is unknown identifier. Use 'let' to declare it and annotate the type if it's value is a global input", expr).as_str(),                    ));
                 }
             }
             Expr::Boolean(_, inferred_type) => {
@@ -149,12 +152,9 @@ mod internal {
         expr_fields: &Vec<(String, Expr)>,
     ) -> Result<(), UnResolvedTypesError> {
         for (field_name, field_expr) in expr_fields {
-            let field_type = field_expr.inferred_type();
-            if field_type.is_unknown() || field_type.is_one_of() {
-                return Err(UnResolvedTypesError::new(field_expr).at_field(field_name.clone()));
-            } else {
-                check_unresolved_types(field_expr)?;
-            }
+            check_unresolved_types(field_expr).map_err(|error| {
+                error.at_field(field_name.clone())
+            })?;
         }
 
         Ok(())
@@ -316,4 +316,39 @@ mod internal {
 
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod unresolved_types_tests {
+    use test_r::test;
+    use crate::{compile, Expr};
+
+    #[test]
+    fn test_unresolved_types_identifier() {
+        let expr = Expr::from_text("hello").unwrap();
+        compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `hello`. `hello` is unknown identifier. Use 'let' to declare it and annotate the type if it's value is a global input");
+    }
+
+    #[test]
+    fn test_unresolved_type_record() {
+        let expr = Expr::from_text("{a: 1, b: \"hello\"}").unwrap();
+        compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `1` in the record at path `a`. Number literals must have a type annotation. Example: `1u64`");
+    }
+
+    #[test]
+    fn test_unresolved_type_nested_record() {
+        let expr = Expr::from_text("{foo: {a: 1, b: \"hello\"}}").unwrap();
+        compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `1` in the record at path `foo.a`. Number literals must have a type annotation. Example: `1u64`");
+    }
+
+    #[test]
+    fn test_unresolved_type_nested_record_index() {
+        let expr = Expr::from_text("{foo: {a: \"bar\", b: (\"foo\", hello)}}").unwrap();
+        compile(&expr, &vec![]).unwrap_err();
+        assert_eq!(compile(&expr, &vec![]).unwrap_err().to_string(), "Unable to determine the type of `hello` in the record at path `foo.b[1]`");
+    }
+
 }
