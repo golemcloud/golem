@@ -142,10 +142,6 @@ impl Path {
     pub fn push_front(&mut self, elem: PathElem) {
         self.0.insert(0, elem);
     }
-
-    pub fn push_back(&mut self, elem: PathElem) {
-        self.0.push(elem);
-    }
 }
 
 pub enum PathType {

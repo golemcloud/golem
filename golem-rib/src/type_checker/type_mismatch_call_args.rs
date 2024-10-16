@@ -99,13 +99,13 @@ impl Display for FunctionCallTypeError {
             } => {
                 write!(
                     f,
-                    "Invalid argument in `{}`: `{}`. {}. Expected type: {}",
+                    "Invalid argument in `{}`: `{}`. Expected type: {}. {}",
                     call_type,
                     argument,
-                    unresolved_error,
                     TypeName::try_from(expected_type.clone())
                         .map(|t| t.to_string())
-                        .unwrap_or_default()
+                        .unwrap_or_default(),
+                    unresolved_error
                 )
             }
         }
