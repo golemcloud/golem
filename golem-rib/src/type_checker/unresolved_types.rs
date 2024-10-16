@@ -160,7 +160,7 @@ mod internal {
         for (index, field_expr) in expr_fields.iter().enumerate() {
             check_unresolved_types(field_expr).map_err(|error| {
                 error
-                    .at_index(index.clone())
+                    .at_index(index)
                     .with_additional_message("Invalid element in Tuple")
             })?;
         }
