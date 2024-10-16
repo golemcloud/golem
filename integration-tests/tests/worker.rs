@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, timeout};
 
 use assert2::check;
 
@@ -45,6 +45,7 @@ inherit_test_dep!(EnvBasedTestDependencies);
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn dynamic_worker_creation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("environment-service").await;
     let worker_id = WorkerId {
@@ -111,6 +112,7 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn dynamic_worker_creation_without_name(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("environment-service").await;
     let worker_id = TargetWorkerId {
@@ -141,6 +143,7 @@ async fn dynamic_worker_creation_without_name(deps: &EnvBasedTestDependencies, _
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn ephemeral_worker_creation_without_name(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -174,6 +177,7 @@ async fn ephemeral_worker_creation_without_name(
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn ephemeral_worker_creation_with_name_is_not_persistent(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -207,6 +211,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("counters").await;
     let worker_id = deps.start_worker(&component_id, "counters-1").await;
@@ -309,6 +314,7 @@ async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tra
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("counters").await;
     let worker_id = deps.start_worker(&component_id, "counters-1j").await;
@@ -486,6 +492,7 @@ async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing:
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("counters").await;
     let worker_id = deps.start_worker(&component_id, "counters-2").await;
@@ -561,6 +568,7 @@ async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tra
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("counters").await;
     let worker_id = deps.start_worker(&component_id, "counters-2j").await;
@@ -696,6 +704,7 @@ async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing:
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn shopping_cart_example(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("shopping-cart").await;
     let worker_id = deps.start_worker(&component_id, "shopping-cart-1").await;
@@ -790,6 +799,7 @@ async fn shopping_cart_example(deps: &EnvBasedTestDependencies, _tracing: &Traci
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let registry_component_id = deps.store_component("auction_registry_composed").await;
     let auction_component_id = deps.store_component("auction").await;
@@ -852,6 +862,7 @@ fn get_worker_ids(workers: Vec<(WorkerMetadata, Option<String>)>) -> HashSet<Wor
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("shopping-cart").await;
 
@@ -949,6 +960,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("http-client-2").await;
     let host_http_port = 8585;
@@ -1079,6 +1091,7 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("update-test-v1").await;
     let worker_id = deps
@@ -1165,6 +1178,7 @@ async fn auto_update_on_idle_via_host_function(
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_component("runtime-service").await;
 
