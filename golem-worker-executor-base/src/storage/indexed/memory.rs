@@ -125,6 +125,8 @@ impl IndexedStorage for InMemoryIndexedStorage {
         id: u64,
         value: &[u8],
     ) -> Result<(), String> {
+        debug!("IS::APPEND {:?} {} {}", namespace, key, id);
+
         let composite_key = Self::composite_key(namespace, key);
         let mut entry = self.data.entry(composite_key.clone()).or_default();
         if let std::collections::btree_map::Entry::Vacant(e) = entry.entry(id) {

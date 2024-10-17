@@ -1306,3 +1306,99 @@ async fn scheduled_archive_impl(use_blob: bool) {
 
     assert_eq!(last_oplog_index_2, last_oplog_index_3);
 }
+
+#[test]
+async fn multilayer_scan_for_component(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        1000, // no transfer will occur by reaching limit in this test
+        10,
+    ));
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let component_id = ComponentId(Uuid::new_v4());
+
+    // Adding some workers
+    let mut primary_workers = Vec::new();
+    let mut secondary_workers = Vec::new();
+    let mut tertiary_workers = Vec::new();
+    for i in 0..100 {
+        let worker_id = WorkerId {
+            component_id: component_id.clone(),
+            worker_name: format!("worker-{}", i),
+        };
+        let create_entry = OplogEntry::create(
+            worker_id.clone(),
+            1,
+            Vec::new(),
+            Vec::new(),
+            account_id.clone(),
+            None,
+            100,
+            100,
+        );
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let oplog = oplog_service
+            .create(&owned_worker_id, create_entry, ComponentType::Durable)
+            .await;
+
+        debug!("Created {worker_id}");
+        match i % 3 {
+            0 => primary_workers.push(worker_id),
+            1 => {
+                secondary_workers.push(worker_id.clone());
+                debug!("Archiving {worker_id} to secondary layer");
+                MultiLayerOplog::try_archive_blocking(&oplog).await;
+            }
+            2 => {
+                tertiary_workers.push(worker_id.clone());
+                debug!("Archiving {worker_id} to secondary layer");
+                let r = MultiLayerOplog::try_archive_blocking(&oplog).await;
+                debug!("[{r:?}] => archiving {worker_id} to tertiary layer");
+                MultiLayerOplog::try_archive_blocking(&oplog).await;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    debug!(
+        "Created {}/{}/{} workers, waiting for background processes",
+        primary_workers.len(),
+        secondary_workers.len(),
+        tertiary_workers.len()
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let mut cursor = ScanCursor::default();
+    let mut result = Vec::new();
+    let page_size = 10;
+    loop {
+        let (new_cursor, ids) = oplog_service
+            .scan_for_component(&account_id, &component_id, cursor, page_size)
+            .await
+            .unwrap();
+        debug!("Got {} elements, new cursor is {}", ids.len(), new_cursor);
+        result.extend(ids);
+        if new_cursor.is_finished() {
+            break;
+        } else {
+            cursor = new_cursor;
+        }
+    }
+
+    assert_eq!(result.len(), 100);
+}

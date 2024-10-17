@@ -102,13 +102,14 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+        let ScanCursor { cursor, layer } = cursor;
         let (cursor, keys) = self
             .indexed_storage
             .with("compressed_oplog", "scan")
             .scan(
                 IndexedStorageNamespace::CompressedOpLog { level: self.level },
                 &PrimaryOplogService::key_pattern(component_id),
-                cursor.cursor,
+                cursor,
                 count,
             )
             .await
@@ -117,7 +118,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             });
 
         Ok((
-            ScanCursor { cursor, layer: 0 },
+            ScanCursor { cursor, layer },
             keys.into_iter()
                 .map(|key| OwnedWorkerId {
                     worker_id: PrimaryOplogService::get_worker_id_from_key(&key, component_id),

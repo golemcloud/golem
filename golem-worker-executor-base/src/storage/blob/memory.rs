@@ -174,9 +174,11 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
     ) -> Result<Vec<PathBuf>, String> {
         let dir = path.to_string_lossy().to_string();
+
         if let Some(namespace_data) = self.data.get(&namespace) {
+            let mut result: Vec<PathBuf> = Vec::new();
             if let Some(directory) = namespace_data.get(&dir) {
-                let mut result: Vec<PathBuf> = directory
+                let file_result: Vec<PathBuf> = directory
                     .iter()
                     .map(|entry| {
                         let mut path = path.to_path_buf();
@@ -184,24 +186,22 @@ impl BlobStorage for InMemoryBlobStorage {
                         path
                     })
                     .collect();
+                result.extend(file_result);
                 drop(directory);
-
-                let prefix = if dir.ends_with('/') || dir.is_empty() {
-                    dir.to_string()
-                } else {
-                    format!("{}/", dir)
-                };
-                namespace_data
-                    .iter()
-                    .filter(|entry| entry.key() != &dir && entry.key().starts_with(&prefix))
-                    .for_each(|entry| {
-                        result.push(Path::new(entry.key()).to_path_buf());
-                    });
-
-                Ok(result)
-            } else {
-                Ok(vec![])
             }
+            let prefix = if dir.ends_with('/') || dir.is_empty() {
+                dir.to_string()
+            } else {
+                format!("{}/", dir)
+            };
+            namespace_data
+                .iter()
+                .filter(|entry| entry.key() != &dir && entry.key().starts_with(&prefix))
+                .for_each(|entry| {
+                    result.push(Path::new(entry.key()).to_path_buf());
+                });
+
+            Ok(result)
         } else {
             Ok(vec![])
         }

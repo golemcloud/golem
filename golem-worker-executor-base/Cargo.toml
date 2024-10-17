@@ -25,6 +25,7 @@ golem-wasm-rpc = { workspace = true }
 
 anyhow = { workspace = true }
 async-fs = "2.1.0"
+async-lock = "3.4.0"
 async-mutex = "1.4.0"
 async-stream = { version = "0.3", optional = true }
 async-trait = { workspace = true }

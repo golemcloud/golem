@@ -2034,8 +2034,20 @@ pub struct ScanCursor {
 }
 
 impl ScanCursor {
-    pub fn is_finished(&self) -> bool {
+    pub fn is_active_layer_finished(&self) -> bool {
         self.cursor == 0
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.cursor == 0 && self.layer == 0
+    }
+
+    pub fn into_option(self) -> Option<Self> {
+        if self.is_finished() {
+            None
+        } else {
+            Some(self)
+        }
     }
 }
 

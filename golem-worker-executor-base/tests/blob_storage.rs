@@ -448,6 +448,73 @@ macro_rules! test_blob_storage {
 
             #[test]
             #[tracing::instrument]
+            async fn list_dir_root_only_subdirs() {
+                let test = $init().await;
+                let storage = test.get_blob_storage();
+                let namespace = $ns();
+
+                storage
+                    .create_dir(
+                        "list_dir_root",
+                        "create-dir",
+                        namespace.clone(),
+                        Path::new("inner-dir1"),
+                    )
+                    .await
+                    .unwrap();
+                           storage
+                    .create_dir(
+                        "list_dir_root",
+                        "create-dir",
+                        namespace.clone(),
+                        Path::new("inner-dir2"),
+                    )
+                    .await
+                    .unwrap();
+
+                storage
+                    .put_raw(
+                        "list_dir_root",
+                        "put-raw",
+                        namespace.clone(),
+                        Path::new("inner-dir1/test-file1"),
+                        &Bytes::from("test-data1"),
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .put_raw(
+                        "list_dir_root",
+                        "put-raw-2",
+                        namespace.clone(),
+                        Path::new("inner-dir2/test-file2"),
+                        &Bytes::from("test-data2"),
+                    )
+                    .await
+                    .unwrap();
+                let mut entries = storage
+                    .list_dir(
+                        "list_dir_root",
+                        "list-dir",
+                        namespace.clone(),
+                        Path::new(""),
+                    )
+                    .await
+                    .unwrap();
+
+                entries.sort();
+
+                check!(
+                    entries
+                        == vec![
+                            Path::new("inner-dir1").to_path_buf(),
+                            Path::new("inner-dir2").to_path_buf(),
+                        ]
+                );
+            }
+
+            #[test]
+            #[tracing::instrument]
             async fn list_dir_same_prefix() {
                 let test = $init().await;
                 let storage = test.get_blob_storage();

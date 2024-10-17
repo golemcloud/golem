@@ -12,22 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::cmp::min;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
 use crate::error::GolemError;
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService};
 use crate::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
 };
+use async_lock::RwLockUpgradableReadGuard;
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
+use std::cmp::min;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::sync::RwLock;
+use tracing::debug;
 
 /// An oplog archive implementation that uses the configured blob storage to store compressed
 /// chunks of the oplog.
@@ -183,6 +184,7 @@ struct BlobOplogArchive {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     level: usize,
     entries: Arc<RwLock<BTreeMap<OplogIndex, PathBuf>>>,
+    created: Arc<async_lock::RwLock<bool>>,
     #[allow(clippy::type_complexity)]
     cache: RwLock<
         EvictingCacheMap<
@@ -219,36 +221,48 @@ impl BlobOplogArchive {
                 )
             });
 
-        if !exists {
-            blob_storage
-                .with("blob_oplog", "new")
-                .create_dir(
-                    BlobStorageNamespace::CompressedOplog {
-                        account_id: owned_worker_id.account_id(),
-                        component_id: owned_worker_id.component_id(),
-                        level,
-                    },
-                    Path::new(&owned_worker_id.worker_name()),
-                )
-                .await
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to create compressed oplog directory for worker {} in blob storage: {err}",
-                        owned_worker_id.worker_id
-                    )
-                });
-        }
-
+        let created = Arc::new(async_lock::RwLock::new(exists));
         let entries = Arc::new(RwLock::new(
-            Self::entries(owned_worker_id.clone(), blob_storage.clone(), level).await,
+            if exists {
+                Self::entries(owned_worker_id.clone(), blob_storage.clone(), level).await
+            } else {
+                BTreeMap::new()
+            }
         ));
 
         BlobOplogArchive {
             owned_worker_id,
             blob_storage,
             level,
+            created,
             entries,
             cache: RwLock::new(EvictingCacheMap::new()),
+        }
+    }
+
+    async fn ensure_is_created(&self) {
+        let created = self.created.upgradable_read().await;
+        if !*created {
+            let mut created = RwLockUpgradableReadGuard::upgrade(created).await;
+            self.blob_storage
+                .with("blob_oplog", "new")
+                .create_dir(
+                    BlobStorageNamespace::CompressedOplog {
+                        account_id: self.owned_worker_id.account_id(),
+                        component_id: self.owned_worker_id.component_id(),
+                        level: self.level,
+                    },
+                    Path::new(&self.owned_worker_id.worker_name()),
+                )
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to create compressed oplog directory for worker {} in blob storage: {err}",
+                        self.owned_worker_id.worker_id
+                    )
+                });
+
+            *created = true;
         }
     }
 
@@ -393,6 +407,8 @@ impl OplogArchive for BlobOplogArchive {
     }
 
     async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) {
+        self.ensure_is_created().await;
+
         if let Some(last) = chunk.last() {
             let oplog_index = last.0;
             let path = self.oplog_index_to_path(oplog_index);
@@ -431,6 +447,8 @@ impl OplogArchive for BlobOplogArchive {
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+        self.ensure_is_created().await;
+
         let mut entries = self.entries.write().await;
         let mut cache = self.cache.write().await;
 
