@@ -26,7 +26,7 @@ use golem_worker_executor_base::services::golem_config::S3BlobStorageConfig;
 use golem_worker_executor_base::storage::blob::{
     fs, memory, s3, BlobStorage, BlobStorageNamespace,
 };
-use golem_worker_executor_base::storage::sqlite_types::SqlitePool;
+use golem_worker_executor_base::storage::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -755,7 +755,7 @@ pub(crate) async fn sqlite() -> impl GetBlobStorage {
         .await
         .expect("Cannot connect to sqlite db");
 
-    let sbs = SqliteBlobStorage::new(pool);
+    let sbs = SqliteBlobStorage::new(pool).await.unwrap();
 
     SqliteTest { storage: sbs }
 }

@@ -20,7 +20,7 @@ use golem_test_framework::config::TestDependencies;
 use golem_worker_executor_base::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor_base::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor_base::storage::indexed::sqlite::SqliteIndexedStorage;
-use golem_worker_executor_base::storage::sqlite_types::SqlitePool;
+use golem_worker_executor_base::storage::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 
 use crate::WorkerExecutorTestDependencies;
@@ -111,7 +111,7 @@ pub(crate) async fn sqlite_storage(
     let pool = SqlitePool::new(sqlx_pool_sqlite)
         .await
         .expect("Cannot connect to sqlite db");
-    let sis = SqliteIndexedStorage::new(pool);
+    let sis = SqliteIndexedStorage::new(pool).await.unwrap();
     SqliteIndexedStorageWrapper { sis }
 }
 
