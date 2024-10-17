@@ -17,10 +17,6 @@ use std::{
     sync::Arc,
 };
 
-use prometheus::Registry;
-use tonic::codec::CompressionEncoding;
-use tracing::info;
-
 use config::ServerConfig;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
 use golem_common::tracing::init_tracing_with_default_env_filter;
@@ -31,10 +27,16 @@ use golem_worker_executor_base::{
     http_server::HttpServerImpl, services::compiled_component, storage,
 };
 use grpc::CompileGrpcService;
+use prometheus::Registry;
 use service::CompilationService;
+use tonic::codec::CompressionEncoding;
+use tracing::info;
+use wasmtime::component::__internal::anyhow::anyhow;
 
 use crate::config::make_config_loader;
 use crate::service::compile_service::ComponentCompilationServiceImpl;
+use golem_worker_executor_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_worker_executor_base::storage::sqlite::SqlitePool;
 use wasmtime::WasmBacktraceDetails;
 
 mod config;
@@ -82,6 +84,20 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
         BlobStorageConfig::InMemory => {
             info!("Using in-memory blob storage");
             Arc::new(storage::blob::memory::InMemoryBlobStorage::new())
+        }
+        BlobStorageConfig::KVStoreSqlite => {
+            Err(anyhow!("KVStoreSqlite configuration option is not supported - use an explicit Sqlite configuration instead"))?
+        }
+        BlobStorageConfig::Sqlite(sqlite) => {
+            info!("Using Sqlite for blob storage at {}", sqlite.database);
+            let pool = SqlitePool::configured(sqlite)
+                .await
+                .map_err(|err| anyhow!(err))?;
+            Arc::new(
+                SqliteBlobStorage::new(pool.clone())
+                    .await
+                    .map_err(|err| anyhow!(err))?,
+            )
         }
     };
     let compiled_component =

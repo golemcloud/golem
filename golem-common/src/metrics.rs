@@ -416,14 +416,14 @@ pub mod db {
         static ref DB_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
             "db_success_seconds",
             "Duration of successful db calls",
-            &["db_type", "svc", "api", "cmd"],
+            &["db_type", "svc", "api"],
             crate::metrics::DEFAULT_TIME_BUCKETS.to_vec()
         )
         .unwrap();
         static ref DB_FAILURE_TOTAL: CounterVec = register_counter_vec!(
             "db_failure_total",
             "Number of failed db calls",
-            &["db_type", "svc", "api", "cmd"]
+            &["db_type", "svc", "api"]
         )
         .unwrap();
         static ref DB_SERIALIZED_SIZE_BYTES: HistogramVec = register_histogram_vec!(
@@ -446,11 +446,10 @@ pub mod db {
         db_type: &'static str,
         svc_name: &'static str,
         api_name: &'static str,
-        cmd_name: &'static str,
         duration: Duration,
     ) {
         DB_SUCCESS_SECONDS
-            .with_label_values(&[db_type, svc_name, api_name, cmd_name])
+            .with_label_values(&[db_type, svc_name, api_name])
             .observe(duration.as_secs_f64());
     }
 
@@ -458,10 +457,9 @@ pub mod db {
         db_type: &'static str,
         svc_name: &'static str,
         api_name: &'static str,
-        cmd_name: &'static str,
     ) {
         DB_FAILURE_TOTAL
-            .with_label_values(&[db_type, svc_name, api_name, cmd_name])
+            .with_label_values(&[db_type, svc_name, api_name])
             .inc();
     }
 

@@ -261,6 +261,8 @@ pub enum KeyValueStorageConfig {
 pub enum IndexedStorageConfig {
     KVStoreRedis,
     Redis(RedisConfig),
+    KVStoreSqlite,
+    Sqlite(DbSqliteConfig),
     InMemory,
 }
 
@@ -270,6 +272,8 @@ pub enum IndexedStorageConfig {
 pub enum BlobStorageConfig {
     S3(S3BlobStorageConfig),
     LocalFileSystem(LocalFileSystemBlobStorageConfig),
+    KVStoreSqlite,
+    Sqlite(DbSqliteConfig),
     InMemory,
 }
 

@@ -14,12 +14,14 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::storage::sqlite::DBValue;
 use crate::storage::{
     blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult},
-    sqlite_types::SqlitePool,
+    sqlite::SqlitePool,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use chrono::NaiveDateTime;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -27,11 +29,29 @@ pub struct SqliteBlobStorage {
 }
 
 impl SqliteBlobStorage {
-    pub fn new(pool: SqlitePool) -> Self {
-        SqliteBlobStorage { pool }
+    pub async fn new(pool: SqlitePool) -> Result<Self, String> {
+        let result = Self { pool };
+        result.init().await?;
+        Ok(result)
     }
 
-    fn into_string(namespace: BlobStorageNamespace) -> String {
+    async fn init(&self) -> Result<(), String> {
+        self.pool.execute(sqlx::query(r#"
+                CREATE TABLE IF NOT EXISTS blob_storage (
+                    namespace TEXT NOT NULL,                              -- 'Bucket' or namespace
+                    parent TEXT NOT NULL,                                 -- Parent path
+                    name TEXT NOT NULL,                                   -- Name of the entry
+                    value BLOB,                                           -- The actual blob data
+                    last_modified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Metadata: Last modified timestamp
+                    size INTEGER NOT NULL,                                -- Metadata: Size of the blob
+                    is_directory BOOLEAN DEFAULT FALSE NOT NULL,          -- Flag indicating if the row represents a directory
+                    PRIMARY KEY (namespace, parent, name)  -- Composite primary key
+                );
+                "#)).await?;
+        Ok(())
+    }
+
+    fn namespace(namespace: BlobStorageNamespace) -> String {
         match namespace {
             BlobStorageNamespace::CompilationCache => "compilation_cache".to_string(),
             BlobStorageNamespace::CustomStorage(account_id) => {
@@ -55,8 +75,17 @@ impl SqliteBlobStorage {
         }
     }
 
-    fn to_string(path: &Path) -> String {
-        path.to_string_lossy().to_string()
+    fn parent_string(path: &Path) -> String {
+        path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or("".to_string())
+    }
+
+    fn name_string(path: &Path) -> String {
+        path.file_name()
+            .expect("Path must have a file name")
+            .to_string_lossy()
+            .to_string()
     }
 }
 
@@ -69,11 +98,16 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<Bytes>, String> {
+        let query = sqlx::query_as("SELECT value FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? AND is_directory = FALSE;")
+            .bind(Self::namespace(namespace))
+            .bind(Self::parent_string(path))
+            .bind(Self::name_string(path));
+
         self.pool
             .with(target_label, op_label)
-            .get_raw(&Self::into_string(namespace), &Self::to_string(path))
+            .fetch_optional_as::<DBValue, _>(query)
             .await
-            .map_err(|err| err.to_string())
+            .map(|r| r.map(|op| op.into_bytes()))
     }
 
     async fn get_metadata(
@@ -83,11 +117,19 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<BlobMetadata>, String> {
+        let query = sqlx::query_as(
+            "SELECT last_modified_at, size FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
+        )
+            .bind(Self::namespace(namespace))
+            .bind(Self::parent_string(path))
+            .bind(Self::name_string(path));
+
         self.pool
             .with(target_label, op_label)
-            .get_metadata(&Self::into_string(namespace), &Self::to_string(path))
+            .fetch_optional_as::<DBMetadata, _>(query)
             .await
-            .map_err(|err| err.to_string())
+            .map(|r| r.map(|op| op.into_blob_metadata()))?
+            .transpose()
     }
 
     async fn put_raw(
@@ -98,11 +140,24 @@ impl BlobStorage for SqliteBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), String> {
+        let query = sqlx::query(
+                    r#"
+                        INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
+                        VALUES (?, ?, ?, ?, ?, FALSE)
+                        ON CONFLICT(namespace, parent, name) DO UPDATE SET value = excluded.value, size = excluded.size, last_modified_at = CURRENT_TIMESTAMP;
+                    "#,
+                )
+                    .bind(Self::namespace(namespace))
+                    .bind(Self::parent_string(path))
+                    .bind(Self::name_string(path))
+                    .bind(data)
+                    .bind(data.len() as i64);
+
         self.pool
             .with(target_label, op_label)
-            .put_raw(&Self::into_string(namespace), &Self::to_string(path), data)
+            .execute(query)
             .await
-            .map_err(|err| err.to_string())
+            .map(|_| ())
     }
 
     async fn delete(
@@ -112,11 +167,17 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), String> {
+        let query = sqlx::query(
+            "DELETE FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ?;",
+        )
+        .bind(Self::namespace(namespace))
+        .bind(Self::parent_string(path))
+        .bind(Self::name_string(path));
         self.pool
             .with(target_label, op_label)
-            .delete_blob(&Self::into_string(namespace), &Self::to_string(path))
+            .execute(query)
             .await
-            .map_err(|err| err.to_string())
+            .map(|_| ())
     }
 
     async fn create_dir(
@@ -126,11 +187,21 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), String> {
+        let query = sqlx::query(
+                    r#"
+                        INSERT INTO blob_storage (namespace, parent, name, value, size, is_directory)
+                        VALUES (?, ?, ?, NULL, 0, TRUE)
+                        ON CONFLICT(namespace, parent, name) DO UPDATE SET is_directory = TRUE, value = NULL, size = 0;
+                    "#
+                )
+                .bind(Self::namespace(namespace))
+                .bind(Self::parent_string(path))
+                .bind(Self::name_string(path));
         self.pool
             .with(target_label, op_label)
-            .create_dir(&Self::into_string(namespace), &Self::to_string(path))
+            .execute(query)
             .await
-            .map_err(|err| err.to_string())
+            .map(|_| ())
     }
 
     async fn list_dir(
@@ -140,11 +211,16 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Vec<PathBuf>, String> {
+        let query =
+            sqlx::query_as("SELECT name FROM blob_storage WHERE namespace = ? AND parent = ?;")
+                .bind(Self::namespace(namespace))
+                .bind(path.to_string_lossy().to_string());
+
         self.pool
             .with(target_label, op_label)
-            .list_dir(&Self::into_string(namespace), &Self::to_string(path))
+            .fetch_all::<(String,), _>(query)
             .await
-            .map_err(|err| err.to_string())
+            .map(|r| r.into_iter().map(|row| path.join(row.0)).collect())
     }
 
     async fn delete_dir(
@@ -154,11 +230,24 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), String> {
+        let parent = Self::parent_string(path);
+        let name = Self::name_string(path);
+        let parent_prefix = format!("{parent}%");
+
+        let query = sqlx::query(
+            r#"DELETE FROM blob_storage WHERE namespace = ? AND
+                     ((parent = ? AND name = ?) OR (parent LIKE ?));
+            "#,
+        )
+        .bind(Self::namespace(namespace))
+        .bind(parent)
+        .bind(name)
+        .bind(parent_prefix);
         self.pool
             .with(target_label, op_label)
-            .delete_dir(&Self::into_string(namespace), &Self::to_string(path))
+            .execute(query)
             .await
-            .map_err(|err| err.to_string())
+            .map(|_| ())
     }
 
     async fn exists(
@@ -168,10 +257,46 @@ impl BlobStorage for SqliteBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<ExistsResult, String> {
+        let query = sqlx::query_as(
+            "SELECT is_directory FROM blob_storage WHERE namespace = ? AND parent = ? AND name = ? LIMIT 1;",
+        )
+        .bind(Self::namespace(namespace))
+        .bind(Self::parent_string(path))
+        .bind(Self::name_string(path));
+
         self.pool
             .with(target_label, op_label)
-            .exists_blob(&Self::into_string(namespace), &Self::to_string(path))
+            .fetch_optional_as(query)
             .await
-            .map_err(|err| err.to_string())
+            .map(|row| {
+                if let Some((is_directory,)) = row {
+                    if is_directory {
+                        ExistsResult::Directory
+                    } else {
+                        ExistsResult::File
+                    }
+                } else {
+                    ExistsResult::DoesNotExist
+                }
+            })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+struct DBMetadata {
+    last_modified_at: NaiveDateTime,
+    size: i64,
+}
+impl DBMetadata {
+    pub const ISO_8601_FORMAT: &'static str = "%Y-%m-%dT%H:%M:%S";
+    fn into_blob_metadata(self) -> Result<BlobMetadata, String> {
+        let str = self
+            .last_modified_at
+            .format(Self::ISO_8601_FORMAT)
+            .to_string();
+        str.parse().map(|last_modified_at| BlobMetadata {
+            last_modified_at,
+            size: self.size as u64,
+        })
     }
 }
