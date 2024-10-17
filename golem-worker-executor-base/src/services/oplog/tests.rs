@@ -804,6 +804,114 @@ async fn read_from_archive_impl(use_blob: bool) {
 }
 
 #[test]
+async fn read_initial_from_archive(_tracing: &Tracing) {
+    crate::services::oplog::tests::read_initial_from_archive_impl(false).await;
+}
+
+#[test]
+async fn blob_read_initial_from_archive(_tracing: &Tracing) {
+    crate::services::oplog::tests::read_initial_from_archive_impl(true).await;
+}
+
+async fn read_initial_from_archive_impl(use_blob: bool) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
+    } else {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            1,
+        ))
+    };
+    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
+    } else {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            2,
+        ))
+    };
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+    let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
+
+    let timestamp = Timestamp::now_utc();
+    let create_entry = rounded(OplogEntry::Create {
+        timestamp,
+        worker_id: WorkerId {
+            component_id: ComponentId(Uuid::new_v4()),
+            worker_name: "test".to_string(),
+        },
+        component_version: 1,
+        args: vec![],
+        env: vec![],
+        account_id: AccountId {
+            value: "user1".to_string(),
+        },
+        parent: None,
+        component_size: 0,
+        initial_total_linear_memory_size: 0,
+    });
+
+    let oplog = oplog_service
+        .create(
+            &owned_worker_id,
+            create_entry.clone(),
+            ComponentType::Durable,
+        )
+        .await;
+
+    // The create entry is in the primary oplog now
+    let read1 = oplog_service
+        .read(&owned_worker_id, OplogIndex::INITIAL, 1)
+        .await
+        .into_iter()
+        .next();
+
+    // Archiving it to the secondary
+    let more = MultiLayerOplog::try_archive_blocking(&oplog).await;
+
+    // Reading it again, now it needs to be fetched from the secondary layer
+    let read2 = oplog_service
+        .read(&owned_worker_id, OplogIndex::INITIAL, 1)
+        .await
+        .into_iter()
+        .next();
+
+    // Archiving it to the tertiary
+    MultiLayerOplog::try_archive_blocking(&oplog).await;
+
+    // Reading it again, now it needs to be fetched from the tertiary layer
+    let read3 = oplog_service
+        .read(&owned_worker_id, OplogIndex::INITIAL, 1)
+        .await
+        .into_iter()
+        .next();
+
+    assert_eq!(more, Some(true));
+    assert_eq!(read1, Some((OplogIndex::INITIAL, create_entry.clone())));
+    assert_eq!(read2, Some((OplogIndex::INITIAL, create_entry.clone())));
+    assert_eq!(read3, Some((OplogIndex::INITIAL, create_entry)));
+}
+
+#[test]
 async fn write_after_archive(_tracing: &Tracing) {
     write_after_archive_impl(false, Reopen::No).await;
 }

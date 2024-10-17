@@ -602,10 +602,6 @@ impl MultiLayerOplog {
             (None, None)
         };
         let result = if this.primary_length.load(Ordering::Acquire) > 0 {
-            debug!(
-                "** primary length is {}, transferring it to the secondary layer",
-                this.primary_length.load(Ordering::Acquire)
-            );
             // transferring the whole primary oplog to the next layer
             this.transfer
                 .send(TransferFromPrimary {

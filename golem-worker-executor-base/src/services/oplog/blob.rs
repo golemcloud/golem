@@ -28,7 +28,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::debug;
 
 /// An oplog archive implementation that uses the configured blob storage to store compressed
 /// chunks of the oplog.

@@ -29,7 +29,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error};
+use tracing::error;
 
 /// The primary oplog service implementation, suitable for direct use (top level of a multi-layered setup).
 ///
