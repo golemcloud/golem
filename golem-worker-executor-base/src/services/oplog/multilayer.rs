@@ -408,20 +408,18 @@ impl OplogService for MultiLayerOplogService {
                         },
                         ids,
                     ))
+                } else if new_cursor.is_active_layer_finished() {
+                    // Finished scanning the last layer
+                    Ok((
+                        ScanCursor {
+                            cursor: 0,
+                            layer: 0,
+                        },
+                        ids,
+                    ))
                 } else {
-                    if new_cursor.is_active_layer_finished() {
-                        // Finished scanning the last layer
-                        Ok((
-                            ScanCursor {
-                                cursor: 0,
-                                layer: 0,
-                            },
-                            ids,
-                        ))
-                    } else {
-                        // Still scanning the current layer
-                        Ok((new_cursor, ids))
-                    }
+                    // Still scanning the current layer
+                    Ok((new_cursor, ids))
                 }
             }
             layer => Err(GolemError::unknown(format!(
@@ -461,6 +459,7 @@ pub struct MultiLayerOplog {
 }
 
 impl MultiLayerOplog {
+    #[allow(clippy::new_ret_no_self)]
     pub async fn new(
         owned_worker_id: OwnedWorkerId,
         primary: Arc<dyn Oplog + Send + Sync>,

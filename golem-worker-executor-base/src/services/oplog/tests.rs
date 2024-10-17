@@ -850,8 +850,6 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     };
     let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
 
-    let last_oplog_index = oplog_service.get_last_index(&owned_worker_id).await;
-
     let timestamp = Timestamp::now_utc();
     let create_entry = rounded(OplogEntry::Create {
         timestamp,
@@ -884,6 +882,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         .await
         .into_iter()
         .next();
+    let last_index_1 = oplog_service.get_last_index(&owned_worker_id).await;
 
     // Archiving it to the secondary
     let more = MultiLayerOplog::try_archive_blocking(&oplog).await;
@@ -894,6 +893,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         .await
         .into_iter()
         .next();
+    let last_index_2 = oplog_service.get_last_index(&owned_worker_id).await;
 
     // Archiving it to the tertiary
     MultiLayerOplog::try_archive_blocking(&oplog).await;
@@ -904,11 +904,16 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         .await
         .into_iter()
         .next();
+    let last_index_3 = oplog_service.get_last_index(&owned_worker_id).await;
 
     assert_eq!(more, Some(true));
     assert_eq!(read1, Some((OplogIndex::INITIAL, create_entry.clone())));
     assert_eq!(read2, Some((OplogIndex::INITIAL, create_entry.clone())));
     assert_eq!(read3, Some((OplogIndex::INITIAL, create_entry)));
+
+    assert_eq!(last_index_1, OplogIndex::INITIAL);
+    assert_eq!(last_index_2, OplogIndex::INITIAL);
+    assert_eq!(last_index_3, OplogIndex::INITIAL);
 }
 
 #[test]

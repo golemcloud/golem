@@ -462,7 +462,7 @@ macro_rules! test_blob_storage {
                     )
                     .await
                     .unwrap();
-                           storage
+                storage
                     .create_dir(
                         "list_dir_root",
                         "create-dir",

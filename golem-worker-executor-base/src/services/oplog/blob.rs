@@ -221,13 +221,11 @@ impl BlobOplogArchive {
             });
 
         let created = Arc::new(async_lock::RwLock::new(exists));
-        let entries = Arc::new(RwLock::new(
-            if exists {
-                Self::entries(owned_worker_id.clone(), blob_storage.clone(), level).await
-            } else {
-                BTreeMap::new()
-            }
-        ));
+        let entries = Arc::new(RwLock::new(if exists {
+            Self::entries(owned_worker_id.clone(), blob_storage.clone(), level).await
+        } else {
+            BTreeMap::new()
+        }));
 
         BlobOplogArchive {
             owned_worker_id,
