@@ -163,17 +163,23 @@ impl OplogArchiveService for BlobOplogArchiveService {
     }
 
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex {
-        let entries = BlobOplogArchive::entries(
+        if BlobOplogArchive::exists(
             owned_worker_id.clone(),
             self.blob_storage.clone(),
             self.level,
         )
-        .await;
-        entries
-            .keys()
-            .last()
-            .copied()
-            .unwrap_or_else(|| OplogIndex::from_u64(0))
+        .await
+        {
+            let entries = BlobOplogArchive::entries(
+                owned_worker_id.clone(),
+                self.blob_storage.clone(),
+                self.level,
+            )
+            .await;
+            entries.keys().last().copied().unwrap_or(OplogIndex::NONE)
+        } else {
+            OplogIndex::NONE
+        }
     }
 }
 
@@ -201,25 +207,7 @@ impl BlobOplogArchive {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         level: usize,
     ) -> Self {
-        let exists = blob_storage
-            .with("blob_oplog", "exists")
-            .exists(
-                BlobStorageNamespace::CompressedOplog {
-                    account_id: owned_worker_id.account_id(),
-                    component_id: owned_worker_id.component_id(),
-                    level,
-                },
-                Path::new(&owned_worker_id.worker_name()),
-            )
-            .await
-            .map(|exists| exists == ExistsResult::Directory)
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to check existence of compressed oplog for worker {} in blob storage: {err}",
-                    owned_worker_id.worker_id
-                )
-            });
-
+        let exists = Self::exists(owned_worker_id.clone(), blob_storage.clone(), level).await;
         let created = Arc::new(async_lock::RwLock::new(exists));
         let entries = Arc::new(RwLock::new(if exists {
             Self::entries(owned_worker_id.clone(), blob_storage.clone(), level).await
@@ -261,6 +249,31 @@ impl BlobOplogArchive {
 
             *created = true;
         }
+    }
+
+    pub(crate) async fn exists(
+        owned_worker_id: OwnedWorkerId,
+        blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+        level: usize,
+    ) -> bool {
+        blob_storage
+            .with("blob_oplog", "exists")
+            .exists(
+                BlobStorageNamespace::CompressedOplog {
+                    account_id: owned_worker_id.account_id(),
+                    component_id: owned_worker_id.component_id(),
+                    level,
+                },
+                Path::new(&owned_worker_id.worker_name()),
+            )
+            .await
+            .map(|exists| exists == ExistsResult::Directory)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "failed to check existence of compressed oplog for worker {} in blob storage: {err}",
+                    owned_worker_id.worker_id
+                )
+            })
     }
 
     pub(crate) async fn entries(
