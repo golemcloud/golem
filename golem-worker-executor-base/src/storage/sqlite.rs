@@ -145,7 +145,7 @@ impl SqliteLabelledApi {
     }
 
     pub async fn commit(&self, tx: SqliteLabelledTransaction) -> Result<(), String> {
-        let start = tx.start.clone();
+        let start = tx.start;
         let result = tx.commit().await;
         self.record(start, result)
     }
