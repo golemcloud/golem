@@ -678,7 +678,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
         entries.push(entry);
     }
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(4)).await;
 
     debug!("Fetching information to evaluate the test");
 
