@@ -149,7 +149,7 @@ macro_rules! test_blob_storage {
                     )
                     .await
                     .unwrap();
-                storage
+                let delete_result1 = storage
                     .delete_dir(
                         "create_delete_exists_dir",
                         "delete-dir",
@@ -167,10 +167,21 @@ macro_rules! test_blob_storage {
                     )
                     .await
                     .unwrap();
+                let delete_result2 = storage
+                    .delete_dir(
+                        "create_delete_exists_dir",
+                        "delete-dir",
+                        namespace.clone(),
+                        path,
+                    )
+                    .await
+                    .unwrap();
 
                 check!(result1 == ExistsResult::DoesNotExist);
                 check!(result2 == ExistsResult::Directory);
                 check!(result3 == ExistsResult::DoesNotExist);
+                check!(delete_result1 == true);
+                check!(delete_result2 == false);
             }
 
             #[test]

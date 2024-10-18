@@ -229,13 +229,21 @@ impl BlobStorage for FileSystemBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
 
-        async_fs::remove_dir_all(&full_path)
-            .await
-            .map_err(|err| err.to_string())
+        let result = async_fs::remove_dir_all(&full_path).await;
+
+        if let Err(err) = result {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                Ok(false)
+            } else {
+                Err(err.to_string())
+            }
+        } else {
+            Ok(true)
+        }
     }
 
     async fn exists(

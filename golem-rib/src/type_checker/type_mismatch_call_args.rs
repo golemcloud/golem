@@ -9,6 +9,7 @@ use std::fmt::Display;
 // we have this special phase to grab errors in the context function calls.
 // This is grab as many errors as possible.
 // Refer `FunctionCallTypeCheckError`.
+#[allow(clippy::result_large_err)]
 pub fn check_type_errors_in_function_call(
     expr: &mut Expr,
     type_registry: &FunctionTypeRegistry,
@@ -117,6 +118,7 @@ mod internal {
     use crate::call_type::CallType;
     use crate::type_checker;
 
+    #[allow(clippy::result_large_err)]
     pub(crate) fn check_type_mismatch_in_function_call(
         call_type: &mut CallType,
         args: &mut [Expr],

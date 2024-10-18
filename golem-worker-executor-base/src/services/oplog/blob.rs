@@ -121,32 +121,46 @@ impl OplogArchiveService for BlobOplogArchiveService {
         _count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
         if cursor.cursor == 0 {
-            let paths = self.blob_storage
-                .with("blob_oplog", "scan_for_component")
-                .list_dir(
+            let blob_storage = self.blob_storage.with("blob_oplog", "scan_for_component");
+            let owned_worker_ids = if blob_storage.exists(
+                BlobStorageNamespace::CompressedOplog {
+                    account_id: account_id.clone(),
+                    component_id: component_id.clone(),
+                    level: self.level,
+                },
+                Path::new(""),
+            ).await.map_err(|err| {
+                GolemError::unknown(format!("Failed to check if compressed oplog root for component {component_id} exists in blob storage: {err}"))
+            })? == ExistsResult::Directory
+            {
+                let paths = blob_storage
+                    .list_dir(
                     BlobStorageNamespace::CompressedOplog {
-                        account_id: account_id.clone(),
-                        component_id: component_id.clone(),
-                        level: self.level,
-                    },
-                    Path::new(""),
-                ).await.map_err(|err| {
-                    GolemError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
-                })?;
+                    account_id: account_id.clone(),
+                    component_id: component_id.clone(),
+                    level: self.level,
+                },
+                Path::new(""),
+            ).await.map_err(|err| {
+                GolemError::unknown(format!("Failed to list entries of compressed oplog for component {component_id} in blob storage: {err}"))
+            })?;
 
-            let owned_worker_ids = paths
-                .into_iter()
-                .map(|path| {
-                    let worker_name = path.file_name().unwrap().to_str().unwrap();
-                    OwnedWorkerId {
-                        account_id: account_id.clone(),
-                        worker_id: WorkerId {
-                            component_id: component_id.clone(),
-                            worker_name: worker_name.to_string(),
-                        },
-                    }
-                })
-                .collect();
+                paths
+                    .into_iter()
+                    .map(|path| {
+                        let worker_name = path.file_name().unwrap().to_str().unwrap();
+                        OwnedWorkerId {
+                            account_id: account_id.clone(),
+                            worker_id: WorkerId {
+                                component_id: component_id.clone(),
+                                worker_name: worker_name.to_string(),
+                            },
+                        }
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
             Ok((
                 ScanCursor {
@@ -510,7 +524,9 @@ impl OplogArchive for BlobOplogArchive {
         }
 
         if entries.len() == 0 {
-            self.blob_storage
+            let mut created = self.created.write().await;
+            if *created {
+                self.blob_storage
                 .with("blob_oplog", "drop_prefix")
                 .delete_dir(BlobStorageNamespace::CompressedOplog {
                     account_id: self.owned_worker_id.account_id(),
@@ -523,6 +539,8 @@ impl OplogArchive for BlobOplogArchive {
                         self.owned_worker_id.worker_id
                     )
                 });
+                *created = false;
+            }
         }
     }
 

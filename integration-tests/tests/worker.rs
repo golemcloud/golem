@@ -1235,3 +1235,71 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         3
     );
 }
+
+#[test]
+#[tracing::instrument]
+#[timeout(600000)]
+async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_unique_component("counters").await;
+    let worker_id = deps
+        .start_worker(&component_id, "counters-recreation")
+        .await;
+
+    // Doing many requests, so parts of the oplog gets archived
+    for _ in 1..=5000 {
+        let _ = deps
+            .invoke_and_await(
+                &worker_id,
+                "rpc:counters/api.{counter(\"counter1\").inc-by}",
+                vec![Value::U64(1)],
+            )
+            .await;
+    }
+
+    let result1 = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    deps.delete_worker(&worker_id).await;
+
+    // Invoking again should create a new worker
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").inc-by}",
+            vec![Value::U64(1)],
+        )
+        .await;
+
+    let result2 = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+
+    deps.delete_worker(&worker_id).await;
+
+    // Also if we explicitly create a new one
+    let worker_id = deps
+        .start_worker(&component_id, "counters-recreation")
+        .await;
+    let result3 = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+
+    check!(result1 == Ok(vec![Value::U64(5000)]));
+    check!(result2 == Ok(vec![Value::U64(1)]));
+    check!(result3 == Ok(vec![Value::U64(0)]));
+}

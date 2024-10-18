@@ -325,7 +325,6 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("update_status");
 
         if component_type != ComponentType::Ephemeral {
-            debug!("Updating worker status to {status_value:?}");
             self.key_value_storage
                 .with_entity("worker", "update_status", "worker_status")
                 .set(

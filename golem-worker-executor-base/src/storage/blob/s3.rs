@@ -670,7 +670,7 @@ impl BlobStorage for S3BlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let bucket = self.bucket_of(&namespace);
         let key = self.prefix_of(&namespace).join(path);
 
@@ -687,35 +687,38 @@ impl BlobStorage for S3BlobStorage {
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let has_entries = !to_delete.is_empty();
 
-        with_retries_customized(
-            target_label,
-            op_label,
-            Some(format!("{bucket} - {key:?}")),
-            &self.config.retries,
-            &(self.client.clone(), bucket, to_delete),
-            |(client, bucket, to_delete)| {
-                Box::pin(async move {
-                    client
-                        .delete_objects()
-                        .bucket(*bucket)
-                        .delete(
-                            Delete::builder()
-                                .set_objects(Some(to_delete.clone()))
-                                .build()
-                                .expect("Could not build delete object"),
-                        )
-                        .send()
-                        .await
-                })
-            },
-            Self::is_delete_objects_error_retriable,
-            Self::as_loggable_generic,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+        if has_entries {
+            with_retries_customized(
+                target_label,
+                op_label,
+                Some(format!("{bucket} - {key:?}")),
+                &self.config.retries,
+                &(self.client.clone(), bucket, to_delete),
+                |(client, bucket, to_delete)| {
+                    Box::pin(async move {
+                        client
+                            .delete_objects()
+                            .bucket(*bucket)
+                            .delete(
+                                Delete::builder()
+                                    .set_objects(Some(to_delete.clone()))
+                                    .build()
+                                    .expect("Could not build delete object"),
+                            )
+                            .send()
+                            .await
+                    })
+                },
+                Self::is_delete_objects_error_retriable,
+                Self::as_loggable_generic,
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+        }
 
-        Ok(())
+        Ok(has_entries)
     }
 
     async fn exists(
