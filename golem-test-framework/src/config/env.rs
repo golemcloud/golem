@@ -122,6 +122,14 @@ impl EnvBasedTestDependenciesConfig {
             Level::DEBUG
         }
     }
+
+    pub fn redis_monitor_stdout_level(&self) -> Level {
+        Level::TRACE
+    }
+
+    pub fn redis_monitor_stderr_level(&self) -> Level {
+        Level::ERROR
+    }
 }
 
 impl Default for EnvBasedTestDependenciesConfig {
@@ -209,8 +217,8 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
         Arc::new(SpawnedRedisMonitor::new(
             redis,
-            config.default_stdout_level(),
-            config.default_stderr_level(),
+            config.redis_monitor_stdout_level(),
+            config.redis_monitor_stderr_level(),
         ))
     }
 

@@ -16,7 +16,7 @@ use std::cmp::min;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -499,11 +499,12 @@ impl MultiLayerOplog {
             primary_length: AtomicU64::new(initial_primary_length),
             close_fn: Some(close),
         });
+        let result_oplog: Arc<dyn Oplog + Send + Sync> = result.clone();
 
         result.set_background_transfer(tokio::spawn(
             Self::background_transfer(
                 owned_worker_id,
-                result.clone(),
+                Arc::downgrade(&result_oplog),
                 lower,
                 multi_layer_oplog_service,
                 rx,
@@ -520,7 +521,7 @@ impl MultiLayerOplog {
 
     async fn background_transfer(
         owned_worker_id: OwnedWorkerId,
-        primary: Arc<dyn Oplog + Send + Sync>,
+        primary: Weak<dyn Oplog + Send + Sync>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         multi_layer_oplog_service: MultiLayerOplogService,
         mut rx: UnboundedReceiver<BackgroundTransferMessage>,
@@ -537,21 +538,23 @@ impl MultiLayerOplog {
                     info!("Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer");
                     debug!("Reading entries from the primary oplog");
 
-                    let transfer = BackgroundTransferFromPrimary::new(
-                        owned_worker_id.clone(),
-                        last_transferred_idx,
-                        multi_layer_oplog_service.clone(),
-                        primary.clone(),
-                        lower.clone(),
-                    );
-                    let result = transfer.run().await;
-                    if let Err(error) = result {
-                        error!("Failed to transfer entries from the primary oplog: {error}");
-                    }
-                    let _ = keep_alive.take();
+                    if let Some(primary) = primary.upgrade() {
+                        let transfer = BackgroundTransferFromPrimary::new(
+                            owned_worker_id.clone(),
+                            last_transferred_idx,
+                            multi_layer_oplog_service.clone(),
+                            primary.clone(),
+                            lower.clone(),
+                        );
+                        let result = transfer.run().await;
+                        if let Err(error) = result {
+                            error!("Failed to transfer entries from the primary oplog: {error}");
+                        }
+                        let _ = keep_alive.take();
 
-                    if let Some(done) = done {
-                        done.send(()).unwrap()
+                        if let Some(done) = done {
+                            done.send(()).unwrap()
+                        }
                     }
                 }
                 TransferFromLower {

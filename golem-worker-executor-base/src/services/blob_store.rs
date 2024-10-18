@@ -218,7 +218,8 @@ impl BlobStoreService for DefaultBlobStoreService {
                 Path::new(&container_name),
             )
             .await
-            .map_err(|err| anyhow!(err))
+            .map_err(|err| anyhow!(err))?;
+        Ok(())
     }
 
     async fn delete_object(
