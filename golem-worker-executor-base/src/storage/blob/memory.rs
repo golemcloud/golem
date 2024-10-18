@@ -236,37 +236,35 @@ impl BlobStorage for InMemoryBlobStorage {
             .unwrap_or_default()
         {
             Ok(ExistsResult::Directory)
-        } else {
-            if path == Path::new("") {
-                if self.data.get(&namespace).is_some() {
-                    Ok(ExistsResult::Directory)
-                } else {
-                    Ok(ExistsResult::DoesNotExist)
-                }
+        } else if path == Path::new("") {
+            if self.data.get(&namespace).is_some() {
+                Ok(ExistsResult::Directory)
             } else {
-                let dir = path
-                    .parent()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                let key = path
-                    .file_name()
-                    .expect("Path must have a file name")
-                    .to_string_lossy()
-                    .to_string();
+                Ok(ExistsResult::DoesNotExist)
+            }
+        } else {
+            let dir = path
+                .parent()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let key = path
+                .file_name()
+                .expect("Path must have a file name")
+                .to_string_lossy()
+                .to_string();
 
-                if let Some(namespace_data) = self.data.get(&namespace) {
-                    if let Some(directory) = namespace_data.get(&dir) {
-                        if directory.contains_key(&key) {
-                            Ok(ExistsResult::File)
-                        } else {
-                            Ok(ExistsResult::DoesNotExist)
-                        }
+            if let Some(namespace_data) = self.data.get(&namespace) {
+                if let Some(directory) = namespace_data.get(&dir) {
+                    if directory.contains_key(&key) {
+                        Ok(ExistsResult::File)
                     } else {
                         Ok(ExistsResult::DoesNotExist)
                     }
                 } else {
                     Ok(ExistsResult::DoesNotExist)
                 }
+            } else {
+                Ok(ExistsResult::DoesNotExist)
             }
         }
     }
