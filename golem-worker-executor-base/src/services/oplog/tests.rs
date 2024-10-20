@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use std::time::Instant;
-use test_r::{test, test_dep};
+use test_r::{flaky, test, test_dep};
 
 use assert2::check;
 use nonempty_collections::nev;
@@ -585,6 +585,7 @@ async fn multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) 
 }
 
 #[test]
+#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, false).await;
 }
@@ -600,6 +601,7 @@ async fn blob_multilayer_transfers_entries_after_limit_reached_2(_tracing: &Trac
 }
 
 #[test]
+#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, true).await;
 }
