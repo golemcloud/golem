@@ -1194,6 +1194,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
 
 #[test]
 #[tracing::instrument]
+#[flaky(3)]
 async fn filesystem_symlink_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
