@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{inherit_test_dep, test};
+use test_r::{flaky, inherit_test_dep, test};
 
 use std::collections::HashMap;
 use std::env;
