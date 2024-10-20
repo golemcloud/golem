@@ -1240,6 +1240,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(600000)]
+#[ignore] // Temporarily disabled to check if it causes the timing out CI runs
 async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("counters").await;
     let worker_id = deps
