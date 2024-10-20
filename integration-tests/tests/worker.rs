@@ -962,7 +962,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("http-client-2").await;
+    let component_id = deps.store_unique_component("http-client-2").await;
     let host_http_port = 8585;
 
     let polling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -1081,12 +1081,12 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
     http_server.abort();
 
     check!(found_worker_ids.len() == workers_count);
-    check!(found_worker_ids.eq(&worker_ids));
+    check!(&found_worker_ids == &worker_ids);
 
     let found_worker_ids2 = get_worker_ids(values);
 
     check!(found_worker_ids2.len() == workers_count);
-    check!(found_worker_ids2.eq(&worker_ids));
+    check!(&found_worker_ids2 == &worker_ids);
 }
 
 #[test]
