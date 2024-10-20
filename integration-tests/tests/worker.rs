@@ -1123,6 +1123,7 @@ async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
 async fn auto_update_on_idle_via_host_function(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
