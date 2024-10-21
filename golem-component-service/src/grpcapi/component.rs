@@ -491,12 +491,11 @@ impl ComponentService for ComponentGrpcApi {
 
         match request.component_constraints {
             Some(proto_constraints) => {
-                let id: Result<ComponentId, ComponentError> = proto_constraints
+                let component_id = match proto_constraints
                     .component_id
                     .and_then(|id| id.try_into().ok())
-                    .ok_or_else(|| bad_request_error("Missing component id"));
-
-                let component_id = match id {
+                    .ok_or_else(|| bad_request_error("Missing component id"))
+                {
                     Ok(id) => id,
                     Err(fail) => {
                         return Ok(Response::new(CreateComponentConstraintsResponse {
