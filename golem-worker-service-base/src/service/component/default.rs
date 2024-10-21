@@ -1,19 +1,20 @@
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::AnalysedExport;
-use http::Uri;
-use tonic::codec::CompressionEncoding;
-use tonic::transport::Channel;
-use golem_api_grpc::proto::golem::component::{ComponentConstraints, FunctionConstraint};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
-    get_component_metadata_response, GetComponentMetadataResponse, GetLatestComponentRequest,
-    GetVersionedComponentRequest,
+    create_component_constraints_response, get_component_metadata_response,
+    CreateComponentConstraintsRequest, CreateComponentConstraintsResponse,
+    GetComponentMetadataResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
+use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
+use golem_common::model::function_constraint::FunctionConstraint;
 use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
+use http::Uri;
+use tonic::codec::CompressionEncoding;
+use tonic::transport::Channel;
 
 use crate::service::component::ComponentServiceError;
 use crate::service::with_metadata;
@@ -37,10 +38,11 @@ pub trait ComponentService<AuthCtx> {
     ) -> ComponentResult<Component>;
 
     async fn create_constraints(
+        &self,
         component_id: &ComponentId,
-        constraints: Vec<FunctionConstraint>,
+        constraints: &Vec<FunctionConstraint>,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<ComponentConstraints>;
+    ) -> ComponentResult<Vec<FunctionConstraint>>;
 }
 
 #[derive(Clone)]
@@ -95,6 +97,39 @@ impl RemoteComponentService {
                 Ok(component_view?)
             }
             Some(get_component_metadata_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    fn process_create_component_metadata_response(
+        response: CreateComponentConstraintsResponse,
+    ) -> Result<Vec<FunctionConstraint>, ComponentServiceError> {
+        match response.result {
+            None => Ok(vec![]),
+            Some(create_component_constraints_response::Result::Success(response)) => {
+                let constraints_view: Result<Vec<FunctionConstraint>, ComponentServiceError> =
+                    match response.components {
+                        Some(constraints) => {
+                            let result = constraints
+                                .constraints
+                                .iter()
+                                .map(|x| {
+                                    FunctionConstraint::try_from(x.clone()).map_err(|err| {
+                                        ComponentServiceError::Internal(format!(
+                                            "Response conversion error: {err}"
+                                        ))
+                                    })
+                                })
+                                .collect::<Result<_, _>>()?;
+
+                            Ok(result)
+                        }
+                        None => Err(ComponentServiceError::Internal(
+                            "Empty component response".to_string(),
+                        )),
+                    };
+                Ok(constraints_view?)
+            }
+            Some(create_component_constraints_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
@@ -180,6 +215,49 @@ where
             Self::is_retriable,
         )
         .await?;
+
+        Ok(value)
+    }
+
+    async fn create_constraints(
+        &self,
+        component_id: &ComponentId,
+        constraints: &Vec<FunctionConstraint>,
+        metadata: &AuthCtx,
+    ) -> ComponentResult<Vec<FunctionConstraint>> {
+        let value = with_retries(
+            "component",
+            "get_latest",
+            Some(component_id.to_string()),
+            &self.retry_config,
+            &(self.client.clone(), component_id.clone(), metadata.clone()),
+            |(client, id, metadata)| {
+                Box::pin(async move {
+                    let response = client
+                        .call(move |client| {
+                            let request = CreateComponentConstraintsRequest {
+                                project_id: None,
+                                component_constraints: Some(ComponentConstraints {
+                                    component_id: Some(golem_api_grpc::proto::golem::component::ComponentId::from(id.clone())),
+                                    constraints: constraints.iter().map(|function_constraint| {
+                                        golem_api_grpc::proto::golem::component::FunctionConstraint::from(function_constraint.clone())
+                                    }).collect()
+
+                                })
+                            };
+                            let request = with_metadata(request, metadata.clone());
+
+                            Box::pin(client.create_component_constraints(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    Self::process_create_component_metadata_response(response)
+                })
+            },
+            Self::is_retriable,
+        )
+            .await?;
 
         Ok(value)
     }

@@ -319,6 +319,7 @@ mod test {
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
+    use golem_common::model::function_constraint::FunctionConstraint;
 
     struct SqliteDb<'c> {
         db_path: String,
@@ -360,6 +361,10 @@ mod test {
             _component_id: &ComponentId,
             _auth_ctx: &EmptyAuthCtx,
         ) -> ComponentResult<Component> {
+            unimplemented!()
+        }
+
+        async fn create_constraints(&self, component_id: &ComponentId, constraints: Vec<FunctionConstraint>, auth_ctx: &EmptyAuthCtx) -> ComponentResult<Vec<FunctionConstraint>> {
             unimplemented!()
         }
     }
