@@ -25,7 +25,9 @@ use crate::preview2::golem::api1_1_0_rc1::host::{
     WorkerMetadata, WorkerNameFilter, WorkerPropertyFilter, WorkerStatus, WorkerStatusFilter,
     WorkerVersionFilter,
 };
-use crate::preview2::golem::api1_1_0_rc1::oplog::{Host as OplogHost, HostGetOplog, OplogEntry};
+use crate::preview2::golem::api1_1_0_rc1::oplog::{
+    Host as OplogHost, HostGetOplog, HostSearchOplog, OplogEntry, SearchOplog,
+};
 use crate::services::HasOplogService;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
@@ -250,6 +252,29 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     }
 }
 
+#[async_trait]
+impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
+    async fn new(
+        &mut self,
+        worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
+        text: String,
+        older_than: Option<golem::api1_1_0_rc1::oplog::OplogIndex>,
+    ) -> anyhow::Result<Resource<SearchOplog>> {
+        todo!()
+    }
+
+    async fn get_next(
+        &mut self,
+        self_: Resource<SearchOplog>,
+    ) -> anyhow::Result<Option<Vec<(golem::api1_1_0_rc1::oplog::OplogIndex, OplogEntry)>>> {
+        todo!()
+    }
+
+    fn drop(&mut self, rep: Resource<SearchOplog>) -> anyhow::Result<()> {
+        todo!()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GetOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
@@ -424,6 +449,29 @@ impl<Ctx: WorkerCtx> HostGetOplog for &mut DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<GetOplogEntry>) -> anyhow::Result<()> {
         HostGetOplog::drop(*self, rep)
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostSearchOplog for &mut DurableWorkerCtx<Ctx> {
+    async fn new(
+        &mut self,
+        worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
+        text: String,
+        older_than: Option<golem::api1_1_0_rc1::oplog::OplogIndex>,
+    ) -> anyhow::Result<Resource<SearchOplog>> {
+        HostSearchOplog::new(*self, worker_id, text, older_than).await
+    }
+
+    async fn get_next(
+        &mut self,
+        self_: Resource<SearchOplog>,
+    ) -> anyhow::Result<Option<Vec<(golem::api1_1_0_rc1::oplog::OplogIndex, OplogEntry)>>> {
+        HostSearchOplog::get_next(*self, self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<SearchOplog>) -> anyhow::Result<()> {
+        HostSearchOplog::drop(*self, rep)
     }
 }
 
