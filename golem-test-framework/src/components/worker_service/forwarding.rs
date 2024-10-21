@@ -55,11 +55,9 @@ impl ForwardingWorkerService {
 
     fn should_retry<R>(retry_count: &mut usize, result: &Result<R, tonic::Status>) -> bool {
         if let Err(status) = result {
-            if *retry_count > 0 {
-                if status.code() == tonic::Code::Unavailable {
-                    *retry_count -= 1;
-                    return true;
-                }
+            if *retry_count > 0 && status.code() == tonic::Code::Unavailable {
+                *retry_count -= 1;
+                return true;
             }
         }
         false
