@@ -28,6 +28,7 @@ skip_core_tasks = true       # we are not using the predefined cargo-make flows,
 
 [env]
 JUNIT_OPTS = ""
+AWS_EC2_METADATA_DISABLED = "true"
 
 [env.ci]
 CARGO_INCREMENTAL = "false"
