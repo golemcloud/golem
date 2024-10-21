@@ -264,7 +264,7 @@ cargo test --package golem-worker-executor-base --test integration :tag:group8 -
 [tasks.integration-tests]
 description = "Runs integration tests only"
 dependencies = ["build-bins"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "1" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package integration-tests --test integration -- --nocapture --report-time
 '''

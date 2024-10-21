@@ -3550,6 +3550,7 @@ dependencies = [
  "reqwest",
  "serde 1.0.210",
  "serde_json",
+ "test-r",
  "tracing",
  "uuid",
 ]
