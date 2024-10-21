@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{flaky, inherit_test_dep, test};
+use test_r::{inherit_test_dep, test};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -892,7 +892,6 @@ async fn file_service_write_direct(
 
 #[test]
 #[tracing::instrument]
-#[flaky(3)]
 async fn filesystem_write_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1194,7 +1193,6 @@ async fn filesystem_remove_dir_replay_restores_file_times(
 
 #[test]
 #[tracing::instrument]
-#[flaky(3)]
 async fn filesystem_symlink_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

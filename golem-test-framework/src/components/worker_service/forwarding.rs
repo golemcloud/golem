@@ -52,6 +52,20 @@ impl ForwardingWorkerService {
             component_service,
         }
     }
+
+    fn should_retry<R>(retry_count: &mut usize, result: &Result<R, tonic::Status>) -> bool {
+        if let Err(status) = result {
+            if *retry_count > 0 {
+                if status.code() == tonic::Code::Unavailable {
+                    *retry_count -= 1;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    const RETRY_COUNT: usize = 5;
 }
 
 #[async_trait]
@@ -81,28 +95,39 @@ impl WorkerService for ForwardingWorkerService {
             .component_service
             .get_latest_version(&component_id)
             .await;
-        let response = self
-            .worker_executor
-            .client()
-            .await?
-            .create_worker(CreateWorkerRequest {
-                worker_id: Some(worker_id.clone()),
-                component_version: latest_component_version,
-                args: request.args,
-                env: request.env,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-                account_limits: Some(ResourceLimits {
-                    available_fuel: i64::MAX,
-                    max_memory_per_worker: i64::MAX,
-                }),
-            })
-            .await?
-            .into_inner();
+
+        let mut retry_count = Self::RETRY_COUNT;
+        let response = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .create_worker(CreateWorkerRequest {
+                    worker_id: Some(worker_id.clone()),
+                    component_version: latest_component_version,
+                    args: request.args.clone(),
+                    env: request.env.clone(),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                    account_limits: Some(ResourceLimits {
+                        available_fuel: i64::MAX,
+                        max_memory_per_worker: i64::MAX,
+                    }),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let response = response?.into_inner();
 
         match response.result {
             None => Err(anyhow!(
@@ -134,21 +159,31 @@ impl WorkerService for ForwardingWorkerService {
         &self,
         request: DeleteWorkerRequest,
     ) -> crate::Result<DeleteWorkerResponse> {
-        let result = self
-            .worker_executor
-            .client()
-            .await?
-            .delete_worker(workerexecutor::v1::DeleteWorkerRequest {
-                worker_id: request.worker_id,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-            })
-            .await?
-            .into_inner();
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .delete_worker(workerexecutor::v1::DeleteWorkerRequest {
+                    worker_id: request.worker_id.clone(),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
 
         match result.result {
             None => Err(anyhow!(
@@ -177,21 +212,36 @@ impl WorkerService for ForwardingWorkerService {
         &self,
         request: GetWorkerMetadataRequest,
     ) -> crate::Result<GetWorkerMetadataResponse> {
-        let result = self
-            .worker_executor
-            .client()
-            .await?
-            .get_worker_metadata(workerexecutor::v1::GetWorkerMetadataRequest {
-                worker_id: Some(request.worker_id.ok_or(anyhow!("Worker ID is required"))?),
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-            })
-            .await?
-            .into_inner();
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .get_worker_metadata(workerexecutor::v1::GetWorkerMetadataRequest {
+                    worker_id: Some(
+                        request
+                            .worker_id
+                            .clone()
+                            .ok_or(anyhow!("Worker ID is required"))?,
+                    ),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
 
         match result.result {
             None => Err(anyhow!(
@@ -217,32 +267,43 @@ impl WorkerService for ForwardingWorkerService {
     }
 
     async fn invoke(&self, request: InvokeRequest) -> crate::Result<InvokeResponse> {
-        let result = self
-            .worker_executor
-            .client()
-            .await?
-            .invoke_worker(workerexecutor::v1::InvokeWorkerRequest {
-                worker_id: request.worker_id,
-                idempotency_key: request.idempotency_key,
-                name: request.function,
-                input: request
-                    .invoke_parameters
-                    .map(|p| p.params.clone())
-                    .unwrap_or_default(),
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-                account_limits: Some(ResourceLimits {
-                    available_fuel: i64::MAX,
-                    max_memory_per_worker: i64::MAX,
-                }),
-                context: request.context,
-            })
-            .await?
-            .into_inner();
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .invoke_worker(workerexecutor::v1::InvokeWorkerRequest {
+                    worker_id: request.worker_id.clone(),
+                    idempotency_key: request.idempotency_key.clone(),
+                    name: request.function.clone(),
+                    input: request
+                        .invoke_parameters
+                        .clone()
+                        .map(|p| p.params.clone())
+                        .unwrap_or_default(),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                    account_limits: Some(ResourceLimits {
+                        available_fuel: i64::MAX,
+                        max_memory_per_worker: i64::MAX,
+                    }),
+                    context: request.context.clone(),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
 
         match result.result {
             None => Err(anyhow!(
@@ -271,32 +332,43 @@ impl WorkerService for ForwardingWorkerService {
         &self,
         request: InvokeAndAwaitRequest,
     ) -> crate::Result<InvokeAndAwaitResponse> {
-        let result = self
-            .worker_executor
-            .client()
-            .await?
-            .invoke_and_await_worker(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-                worker_id: request.worker_id,
-                idempotency_key: request.idempotency_key,
-                name: request.function,
-                input: request
-                    .invoke_parameters
-                    .map(|p| p.params.clone())
-                    .unwrap_or_default(),
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-                account_limits: Some(ResourceLimits {
-                    available_fuel: i64::MAX,
-                    max_memory_per_worker: i64::MAX,
-                }),
-                context: request.context,
-            })
-            .await?
-            .into_inner();
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .invoke_and_await_worker(workerexecutor::v1::InvokeAndAwaitWorkerRequest {
+                    worker_id: request.worker_id.clone(),
+                    idempotency_key: request.idempotency_key.clone(),
+                    name: request.function.clone(),
+                    input: request
+                        .invoke_parameters
+                        .clone()
+                        .map(|p| p.params.clone())
+                        .unwrap_or_default(),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                    account_limits: Some(ResourceLimits {
+                        available_fuel: i64::MAX,
+                        max_memory_per_worker: i64::MAX,
+                    }),
+                    context: request.context.clone(),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
 
         match result.result {
             None => Err(anyhow!(
@@ -334,46 +406,68 @@ impl WorkerService for ForwardingWorkerService {
         &self,
         request: ConnectWorkerRequest,
     ) -> crate::Result<Streaming<LogEvent>> {
-        Ok(self
-            .worker_executor
-            .client()
-            .await?
-            .connect_worker(workerexecutor::v1::ConnectWorkerRequest {
-                worker_id: request.worker_id,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-                account_limits: Some(ResourceLimits {
-                    available_fuel: i64::MAX,
-                    max_memory_per_worker: i64::MAX,
-                }),
-            })
-            .await?
-            .into_inner())
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .connect_worker(workerexecutor::v1::ConnectWorkerRequest {
+                    worker_id: request.worker_id.clone(),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                    account_limits: Some(ResourceLimits {
+                        available_fuel: i64::MAX,
+                        max_memory_per_worker: i64::MAX,
+                    }),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
+
+        Ok(result)
     }
 
     async fn resume_worker(
         &self,
         request: ResumeWorkerRequest,
     ) -> crate::Result<ResumeWorkerResponse> {
-        let result = self
-            .worker_executor
-            .client()
-            .await?
-            .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
-                worker_id: request.worker_id,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-            })
-            .await?
-            .into_inner();
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .resume_worker(workerexecutor::v1::ResumeWorkerRequest {
+                    worker_id: request.worker_id.clone(),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
 
         match result.result {
             None => Err(anyhow!(
@@ -402,22 +496,32 @@ impl WorkerService for ForwardingWorkerService {
         &self,
         request: InterruptWorkerRequest,
     ) -> crate::Result<InterruptWorkerResponse> {
-        let result = self
-            .worker_executor
-            .client()
-            .await?
-            .interrupt_worker(workerexecutor::v1::InterruptWorkerRequest {
-                worker_id: request.worker_id,
-                recover_immediately: request.recover_immediately,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-            })
-            .await?
-            .into_inner();
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .interrupt_worker(workerexecutor::v1::InterruptWorkerRequest {
+                    worker_id: request.worker_id.clone(),
+                    recover_immediately: request.recover_immediately,
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
 
         match result.result {
             None => Err(anyhow!(
@@ -446,23 +550,33 @@ impl WorkerService for ForwardingWorkerService {
         &self,
         request: UpdateWorkerRequest,
     ) -> crate::Result<UpdateWorkerResponse> {
-        let result = self
-            .worker_executor
-            .client()
-            .await?
-            .update_worker(workerexecutor::v1::UpdateWorkerRequest {
-                worker_id: request.worker_id,
-                target_version: request.target_version,
-                mode: request.mode,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-            })
-            .await?
-            .into_inner();
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .update_worker(workerexecutor::v1::UpdateWorkerRequest {
+                    worker_id: request.worker_id.clone(),
+                    target_version: request.target_version,
+                    mode: request.mode,
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
 
         match result.result {
             None => Err(anyhow!(
@@ -488,24 +602,34 @@ impl WorkerService for ForwardingWorkerService {
     }
 
     async fn get_oplog(&self, request: GetOplogRequest) -> crate::Result<GetOplogResponse> {
-        let result = self
-            .worker_executor
-            .client()
-            .await?
-            .get_oplog(workerexecutor::v1::GetOplogRequest {
-                worker_id: request.worker_id,
-                account_id: Some(
-                    AccountId {
-                        value: "test-account".to_string(),
-                    }
-                    .into(),
-                ),
-                from_oplog_index: request.from_oplog_index,
-                cursor: request.cursor,
-                count: request.count,
-            })
-            .await?
-            .into_inner();
+        let mut retry_count = Self::RETRY_COUNT;
+        let result = loop {
+            let result = self
+                .worker_executor
+                .client()
+                .await?
+                .get_oplog(workerexecutor::v1::GetOplogRequest {
+                    worker_id: request.worker_id.clone(),
+                    account_id: Some(
+                        AccountId {
+                            value: "test-account".to_string(),
+                        }
+                        .into(),
+                    ),
+                    from_oplog_index: request.from_oplog_index,
+                    cursor: request.cursor.clone(),
+                    count: request.count,
+                })
+                .await;
+
+            if Self::should_retry(&mut retry_count, &result) {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
+            } else {
+                break result;
+            }
+        };
+        let result = result?.into_inner();
 
         match result.result {
             None => Err(anyhow!(
