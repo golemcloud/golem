@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/component/component_id.proto";
+import "golem/component/function_constraints.proto";
+
+message ComponentConstraints {
+  ComponentId component_id = 1;
+  repeated FunctionConstraint constraints = 2;
+}

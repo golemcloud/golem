@@ -72,7 +72,7 @@ impl ComponentGrpcApi {
             .component_service
             .get(&id, &DefaultNamespace::default())
             .await?;
-        Ok(result.into_iter().map(|p| p.into()).collect())
+        Ok(result.into_iter().map(|p| Component::from(p)).collect())
     }
 
     async fn get_component_metadata(
