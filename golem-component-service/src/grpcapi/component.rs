@@ -20,17 +20,32 @@ use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService;
-use golem_api_grpc::proto::golem::component::v1::{component_error, create_component_constraints_response, create_component_request, create_component_response, download_component_response, get_component_metadata_all_versions_response, get_component_metadata_response, get_components_response, update_component_request, update_component_response, ComponentError, CreateComponentConstraintsRequest, CreateComponentConstraintsResponse, CreateComponentConstraintsSuccessResponse, CreateComponentRequest, CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentRequest, DownloadComponentResponse, GetComponentMetadataAllVersionsResponse, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest, GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse, GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest, UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse};
-use golem_api_grpc::proto::golem::component::{Component, ComponentConstraints, FunctionConstraint};
+use golem_api_grpc::proto::golem::component::v1::{
+    component_error, create_component_constraints_response, create_component_request,
+    create_component_response, download_component_response,
+    get_component_metadata_all_versions_response, get_component_metadata_response,
+    get_components_response, update_component_request, update_component_response, ComponentError,
+    CreateComponentConstraintsRequest, CreateComponentConstraintsResponse,
+    CreateComponentConstraintsSuccessResponse, CreateComponentRequest,
+    CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentRequest,
+    DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
+    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest,
+    GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse,
+    GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
+    UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
+};
+use golem_api_grpc::proto::golem::component::{
+    Component, ComponentConstraints, FunctionConstraint,
+};
 use golem_common::grpc::proto_component_id_string;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
+use golem_component_service_base::model::ComponentConstraint;
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::stream::ByteStream;
 use tonic::{Request, Response, Status, Streaming};
-use golem_component_service_base::model::ComponentConstraint;
 
 fn bad_request_error(error: &str) -> ComponentError {
     ComponentError {
@@ -188,18 +203,19 @@ impl ComponentGrpcApi {
     ) -> Result<ComponentConstraints, ComponentError> {
         let response = self
             .component_service
-            .create_constraint(
-                &component_constraint
-            )
-            .await.map(|v| {
-            ComponentConstraints {
+            .create_constraint(&component_constraint)
+            .await
+            .map(|v| ComponentConstraints {
                 component_id: Some(v.component_id.into()),
-                constraints: v.constraints.constraints.iter().map(|x| FunctionConstraint::from(x.clone())).collect()
-            }
-        })?;
+                constraints: v
+                    .constraints
+                    .constraints
+                    .iter()
+                    .map(|x| FunctionConstraint::from(x.clone()))
+                    .collect(),
+            })?;
 
         Ok(response)
-
     }
 }
 
@@ -466,12 +482,12 @@ impl ComponentService for ComponentGrpcApi {
         }))
     }
 
-    async fn create_component_constraints(&self, request: Request<CreateComponentConstraintsRequest>) -> Result<Response<CreateComponentConstraintsResponse>, Status> {
-
+    async fn create_component_constraints(
+        &self,
+        request: Request<CreateComponentConstraintsRequest>,
+    ) -> Result<Response<CreateComponentConstraintsResponse>, Status> {
         let request = request.into_inner();
-        let record = recorded_grpc_api_request!(
-            "create_component_constraints",
-        );
+        let record = recorded_grpc_api_request!("create_component_constraints",);
 
         match request.component_constraints {
             Some(proto_constraints) => {
@@ -484,7 +500,10 @@ impl ComponentService for ComponentGrpcApi {
                     Ok(id) => id,
                     Err(fail) => {
                         return Ok(Response::new(CreateComponentConstraintsResponse {
-                            result: Some(record.fail(create_component_constraints_response::Result::Error(fail.clone()), &ComponentTraceErrorKind(&fail))),
+                            result: Some(record.fail(
+                                create_component_constraints_response::Result::Error(fail.clone()),
+                                &ComponentTraceErrorKind(&fail),
+                            )),
                         }))
                     }
                 };
@@ -492,16 +511,21 @@ impl ComponentService for ComponentGrpcApi {
                 let mut constraints = vec![];
 
                 for proto_constraint in proto_constraints.constraints {
-                   let result =
-                       golem_component_service_base::model::FunctionConstraint::try_from(proto_constraint.clone()).map_err(|err| bad_request_error(err.as_str()));
+                    let result = golem_component_service_base::model::FunctionConstraint::try_from(
+                        proto_constraint.clone(),
+                    )
+                    .map_err(|err| bad_request_error(err.as_str()));
 
                     match result {
-                        Ok(constraint) => {
-                            constraints.push(constraint)
-                        }
+                        Ok(constraint) => constraints.push(constraint),
                         Err(fail) => {
                             return Ok(Response::new(CreateComponentConstraintsResponse {
-                                result: Some(record.fail(create_component_constraints_response::Result::Error(fail.clone()), &ComponentTraceErrorKind(&fail))),
+                                result: Some(record.fail(
+                                    create_component_constraints_response::Result::Error(
+                                        fail.clone(),
+                                    ),
+                                    &ComponentTraceErrorKind(&fail),
+                                )),
                             }))
                         }
                     }
@@ -511,21 +535,22 @@ impl ComponentService for ComponentGrpcApi {
                     namespace: DefaultNamespace::default(),
                     component_id,
                     constraints: golem_component_service_base::model::FunctionConstraints {
-                        constraints: constraints
-                    }
+                        constraints: constraints,
+                    },
                 };
 
                 let response = match self
-                    .create_component_constraints(
-                        &component_constraint
-                    )
+                    .create_component_constraints(&component_constraint)
+                    .instrument(record.span.clone())
                     .await
                 {
                     Ok(v) => {
-                        record.succeed(create_component_constraints_response::Result::Success(CreateComponentConstraintsSuccessResponse {
-                            components: Some(v)
-                        }))
-                    },
+                        record.succeed(create_component_constraints_response::Result::Success(
+                            CreateComponentConstraintsSuccessResponse {
+                                components: Some(v),
+                            },
+                        ))
+                    }
                     Err(error) => record.fail(
                         create_component_constraints_response::Result::Error(error.clone()),
                         &ComponentTraceErrorKind(&error),
@@ -537,14 +562,16 @@ impl ComponentService for ComponentGrpcApi {
                 }))
             }
 
-            None =>  {
+            None => {
                 let bad_request = bad_request_error("Missing component constraints");
-                let error = record.fail(create_component_constraints_response::Result::Error(bad_request.clone()), &ComponentTraceErrorKind(&bad_request));
+                let error = record.fail(
+                    create_component_constraints_response::Result::Error(bad_request.clone()),
+                    &ComponentTraceErrorKind(&bad_request),
+                );
                 Ok(Response::new(CreateComponentConstraintsResponse {
                     result: Some(error),
                 }))
             }
         }
-
     }
 }
