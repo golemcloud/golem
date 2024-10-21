@@ -5,7 +5,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use rib::ParsedFunctionName;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
-use tonic::codegen::Body;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component<Namespace> {

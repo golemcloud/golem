@@ -16,7 +16,7 @@ use std::fmt::{Debug, Display};
 use std::num::TryFromIntError;
 use std::sync::Arc;
 
-use crate::model::{Component, ComponentConstraint, FunctionConstraint};
+use crate::model::{Component, ComponentConstraint};
 use crate::repo::component::{ComponentConstraintRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
