@@ -47,7 +47,8 @@ jobs:
           echo "PLATFORM_PAIR=${platform//\//-}" >> $GITHUB_ENV
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.platform.target }}
-      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall cargo-make
       - name: Install Rust Target
         run: rustup target add ${{ matrix.platform.target }}
       - name: Install Protoc
@@ -225,7 +226,8 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: true
-      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -264,7 +266,8 @@ jobs:
         with:
           shared-key: debug-workertests
           cache-all-crates: true
-      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -314,7 +317,8 @@ jobs:
           shared-key: debug-workertests
           cache-all-crates: true
           save-if: false
-      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -351,7 +355,8 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -390,7 +395,8 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -429,7 +435,8 @@ jobs:
           shared-key: debug
           cache-all-crates: true
           save-if: false
-      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -476,7 +483,8 @@ jobs:
         with:
           shared-key: release
           cache-all-crates: true
-      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -529,7 +537,8 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.rust-target }}
-      - uses: davidB/rust-cargo-make@v1
+      - uses: cargo-bins/cargo-binstall@main
+      - run: cargo binstall cargo-make
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
         with:
