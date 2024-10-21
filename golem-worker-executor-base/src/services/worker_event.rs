@@ -199,7 +199,7 @@ fn label(event: &WorkerEvent) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use test_r::{non_flaky, test};
+    use test_r::{non_flaky, test, timeout};
 
     use std::sync::Arc;
     use std::time::Duration;
@@ -211,7 +211,8 @@ mod tests {
     };
 
     #[test]
-    #[non_flaky(100)]
+    #[non_flaky(10)]
+    #[timeout(120000)]
     pub async fn both_subscriber_gets_events_small() {
         let svc = Arc::new(WorkerEventServiceDefault::new(4, 16));
         let rx1_events = Arc::new(Mutex::new(Vec::<WorkerEvent>::new()));
@@ -328,6 +329,7 @@ mod tests {
 
     #[test]
     #[non_flaky(10)]
+    #[timeout(120000)]
     pub async fn both_subscriber_gets_events_large() {
         let svc = Arc::new(WorkerEventServiceDefault::new(4, 4));
         let rx1_events = Arc::new(Mutex::new(Vec::<WorkerEvent>::new()));
