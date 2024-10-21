@@ -27,6 +27,8 @@ pub use type_push_down::*;
 pub use type_reset::*;
 pub use type_unification::*;
 pub use variant_resolution::*;
+pub use inferred_expr::*;
+pub use function_calls::*;
 
 mod call_arguments_inference;
 mod expr_visitor;
@@ -45,6 +47,8 @@ mod global_input_inference;
 mod inference_fix_point;
 pub(crate) mod kind;
 mod type_binding;
+mod inferred_expr;
+mod function_calls;
 
 #[cfg(test)]
 mod type_inference_tests {

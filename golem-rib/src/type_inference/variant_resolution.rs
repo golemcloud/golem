@@ -19,6 +19,8 @@ pub fn infer_variants(expr: &mut Expr, function_type_registry: &FunctionTypeRegi
     let variants = get_variants_info(expr, function_type_registry);
 
     internal::convert_identifiers_to_no_arg_variant_calls(expr, &variants);
+
+    // Initially every call type is dynamic-parsed function name
     internal::convert_function_calls_to_variant_calls(expr, &variants);
 }
 

@@ -16,15 +16,17 @@ pub use byte_code::*;
 use golem_wasm_ast::analysis::AnalysedExport;
 pub use ir::*;
 pub use type_with_unit::*;
+pub use inferred_expr::*;
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, RibInputTypeInfo};
+use crate::{Expr, InferredExpr, RibInputTypeInfo};
 use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
 
 mod byte_code;
 mod desugar;
 mod ir;
 mod type_with_unit;
+mod inferred_expr;
 
 pub fn compile(
     expr: &Expr,
@@ -42,13 +44,10 @@ pub fn compile_with_limited_globals(
     allowed_global_variables: Option<Vec<String>>,
 ) -> Result<CompilerOutput, String> {
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
-    let mut expr_cloned = expr.clone();
-    expr_cloned
-        .infer_types(&type_registry)
-        .map_err(|e| e.join("\n"))?;
+    let inferred_expr = InferredExpr::from_expr(expr, &type_registry)?;
 
     let global_input_type_info =
-        RibInputTypeInfo::from_expr(&mut expr_cloned).map_err(|e| format!("Error: {}", e))?;
+        RibInputTypeInfo::from_expr(&inferred_expr.0).map_err(|e| format!("Error: {}", e))?;
 
     if let Some(allowed_global_variables) = &allowed_global_variables {
         let mut un_allowed_variables = vec![];
@@ -68,9 +67,11 @@ pub fn compile_with_limited_globals(
         }
     }
 
-    let byte_code = RibByteCode::from_expr(expr_cloned)?;
+    let byte_code =
+        RibByteCode::from_expr(inferred_expr.0.clone())?;
 
     Ok(CompilerOutput {
+        fully_inferred_expr,
         byte_code,
         global_input_type_info,
     })
@@ -78,6 +79,7 @@ pub fn compile_with_limited_globals(
 
 #[derive(Debug, Clone)]
 pub struct CompilerOutput {
+    pub function_calls: FunctionCalls,
     pub byte_code: RibByteCode,
     pub global_input_type_info: RibInputTypeInfo,
 }
@@ -92,6 +94,7 @@ impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
         let byte_code = RibByteCode::try_from(proto_byte_code)?;
 
         Ok(CompilerOutput {
+            fully_inferred_expr,
             byte_code,
             global_input_type_info: rib_input,
         })
