@@ -24,7 +24,7 @@ use poem::error::ReadBodyError;
 use poem::Body;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
-use poem_openapi::types::multipart::Upload;
+use poem_openapi::types::multipart::{JsonField, Upload};
 use poem_openapi::*;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -67,6 +67,13 @@ pub struct UploadPayload {
     name: ComponentName,
     component_type: Option<ComponentType>,
     component: Upload,
+    initial_files: Option<JsonField<Vec<InitialFile>>>,
+}
+
+#[derive(Multipart)]
+pub struct UpdateMultipartPayload {
+    component: Upload,
+    initial_files: Option<JsonField<Vec<InitialFile>>>,
 }
 
 type Result<T> = std::result::Result<T, ComponentError>;
@@ -142,6 +149,10 @@ impl ComponentApi {
         let response = {
             let data = payload.component.into_vec().await?;
             let component_name = payload.name;
+            let initial_files = payload.initial_files.map_or(
+                Vec::new(),
+                |initial_files_json| initial_files_json.0
+            );
             self.component_service
                 .create(
                     &ComponentId::new_v4(),
@@ -149,6 +160,7 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     &DefaultNamespace::default(),
+                    initial_files
                 )
                 .instrument(record.span.clone())
                 .await
@@ -167,7 +179,7 @@ impl ComponentApi {
     async fn update_component(
         &self,
         component_id: Path<ComponentId>,
-        wasm: Binary<Body>,
+        payload: UpdateMultipartPayload,
 
         /// Type of the new version of the component - if not specified, the type of the previous version
         /// is used.
@@ -178,13 +190,18 @@ impl ComponentApi {
             component_id = component_id.0.to_string()
         );
         let response = {
-            let data = wasm.0.into_vec().await?;
+            let data = payload.component.into_vec().await?;
+            let initial_files = payload.initial_files.map_or(
+                Vec::new(),
+                |initial_files_json| initial_files_json.0
+            );
             self.component_service
                 .update(
                     &component_id.0,
                     data,
                     component_type.0,
                     &DefaultNamespace::default(),
+                    initial_files
                 )
                 .instrument(record.span.clone())
                 .await

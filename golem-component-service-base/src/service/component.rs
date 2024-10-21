@@ -14,6 +14,7 @@
 
 use std::fmt::{Debug, Display};
 use std::num::TryFromIntError;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::model::Component;
@@ -25,7 +26,7 @@ use chrono::Utc;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::{ComponentName, InitialFile, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
@@ -123,6 +124,7 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
+        initial_files: Vec<InitialFile>
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
@@ -131,6 +133,7 @@ pub trait ComponentService<Namespace> {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
+        initial_files: Vec<InitialFile>
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
@@ -229,6 +232,7 @@ where
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
+        initial_files: Vec<InitialFile>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Create component");
 
@@ -251,6 +255,26 @@ where
             self.upload_protected_component(&component.versioned_component_id, data)
         )?;
 
+        let mut initial_file_records = Vec::new();
+        for initial_file in initial_files {
+            let file_path_buf = PathBuf::from(&initial_file.file_path).canonicalize().map_err(|e| {
+                ComponentError::component_store_error("File path error", anyhow::Error::from(e))
+            })?;
+            let blob_storage_id = self.upload_initial_file(
+                &component.versioned_component_id,
+                file_path_buf.as_path(),
+                initial_file.file_content,
+            ).await?;
+
+            initial_file_records.push(crate::model::InitialFile {
+                versioned_component_id: component.versioned_component_id.clone(),
+                file_path: file_path_buf,
+                file_permission: initial_file.file_permission,
+                created_at: Utc::now(),
+                blob_storage_id,
+            }.into());
+        }
+
         let record = component
             .clone()
             .try_into()
@@ -265,6 +289,10 @@ where
             .enqueue_compilation(component_id, component.versioned_component_id.version)
             .await;
 
+        self.component_repo.upload_initial_file(initial_file_records)
+            .await
+            .map_err(ComponentError::from)?;
+
         Ok(component)
     }
 
@@ -274,6 +302,7 @@ where
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
+        initial_files: Vec<InitialFile>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
         let created_at = Utc::now();
@@ -303,6 +332,26 @@ where
             self.upload_protected_component(&next_component.versioned_component_id, data)
         )?;
 
+        let mut initial_file_records = Vec::new();
+        for initial_file in initial_files {
+            let file_path_buf = PathBuf::from(&initial_file.file_path).canonicalize().map_err(|e| {
+                ComponentError::component_store_error("File path error", anyhow::Error::from(e))
+            })?;
+            let blob_storage_id = self.upload_initial_file(
+                &next_component.versioned_component_id,
+                file_path_buf.as_path(),
+                initial_file.file_content,
+            ).await?;
+
+            initial_file_records.push(crate::model::InitialFile {
+                versioned_component_id: next_component.versioned_component_id.clone(),
+                file_path: file_path_buf,
+                file_permission: initial_file.file_permission,
+                created_at: Utc::now(),
+                blob_storage_id,
+            }.into());
+        }
+
         let component = Component {
             component_size,
             metadata,
@@ -320,6 +369,10 @@ where
         self.component_compilation
             .enqueue_compilation(component_id, component.versioned_component_id.version)
             .await;
+
+        self.component_repo.upload_initial_file(initial_file_records)
+            .await
+            .map_err(ComponentError::from)?;
 
         Ok(component)
     }
@@ -569,6 +622,11 @@ impl ComponentServiceDefault {
         format!("{id}:protected")
     }
 
+    fn get_initial_file_store_key(&self, id: &VersionedComponentId, file_path: &Path) -> String {
+        let file_path_string = file_path.to_string_lossy().to_string();
+        format!("{id}:files{file_path_string}")
+    }
+
     async fn upload_user_component(
         &self,
         user_component_id: &VersionedComponentId,
@@ -596,6 +654,25 @@ impl ComponentServiceDefault {
             .map_err(|e| {
                 ComponentError::component_store_error("Failed to upload protected component", e)
             })
+    }
+
+    async fn upload_initial_file(
+        &self,
+        protected_component_id: &VersionedComponentId,
+        file_path: &Path,
+        data: Vec<u8>,
+    ) -> Result<String, ComponentError> {
+        let file_storage_key = self.get_initial_file_store_key(protected_component_id, file_path);
+        self.object_store
+            .put(
+                &file_storage_key,
+                data,
+            )
+            .await
+            .map_err(|e| {
+                ComponentError::component_store_error("Failed to upload component's initial file", e)
+            })?;
+        Ok(file_storage_key)
     }
 
     async fn get_versioned_component_id<Namespace: Display + Clone>(

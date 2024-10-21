@@ -94,6 +94,16 @@ where
     }
 }
 
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct InitialFileRecord {
+    pub component_id: Uuid,
+    pub version: i64,
+    pub file_path: String,
+    pub file_permission: i32,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub blob_storage_id: String
+}
+
 #[async_trait]
 pub trait ComponentRepo {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
@@ -124,6 +134,11 @@ pub trait ComponentRepo {
     async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError>;
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError>;
+
+    async fn upload_initial_file(
+        &self,
+        initial_file_records: Vec<InitialFileRecord>
+    ) -> Result<(), RepoError>;
 }
 
 pub struct DbComponentRepo<DB: Database> {
@@ -226,6 +241,11 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
         let result = self.repo.delete(namespace, component_id).await;
         Self::logged_with_id("delete", component_id, result)
+    }
+
+    async fn upload_initial_file(&self, initial_file_records: Vec<InitialFileRecord>) -> Result<(), RepoError> {
+        let result = self.repo.upload_initial_file(initial_file_records).await;
+        Self::logged("upload_initial_file", result)
     }
 }
 
@@ -569,6 +589,32 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             .await?;
 
         transaction.commit().await?;
+        Ok(())
+    }
+
+    async fn upload_initial_file(&self, initial_file_records: Vec<InitialFileRecord>) -> Result<(), RepoError> {
+        let mut transaction = self.db_pool.begin().await?;
+        for initial_file_record in initial_file_records {
+            sqlx::query(
+                r#"
+                  INSERT INTO component_initial_files
+                    (component_id, version, file_path, file_permission, created_at, blob_storage_id)
+                  VALUES
+                    ($1, $2, $3, $4, $5, $6)
+                   "#,
+            )
+                .bind(initial_file_record.component_id)
+                .bind(initial_file_record.version)
+                .bind(initial_file_record.file_path)
+                .bind(initial_file_record.file_permission)
+                .bind(initial_file_record.created_at)
+                .bind(initial_file_record.blob_storage_id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+
+        transaction.commit().await?;
+
         Ok(())
     }
 }

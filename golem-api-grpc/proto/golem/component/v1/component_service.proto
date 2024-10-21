@@ -39,6 +39,8 @@ message CreateComponentRequest {
   oneof data {
     CreateComponentRequestHeader header = 1;
     CreateComponentRequestChunk chunk = 2;
+    CreateComponentRequestInitialFileHeader fileHeader = 3;
+    CreateComponentRequestInitialFileChunk fileChunk = 4;
   }
 }
 
@@ -50,6 +52,16 @@ message CreateComponentRequestHeader {
 
 message CreateComponentRequestChunk {
   bytes componentChunk = 1;
+}
+
+message CreateComponentRequestInitialFileHeader {
+  string filePath = 1;
+  int32 filePermission = 2;
+}
+
+message CreateComponentRequestInitialFileChunk {
+  string filePath = 1;
+  bytes fileChunk = 2;
 }
 
 message CreateComponentResponse {
@@ -110,6 +122,8 @@ message UpdateComponentRequest {
   oneof data {
     UpdateComponentRequestHeader header = 1;
     UpdateComponentRequestChunk chunk = 2;
+    UpdateComponentRequestInitialFileHeader fileHeader = 3;
+    UpdateComponentRequestInitialFileChunk fileChunk = 4;
   }
 }
 
@@ -120,6 +134,16 @@ message UpdateComponentRequestHeader {
 
 message UpdateComponentRequestChunk {
   bytes componentChunk = 1;
+}
+
+message UpdateComponentRequestInitialFileHeader {
+  string filePath = 1;
+  int32 filePermission = 2;
+}
+
+message UpdateComponentRequestInitialFileChunk {
+  string filePath = 1;
+  bytes fileChunk = 2;
 }
 
 message UpdateComponentResponse {

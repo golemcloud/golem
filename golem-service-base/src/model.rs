@@ -1682,3 +1682,36 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
+pub enum InitialFilePermission {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl From<InitialFilePermission> for i32 {
+    fn from(permission: InitialFilePermission) -> Self {
+        match permission {
+            InitialFilePermission::ReadOnly => 0,
+            InitialFilePermission::ReadWrite => 1,
+        }
+    }
+}
+
+impl TryFrom<i32> for InitialFilePermission {
+    type Error = String;
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::ReadOnly),
+            1 => Ok(Self::ReadWrite),
+            _ => Err(format!("Invalid permission: {}", value)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct InitialFile {
+    pub file_path: String,
+    pub file_permission: InitialFilePermission,
+    pub file_content: Vec<u8>
+}

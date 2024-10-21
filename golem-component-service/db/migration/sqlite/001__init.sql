@@ -16,3 +16,15 @@ CREATE TABLE component_versions
     metadata            blob    NOT NULL,
     PRIMARY KEY (component_id, version)
 );
+
+CREATE TABLE component_initial_files
+(
+    component_id        uuid    NOT NULL,
+    version             bigint  NOT NULL,
+    file_path           text    NOT NULL,
+    file_permission     integer NOT NULL,
+    created_at          timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    blob_storage_id     text    NOT NULL,
+    PRIMARY KEY (component_id, version, file_path),
+    FOREIGN KEY (component_id, version) REFERENCES component_versions (component_id, version)
+);

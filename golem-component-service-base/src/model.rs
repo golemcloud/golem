@@ -1,8 +1,10 @@
+use std::path::PathBuf;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::ComponentType;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::{ComponentName, InitialFilePermission, VersionedComponentId};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
+use crate::repo::component::InitialFileRecord;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component<Namespace> {
@@ -55,6 +57,28 @@ impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::com
                 value.created_at,
             ))),
             component_type: Some(component_type.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InitialFile {
+    pub versioned_component_id: VersionedComponentId,
+    pub file_path: PathBuf,
+    pub file_permission: InitialFilePermission,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub blob_storage_id: String,
+}
+
+impl From<InitialFile> for InitialFileRecord {
+    fn from(value: InitialFile) -> Self {
+        Self {
+            component_id: value.versioned_component_id.component_id.0,
+            version: value.versioned_component_id.version as i64,
+            file_path: value.file_path.to_string_lossy().to_string(),
+            file_permission: value.file_permission.into(),
+            created_at: value.created_at,
+            blob_storage_id: value.blob_storage_id,
         }
     }
 }
