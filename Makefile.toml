@@ -265,7 +265,7 @@ description = "Runs integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package integration-tests --test integration -- --report-time
+cargo test --package integration-tests --test integration -- --nocapture --report-time
 '''
 
 [tasks.sharding-tests]
