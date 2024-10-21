@@ -474,18 +474,44 @@ impl ComponentService for ComponentGrpcApi {
         );
 
         match request.component_constraints {
-            Some(constraints) => {
-                let id: ComponentId = constraints
+            Some(proto_constraints) => {
+                let id: Result<ComponentId, ComponentError> = proto_constraints
                     .component_id
                     .and_then(|id| id.try_into().ok())
-                    .ok_or_else(|| bad_request_error("Missing component id"))?;
+                    .ok_or_else(|| bad_request_error("Missing component id"));
 
-                let component_constraint = golem_component_service_base::model::ComponentConstraint {
+                let component_id = match id {
+                    Ok(id) => id,
+                    Err(fail) => {
+                        return Ok(Response::new(CreateComponentConstraintsResponse {
+                            result: Some(record.fail(create_component_constraints_response::Result::Error(fail.clone()), &ComponentTraceErrorKind(&fail))),
+                        }))
+                    }
+                };
+
+                let mut constraints = vec![];
+
+                for proto_constraint in proto_constraints.constraints {
+                   let result =
+                       golem_component_service_base::model::FunctionConstraint::try_from(proto_constraint.clone()).map_err(|err| bad_request_error(err.as_str()));
+
+                    match result {
+                        Ok(constraint) => {
+                            constraints.push(constraint)
+                        }
+                        Err(fail) => {
+                            return Ok(Response::new(CreateComponentConstraintsResponse {
+                                result: Some(record.fail(create_component_constraints_response::Result::Error(fail.clone()), &ComponentTraceErrorKind(&fail))),
+                            }))
+                        }
+                    }
+                }
+
+                let component_constraint = ComponentConstraint {
                     namespace: DefaultNamespace::default(),
-                    component_id: id,
+                    component_id,
                     constraints: golem_component_service_base::model::FunctionConstraints {
-                        constraints: constraints.constraints.iter().map(|x|
-                        golem_component_service_base::model::FunctionConstraint::try_from(x.clone()).map_err(|err| bad_request_error(err.as_str()))?).collect()
+                        constraints: constraints
                     }
                 };
 

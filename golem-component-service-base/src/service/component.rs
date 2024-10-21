@@ -567,7 +567,7 @@ where
     async fn create_constraint(
         &self,
         component_constraint: &ComponentConstraint<Namespace>,
-    ) -> Result<(), ComponentError> {
+    ) -> Result<ComponentConstraint<Namespace>, ComponentError> {
         info!(namespace = %component_constraint.namespace, "Create Component Constraint");
         let record = ComponentConstraintRecord::try_from(component_constraint.clone())
             .map_err(|e| ComponentError::conversion_error("record", e))?;
