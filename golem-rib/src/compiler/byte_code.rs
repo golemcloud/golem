@@ -285,11 +285,13 @@ mod internal {
                             )?)
                         };
 
+                        // Invoke Function after resolving the function name
                         instructions
                             .push(RibIR::InvokeFunction(arguments.len(), function_result_type));
 
                         let site = parsed_function_name.site.clone();
 
+                        // Resolve the function name and update stack
                         match &parsed_function_name.function {
                             DynamicParsedFunctionReference::Function { function } => instructions
                                 .push(RibIR::CreateFunctionName(
