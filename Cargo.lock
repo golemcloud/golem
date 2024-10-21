@@ -3684,6 +3684,7 @@ dependencies = [
  "fastrand 2.1.1",
  "golem-api-grpc",
  "golem-common",
+ "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
  "http 0.2.12",

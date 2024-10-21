@@ -16,8 +16,8 @@ use std::fmt::{Debug, Display};
 use std::num::TryFromIntError;
 use std::sync::Arc;
 
-use crate::model::Component;
-use crate::repo::component::ComponentRepo;
+use crate::model::{Component, ComponentConstraint, FunctionConstraint};
+use crate::repo::component::{ComponentConstraintRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
@@ -193,6 +193,11 @@ pub trait ComponentService<Namespace> {
         &self,
         component_id: &ComponentId,
         namespace: &Namespace,
+    ) -> Result<(), ComponentError>;
+
+    async fn create_constraint(
+        &self,
+        component_constraint: &ComponentConstraint<Namespace>
     ) -> Result<(), ComponentError>;
 }
 
@@ -557,6 +562,21 @@ where
         } else {
             Err(ComponentError::UnknownComponentId(component_id.clone()))
         }
+    }
+
+    async fn create_constraint(
+        &self,
+        component_constraint: &ComponentConstraint<Namespace>
+    ) -> Result<(), ComponentError> {
+        info!(namespace = %component_constraint.namespace, "Create Component Constraint");
+        let record =
+            ComponentConstraintRecord::try_from(component_constraint.clone())
+                .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        self.component_repo
+            .create_constraint(&record)
+            .await?;
+        Ok(())
     }
 }
 

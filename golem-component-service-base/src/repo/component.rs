@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::Component;
+use crate::model::{Component, ComponentConstraint, FunctionConstraints};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -94,6 +94,48 @@ where
     }
 }
 
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct ComponentConstraintRecord {
+    pub namespace: String,
+    pub component_id: Uuid,
+    pub constraint_data: Vec<u8>,
+}
+
+impl<Namespace> TryFrom<ComponentConstraint<Namespace>> for ComponentConstraintRecord
+where
+    Namespace: Display,
+{
+    type Error = String;
+
+    fn try_from(value: ComponentConstraint<Namespace>) -> Result<Self, Self::Error> {
+        let metadata = constraint_serde::serialize(&value.constraints)?;
+        Ok(Self {
+            namespace: value.namespace.to_string(),
+            component_id: value.component_id.0,
+            constraint_data: metadata.into(),
+        })
+    }
+}
+
+
+impl<Namespace> TryFrom<ComponentConstraintRecord> for ComponentConstraint<Namespace>
+where
+    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+    <Namespace as TryFrom<String>>::Error: Display + Send + Sync + 'static,
+{
+    type Error = String;
+    fn try_from(value: ComponentConstraintRecord) -> Result<Self, Self::Error> {
+        let function_constraints: FunctionConstraints = constraint_serde::deserialize(&value.constraint_data)?;
+        let namespace =
+            Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
+        Ok(ComponentConstraint {
+            namespace,
+            component_id: ComponentId(value.component_id),
+            constraints: function_constraints
+        })
+    }
+}
+
 #[async_trait]
 pub trait ComponentRepo {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
@@ -124,6 +166,11 @@ pub trait ComponentRepo {
     async fn get_namespace(&self, component_id: &Uuid) -> Result<Option<String>, RepoError>;
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError>;
+
+    async fn create_constraint(
+        &self,
+        component_constraint_record: &ComponentConstraintRecord,
+    ) -> Result<(), RepoError>;
 }
 
 pub struct DbComponentRepo<DB: Database> {
@@ -226,6 +273,11 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
         let result = self.repo.delete(namespace, component_id).await;
         Self::logged_with_id("delete", component_id, result)
+    }
+
+    async fn create_constraint(&self, component_constraint_record: &ComponentConstraintRecord) -> Result<(), RepoError> {
+        let result = self.repo.create_constraint(component_constraint_record).await;
+        Self::logged("create_component_constraint", result)
     }
 }
 
@@ -571,6 +623,29 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         transaction.commit().await?;
         Ok(())
     }
+
+    async fn create_constraint(&self, component_constraint_record: &ComponentConstraintRecord) -> Result<(), RepoError> {
+        let component_constraint_record = component_constraint_record.clone();
+        let mut transaction = self.db_pool.begin().await?;
+
+        sqlx::query(
+            r#"
+              INSERT INTO component_constraints
+                (namespace, component_id, constraints)
+              VALUES
+                ($1, $2, $3)
+               "#,
+        )
+            .bind(component_constraint_record.namespace)
+            .bind(component_constraint_record.component_id)
+            .bind(component_constraint_record.constraint_data)
+            .execute(&mut *transaction)
+            .await?;
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
 }
 
 pub mod record_metadata_serde {
@@ -582,7 +657,7 @@ pub mod record_metadata_serde {
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
     pub fn serialize(value: &ComponentMetadata) -> Result<Bytes, String> {
-        let proto_value: ComponentMetadataProto = value.clone().into();
+        let proto_value: ComponentMetadataProto = ComponentMetadataProto::from(value.clone());
         let mut bytes = BytesMut::new();
         bytes.put_u8(SERIALIZATION_VERSION_V1);
         bytes.extend_from_slice(&proto_value.encode_to_vec());
@@ -596,7 +671,38 @@ pub mod record_metadata_serde {
             SERIALIZATION_VERSION_V1 => {
                 let proto_value: ComponentMetadataProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
-                let value = proto_value.try_into()?;
+                let value = ComponentMetadata::try_from(proto_value)?;
+                Ok(value)
+            }
+            _ => Err("Unsupported serialization version".to_string()),
+        }
+    }
+}
+
+pub mod constraint_serde {
+    use crate::model::{FunctionConstraints};
+    use bytes::{BufMut, Bytes, BytesMut};
+    use golem_api_grpc::proto::golem::component::FunctionConstraints as FunctionConstraintsProto;
+    use prost::Message;
+
+    pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
+
+    pub fn serialize(value: &FunctionConstraints) -> Result<Bytes, String> {
+        let proto_value: FunctionConstraintsProto =  FunctionConstraintsProto::from(value.clone());
+        let mut bytes = BytesMut::new();
+        bytes.put_u8(SERIALIZATION_VERSION_V1);
+        bytes.extend_from_slice(&proto_value.encode_to_vec());
+        Ok(bytes.freeze())
+    }
+
+    pub fn deserialize(bytes: &[u8]) -> Result<FunctionConstraints, String> {
+        let (version, data) = bytes.split_at(1);
+
+        match version[0] {
+            SERIALIZATION_VERSION_V1 => {
+                let proto_value: FunctionConstraintsProto = Message::decode(data)
+                    .map_err(|e| format!("Failed to deserialize value: {e}"))?;
+                let value = FunctionConstraints::try_from(proto_value)?;
                 Ok(value)
             }
             _ => Err("Unsupported serialization version".to_string()),

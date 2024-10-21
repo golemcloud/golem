@@ -73,6 +73,7 @@ impl Display for ApiSite {
             None => write!(f, "{}", self.host),
         }
     }
+
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Hash, Serialize, Deserialize, NewType)]
