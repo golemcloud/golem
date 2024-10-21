@@ -511,7 +511,13 @@ impl ComponentService for ComponentGrpcApi {
                 }))
             }
 
-            None => panic!("m not sure whats going on")
+            None =>  {
+                let bad_request = bad_request_error("Missing component constraints");
+                let error = record.fail(create_component_constraints_response::Result::Error(bad_request.clone()), &ComponentTraceErrorKind(&bad_request));
+                Ok(Response::new(CreateComponentConstraintsResponse {
+                    result: Some(error),
+                }))
+            }
         }
 
     }
