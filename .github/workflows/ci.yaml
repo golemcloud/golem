@@ -272,11 +272,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.8.0
         with:
-          redis-version: latest
-          auto-start: false
+          redis-version: 'latest'
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-group1
         timeout-minutes: 20
@@ -323,11 +322,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.8.0
         with:
-          redis-version: latest
-          auto-start: false
+          redis-version: 'latest'
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 40
@@ -361,11 +359,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.8.0
         with:
-          redis-version: latest
-          auto-start: false
+          redis-version: 'latest'
       - name: Integration tests
         env:
           QUIET: 1
@@ -401,11 +398,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.8.0
         with:
-          redis-version: latest
-          auto-start: false
+          redis-version: 'latest'
       - name: CLI tests
         env:
           QUIET: 1
@@ -441,11 +437,10 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Setup Redis
-        uses: shogo82148/actions-setup-redis@v1.35.1
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.8.0
         with:
-          redis-version: latest
-          auto-start: false
+          redis-version: 'latest'
       - name: Sharding tests
         env:
           QUIET: 1

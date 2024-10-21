@@ -21,6 +21,7 @@ use test_r::{tag_suite, test_dep};
 use tracing::Level;
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_test_framework::components;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
@@ -155,12 +156,21 @@ impl Default for WorkerExecutorTestDependencies {
 
 impl WorkerExecutorTestDependencies {
     pub fn new() -> Self {
-        let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
-            6379,
-            "".to_string(),
-            Level::INFO,
-            Level::ERROR,
-        ));
+        let redis: Arc<dyn Redis + Send + Sync + 'static> =
+            if components::redis::check_if_running("redis", 6379) {
+                Arc::new(ProvidedRedis::new(
+                    "localhost".to_string(),
+                    6379,
+                    "".to_string(),
+                ))
+            } else {
+                Arc::new(SpawnedRedis::new(
+                    6379,
+                    "".to_string(),
+                    Level::INFO,
+                    Level::ERROR,
+                ))
+            };
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = Arc::new(
             SpawnedRedisMonitor::new(redis.clone(), Level::DEBUG, Level::ERROR),
         );
