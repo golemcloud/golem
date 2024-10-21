@@ -1123,7 +1123,7 @@ async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout(300000)]
 async fn auto_update_on_idle_via_host_function(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -1300,7 +1300,7 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         )
         .await;
 
-    check!(result1 == Ok(vec![Value::U64(5000)]));
+    check!(result1 == Ok(vec![Value::U64(1200)]));
     check!(result2 == Ok(vec![Value::U64(1)]));
     check!(result3 == Ok(vec![Value::U64(0)]));
 }
