@@ -149,7 +149,7 @@ pub fn get_file_name<P: AsRef<Path>>(path: P) -> anyhow::Result<String> {
     path.file_name()
         .ok_or_else(|| {
             anyhow!(
-                "Failed to get file name for package source: {}",
+                "Failed to get file name for path: {}",
                 path.to_string_lossy(),
             )
         })?
@@ -205,7 +205,7 @@ impl OverwriteSafeAction {
         transform: F,
     ) -> anyhow::Result<Self>
     where
-        F: Fn(String) -> anyhow::Result<String>,
+        F: FnOnce(String) -> anyhow::Result<String>,
     {
         let content = std::fs::read_to_string(&source).with_context(|| {
             anyhow!(
@@ -345,7 +345,7 @@ impl OverwriteSafeActions {
     ) -> anyhow::Result<Option<OverwriteSafeActionPlan>>
     where
         P: AsRef<Path>,
-        F: Fn() -> anyhow::Result<bool>,
+        F: FnOnce() -> anyhow::Result<bool>,
     {
         if !target.as_ref().exists() {
             Ok(Some(OverwriteSafeActionPlan::Create))

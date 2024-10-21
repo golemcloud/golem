@@ -18,7 +18,7 @@ use crate::fs::copy;
 use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit::{copy_wit_dependencies, generate_stub_wit_to_target};
+use crate::wit_generate::{copy_wit_dependencies, generate_stub_wit_to_target};
 use crate::wit_resolve::ResolvedWitDir;
 use anyhow::Context;
 use fs_extra::dir::CopyOptions;

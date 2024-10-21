@@ -18,16 +18,14 @@ use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
     InterfaceStubTypeDef, StubDefinition,
 };
+use crate::wit_transform::import_remover;
 use crate::{naming, WasmRpcOverride};
 use anyhow::{anyhow, bail};
 use indexmap::IndexMap;
-use regex::Regex;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
-use wit_parser::{
-    Enum, Field, Flags, Handle, PackageName, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant,
-};
+use wit_parser::{Enum, Field, Flags, Handle, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant};
 
 pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
@@ -638,22 +636,5 @@ impl TypeExtensions for Type {
                 }
             }
         }
-    }
-}
-
-pub fn import_remover(package_name: &PackageName) -> impl Fn(String) -> anyhow::Result<String> {
-    let pattern_import_stub_package_name = Regex::new(
-        format!(
-            r"import\s+{}(/[^;]*)?;",
-            regex::escape(&package_name.to_string())
-        )
-        .as_str(),
-    )
-    .unwrap_or_else(|err| panic!("Failed to compile package import regex: {}", err));
-
-    move |src: String| -> anyhow::Result<String> {
-        Ok(pattern_import_stub_package_name
-            .replace_all(&src, "")
-            .to_string())
     }
 }

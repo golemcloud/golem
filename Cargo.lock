@@ -1938,7 +1938,8 @@ dependencies = [
  "wac-graph",
  "walkdir",
  "wit-bindgen-rust 0.26.0",
- "wit-parser 0.219.0",
+ "wit-encoder",
+ "wit-parser 0.219.1",
 ]
 
 [[package]]
@@ -3298,6 +3299,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77957b295656769bb8ad2b6a6b09d897d94f05c41b069aede1fcdaa675eaea04"
 dependencies = [
  "zerocopy",
+]
+
+[[package]]
+name = "pretty_assertions"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae130e2f271fbc2ac3a40fb1d07180839cdbbe443c7a27e1e3c13c5cac0116d"
+dependencies = [
+ "diff",
+ "yansi",
 ]
 
 [[package]]
@@ -5194,7 +5205,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2b1b95711b3ad655656a341e301cc64e33cbee94de9a99a1c5a2ab88efab79d"
 dependencies = [
  "leb128",
- "wasmparser 0.219.1",
+ "wasmparser 0.219.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -5364,14 +5375,22 @@ dependencies = [
 [[package]]
 name = "wasmparser"
 version = "0.219.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c771866898879073c53b565a6c7b49953795159836714ac56a5befb581227c5"
 dependencies = [
  "ahash",
  "bitflags 2.6.0",
  "hashbrown 0.14.5",
  "indexmap 2.6.0",
  "semver",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.219.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c771866898879073c53b565a6c7b49953795159836714ac56a5befb581227c5"
+dependencies = [
+ "bitflags 2.6.0",
+ "indexmap 2.6.0",
 ]
 
 [[package]]
@@ -6152,6 +6171,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wit-encoder"
+version = "0.219.1"
+dependencies = [
+ "id-arena",
+ "pretty_assertions",
+ "semver",
+ "serde 1.0.210",
+ "wit-parser 0.219.1",
+]
+
+[[package]]
 name = "wit-parser"
 version = "0.207.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6207,9 +6237,7 @@ dependencies = [
 
 [[package]]
 name = "wit-parser"
-version = "0.219.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23102e180c0c464f36e293d31a27b524e3ece930d7b5527d2f33f9d2c963de64"
+version = "0.219.1"
 dependencies = [
  "anyhow",
  "id-arena",

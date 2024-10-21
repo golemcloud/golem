@@ -31,6 +31,10 @@ pub mod wit {
         format!("{}_{}", package_name.namespace, package_name.name)
     }
 
+    pub fn package_merged_wit_name(package_name: &PackageName) -> String {
+        format!("{}_{}.wit", package_name.namespace, package_name.name)
+    }
+
     pub fn package_wit_dep_dir_from_package_dir_name(package_dir_name: &str) -> PathBuf {
         Path::new(WIT_DIR).join(DEPS_DIR).join(package_dir_name)
     }
