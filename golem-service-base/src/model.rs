@@ -14,6 +14,7 @@
 
 use bincode::{Decode, Encode};
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
@@ -979,11 +980,21 @@ pub struct ResumeResponse {}
 pub struct UpdateWorkerResponse {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct GetOplogResponse {
-    pub entries: Vec<PublicOplogEntry>,
+    pub entries: Vec<PublicOplogEntryWithIndex>,
     pub next: Option<OplogCursor>,
     pub first_index_in_chunk: u64,
     pub last_index: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct PublicOplogEntryWithIndex {
+    pub oplog_index: OplogIndex,
+    pub entry: PublicOplogEntry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]

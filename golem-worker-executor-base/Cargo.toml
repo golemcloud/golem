@@ -47,7 +47,7 @@ fs-set-times = "0.20.1"
 futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.4.3"
-golem-wit = { version = "=1.0.2" }
+golem-wit = { version = "=1.0.3" }
 hex = "0.4.3"
 http = { workspace = true }
 http_02 = { workspace = true }

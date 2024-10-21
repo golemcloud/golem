@@ -610,7 +610,7 @@ impl WorkerApi {
         record.result(response)
     }
 
-    /// Get the oplog of a worker
+    /// Get or search the oplog of a worker
     #[oai(
         path = "/:component_id/workers/:worker_name/oplog",
         method = "get",
@@ -623,6 +623,7 @@ impl WorkerApi {
         from: Query<u64>,
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
+        query: Query<Option<String>>,
     ) -> Result<Json<GetOplogResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
