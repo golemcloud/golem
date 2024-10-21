@@ -510,10 +510,11 @@ impl ComponentService for ComponentGrpcApi {
                 let mut constraints = vec![];
 
                 for proto_constraint in proto_constraints.constraints {
-                    let result = golem_component_service_base::model::FunctionConstraint::try_from(
-                        proto_constraint.clone(),
-                    )
-                    .map_err(|err| bad_request_error(err.as_str()));
+                    let result =
+                        golem_common::model::function_constraint::FunctionConstraint::try_from(
+                            proto_constraint.clone(),
+                        )
+                        .map_err(|err| bad_request_error(err.as_str()));
 
                     match result {
                         Ok(constraint) => constraints.push(constraint),

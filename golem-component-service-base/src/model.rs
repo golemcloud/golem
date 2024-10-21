@@ -1,10 +1,9 @@
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
-use golem_wasm_ast::analysis::AnalysedType;
-use rib::ParsedFunctionName;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
+use golem_common::model::function_constraint::FunctionConstraint;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component<Namespace> {
@@ -57,56 +56,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraints> for F
     }
 }
 
-// A trimmed down version of component metadata that just includes enough details
-// on function calls, and is part of a component constraint
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FunctionConstraint {
-    pub function_name: ParsedFunctionName,
-    pub argument_types: Vec<AnalysedType>,
-    pub result_types: Vec<AnalysedType>,
-}
-
-impl From<FunctionConstraint> for golem_api_grpc::proto::golem::component::FunctionConstraint {
-    fn from(value: FunctionConstraint) -> Self {
-        Self {
-            function_name: value.function_name.to_string(),
-            argument_types: value
-                .argument_types
-                .iter()
-                .map(|analysed_type| analysed_type.into())
-                .collect(),
-            result_types: value
-                .result_types
-                .iter()
-                .map(|analysed_type| analysed_type.into())
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraint> for FunctionConstraint {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::FunctionConstraint,
-    ) -> Result<Self, Self::Error> {
-        let result = FunctionConstraint {
-            function_name: ParsedFunctionName::parse(value.function_name)?,
-            argument_types: value
-                .argument_types
-                .into_iter()
-                .map(|typ| AnalysedType::try_from(&typ))
-                .collect::<Result<_, _>>()?,
-            result_types: value
-                .result_types
-                .into_iter()
-                .map(|typ| AnalysedType::try_from(&typ))
-                .collect::<Result<_, _>>()?,
-        };
-
-        Ok(result)
-    }
-}
 
 impl<Namespace> Component<Namespace> {
     pub fn next_version(self) -> Self {

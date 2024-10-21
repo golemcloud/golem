@@ -1,8 +1,9 @@
 use async_trait::async_trait;
+use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-
+use golem_api_grpc::proto::golem::component::{ComponentConstraints, FunctionConstraint};
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
     get_component_metadata_response, GetComponentMetadataResponse, GetLatestComponentRequest,
@@ -34,6 +35,12 @@ pub trait ComponentService<AuthCtx> {
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component>;
+
+    async fn create_constraints(
+        component_id: &ComponentId,
+        constraints: Vec<FunctionConstraint>,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<ComponentConstraints>;
 }
 
 #[derive(Clone)]
