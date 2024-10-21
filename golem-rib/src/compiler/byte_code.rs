@@ -14,7 +14,7 @@
 
 use crate::compiler::byte_code::internal::ExprState;
 use crate::compiler::ir::RibIR;
-use crate::{Expr, InstructionId};
+use crate::{Expr, InstructionId, ParsedFunctionName};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::RibByteCode as ProtoRibByteCode;
 
@@ -269,12 +269,12 @@ mod internal {
                 )?));
             }
 
-            Expr::Call(invocation_name, arguments, inferred_type) => {
+            Expr::Call(call_type, arguments, inferred_type) => {
                 for expr in arguments.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
 
-                match invocation_name {
+                match call_type {
                     CallType::Function(parsed_function_name) => {
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit

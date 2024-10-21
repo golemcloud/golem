@@ -655,7 +655,7 @@ mod internal {
                     .pop_n(arg_size)
                     .ok_or("Failed to get values from the stack".to_string())?;
 
-                let type_anntoated_values = last_n_elements
+                let type_annotated_value = last_n_elements
                     .iter()
                     .map(|interpreter_result| {
                         interpreter_result
@@ -668,7 +668,7 @@ mod internal {
                     site,
                     function: ParsedFunctionReference::IndexedResourceConstructor {
                         resource,
-                        resource_params: type_anntoated_values
+                        resource_params: type_annotated_value
                             .iter()
                             .map(type_annotated_value_to_string)
                             .collect::<Result<Vec<String>, String>>()?,
