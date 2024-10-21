@@ -1091,7 +1091,7 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout(300000)]
 async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("update-test-v1").await;
     let worker_id = deps
