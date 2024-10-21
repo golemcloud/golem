@@ -40,7 +40,7 @@ pub trait ComponentService<AuthCtx> {
     async fn create_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: &Vec<FunctionConstraint>,
+        constraints: Vec<FunctionConstraint>,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Vec<FunctionConstraint>>;
 }
@@ -222,7 +222,7 @@ where
     async fn create_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: &Vec<FunctionConstraint>,
+        constraints: Vec<FunctionConstraint>,
         metadata: &AuthCtx,
     ) -> ComponentResult<Vec<FunctionConstraint>> {
         let value = with_retries(
