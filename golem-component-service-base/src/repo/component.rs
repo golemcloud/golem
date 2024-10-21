@@ -117,7 +117,6 @@ where
     }
 }
 
-
 impl<Namespace> TryFrom<ComponentConstraintRecord> for ComponentConstraint<Namespace>
 where
     Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
@@ -125,13 +124,13 @@ where
 {
     type Error = String;
     fn try_from(value: ComponentConstraintRecord) -> Result<Self, Self::Error> {
-        let function_constraints: FunctionConstraints = constraint_serde::deserialize(&value.constraint_data)?;
-        let namespace =
-            Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
+        let function_constraints: FunctionConstraints =
+            constraint_serde::deserialize(&value.constraint_data)?;
+        let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
         Ok(ComponentConstraint {
             namespace,
             component_id: ComponentId(value.component_id),
-            constraints: function_constraints
+            constraints: function_constraints,
         })
     }
 }
@@ -275,8 +274,14 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
         Self::logged_with_id("delete", component_id, result)
     }
 
-    async fn create_constraint(&self, component_constraint_record: &ComponentConstraintRecord) -> Result<(), RepoError> {
-        let result = self.repo.create_constraint(component_constraint_record).await;
+    async fn create_constraint(
+        &self,
+        component_constraint_record: &ComponentConstraintRecord,
+    ) -> Result<(), RepoError> {
+        let result = self
+            .repo
+            .create_constraint(component_constraint_record)
+            .await;
         Self::logged("create_component_constraint", result)
     }
 }
@@ -624,7 +629,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn create_constraint(&self, component_constraint_record: &ComponentConstraintRecord) -> Result<(), RepoError> {
+    async fn create_constraint(
+        &self,
+        component_constraint_record: &ComponentConstraintRecord,
+    ) -> Result<(), RepoError> {
         let component_constraint_record = component_constraint_record.clone();
         let mut transaction = self.db_pool.begin().await?;
 
@@ -636,11 +644,11 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                 ($1, $2, $3)
                "#,
         )
-            .bind(component_constraint_record.namespace)
-            .bind(component_constraint_record.component_id)
-            .bind(component_constraint_record.constraint_data)
-            .execute(&mut *transaction)
-            .await?;
+        .bind(component_constraint_record.namespace)
+        .bind(component_constraint_record.component_id)
+        .bind(component_constraint_record.constraint_data)
+        .execute(&mut *transaction)
+        .await?;
 
         transaction.commit().await?;
 
@@ -680,7 +688,7 @@ pub mod record_metadata_serde {
 }
 
 pub mod constraint_serde {
-    use crate::model::{FunctionConstraints};
+    use crate::model::FunctionConstraints;
     use bytes::{BufMut, Bytes, BytesMut};
     use golem_api_grpc::proto::golem::component::FunctionConstraints as FunctionConstraintsProto;
     use prost::Message;
@@ -688,7 +696,7 @@ pub mod constraint_serde {
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
     pub fn serialize(value: &FunctionConstraints) -> Result<Bytes, String> {
-        let proto_value: FunctionConstraintsProto =  FunctionConstraintsProto::from(value.clone());
+        let proto_value: FunctionConstraintsProto = FunctionConstraintsProto::from(value.clone());
         let mut bytes = BytesMut::new();
         bytes.put_u8(SERIALIZATION_VERSION_V1);
         bytes.extend_from_slice(&proto_value.encode_to_vec());

@@ -197,7 +197,7 @@ pub trait ComponentService<Namespace> {
 
     async fn create_constraint(
         &self,
-        component_constraint: &ComponentConstraint<Namespace>
+        component_constraint: &ComponentConstraint<Namespace>,
     ) -> Result<ComponentConstraint<Namespace>, ComponentError>;
 }
 
@@ -566,16 +566,13 @@ where
 
     async fn create_constraint(
         &self,
-        component_constraint: &ComponentConstraint<Namespace>
+        component_constraint: &ComponentConstraint<Namespace>,
     ) -> Result<(), ComponentError> {
         info!(namespace = %component_constraint.namespace, "Create Component Constraint");
-        let record =
-            ComponentConstraintRecord::try_from(component_constraint.clone())
-                .map_err(|e| ComponentError::conversion_error("record", e))?;
+        let record = ComponentConstraintRecord::try_from(component_constraint.clone())
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
 
-        self.component_repo
-            .create_constraint(&record)
-            .await?;
+        self.component_repo.create_constraint(&record).await?;
         Ok(component_constraint.clone())
     }
 }

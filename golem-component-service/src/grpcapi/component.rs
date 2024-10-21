@@ -511,7 +511,7 @@ impl ComponentService for ComponentGrpcApi {
                 }))
             }
 
-            None => Err(bad_request_error("Missing component constraints"))
+            None => panic!("m not sure whats going on")
         }
 
     }

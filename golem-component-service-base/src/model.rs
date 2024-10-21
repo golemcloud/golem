@@ -52,11 +52,10 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraints> for F
                 .constraints
                 .into_iter()
                 .map(|function_constraint| FunctionConstraint::try_from(function_constraint))
-                .collect::<Result<_, _>>()?
+                .collect::<Result<_, _>>()?,
         })
     }
 }
-
 
 // A trimmed down version of component metadata that just includes enough details
 // on function calls, and is part of a component constraint
@@ -74,7 +73,7 @@ impl From<FunctionConstraint> for golem_api_grpc::proto::golem::component::Funct
             argument_types: value
                 .argument_types
                 .iter()
-                .map(|analysed_type|analysed_type.into())
+                .map(|analysed_type| analysed_type.into())
                 .collect(),
             result_types: value
                 .result_types
@@ -88,7 +87,9 @@ impl From<FunctionConstraint> for golem_api_grpc::proto::golem::component::Funct
 impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraint> for FunctionConstraint {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::component::FunctionConstraint) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::FunctionConstraint,
+    ) -> Result<Self, Self::Error> {
         let result = FunctionConstraint {
             function_name: ParsedFunctionName::parse(value.function_name)?,
             argument_types: value
@@ -96,7 +97,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraint> for Fu
                 .into_iter()
                 .map(|typ| AnalysedType::try_from(&typ))
                 .collect::<Result<_, _>>()?,
-            result_types: value.result_types
+            result_types: value
+                .result_types
                 .into_iter()
                 .map(|typ| AnalysedType::try_from(&typ))
                 .collect::<Result<_, _>>()?,
