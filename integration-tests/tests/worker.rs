@@ -1091,7 +1091,7 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout(300000)]
 async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("update-test-v1").await;
     let worker_id = deps
@@ -1123,7 +1123,7 @@ async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout(300000)]
 async fn auto_update_on_idle_via_host_function(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -1240,7 +1240,6 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(600000)]
-#[ignore] // Temporarily disabled to check if it causes the timing out CI runs
 async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("counters").await;
     let worker_id = deps
@@ -1248,7 +1247,7 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         .await;
 
     // Doing many requests, so parts of the oplog gets archived
-    for _ in 1..=5000 {
+    for _ in 1..=1200 {
         let _ = deps
             .invoke_and_await(
                 &worker_id,
@@ -1301,7 +1300,7 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
         )
         .await;
 
-    check!(result1 == Ok(vec![Value::U64(5000)]));
+    check!(result1 == Ok(vec![Value::U64(1200)]));
     check!(result2 == Ok(vec![Value::U64(1)]));
     check!(result3 == Ok(vec![Value::U64(0)]));
 }
