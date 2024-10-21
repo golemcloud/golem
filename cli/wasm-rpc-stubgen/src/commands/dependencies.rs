@@ -14,8 +14,10 @@
 
 use crate::commands::log::{log_action_plan, log_warn_action};
 use crate::fs::{get_file_name, strip_path_prefix, OverwriteSafeAction, OverwriteSafeActions};
-use crate::wit::{generate_stub_wit_from_wit_dir, import_remover};
+use crate::naming::wit::package_merged_wit_name;
+use crate::wit_generate::generate_stub_wit_from_wit_dir;
 use crate::wit_resolve::ResolvedWitDir;
+use crate::wit_transform::WitDirTransformer;
 use crate::{cargo, naming};
 use anyhow::{anyhow, Context};
 use std::collections::BTreeMap;
@@ -36,6 +38,7 @@ pub fn add_stub_dependency(
     update_cargo_toml: UpdateCargoToml,
 ) -> anyhow::Result<()> {
     let stub_resolved_wit_root = ResolvedWitDir::new(stub_wit_root)?;
+    let mut stub_transformer = WitDirTransformer::new(&stub_resolved_wit_root)?;
     let stub_package = stub_resolved_wit_root.main_package()?;
     let stub_wit = stub_wit_root.join(naming::wit::STUB_WIT_FILE_NAME);
 
@@ -43,7 +46,8 @@ pub fn add_stub_dependency(
     let dest_resolved_wit_root = ResolvedWitDir::new(dest_wit_root)?;
     let dest_package = dest_resolved_wit_root.main_package()?;
     let dest_stub_package_name = naming::wit::stub_package_name(&dest_package.name);
-    let dest_stub_import_remover = import_remover(&dest_stub_package_name);
+    // TODO: have a better matcher which also considers / and @
+    let dest_stub_package_import_prefix = dest_stub_package_name.to_string();
 
     {
         let is_self_stub_by_name =
@@ -107,13 +111,44 @@ pub fn add_stub_dependency(
         // Handle other package by copying while removing imports
         } else {
             package_names_to_package_path.insert(package_name.clone(), package_path);
+            stub_transformer.remove_imports_from_package_all_worlds(
+                *package_id,
+                &dest_stub_package_import_prefix,
+            )?;
+            let content = stub_transformer.render_package(*package_id)?;
+            let first_source = package_sources.iter().next().ok_or_else(|| {
+                anyhow!(
+                    "Expected at least one source for stub package: {}",
+                    package_name
+                )
+            })?;
+            let first_source_relative_path = strip_path_prefix(stub_wit_root, first_source)?;
+            let target = {
+                if package_sources.len() == 1 {
+                    dest_wit_root.join(first_source_relative_path)
+                } else {
+                    dest_wit_root
+                        .join(first_source_relative_path.parent().ok_or_else(|| {
+                            anyhow!(
+                                "Failed to get parent of stub source: {}",
+                                first_source_relative_path.to_string_lossy()
+                            )
+                        })?)
+                        .join(package_merged_wit_name(package_name))
+                }
+            };
 
+            actions.add(OverwriteSafeAction::WriteFile { content, target });
+
+            // TODO: still output old ones while experimenting
             for source in package_sources {
-                actions.add(OverwriteSafeAction::copy_file_transformed(
-                    source.clone(),
-                    dest_wit_root.join(strip_path_prefix(stub_wit_root, source)?),
-                    &dest_stub_import_remover,
-                )?);
+                actions.add(OverwriteSafeAction::CopyFile {
+                    source: source.clone(),
+                    target: dest_wit_root.join(format!(
+                        "{}.old",
+                        strip_path_prefix(stub_wit_root, source)?.to_string_lossy()
+                    )),
+                });
             }
         }
     }

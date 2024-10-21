@@ -19,12 +19,11 @@ pub fn log_skipping_up_to_date<T: AsRef<str>>(subject: T) {
 
 pub fn log_validated_action_result<T, F>(action: &str, result: &ValidatedResult<T>, to_log: F)
 where
-    F: Fn(&T) -> String,
+    F: FnOnce(&T) -> String,
 {
-    result
-        .as_ok_ref()
-        .iter()
-        .for_each(|value| log_action(action, to_log(value)));
+    if let Some(value) = result.as_ok_ref() {
+        log_action(action, to_log(value))
+    }
 }
 
 pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPlan) {

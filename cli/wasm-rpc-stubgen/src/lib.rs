@@ -21,8 +21,9 @@ pub mod model;
 pub mod naming;
 pub mod rust;
 pub mod stub;
-pub mod wit;
+pub mod wit_generate;
 pub mod wit_resolve;
+pub mod wit_transform;
 
 use crate::commands::dependencies::UpdateCargoToml;
 use crate::stub::StubDefinition;

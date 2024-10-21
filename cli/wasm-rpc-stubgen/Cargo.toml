@@ -58,9 +58,15 @@ tempfile = { workspace = true }
 tokio = { workspace = true }
 toml = "0.8.14"
 walkdir = "2.5.0"
-wac-graph = "0.6.0"
+wac-graph = "=0.6.0"
 wit-bindgen-rust = "=0.26.0"
-wit-parser = "=0.219.0"
+# wit-encoder = "=0.219.0"
+# wit-encoder = { git = "https://github.com/golemcloud/wasm-tools.git", rev = "f715bded75519d7706f70d9d5938678b42e44e56"}
+wit-encoder = { path = "../../wasm-tools/crates/wit-encoder"}
+# wit-parser = "=0.219.0"
+# wit-parser = { git = "https://github.com/golemcloud/wasm-tools.git", rev = "f715bded75519d7706f70d9d5938678b42e44e56"}
+wit-parser = { path = "../../wasm-tools/crates/wit-parser"}
+
 
 [dev-dependencies]
 test-r = { workspace = true }

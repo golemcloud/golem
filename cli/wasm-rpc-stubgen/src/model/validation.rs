@@ -47,7 +47,7 @@ impl<T> ValidatedResult<T> {
 
     pub fn combine<U, V, C>(self, u: ValidatedResult<U>, combine: C) -> ValidatedResult<V>
     where
-        C: Fn(T, U) -> V,
+        C: FnOnce(T, U) -> V,
     {
         let (t, mut t_warns, mut t_errors) = self.into_product();
         let (u, u_warns, u_errors) = u.into_product();

@@ -2,7 +2,7 @@ use crate::fs::strip_path_prefix;
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
-use wit_parser::{Package, PackageId, Resolve, UnresolvedPackageGroup};
+use wit_parser::{Package, PackageId, PackageName, Resolve, UnresolvedPackageGroup};
 
 pub struct ResolvedWitDir {
     pub path: PathBuf,
@@ -24,6 +24,19 @@ impl ResolvedWitDir {
                 self.path.to_string_lossy()
             )
         })
+    }
+
+    pub fn package_id_by_encoder_name(
+        &self,
+        package_name: &wit_encoder::PackageName,
+    ) -> Option<PackageId> {
+        let package_name = PackageName {
+            namespace: package_name.namespace().to_string(),
+            name: package_name.name().to_string(),
+            version: package_name.version().cloned(),
+        };
+
+        self.resolve.package_names.get(&package_name).cloned()
     }
 
     pub fn main_package(&self) -> anyhow::Result<&Package> {
