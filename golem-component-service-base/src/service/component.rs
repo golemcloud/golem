@@ -198,7 +198,7 @@ pub trait ComponentService<Namespace> {
     async fn create_constraint(
         &self,
         component_constraint: &ComponentConstraint<Namespace>
-    ) -> Result<(), ComponentError>;
+    ) -> Result<ComponentConstraint<Namespace>, ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
@@ -576,7 +576,7 @@ where
         self.component_repo
             .create_constraint(&record)
             .await?;
-        Ok(())
+        Ok(component_constraint.clone())
     }
 }
 
