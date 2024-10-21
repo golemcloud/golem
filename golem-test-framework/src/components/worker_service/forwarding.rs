@@ -263,6 +263,10 @@ impl WorkerService for ForwardingWorkerService {
         }
     }
 
+    async fn invoke_json(&self, _request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
+        panic!("invoke_json can only be used through worker service");
+    }
+
     async fn invoke_and_await(
         &self,
         request: InvokeAndAwaitRequest,
@@ -317,10 +321,6 @@ impl WorkerService for ForwardingWorkerService {
                 })
             }
         }
-    }
-
-    async fn invoke_json(&self, _request: InvokeJsonRequest) -> crate::Result<InvokeResponse> {
-        panic!("invoke_json can only be used through worker service");
     }
 
     async fn invoke_and_await_json(

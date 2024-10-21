@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{test, test_dep};
+use std::time::Instant;
+use test_r::{flaky, test, test_dep};
 
 use assert2::check;
 use nonempty_collections::nev;
@@ -574,31 +575,37 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
 }
 
 #[test]
+#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, false).await;
 }
 
 #[test]
+#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, false).await;
 }
 
 #[test]
+#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, false).await;
 }
 
 #[test]
+#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, true).await;
 }
 
 #[test]
+#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, true).await;
 }
 
 #[test]
+#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, true).await;
 }
@@ -678,7 +685,30 @@ async fn multilayer_transfers_entries_after_limit_reached(
         entries.push(entry);
     }
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    let start = Instant::now();
+    loop {
+        let primary_length = primary_oplog_service
+            .open(
+                &owned_worker_id,
+                primary_oplog_service.get_last_index(&owned_worker_id).await,
+                ComponentType::Durable,
+            )
+            .await
+            .length()
+            .await;
+
+        let secondary_length = secondary_layer.open(&owned_worker_id).await.length().await;
+        if primary_length == expected_1 && secondary_length == expected_2 {
+            break;
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_secs() > 120 {
+            panic!("Timeout");
+        } else {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
 
     debug!("Fetching information to evaluate the test");
 

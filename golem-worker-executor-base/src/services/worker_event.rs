@@ -164,7 +164,7 @@ impl WorkerEventService for WorkerEventServiceDefault {
     fn receiver(&self) -> WorkerEventReceiver {
         let receiver = self.sender.subscribe();
         let ring_cons = self.ring_cons.lock().unwrap();
-        let history = ring_cons.iter().cloned().collect();
+        let history = ring_cons.iter().rev().cloned().collect();
         WorkerEventReceiver { history, receiver }
     }
 
@@ -202,6 +202,7 @@ mod tests {
     use test_r::{non_flaky, test};
 
     use std::sync::Arc;
+    use std::time::Duration;
     use tokio::sync::broadcast::error::RecvError;
     use tokio::sync::Mutex;
 
@@ -210,7 +211,7 @@ mod tests {
     };
 
     #[test]
-    #[non_flaky(10)]
+    #[non_flaky(100)]
     pub async fn both_subscriber_gets_events_small() {
         let svc = Arc::new(WorkerEventServiceDefault::new(4, 16));
         let rx1_events = Arc::new(Mutex::new(Vec::<WorkerEvent>::new()));
@@ -228,20 +229,32 @@ mod tests {
                         rx1_events_clone.lock().await.push(event);
                     }
                     Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(_n)) => {}
+                    Err(RecvError::Lagged(n)) => {
+                        println!("task1 lagged {n}");
+                    }
                 }
             }
         });
 
-        for b in 1..5u8 {
+        for b in 1..=4u8 {
             svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        loop {
+            let received_count = rx1_events.lock().await.len();
+            if received_count == 4 {
+                break;
+            }
         }
 
         let svc2 = svc.clone();
         let rx2_events_clone = rx2_events.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let task2 = tokio::task::spawn(async move {
             let mut rx2 = svc2.receiver();
             drop(svc2);
+            ready_tx.send(()).unwrap();
             loop {
                 match rx2.recv().await {
                     Ok(WorkerEvent::Close) => break,
@@ -249,13 +262,18 @@ mod tests {
                         rx2_events_clone.lock().await.push(event);
                     }
                     Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(_n)) => {}
+                    Err(RecvError::Lagged(n)) => {
+                        println!("task2 lagged {n}");
+                    }
                 }
             }
         });
 
-        for b in 5..9u8 {
+        ready_rx.await.unwrap();
+
+        for b in 5..=8u8 {
             svc.emit_event(WorkerEvent::stdout(vec![b]), true);
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
         drop(svc);
@@ -268,26 +286,44 @@ mod tests {
 
         assert_eq!(
             result1
-                == vec![
-                    WorkerEvent::stdout(vec![1]),
-                    WorkerEvent::stdout(vec![2]),
-                    WorkerEvent::stdout(vec![3]),
-                    WorkerEvent::stdout(vec![5]),
-                    WorkerEvent::stdout(vec![6]),
-                    WorkerEvent::stdout(vec![7]),
-                    WorkerEvent::stdout(vec![8]),
-                ],
+                .into_iter()
+                .filter_map(|event| match event {
+                    WorkerEvent::StdOut { bytes, .. } => Some(bytes.to_vec()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                vec![1],
+                vec![2],
+                vec![3],
+                vec![4],
+                vec![5],
+                vec![6],
+                vec![7],
+                vec![8],
+            ],
+            "result1"
+        );
+        assert_eq!(
             result2
-                == vec![
-                    WorkerEvent::stdout(vec![1]),
-                    WorkerEvent::stdout(vec![2]),
-                    WorkerEvent::stdout(vec![3]),
-                    WorkerEvent::stdout(vec![5]),
-                    WorkerEvent::stdout(vec![6]),
-                    WorkerEvent::stdout(vec![7]),
-                    WorkerEvent::stdout(vec![8]),
-                ]
-        )
+                .into_iter()
+                .filter_map(|event| match event {
+                    WorkerEvent::StdOut { bytes, .. } => Some(bytes.to_vec()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                vec![1],
+                vec![2],
+                vec![3],
+                vec![4],
+                vec![5],
+                vec![6],
+                vec![7],
+                vec![8],
+            ],
+            "result2"
+        );
     }
 
     #[test]
@@ -309,21 +345,33 @@ mod tests {
                         rx1_events_clone.lock().await.push(event);
                     }
                     Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(_n)) => {}
+                    Err(RecvError::Lagged(n)) => {
+                        println!("task1 lagged {n}");
+                    }
                 }
             }
         });
 
-        for b in 1..1001 {
+        for b in 1..=1000 {
             let s = format!("{}", b);
             svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+
+        loop {
+            let received_count = rx1_events.lock().await.len();
+            if received_count == 1000 {
+                break;
+            }
         }
 
         let svc2 = svc.clone();
         let rx2_events_clone = rx2_events.clone();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let task2 = tokio::task::spawn(async move {
             let mut rx2 = svc2.receiver();
             drop(svc2);
+            ready_tx.send(()).unwrap();
             loop {
                 match rx2.recv().await {
                     Ok(WorkerEvent::Close) => break,
@@ -331,14 +379,19 @@ mod tests {
                         rx2_events_clone.lock().await.push(event);
                     }
                     Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(_n)) => {}
+                    Err(RecvError::Lagged(n)) => {
+                        println!("task1 lagged {n}");
+                    }
                 }
             }
         });
 
-        for b in 1001..1005 {
+        ready_rx.await.unwrap();
+
+        for b in 1001..=1004 {
             let s = format!("{}", b);
             svc.emit_event(WorkerEvent::stdout(s.as_bytes().into()), true);
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
 
         drop(svc);
@@ -349,19 +402,27 @@ mod tests {
         let result1: Vec<WorkerEvent> = rx1_events.lock().await.iter().cloned().collect();
         let result2: Vec<WorkerEvent> = rx2_events.lock().await.iter().cloned().collect();
 
+        assert_eq!(result1.len(), 1004, "result1 length");
         assert_eq!(
-            result1.len() == 1004,
             result2
-                == vec![
-                    WorkerEvent::stdout("997".as_bytes().into()),
-                    WorkerEvent::stdout("998".as_bytes().into()),
-                    WorkerEvent::stdout("999".as_bytes().into()),
-                    WorkerEvent::stdout("1000".as_bytes().into()),
-                    WorkerEvent::stdout("1001".as_bytes().into()),
-                    WorkerEvent::stdout("1002".as_bytes().into()),
-                    WorkerEvent::stdout("1003".as_bytes().into()),
-                    WorkerEvent::stdout("1004".as_bytes().into()),
-                ]
-        )
+                .into_iter()
+                .filter_map(|event| match event {
+                    WorkerEvent::StdOut { bytes, .. } =>
+                        Some(String::from_utf8_lossy(&bytes).to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                "997".to_string(),
+                "998".to_string(),
+                "999".to_string(),
+                "1000".to_string(),
+                "1001".to_string(),
+                "1002".to_string(),
+                "1003".to_string(),
+                "1004".to_string(),
+            ],
+            "result2"
+        );
     }
 }

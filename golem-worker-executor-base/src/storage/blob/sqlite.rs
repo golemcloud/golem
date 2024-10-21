@@ -229,7 +229,7 @@ impl BlobStorage for SqliteBlobStorage {
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let parent = Self::parent_string(path);
         let name = Self::name_string(path);
         let parent_prefix = format!("{parent}%");
@@ -247,7 +247,7 @@ impl BlobStorage for SqliteBlobStorage {
             .with(target_label, op_label)
             .execute(query)
             .await
-            .map(|_| ())
+            .map(|result| result.rows_affected() > 0)
     }
 
     async fn exists(
