@@ -230,8 +230,8 @@ where
             "get_latest",
             Some(component_id.to_string()),
             &self.retry_config,
-            &(self.client.clone(), component_id.clone(), metadata.clone()),
-            |(client, id, metadata)| {
+            &(self.client.clone(), component_id.clone(), metadata.clone(), constraints.clone()),
+            |(client, id, metadata, constraints)| {
                 Box::pin(async move {
                     let response = client
                         .call(move |client| {
