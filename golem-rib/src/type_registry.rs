@@ -14,10 +14,10 @@
 
 use crate::call_type::CallType;
 use crate::{DynamicParsedFunctionName, InferredExpr};
+use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
-use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 
 // A type-registry is a mapping from a function name (global or part of an interface in WIT)
 // to the registry value that represents the type of the name.
@@ -198,7 +198,9 @@ impl RegistryKey {
     // A parsed function name (the one that gets invoked with a worker) can correspond
     // to multiple registry keys. This is mainly because a function may have a constructor component
     // along with the method name. Otherwise it's only 1 key that correspond to the Fqn.
-    pub fn registry_keys_of_function(function_name: &DynamicParsedFunctionName) -> Vec<RegistryKey> {
+    pub fn registry_keys_of_function(
+        function_name: &DynamicParsedFunctionName,
+    ) -> Vec<RegistryKey> {
         let resource_constructor_key = Self::resource_constructor_registry_key(function_name);
         let function_name_registry_key = Self::function_name_registry_key(function_name);
         if let Some(resource_constructor_key) = resource_constructor_key {
@@ -264,25 +266,48 @@ impl RegistryKey {
 impl TryFrom<golem_api_grpc::proto::golem::rib::RegistryKey> for RegistryKey {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::rib::RegistryKey) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::rib::RegistryKey,
+    ) -> Result<Self, Self::Error> {
         let key_type = value.key_type.ok_or("key type missing")?;
 
-         let registry_key = match key_type {
-             KeyType::FunctionName(string) => {
-                 RegistryKey::FunctionName(string.name)
-             }
-             KeyType::FunctionNameWithInterface(function_with_interface) => {
-                 let interface_name = function_with_interface.interface_name.clone();
-                 let function_name = function_with_interface.interface_name;
+        let registry_key = match key_type {
+            KeyType::FunctionName(string) => RegistryKey::FunctionName(string.name),
+            KeyType::FunctionNameWithInterface(function_with_interface) => {
+                let interface_name = function_with_interface.interface_name.clone();
+                let function_name = function_with_interface.interface_name;
 
-                 RegistryKey::FunctionNameWithInterface {
-                     interface_name: interface_name,
-                     function_name: function_name
-                 }
-             }
-         };
+                RegistryKey::FunctionNameWithInterface {
+                    interface_name: interface_name,
+                    function_name: function_name,
+                }
+            }
+        };
 
         Ok(registry_key)
+    }
+}
+
+impl From<RegistryKey> for golem_api_grpc::proto::golem::rib::RegistryKey {
+    fn from(value: RegistryKey) -> Self {
+        match value {
+            RegistryKey::FunctionName(str) => golem_api_grpc::proto::golem::rib::RegistryKey {
+                key_type: Some(KeyType::FunctionName(
+                    golem_api_grpc::proto::golem::rib::FunctionName { name: str },
+                )),
+            },
+            RegistryKey::FunctionNameWithInterface {
+                function_name,
+                interface_name,
+            } => golem_api_grpc::proto::golem::rib::RegistryKey {
+                key_type: Some(KeyType::FunctionNameWithInterface(
+                    golem_api_grpc::proto::golem::rib::FunctionNameWithInterface {
+                        interface_name,
+                        function_name,
+                    },
+                )),
+            },
+        }
     }
 }
 

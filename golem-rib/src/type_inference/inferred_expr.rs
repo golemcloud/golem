@@ -1,6 +1,6 @@
-use std::collections::{HashSet, VecDeque};
-use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey};
 use crate::call_type::CallType;
+use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey};
+use std::collections::{HashSet, VecDeque};
 
 #[derive(Debug, Clone)]
 pub struct InferredExpr(pub Expr);
@@ -28,7 +28,7 @@ impl InferredExpr {
                 Expr::Call(CallType::Function(function_name), _, _) => {
                     worker_calls.push(function_name.clone())
                 }
-                _ => expr.visit_children_bottom_up(&mut queue)
+                _ => expr.visit_children_bottom_up(&mut queue),
             }
         }
 
@@ -46,6 +46,5 @@ impl InferredExpr {
         }
 
         registry_keys
-
     }
 }

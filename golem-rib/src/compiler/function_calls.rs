@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedType;
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
-use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
 use golem_api_grpc::proto::golem::rib::WorkerInvokeCallInRib as WorkerInvokeCallInRibProto;
+use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
+use golem_wasm_ast::analysis::AnalysedType;
 
 // An easier data type that focus just the function calls,
 // return types and parameter types, corresponding to a function
@@ -28,38 +28,44 @@ use golem_api_grpc::proto::golem::rib::WorkerInvokeCallInRib as WorkerInvokeCall
 // If Rib has inbuilt function support, that will not be included here either.
 #[derive(Clone, Debug)]
 pub struct WorkerInvokeCallsInRib {
-    function_calls: Vec<WorkerInvokeCallInRib>
+    function_calls: Vec<WorkerInvokeCallInRib>,
 }
 
 impl WorkerInvokeCallsInRib {
-    pub fn from_inferred_expr(inferred_expr: &InferredExpr, original_type_registry: &FunctionTypeRegistry) -> Result<Option<WorkerInvokeCallsInRib>, String> {
-        let worker_invoke_registry_keys =
-            inferred_expr.worker_invoke_registry_keys();
+    pub fn from_inferred_expr(
+        inferred_expr: &InferredExpr,
+        original_type_registry: &FunctionTypeRegistry,
+    ) -> Result<Option<WorkerInvokeCallsInRib>, String> {
+        let worker_invoke_registry_keys = inferred_expr.worker_invoke_registry_keys();
         let type_registry_subset =
             original_type_registry.get_from_keys(worker_invoke_registry_keys);
         let mut function_calls = vec![];
 
         for (key, value) in type_registry_subset.types {
-            if let  RegistryValue::Function  {parameter_types, return_types } = value {
+            if let RegistryValue::Function {
+                parameter_types,
+                return_types,
+            } = value
+            {
                 let function_call_in_rib = WorkerInvokeCallInRib {
                     function_key: key,
                     parameter_types,
-                    return_types
+                    return_types,
                 };
                 function_calls.push(function_call_in_rib)
             } else {
-                return Err("Internal Error: Function Calls should have parameter types and return types".to_string())
+                return Err(
+                    "Internal Error: Function Calls should have parameter types and return types"
+                        .to_string(),
+                );
             }
         }
 
         if function_calls.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(WorkerInvokeCallsInRib {
-                function_calls
-            }))
+            Ok(Some(WorkerInvokeCallsInRib { function_calls }))
         }
-
     }
 }
 
@@ -68,10 +74,23 @@ impl TryFrom<WorkerInvokeCallsInRibProto> for WorkerInvokeCallsInRib {
 
     fn try_from(value: WorkerInvokeCallsInRibProto) -> Result<Self, Self::Error> {
         let function_calls_proto = value.function_calls;
-        let function_calls = function_calls_proto.iter().map(|x| WorkerInvokeCallInRib::try_from(x.clone())).collect::<Result<_, _>>()?;
-        Ok(Self {
-            function_calls
-        })
+        let function_calls = function_calls_proto
+            .iter()
+            .map(|x| WorkerInvokeCallInRib::try_from(x.clone()))
+            .collect::<Result<_, _>>()?;
+        Ok(Self { function_calls })
+    }
+}
+
+impl From<WorkerInvokeCallsInRib> for WorkerInvokeCallsInRibProto {
+    fn from(value: WorkerInvokeCallsInRib) -> Self {
+        WorkerInvokeCallsInRibProto {
+            function_calls: value
+                .function_calls
+                .iter()
+                .map(|x| WorkerInvokeCallInRibProto::from(x.clone()))
+                .collect(),
+        }
     }
 }
 
@@ -79,18 +98,24 @@ impl TryFrom<WorkerInvokeCallsInRibProto> for WorkerInvokeCallsInRib {
 pub struct WorkerInvokeCallInRib {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,
-    pub return_types: Vec<AnalysedType>
+    pub return_types: Vec<AnalysedType>,
 }
 
 impl TryFrom<WorkerInvokeCallInRibProto> for WorkerInvokeCallInRib {
     type Error = String;
 
     fn try_from(value: WorkerInvokeCallInRibProto) -> Result<Self, Self::Error> {
-        let return_types =
-            value.return_types.iter().map(|x| AnalysedType::try_from(x)).collect::<Result<_, _>>()?;
+        let return_types = value
+            .return_types
+            .iter()
+            .map(|x| AnalysedType::try_from(x))
+            .collect::<Result<_, _>>()?;
 
-        let parameter_types =
-            value.parameter_types.iter().map(|x| AnalysedType::try_from(x)).collect::<Result<_, _>>()?;
+        let parameter_types = value
+            .parameter_types
+            .iter()
+            .map(|x| AnalysedType::try_from(x))
+            .collect::<Result<_, _>>()?;
 
         let registry_key_proto = value.function_key.ok_or("Function key missing")?;
         let function_key = RegistryKey::try_from(registry_key_proto)?;
@@ -98,7 +123,19 @@ impl TryFrom<WorkerInvokeCallInRibProto> for WorkerInvokeCallInRib {
         Ok(Self {
             function_key,
             return_types,
-            parameter_types
+            parameter_types,
         })
+    }
+}
+
+impl From<WorkerInvokeCallInRib> for WorkerInvokeCallInRibProto {
+    fn from(value: WorkerInvokeCallInRib) -> Self {
+        let registry_key = value.function_key.into();
+
+        WorkerInvokeCallInRibProto {
+            function_key: Some(registry_key),
+            parameter_types: value.parameter_types.iter().map(|x| x.into()).collect(),
+            return_types: value.return_types.iter().map(|x| x.into()).collect(),
+        }
     }
 }

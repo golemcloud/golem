@@ -17,16 +17,16 @@ use golem_wasm_ast::analysis::AnalysedExport;
 pub use ir::*;
 pub use type_with_unit::*;
 
+use crate::compiler::function_calls::WorkerInvokeCallsInRib;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{Expr, InferredExpr, RibInputTypeInfo};
 use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
-use crate::compiler::function_calls::WorkerInvokeCallsInRib;
 
 mod byte_code;
 mod desugar;
+mod function_calls;
 mod ir;
 mod type_with_unit;
-mod function_calls;
 
 pub fn compile(
     expr: &Expr,
@@ -116,6 +116,9 @@ impl From<CompilerOutput> for ProtoCompilerOutput {
             rib_input: Some(golem_api_grpc::proto::golem::rib::RibInputType::from(
                 value.global_input_type_info,
             )),
+            worker_invoke_calls: value
+                .worker_invoke_calls
+                .map(|x| golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib::from(x)),
         }
     }
 }
