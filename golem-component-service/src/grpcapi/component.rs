@@ -76,7 +76,7 @@ impl ComponentGrpcApi {
             .component_service
             .get(&id, &DefaultNamespace::default())
             .await?;
-        Ok(result.into_iter().map(|p| Component::from(p)).collect())
+        Ok(result.into_iter().map(Component::from).collect())
     }
 
     async fn get_component_metadata(
@@ -202,7 +202,7 @@ impl ComponentGrpcApi {
     ) -> Result<ComponentConstraints, ComponentError> {
         let response = self
             .component_service
-            .create_constraint(&component_constraint)
+            .create_constraint(component_constraint)
             .await
             .map(|v| ComponentConstraints {
                 component_id: Some(v.component_id.into()),
