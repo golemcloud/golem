@@ -92,6 +92,8 @@ pub enum ApiDeploymentError<Namespace> {
     InternalRepoError(RepoError),
     #[error("Internal error: failed to convert {what}: {error}")]
     InternalConversionError { what: String, error: String },
+    #[error("Internal error: failed to create component constraints {0}")]
+    ComponentConstraintCreateError(String),
 }
 
 impl<T> ApiDeploymentError<T> {
@@ -118,6 +120,7 @@ impl<Namespace: Display> SafeDisplay for ApiDeploymentError<Namespace> {
             ApiDeploymentError::ApiDefinitionsConflict(_) => self.to_string(),
             ApiDeploymentError::InternalRepoError(inner) => inner.to_safe_string(),
             ApiDeploymentError::InternalConversionError { .. } => self.to_string(),
+            ApiDeploymentError::ComponentConstraintCreateError(_) => self.to_string(),
         }
     }
 }
@@ -239,7 +242,7 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
 
         for (component_id, worker_calls_vec) in worker_functions {
             let merged_calls = WorkerFunctionsInRib::try_merge(worker_calls_vec)
-                .map_err(|err| Err(ApiDeploymentError::ApiDefinitionsConflict(err)))?;
+                .map_err(|err| ApiDeploymentError::ApiDefinitionsConflict(err))?;
 
             merged_worker_functions.insert(component_id, merged_calls);
         }
@@ -252,6 +255,7 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
 impl<AuthCtx, Namespace> ApiDeploymentService<AuthCtx, Namespace>
     for ApiDeploymentServiceDefault<AuthCtx>
 where
+    AuthCtx: Send + Sync,
     Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
     <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
 {
@@ -347,6 +351,7 @@ where
 
         let conflicting_definitions = HttpApiDefinition::find_conflicts(
             new_definitions
+                .clone()
                 .into_iter()
                 .map(|x| x.into())
                 .collect::<Vec<HttpApiDefinition>>()
@@ -384,15 +389,15 @@ where
                     .await?;
             }
 
-            let constraints =
-                Self::get_worker_functions_in_api_definitions(new_definitions.clone())?;
+            let constraints = Self::get_worker_functions_in_api_definitions(new_definitions)?;
 
             for (component_id, constraints) in constraints {
-                self.component_service.create_or_update_constraints(
-                    &component_id,
-                    constraints,
-                    auth_ctx,
-                )
+                self.component_service
+                    .create_or_update_constraints(&component_id, constraints, auth_ctx)
+                    .await
+                    .map_err(|err| {
+                        ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string())
+                    })?;
             }
 
             self.deployment_repo.create(new_deployment_records).await?;

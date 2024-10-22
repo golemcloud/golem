@@ -18,6 +18,7 @@ use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
+use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 // A type-registry is a mapping from a function name (global or part of an interface in WIT)
@@ -172,7 +173,7 @@ impl FunctionTypeRegistry {
     }
 }
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug, Serialize, Deserialize)]
+#[derive(Hash, Eq, PartialEq, Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub enum RegistryKey {
     FunctionName(String),
     FunctionNameWithInterface {

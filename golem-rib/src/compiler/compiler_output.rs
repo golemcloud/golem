@@ -1,5 +1,5 @@
 use std::convert::TryFrom;
-use crate::compiler::worker_invoke_calls::WorkerFunctionsInRib;
+use crate::compiler::worker_functions_in_rib::WorkerFunctionsInRib;
 use crate::{RibByteCode, RibInputTypeInfo};
 use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
 

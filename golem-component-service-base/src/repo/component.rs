@@ -167,7 +167,7 @@ pub trait ComponentRepo {
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError>;
 
-    async fn create_constraint(
+    async fn create_or_update_constraint(
         &self,
         component_constraint_record: &ComponentConstraintRecord,
     ) -> Result<(), RepoError>;
@@ -275,13 +275,13 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
         Self::logged_with_id("delete", component_id, result)
     }
 
-    async fn create_constraint(
+    async fn create_or_update_constraint(
         &self,
         component_constraint_record: &ComponentConstraintRecord,
     ) -> Result<(), RepoError> {
         let result = self
             .repo
-            .create_constraint(component_constraint_record)
+            .create_or_update_constraint(component_constraint_record)
             .await;
         Self::logged("create_component_constraint", result)
     }
@@ -630,26 +630,73 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn create_constraint(
+    async fn create_or_update_constraint(
         &self,
         component_constraint_record: &ComponentConstraintRecord,
     ) -> Result<(), RepoError> {
         let component_constraint_record = component_constraint_record.clone();
         let mut transaction = self.db_pool.begin().await?;
 
-        sqlx::query(
+        let existing_record = sqlx::query_as::<_, ComponentConstraintRecord>(
             r#"
+                SELECT
+                    namespace,
+                    component_id,
+                    constraints
+                FROM component_constraints WHERE component_id = $1
+                "#,
+        )
+            .bind(component_constraint_record.component_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|e| e.into())?;
+
+        if let Some(existing_record) = existing_record {
+            let existing_worker_calls_used = constraint_serde::deserialize(&existing_record.constraint_data)
+                .map_err(|err| RepoError::Internal(err))?;
+            let new_worker_calls_used = constraint_serde::deserialize(&component_constraint_record.constraint_data)
+                .map_err(|err| RepoError::Internal(err))?;
+
+            // This shouldn't happen as it is validated in service layers.
+            // However, repo gives us more transactional guarantee.
+            let merged_worker_calls = WorkerFunctionsInRib::try_merge(vec![existing_worker_calls_used, new_worker_calls_used])
+                .map_err(|err| RepoError::Internal(err))?;
+
+            // Serialize the merged result back to store in the database
+            let merged_constraint_data = constraint_serde::serialize(&merged_worker_calls)
+                .map_err(|err| RepoError::Internal(err))?;
+
+            // Update the existing record in the database
+            sqlx::query(
+                r#"
+                 UPDATE
+                   component_constraints
+                    SET constraints = $1
+                    WHERE namespace = $2 AND component_id = $3
+                    "#,
+            )
+                .bind(merged_constraint_data.into())
+                .bind(component_constraint_record.namespace)
+                .bind(component_constraint_record.component_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(|e| RepoError::from(e))?;
+
+        } else {
+            sqlx::query(
+                r#"
               INSERT INTO component_constraints
                 (namespace, component_id, constraints)
               VALUES
                 ($1, $2, $3)
                "#,
-        )
-        .bind(component_constraint_record.namespace)
-        .bind(component_constraint_record.component_id)
-        .bind(component_constraint_record.constraint_data)
-        .execute(&mut *transaction)
-        .await?;
+            )
+                .bind(component_constraint_record.namespace)
+                .bind(component_constraint_record.component_id)
+                .bind(component_constraint_record.constraint_data)
+                .execute(&mut *transaction)
+                .await?;
+        }
 
         transaction.commit().await?;
 

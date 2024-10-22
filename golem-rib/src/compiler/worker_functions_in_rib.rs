@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use bincode::{Decode, Encode};
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
 use golem_api_grpc::proto::golem::rib::WorkerFunctionInRibMetadata as WorkerFunctionInRibMetadataProto;
 use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
@@ -28,7 +29,7 @@ use serde::{Deserialize, Serialize};
 // which has specific details, along with original type registry to construct this data.
 // These function calls are specifically worker invoke calls and nothing else.
 // If Rib has inbuilt function support, that will not be included here either.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 pub struct WorkerFunctionsInRib {
     pub function_calls: Vec<WorkerFunctionInRibMetadata>,
 }
@@ -135,7 +136,7 @@ impl From<WorkerFunctionsInRib> for WorkerFunctionsInRibProto {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
 pub struct WorkerFunctionInRibMetadata {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,

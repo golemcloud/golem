@@ -227,9 +227,9 @@ where
     async fn create_or_update_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: rib::WorkerFunctionsInRib,
+        constraints: WorkerFunctionsInRib,
         metadata: &AuthCtx,
-    ) -> ComponentResult<rib::WorkerFunctionsInRib> {
+    ) -> ComponentResult<WorkerFunctionsInRib> {
         let value = with_retries(
             "component",
             "create_component_constraints",

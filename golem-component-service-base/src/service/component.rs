@@ -572,7 +572,7 @@ where
         let record = ComponentConstraintRecord::try_from(component_constraint.clone())
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
-        self.component_repo.create_constraint(&record).await?;
+        self.component_repo.create_or_update_constraint(&record).await?;
         Ok(component_constraint.clone())
     }
 }

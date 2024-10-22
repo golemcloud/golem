@@ -13,7 +13,6 @@ use derive_more::Display;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
-use rib::WorkerFunctionsInRib;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
