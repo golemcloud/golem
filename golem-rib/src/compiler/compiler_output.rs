@@ -44,7 +44,7 @@ impl From<CompilerOutput> for ProtoCompilerOutput {
             )),
             worker_invoke_calls: value
                 .worker_invoke_calls
-                .map(golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib::from),
+                .map(golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib::from),
         }
     }
 }

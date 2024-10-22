@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
-use golem_api_grpc::proto::golem::rib::WorkerInvokeCallInRib as WorkerInvokeCallInRibProto;
-use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
+use golem_api_grpc::proto::golem::rib::WorkerFunctionInRibMetadata as WorkerFunctionInRibMetadataProto;
+use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 
@@ -70,10 +70,10 @@ impl WorkerFunctionsInRib {
     }
 }
 
-impl TryFrom<WorkerInvokeCallsInRibProto> for WorkerFunctionsInRib {
+impl TryFrom<WorkerFunctionsInRibProto> for WorkerFunctionsInRib {
     type Error = String;
 
-    fn try_from(value: WorkerInvokeCallsInRibProto) -> Result<Self, Self::Error> {
+    fn try_from(value: WorkerFunctionsInRibProto) -> Result<Self, Self::Error> {
         let function_calls_proto = value.function_calls;
         let function_calls = function_calls_proto
             .iter()
@@ -83,13 +83,13 @@ impl TryFrom<WorkerInvokeCallsInRibProto> for WorkerFunctionsInRib {
     }
 }
 
-impl From<WorkerFunctionsInRib> for WorkerInvokeCallsInRibProto {
+impl From<WorkerFunctionsInRib> for WorkerFunctionsInRibProto {
     fn from(value: WorkerFunctionsInRib) -> Self {
-        WorkerInvokeCallsInRibProto {
+        WorkerFunctionsInRibProto {
             function_calls: value
                 .function_calls
                 .iter()
-                .map(|x| WorkerInvokeCallInRibProto::from(x.clone()))
+                .map(|x| WorkerFunctionInRibMetadataProto::from(x.clone()))
                 .collect(),
         }
     }
@@ -102,10 +102,10 @@ pub struct WorkerFunctionInRibMetadata {
     pub return_types: Vec<AnalysedType>,
 }
 
-impl TryFrom<WorkerInvokeCallInRibProto> for WorkerFunctionInRibMetadata {
+impl TryFrom<WorkerFunctionInRibMetadataProto> for WorkerFunctionInRibMetadata {
     type Error = String;
 
-    fn try_from(value: WorkerInvokeCallInRibProto) -> Result<Self, Self::Error> {
+    fn try_from(value: WorkerFunctionInRibMetadataProto) -> Result<Self, Self::Error> {
         let return_types = value
             .return_types
             .iter()
@@ -129,11 +129,11 @@ impl TryFrom<WorkerInvokeCallInRibProto> for WorkerFunctionInRibMetadata {
     }
 }
 
-impl From<WorkerFunctionInRibMetadata> for WorkerInvokeCallInRibProto {
+impl From<WorkerFunctionInRibMetadata> for WorkerFunctionInRibMetadataProto {
     fn from(value: WorkerFunctionInRibMetadata) -> Self {
         let registry_key = value.function_key.into();
 
-        WorkerInvokeCallInRibProto {
+        WorkerFunctionInRibMetadataProto {
             function_key: Some(registry_key),
             parameter_types: value.parameter_types.iter().map(|x| x.into()).collect(),
             return_types: value.return_types.iter().map(|x| x.into()).collect(),

@@ -3,7 +3,7 @@ use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
-use rib::{WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
+use rib::WorkerFunctionsInRib;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component<Namespace> {

@@ -26,6 +26,7 @@ use std::result::Result;
 use std::sync::Arc;
 use tracing::{debug, error};
 use uuid::Uuid;
+use rib::WorkerFunctionsInRib;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord {
@@ -124,7 +125,7 @@ where
 {
     type Error = String;
     fn try_from(value: ComponentConstraintRecord) -> Result<Self, Self::Error> {
-        let function_constraints: FunctionConstraints =
+        let function_constraints: WorkerFunctionsInRib =
             constraint_serde::deserialize(&value.constraint_data)?;
         let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
         Ok(ComponentConstraint {
@@ -689,14 +690,14 @@ pub mod record_metadata_serde {
 
 pub mod constraint_serde {
     use bytes::{BufMut, Bytes, BytesMut};
-    use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
+    use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
     use prost::Message;
     use rib::WorkerFunctionsInRib;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
     pub fn serialize(value: &WorkerFunctionsInRib) -> Result<Bytes, String> {
-        let proto_value: WorkerInvokeCallsInRibProto = WorkerInvokeCallsInRibProto::from(value.clone());
+        let proto_value: WorkerFunctionsInRibProto = WorkerFunctionsInRibProto::from(value.clone());
         let mut bytes = BytesMut::new();
         bytes.put_u8(SERIALIZATION_VERSION_V1);
         bytes.extend_from_slice(&proto_value.encode_to_vec());
@@ -708,7 +709,7 @@ pub mod constraint_serde {
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let proto_value: WorkerInvokeCallsInRibProto = Message::decode(data)
+                let proto_value: WorkerFunctionsInRibProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
                 let value = WorkerFunctionsInRib::try_from(proto_value)?;
                 Ok(value)

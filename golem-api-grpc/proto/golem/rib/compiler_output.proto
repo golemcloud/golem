@@ -9,5 +9,5 @@ import "golem/rib/worker_invoke_calls_in_rib.proto";
 message CompilerOutput {
     RibByteCode byte_code = 1;
     RibInputType rib_input = 2;
-    optional WorkerInvokeCallsInRib worker_invoke_calls = 3;
+    optional WorkerFunctionsInRib worker_invoke_calls = 3;
 }

@@ -14,7 +14,7 @@ use golem_service_base::model::Component;
 use http::Uri;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
+use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use rib::WorkerFunctionsInRib;
 use crate::service::component::ComponentServiceError;
 use crate::service::with_metadata;
@@ -243,7 +243,7 @@ where
                                 project_id: None,
                                 component_constraints: Some(ComponentConstraints {
                                     component_id: Some(golem_api_grpc::proto::golem::component::ComponentId::from(id.clone())),
-                                    constraints: Some(WorkerInvokeCallsInRibProto::from(constraints.clone()))
+                                    constraints: Some(WorkerFunctionsInRibProto::from(constraints.clone()))
                                 })
                             };
                             let request = with_metadata(request, metadata.clone());

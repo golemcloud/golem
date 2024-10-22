@@ -3,11 +3,11 @@ syntax = "proto3";
 package golem.rib;
 import "wasm/ast/type.proto";
 
-message WorkerInvokeCallsInRib {
-    repeated WorkerInvokeCallInRib function_calls = 1;
+message WorkerFunctionsInRib {
+    repeated WorkerFunctionInRibMetadata function_calls = 1;
 }
 
-message WorkerInvokeCallInRib {
+message WorkerFunctionInRibMetadata {
     RegistryKey function_key = 1;
     repeated wasm.ast.Type parameter_types = 2;
     repeated wasm.ast.Type return_types = 3;
