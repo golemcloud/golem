@@ -8,14 +8,14 @@ use golem_api_grpc::proto::golem::component::v1::{
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
-use golem_common::model::function_constraint::FunctionConstraint;
 use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
 use http::Uri;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib;
+use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
+use rib::WorkerInvokeCallsInRib;
 use crate::service::component::ComponentServiceError;
 use crate::service::with_metadata;
 use crate::UriBackConversion;
@@ -102,32 +102,36 @@ impl RemoteComponentService {
 
     fn process_create_component_metadata_response(
         response: CreateComponentConstraintsResponse,
-    ) -> Result<WorkerInvokeCallsInRib, ComponentServiceError> {
+    ) -> Result<rib::WorkerInvokeCallsInRib, ComponentServiceError> {
         match response.result {
-            None => Ok(vec![]),
+            None => Err(
+                ComponentServiceError::Internal("Failed to create component constraints. Empty results".to_string())
+            ),
             Some(create_component_constraints_response::Result::Success(response)) => {
-                let constraints_view: Result<Vec<FunctionConstraint>, ComponentServiceError> =
                     match response.components {
                         Some(constraints) => {
-                            let result = constraints
-                                .constraints
-                                .iter()
-                                .map(|x| {
-                                    FunctionConstraint::try_from(x.clone()).map_err(|err| {
-                                        ComponentServiceError::Internal(format!(
-                                            "Response conversion error: {err}"
-                                        ))
-                                    })
-                                })
-                                .collect::<Result<_, _>>()?;
+                            let constraints_optional = constraints.constraints;
 
-                            Ok(result)
+                            if let Some(constraints) = constraints_optional {
+                               let  worker_invoke_calls_in_rib =
+                                   rib::WorkerInvokeCallsInRib::try_from(constraints).map_err(|err| {
+                                    ComponentServiceError::Internal(format!(
+                                        "Response conversion error: {err}"
+                                    ))
+                                })?;
+
+                                Ok(worker_invoke_calls_in_rib)
+
+                            } else {
+                               Err(ComponentServiceError::Internal(
+                                   "Failed to create component constraints".to_string(),
+                               ))
+                            }
                         }
                         None => Err(ComponentServiceError::Internal(
                             "Empty component response".to_string(),
                         )),
-                    };
-                Ok(constraints_view?)
+                    }
             }
             Some(create_component_constraints_response::Result::Error(error)) => Err(error.into()),
         }
@@ -222,12 +226,12 @@ where
     async fn create_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: Vec<FunctionConstraint>,
+        constraints: rib::WorkerInvokeCallsInRib,
         metadata: &AuthCtx,
-    ) -> ComponentResult<Vec<FunctionConstraint>> {
+    ) -> ComponentResult<rib::WorkerInvokeCallsInRib> {
         let value = with_retries(
             "component",
-            "get_latest",
+            "create_component_constraints",
             Some(component_id.to_string()),
             &self.retry_config,
             &(self.client.clone(), component_id.clone(), metadata.clone(), constraints.clone()),
@@ -239,10 +243,7 @@ where
                                 project_id: None,
                                 component_constraints: Some(ComponentConstraints {
                                     component_id: Some(golem_api_grpc::proto::golem::component::ComponentId::from(id.clone())),
-                                    constraints: constraints.iter().map(|function_constraint| {
-                                        golem_api_grpc::proto::golem::component::FunctionConstraint::from(function_constraint.clone())
-                                    }).collect()
-
+                                    constraints: Some(WorkerInvokeCallsInRibProto::from(constraints.clone()))
                                 })
                             };
                             let request = with_metadata(request, metadata.clone());
