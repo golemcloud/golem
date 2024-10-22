@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package golem.rib;
+import "wasm/ast/type.proto";
+
+message WorkerInvokeCallsInRib {
+    repeated WorkerInvokeCallInRib function_calls = 1;
+}
+
+message WorkerInvokeCallInRib {
+    RegistryKey function_key = 1;
+    repeated wasm.ast.Type parameter_types = 2;
+    repeated wasm.ast.Type return_types = 3;
+}
+
+message RegistryKey {
+    oneof key_type {
+        FunctionName function_name = 1;
+        FunctionNameWithInterface function_name_with_interface = 2;
+    }
+}
+
+message FunctionName {
+    string name = 1;
+}
+
+message FunctionNameWithInterface {
+    string interface_name = 1;
+    string function_name = 2;
+}
+

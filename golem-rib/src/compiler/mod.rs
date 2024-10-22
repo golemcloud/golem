@@ -72,7 +72,7 @@ pub fn compile_with_limited_globals(
     let byte_code = RibByteCode::from_expr(inferred_expr.0.clone())?;
 
     Ok(CompilerOutput {
-        function_calls: function_calls_identified,
+        worker_invoke_calls: function_calls_identified,
         byte_code,
         global_input_type_info,
     })
@@ -80,7 +80,7 @@ pub fn compile_with_limited_globals(
 
 #[derive(Debug, Clone)]
 pub struct CompilerOutput {
-    pub function_calls: WorkerInvokeCallsInRib,
+    pub worker_invoke_calls: WorkerInvokeCallsInRib,
     pub byte_code: RibByteCode,
     pub global_input_type_info: RibInputTypeInfo,
 }
