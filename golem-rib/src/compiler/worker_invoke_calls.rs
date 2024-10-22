@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 // If Rib has inbuilt function support, that will not be included here either.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerFunctionsInRib {
-    function_calls: Vec<WorkerFunctionInRibMetadata>,
+    pub function_calls: Vec<WorkerFunctionInRibMetadata>,
 }
 
 impl WorkerFunctionsInRib {

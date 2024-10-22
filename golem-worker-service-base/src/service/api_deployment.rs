@@ -210,7 +210,7 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
         Ok(())
     }
 
-    fn get_worker_functions_in_definition<Namespace>(
+    fn get_worker_functions_in_api_definitions<Namespace>(
         definitions: Vec<CompiledHttpApiDefinition>,
     ) -> Result<HashMap<ComponentId, WorkerFunctionsInRib>, ApiDeploymentError<Namespace>> {
         let mut worker_functions_in_rib = HashMap::new();
@@ -384,7 +384,8 @@ where
                     .await?;
             }
 
-            let constraints = Self::get_worker_functions_in_definition(new_definitions.clone())?;
+            let constraints =
+                Self::get_worker_functions_in_api_definitions(new_definitions.clone())?;
 
             for (component_id, constraints) in constraints {
                 self.component_service.create_or_update_constraints(

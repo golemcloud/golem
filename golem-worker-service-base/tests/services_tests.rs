@@ -31,6 +31,7 @@ use golem_worker_service_base::service::http::http_api_definition_validator::{
 use chrono::Utc;
 use golem_common::model::function_constraint::FunctionConstraint;
 use golem_wasm_ast::analysis::analysed_type::str;
+use rib::WorkerFunctionsInRib;
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -192,10 +193,12 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
     async fn create_or_update_constraints(
         &self,
         _component_id: &ComponentId,
-        _constraints: Vec<FunctionConstraint>,
+        _constraints: WorkerFunctionsInRib,
         _auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Vec<FunctionConstraint>> {
-        Ok(vec![])
+    ) -> ComponentResult<WorkerFunctionsInRib> {
+        Ok(WorkerFunctionsInRib {
+            function_calls: vec![],
+        })
     }
 }
 
@@ -325,7 +328,10 @@ async fn test_deployment(
     ));
 
     let deployment = get_api_deployment("test.com", None, vec![&def1.id.0, &def2.id.0]);
-    deployment_service.deploy(&deployment).await.unwrap();
+    deployment_service
+        .deploy(&deployment, &EmptyAuthCtx::default())
+        .await
+        .unwrap();
 
     let definitions: Vec<HttpApiDefinition> = definition_service
         .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
@@ -355,7 +361,10 @@ async fn test_deployment(
     ));
 
     let deployment = get_api_deployment("test.com", Some("my"), vec![&def4.id.0]);
-    deployment_service.deploy(&deployment).await.unwrap();
+    deployment_service
+        .deploy(&deployment, &EmptyAuthCtx::default())
+        .await
+        .unwrap();
 
     let definitions: Vec<HttpApiDefinition> = deployment_service
         .get_definitions_by_site(&ApiSiteString("my.test.com".to_string()))
@@ -369,7 +378,10 @@ async fn test_deployment(
     assert!(contains_definitions(definitions, vec![def4.clone()]));
 
     let deployment = get_api_deployment("test.com", None, vec![&def3.id.0]);
-    deployment_service.deploy(&deployment).await.unwrap();
+    deployment_service
+        .deploy(&deployment, &EmptyAuthCtx::default())
+        .await
+        .unwrap();
 
     let deployment = deployment_service
         .get_by_site(&ApiSiteString("test.com".to_string()))
@@ -520,10 +532,15 @@ async fn test_deployment_conflict(
         .unwrap();
 
     let deployment = get_api_deployment("test-conflict.com", None, vec![&def1.id.0, &def2.id.0]);
-    deployment_service.deploy(&deployment).await.unwrap();
+    deployment_service
+        .deploy(&deployment, &EmptyAuthCtx::default())
+        .await
+        .unwrap();
 
     let deployment = get_api_deployment("test-conflict.com", None, vec![&def3.id.0]);
-    let deployment_result = deployment_service.deploy(&deployment).await;
+    let deployment_result = deployment_service
+        .deploy(&deployment, &EmptyAuthCtx::default())
+        .await;
     assert!(deployment_result.is_err());
     assert_eq!(
         deployment_result.unwrap_err().to_string(),
