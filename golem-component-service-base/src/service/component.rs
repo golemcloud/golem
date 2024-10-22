@@ -50,6 +50,8 @@ pub enum ComponentError {
     InternalConversionError { what: String, error: String },
     #[error("Internal component store error: {message}: {error}")]
     ComponentStoreError { message: String, error: String },
+    #[error("Component Constraint Error: {0}")]
+    ComponentConstraintError(String),
 
 }
 
@@ -370,7 +372,7 @@ where
         if let Some(constraints) =constraints {
             let conflicts = Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
             if !conflicts.is_empty() {
-                return  Err(ComponentError::conversion_error("record", conflicts))
+                return  Err(ComponentError::ComponentConstraintError("record", conflicts))
             }
         }
 
