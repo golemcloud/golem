@@ -1,58 +1,56 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use crate::config::CloudEnvBasedTestDependencies;
+use crate::Tracing;
 use assert2::assert;
 use golem_cloud_cli::cloud::model::text::account::AccountAddView;
 use golem_cloud_cli::cloud::model::text::project::{
     ProjectAddView, ProjectPolicyAddView, ProjectPolicyGetView, ProjectShareView,
 };
 use golem_cloud_client::model::ProjectAction;
-use libtest_mimic::{Failed, Trial};
-use std::sync::Arc;
+use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
-fn make(
-    suffix: &str,
-    name: &str,
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-) -> Vec<Trial> {
-    let ctx = (deps, name.to_string(), cli);
-    vec![
-        Trial::test_in_context(format!("share_policy{suffix}"), ctx.clone(), share_policy),
-        Trial::test_in_context(format!("share_actions{suffix}"), ctx.clone(), share_actions),
-    ]
+inherit_test_dep!(CloudEnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &CloudEnvBasedTestDependencies) -> CliLive {
+    CliLive::make("share", deps).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
-        CliLive::make("account_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        deps.clone(),
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_short", "CLI_short", true);
+    make(r, "_long", "CLI_long", false);
+}
+
+fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
+    add_test!(
+        r,
+        format!("share_policy{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            share_policy((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    let mut long_args = make(
-        "_long",
-        "CLI_long",
-        CliLive::make("account_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
+    add_test!(
+        r,
+        format!("share_actions{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            share_actions((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    short_args.append(&mut long_args);
-
-    short_args
 }
 
 fn share_policy(
     (_deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
     let name = format!("share policy {name}");
     let email = format!("share_policy_{name}@example.com");
@@ -97,11 +95,11 @@ fn share_policy(
 
 fn share_actions(
     (_deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
     let name = format!("share policy {name}");
     let email = format!("share_policy_{name}@example.com");

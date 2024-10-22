@@ -1,80 +1,67 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use crate::config::CloudEnvBasedTestDependencies;
+use crate::Tracing;
 use assert2::assert;
 use chrono::{DateTime, FixedOffset};
 use golem_cloud_cli::cloud::model::text::token::{TokenListView, UnsafeTokenView};
-use libtest_mimic::{Failed, Trial};
-use std::sync::Arc;
+use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
-fn make(
-    suffix: &str,
-    name: &str,
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-) -> Vec<Trial> {
-    let ctx = (deps, name.to_string(), cli);
-    vec![
-        Trial::test_in_context(
-            format!("token_add_for_another_account{suffix}"),
-            ctx.clone(),
-            token_add_for_another_account,
-        )
-        .with_ignored_flag(true),
-        Trial::test_in_context(format!("token_add{suffix}"), ctx.clone(), token_add),
-        Trial::test_in_context(format!("token_list{suffix}"), ctx.clone(), token_list),
-        Trial::test_in_context(format!("token_delete{suffix}"), ctx.clone(), token_delete),
-    ]
+inherit_test_dep!(CloudEnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &CloudEnvBasedTestDependencies) -> CliLive {
+    CliLive::make("token", deps).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
-        CliLive::make("token_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        deps.clone(),
-    );
-
-    let mut long_args = make(
-        "_long",
-        "CLI_long",
-        CliLive::make("token_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
-    );
-
-    short_args.append(&mut long_args);
-
-    short_args
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_short", "CLI_short", true);
+    make(r, "_long", "CLI_long", false);
 }
 
-fn token_add_for_another_account(
-    (_deps, _name, _cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
-    todo!("Not implemented, required for tests")
+fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
+    add_test!(
+        r,
+        format!("token_add{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            token_add((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("token_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            token_list((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("token_delete{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            token_delete((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
 }
 
 fn token_add(
     (_deps, _name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let token: UnsafeTokenView =
         cli.run(&["token", "add", "--expires-at", "2050-01-01T00:00:00Z"])?;
 
     assert_eq!(
         token.0.data.expires_at,
-        "2050-01-01T00:00:00Z"
-            .parse::<DateTime<FixedOffset>>()
-            .unwrap()
+        "2050-01-01T00:00:00Z".parse::<DateTime<FixedOffset>>()?
     );
 
     Ok(())
@@ -82,11 +69,11 @@ fn token_add(
 
 fn token_list(
     (_deps, _name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let token: UnsafeTokenView = cli.run(&["token", "add"])?;
 
     let tokens: TokenListView = cli.run(&["token", "list"])?;
@@ -98,11 +85,11 @@ fn token_list(
 
 fn token_delete(
     (_deps, _name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let token: UnsafeTokenView = cli.run(&["token", "add"])?;
 
     let tokens: TokenListView = cli.run(&["token", "list"])?;

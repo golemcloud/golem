@@ -1,93 +1,101 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use crate::config::CloudEnvBasedTestDependencies;
+use crate::Tracing;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_common::uri::oss::url::ComponentUrl;
-use libtest_mimic::{Failed, Trial};
-use std::sync::Arc;
+use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
-fn make(
-    suffix: &str,
-    name: &str,
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-) -> Vec<Trial> {
-    let ctx = (deps, name.to_string(), cli);
-    vec![
-        Trial::test_in_context(
-            format!("component_add_and_find_all{suffix}"),
-            ctx.clone(),
-            component_add_and_find_all,
-        ),
-        Trial::test_in_context(
-            format!("component_add_and_find_by_name{suffix}"),
-            ctx.clone(),
-            component_add_and_find_by_name,
-        ),
-        Trial::test_in_context(
-            format!("component_add_and_get{suffix}"),
-            ctx.clone(),
-            component_add_and_get,
-        ),
-        Trial::test_in_context(
-            format!("component_add_and_get_urn{suffix}"),
-            ctx.clone(),
-            component_add_and_get_urn,
-        ),
-        Trial::test_in_context(
-            format!("component_add_and_get_url{suffix}"),
-            ctx.clone(),
-            component_add_and_get_url,
-        ),
-        Trial::test_in_context(
-            format!("component_update{suffix}"),
-            ctx.clone(),
-            component_update,
-        ),
-        Trial::test_in_context(
-            format!("component_update_urn{suffix}"),
-            ctx.clone(),
-            component_update_urn,
-        ),
-        Trial::test_in_context(
-            format!("component_update_url{suffix}"),
-            ctx.clone(),
-            component_update_url,
-        ),
-    ]
+inherit_test_dep!(CloudEnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &CloudEnvBasedTestDependencies) -> CliLive {
+    CliLive::make("component", deps).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI short",
-        CliLive::make("component_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        deps.clone(),
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_short", "CLI_short", true);
+    make(r, "_long", "CLI_long", false);
+}
+
+fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
+    add_test!(
+        r,
+        format!("component_add_and_find_all{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            component_add_and_find_all((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    let mut long_args = make(
-        "_long",
-        "CLI long",
-        CliLive::make("component_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
+    add_test!(
+        r,
+        format!("component_add_and_find_by_name{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            component_add_and_find_by_name((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    short_args.append(&mut long_args);
-
-    short_args
+    add_test!(
+        r,
+        format!("component_add_and_get{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            component_add_and_get((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("component_add_and_get_urn{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            component_add_and_get_urn((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("component_add_and_get_url{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            component_add_and_get_url((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("component_update{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            component_update((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("component_update_urn{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            component_update_urn((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("component_update_url{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            component_update_url((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
 }
 
 fn component_add_and_find_all(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} component add and find all");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -105,11 +113,11 @@ fn component_add_and_find_all(
 
 fn component_add_and_find_by_name(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name_other = format!("{name} component add and find by name other");
     let component_name = format!("{name} component add and find by name");
     let env_service = deps.component_directory().join("environment-service.wasm");
@@ -141,11 +149,11 @@ fn component_add_and_find_by_name(
 
 fn component_update(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} component update");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -168,11 +176,11 @@ fn component_update(
 
 fn component_update_urn(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} component update urn");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -196,11 +204,11 @@ fn component_update_urn(
 
 fn component_update_url(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} component update url");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -228,11 +236,11 @@ fn component_update_url(
 
 fn component_add_and_get(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} component add and get");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -249,17 +257,17 @@ fn component_add_and_get(
         &cfg.arg('c', "component-name"),
         &component_name,
     ])?;
-    assert!(res == component, "{res:?} = ({component:?})");
+    assert_eq!(res, component, "{res:?} = ({component:?})");
     Ok(())
 }
 
 fn component_add_and_get_urn(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} component add and get urn");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -277,17 +285,17 @@ fn component_add_and_get_urn(
         &cfg.arg('C', "component"),
         &component.component_urn.to_string(),
     ])?;
-    assert!(res == component, "{res:?} = ({component:?})");
+    assert_eq!(res, component, "{res:?} = ({component:?})");
     Ok(())
 }
 
 fn component_add_and_get_url(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} component add and get url");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -309,6 +317,6 @@ fn component_add_and_get_url(
         &cfg.arg('C', "component"),
         &component_url.to_string(),
     ])?;
-    assert!(res == component, "{res:?} = ({component:?})");
+    assert_eq!(res, component, "{res:?} = ({component:?})");
     Ok(())
 }

@@ -1,7 +1,8 @@
 use crate::components::{TestDependencies, ROOT_TOKEN};
+use crate::config::CloudEnvBasedTestDependencies;
+use anyhow::anyhow;
 use golem_cli::model::Format;
 use golem_common::model::trim_date::TrimDateTime;
-use libtest_mimic::Failed;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::ffi::OsStr;
@@ -10,7 +11,6 @@ use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct CliConfig {
@@ -28,15 +28,18 @@ impl CliConfig {
 }
 
 pub trait Cli {
-    fn run<T: DeserializeOwned, S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<T, Failed>;
+    fn run<T: DeserializeOwned, S: AsRef<OsStr> + Debug>(
+        &self,
+        args: &[S],
+    ) -> Result<T, anyhow::Error>;
     fn run_trimmed<T: DeserializeOwned + TrimDateTime, S: AsRef<OsStr> + Debug>(
         &self,
         args: &[S],
-    ) -> Result<T, Failed>;
-    fn run_string<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, Failed>;
-    fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, Failed>;
-    fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), Failed>;
-    fn run_stdout<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Child, Failed>;
+    ) -> Result<T, anyhow::Error>;
+    fn run_string<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, anyhow::Error>;
+    fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, anyhow::Error>;
+    fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), anyhow::Error>;
+    fn run_stdout<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Child, anyhow::Error>;
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +69,14 @@ impl CliLive {
         }
     }
 
+    pub fn with_args(&self, short: bool) -> Self {
+        if short {
+            self.with_short_args()
+        } else {
+            self.with_long_args()
+        }
+    }
+
     pub fn with_format(&self, format: Format) -> Self {
         CliLive {
             format,
@@ -75,8 +86,8 @@ impl CliLive {
 
     pub fn make(
         conf_dir_name: &str,
-        deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-    ) -> Result<CliLive, Failed> {
+        deps: &CloudEnvBasedTestDependencies,
+    ) -> Result<CliLive, anyhow::Error> {
         let config_dir = PathBuf::from(format!("../target/cli_conf/{conf_dir_name}"));
         let _ = fs::remove_dir_all(&config_dir);
 
@@ -124,15 +135,14 @@ impl CliLive {
 
             Ok(cli)
         } else {
-            Err(format!(
+            Err(anyhow!(
                 "Expected to have precompiled Golem CLI at {}",
                 golem_cli_path.to_str().unwrap_or("")
-            )
-            .into())
+            ))
         }
     }
 
-    fn run_inner<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, Failed> {
+    fn run_inner<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, anyhow::Error> {
         println!(
             "Executing Golem CLI command: {} {args:?}",
             self.golem_cli_path.to_str().unwrap_or("")
@@ -156,11 +166,10 @@ impl CliLive {
         println!("CLI stderr: {stderr} for command {args:?}");
 
         if !output.status.success() {
-            return Err(format!(
+            return Err(anyhow!(
                 "golem cli failed with exit code: {:?}",
                 output.status.code()
-            )
-            .into());
+            ));
         }
 
         Ok(stdout)
@@ -171,7 +180,7 @@ impl Cli for CliLive {
     fn run<'a, T: DeserializeOwned, S: AsRef<OsStr> + Debug>(
         &self,
         args: &[S],
-    ) -> Result<T, Failed> {
+    ) -> Result<T, anyhow::Error> {
         let stdout = self.run_inner(args)?;
 
         Ok(serde_json::from_str(&stdout)?)
@@ -180,27 +189,27 @@ impl Cli for CliLive {
     fn run_trimmed<'a, T: DeserializeOwned + TrimDateTime, S: AsRef<OsStr> + Debug>(
         &self,
         args: &[S],
-    ) -> Result<T, Failed> {
+    ) -> Result<T, anyhow::Error> {
         let stdout = self.run_inner(args)?;
         Ok(serde_json::from_str::<T>(&stdout)?.trim_date_time_ms())
     }
 
-    fn run_string<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, Failed> {
+    fn run_string<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<String, anyhow::Error> {
         self.run_inner(args)
     }
 
-    fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, Failed> {
+    fn run_json<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Value, anyhow::Error> {
         let stdout = self.run_inner(args)?;
 
         Ok(serde_json::from_str(&stdout)?)
     }
 
-    fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), Failed> {
+    fn run_unit<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<(), anyhow::Error> {
         let _ = self.run_inner(args)?;
         Ok(())
     }
 
-    fn run_stdout<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Child, Failed> {
+    fn run_stdout<S: AsRef<OsStr> + Debug>(&self, args: &[S]) -> Result<Child, anyhow::Error> {
         println!(
             "Executing Golem CLI command: {} {args:?}",
             self.golem_cli_path.to_str().unwrap_or("")
@@ -221,7 +230,7 @@ impl Cli for CliLive {
         let stderr = child
             .stderr
             .take()
-            .ok_or::<Failed>("Can't get golem cli stderr".into())?;
+            .ok_or(anyhow!("Can't get golem cli stderr"))?;
 
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);

@@ -1,55 +1,53 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use crate::config::CloudEnvBasedTestDependencies;
+use crate::Tracing;
 use assert2::assert;
 use golem_cloud_cli::cloud::model::text::project::{ProjectPolicyAddView, ProjectPolicyGetView};
 use golem_cloud_client::model::ProjectAction;
-use libtest_mimic::{Failed, Trial};
-use std::sync::Arc;
+use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
-fn make(
-    suffix: &str,
-    name: &str,
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-) -> Vec<Trial> {
-    let ctx = (deps, name.to_string(), cli);
-    vec![
-        Trial::test_in_context(format!("policy_add{suffix}"), ctx.clone(), policy_add),
-        Trial::test_in_context(format!("policy_get{suffix}"), ctx.clone(), policy_get),
-    ]
+inherit_test_dep!(CloudEnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &CloudEnvBasedTestDependencies) -> CliLive {
+    CliLive::make("policy", deps).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
-        CliLive::make("policy_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        deps.clone(),
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_short", "CLI_short", true);
+    make(r, "_long", "CLI_long", false);
+}
+
+fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
+    add_test!(
+        r,
+        format!("policy_add{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            policy_add((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    let mut long_args = make(
-        "_long",
-        "CLI_long",
-        CliLive::make("policy_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
+    add_test!(
+        r,
+        format!("policy_get{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            policy_get((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    short_args.append(&mut long_args);
-
-    short_args
 }
 
 fn policy_add(
     (_deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let name = format!("policy add {name}");
 
     let policy: ProjectPolicyAddView = cli.run(&[
@@ -78,11 +76,11 @@ fn policy_add(
 
 fn policy_get(
     (_deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let name = format!("policy list {name}");
 
     let policy: ProjectPolicyAddView = cli.run(&[

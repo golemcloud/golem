@@ -1,6 +1,8 @@
 use crate::cli::{Cli, CliConfig, CliLive};
 use crate::components::TestDependencies;
-use crate::RefKind;
+use crate::config::CloudEnvBasedTestDependencies;
+use crate::{RefKind, Tracing};
+use anyhow::anyhow;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::{Format, IdempotencyKey, WorkersMetadataResponseView};
@@ -8,122 +10,162 @@ use golem_client::model::UpdateRecord;
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::WorkerUrn;
 use indoc::formatdoc;
-use libtest_mimic::{Failed, Trial};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
-use std::sync::Arc;
 use std::time::Duration;
-use strum::IntoEnumIterator;
+use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
-fn make(
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-    ref_kind: RefKind,
-) -> Vec<Trial> {
-    let cli_suffix = if cli.config.short_args {
-        "short"
-    } else {
-        "long"
-    };
+inherit_test_dep!(CloudEnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
 
-    let suffix = format!("_{ref_kind}_{cli_suffix}");
-
-    let name = format!("CLI_{cli_suffix}_{ref_kind}");
-
-    let ctx = (deps, name.to_string(), cli, ref_kind);
-    vec![
-        Trial::test_in_context(
-            format!("worker_new_instance{suffix}"),
-            ctx.clone(),
-            worker_new_instance,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_and_await{suffix}"),
-            ctx.clone(),
-            worker_invoke_and_await,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_and_await_wave_params{suffix}"),
-            ctx.clone(),
-            worker_invoke_and_await_wave_params,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_no_params{suffix}"),
-            ctx.clone(),
-            worker_invoke_no_params,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_drop{suffix}"),
-            ctx.clone(),
-            worker_invoke_drop,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_json_params{suffix}"),
-            ctx.clone(),
-            worker_invoke_json_params,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_wave_params{suffix}"),
-            ctx.clone(),
-            worker_invoke_wave_params,
-        ),
-        Trial::test_in_context(
-            format!("worker_connect{suffix}"),
-            ctx.clone(),
-            worker_connect,
-        ),
-        Trial::test_in_context(
-            format!("worker_connect_failed{suffix}"),
-            ctx.clone(),
-            worker_connect_failed,
-        ),
-        Trial::test_in_context(
-            format!("worker_interrupt{suffix}"),
-            ctx.clone(),
-            worker_interrupt,
-        ),
-        Trial::test_in_context(
-            format!("worker_simulated_crash{suffix}"),
-            ctx.clone(),
-            worker_simulated_crash,
-        ),
-        Trial::test_in_context(format!("worker_list{suffix}"), ctx.clone(), worker_list),
-        Trial::test_in_context(format!("worker_update{suffix}"), ctx.clone(), worker_update),
-        Trial::test_in_context(
-            format!("worker_invoke_indexed_resource{suffix}"),
-            ctx.clone(),
-            worker_invoke_indexed_resource,
-        ),
-    ]
+#[test_dep]
+fn cli(deps: &CloudEnvBasedTestDependencies) -> CliLive {
+    CliLive::make("worker", deps).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let clis = vec![
-        CliLive::make("worker_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        CliLive::make("worker_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-    ];
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_name_short", "CLI_short_name", true, RefKind::Name);
+    make(r, "_name_long", "CLI_long_name", false, RefKind::Name);
+    make(r, "_url_short", "CLI_short_url", true, RefKind::Url);
+    make(r, "_url_long", "CLI_long_url", false, RefKind::Url);
+    make(r, "_urn_short", "CLI_short_urn", true, RefKind::Urn);
+    make(r, "_urn_long", "CLI_long_urn", false, RefKind::Urn);
+}
 
-    let mut tests = Vec::new();
-
-    for cli in clis {
-        for ref_kind in RefKind::iter() {
-            tests.append(&mut make(cli.clone(), deps.clone(), ref_kind));
+fn make(
+    r: &mut DynamicTestRegistration,
+    suffix: &'static str,
+    name: &'static str,
+    short: bool,
+    ref_kind: RefKind,
+) {
+    add_test!(
+        r,
+        format!("worker_new_instance{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_new_instance((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
-    }
-
-    tests
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_and_await{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_and_await((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_and_await_wave_params{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_and_await_wave_params((
+                deps,
+                name.to_string(),
+                cli.with_args(short),
+                ref_kind,
+            ))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_no_params{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_no_params((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_drop{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_drop((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_json_params{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_json_params((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_wave_params{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_wave_params((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_connect{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_connect((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_connect_failed{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_connect_failed((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_interrupt{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_interrupt((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_simulated_crash{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_simulated_crash((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_list((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_update{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_update((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_indexed_resource{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_indexed_resource((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
 }
 
 pub fn make_component_from_file(
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    deps: &(impl TestDependencies + Send + Sync + 'static),
     component_name: &str,
     cli: &CliLive,
     file: &str,
-) -> Result<ComponentView, Failed> {
+) -> Result<ComponentView, anyhow::Error> {
     let env_service = deps.component_directory().join(file);
     let cfg = &cli.config;
 
@@ -137,10 +179,10 @@ pub fn make_component_from_file(
 }
 
 pub fn make_component(
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    deps: &(impl TestDependencies + Send + Sync + 'static),
     component_name: &str,
     cli: &CliLive,
-) -> Result<ComponentView, Failed> {
+) -> Result<ComponentView, anyhow::Error> {
     make_component_from_file(deps, component_name, cli, "environment-service.wasm")
 }
 
@@ -164,12 +206,12 @@ fn component_ref_value(component: &ComponentView, ref_kind: RefKind) -> String {
 
 fn worker_new_instance(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component = make_component(deps, &format!("{name} worker new instance"), &cli)?;
     let worker_name = format!("{name}_worker_new_instance");
     let cfg = &cli.config;
@@ -228,12 +270,12 @@ fn worker_ref(
 
 fn worker_invoke_and_await(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component = make_component(deps, &format!("{name} worker_invoke_and_await"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_and_await");
     let cfg = &cli.config;
@@ -324,12 +366,12 @@ fn worker_invoke_and_await(
 
 fn worker_invoke_and_await_wave_params(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component = make_component_from_file(
         deps,
         &format!("{name} worker_invoke_and_await_wave_params"),
@@ -391,12 +433,12 @@ fn worker_invoke_and_await_wave_params(
 
 fn worker_invoke_drop(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component = make_component_from_file(
         deps,
         &format!("{name} worker_invoke_drop"),
@@ -472,12 +514,12 @@ fn worker_invoke_drop(
 
 fn worker_invoke_no_params(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component = make_component(deps, &format!("{name} worker_invoke_no_params"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_no_params");
     let cfg = &cli.config;
@@ -504,12 +546,12 @@ fn worker_invoke_no_params(
 
 fn worker_invoke_json_params(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component = make_component(deps, &format!("{name} worker_invoke_json_params"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_json_params");
     let cfg = &cli.config;
@@ -537,12 +579,12 @@ fn worker_invoke_json_params(
 
 fn worker_invoke_wave_params(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component = make_component_from_file(
         deps,
         &format!("{name} worker_invoke_wave_params"),
@@ -579,12 +621,12 @@ fn worker_invoke_wave_params(
 
 fn worker_connect(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
 
     let stdout_service = deps.component_directory().join("write-stdout.wasm");
@@ -614,7 +656,7 @@ fn worker_connect(
     let stdout = child
         .stdout
         .take()
-        .ok_or::<Failed>("Can't get golem cli stdout".into())?;
+        .ok_or(anyhow!("Can't get golem cli stdout"))?;
 
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
@@ -635,7 +677,7 @@ fn worker_connect(
     let _ = cli.run_json(&cli_args)?;
 
     let line = rx.recv_timeout(Duration::from_secs(5))?;
-    let json: serde_json::Value = serde_json::from_str(&line)?;
+    let json: Value = serde_json::from_str(&line)?;
 
     assert_eq!(
         json.as_object()
@@ -654,12 +696,12 @@ fn worker_connect(
 
 fn worker_connect_failed(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
 
     let stdout_service = deps.component_directory().join("write-stdout.wasm");
@@ -676,7 +718,7 @@ fn worker_connect_failed(
     cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
     let mut child = cli.run_stdout(&cli_args)?;
 
-    let exit = child.wait().unwrap();
+    let exit = child.wait()?;
 
     assert!(!exit.success(), "!{exit}.success()");
 
@@ -685,12 +727,12 @@ fn worker_connect_failed(
 
 fn worker_interrupt(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
 
     let interruption_service = deps.component_directory().join("interruption.wasm");
@@ -719,12 +761,12 @@ fn worker_interrupt(
 
 fn worker_simulated_crash(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
 
     let interruption_service = deps.component_directory().join("interruption.wasm");
@@ -753,12 +795,12 @@ fn worker_simulated_crash(
 
 fn worker_list(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component = make_component(deps, &format!("{name} worker_list"), &cli)?;
     let cfg = &cli.config;
 
@@ -859,12 +901,12 @@ fn worker_list(
 
 fn worker_update(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
     let component_v1 = deps.component_directory().join("update-test-v1.wasm");
     let component: ComponentView = cli.run(&[
@@ -876,7 +918,7 @@ fn worker_update(
     ])?;
     let worker_name = format!("{name}_worker_update");
 
-    let workers_list = || -> Result<WorkersMetadataResponseView, Failed> {
+    let workers_list = || -> Result<WorkersMetadataResponseView, anyhow::Error> {
         cli.run(&[
             "worker",
             "list",
@@ -931,12 +973,12 @@ fn worker_update(
 
 fn worker_invoke_indexed_resource(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component = make_component_from_file(
         deps,
         &format!("{name}_worker_invoke_indexed_resource"),

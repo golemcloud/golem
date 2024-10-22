@@ -1,6 +1,8 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use crate::config::CloudEnvBasedTestDependencies;
 use crate::worker::make_component_from_file;
+use crate::Tracing;
 use assert2::assert;
 use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
@@ -9,98 +11,104 @@ use golem_client::model::{
     HttpApiDefinitionWithTypeInfo, MethodPattern, RibInputTypeInfo, Route, RouteWithTypeInfo,
     VersionedComponentId,
 };
-use libtest_mimic::{Failed, Trial};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 use uuid::Uuid;
 
-fn make(
-    suffix: &str,
-    name: &str,
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-) -> Vec<Trial> {
-    let ctx = (deps, name.to_string(), cli);
-    vec![
-        Trial::test_in_context(
-            format!("api_definition_import{suffix}"),
-            ctx.clone(),
-            api_definition_import,
-        ),
-        Trial::test_in_context(
-            format!("api_definition_add{suffix}"),
-            ctx.clone(),
-            api_definition_add,
-        ),
-        Trial::test_in_context(
-            format!("api_definition_update{suffix}"),
-            ctx.clone(),
-            api_definition_update,
-        ),
-        Trial::test_in_context(
-            format!("api_definition_update_immutable{suffix}"),
-            ctx.clone(),
-            api_definition_update_immutable,
-        ),
-        Trial::test_in_context(
-            format!("api_definition_list{suffix}"),
-            ctx.clone(),
-            api_definition_list,
-        ),
-        Trial::test_in_context(
-            format!("api_definition_list_versions{suffix}"),
-            ctx.clone(),
-            api_definition_list_versions,
-        ),
-        Trial::test_in_context(
-            format!("api_definition_get{suffix}"),
-            ctx.clone(),
-            api_definition_get,
-        ),
-        Trial::test_in_context(
-            format!("api_definition_delete{suffix}"),
-            ctx.clone(),
-            api_definition_delete,
-        ),
-    ]
+inherit_test_dep!(CloudEnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &CloudEnvBasedTestDependencies) -> CliLive {
+    CliLive::make("api_definition", deps).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
-        CliLive::make("api_definition_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        deps.clone(),
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_short", "CLI_short", true);
+    make(r, "_long", "CLI_long", false);
+}
+
+fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
+    add_test!(
+        r,
+        format!("api_definition_import{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_import((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    let mut long_args = make(
-        "_long",
-        "CLI_long",
-        CliLive::make("api_definition_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
+    add_test!(
+        r,
+        format!("api_definition_add{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_add((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    short_args.append(&mut long_args);
-
-    short_args
+    add_test!(
+        r,
+        format!("api_definition_update{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_update((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_update_immutable{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_update_immutable((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_list((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_list_versions{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_list_versions((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_get{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_get((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_delete{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_delete((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
 }
 
 pub fn make_shopping_cart_component(
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    deps: &(impl TestDependencies + Send + Sync + 'static),
     component_name: &str,
     cli: &CliLive,
-) -> Result<ComponentView, Failed> {
+) -> Result<ComponentView, anyhow::Error> {
     make_component_from_file(deps, component_name, cli, "shopping-cart.wasm")
 }
 
-fn make_file(id: &str, json: &serde_json::value::Value) -> Result<PathBuf, Failed> {
+fn make_file(id: &str, json: &serde_json::value::Value) -> Result<PathBuf, anyhow::Error> {
     let text = serde_json::to_string_pretty(json)?;
 
     let path = PathBuf::from(format!("../target/api-definition-{id}.json"));
@@ -144,7 +152,7 @@ pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinitionRequest {
     )
 }
 
-pub fn make_golem_file(def: &HttpApiDefinitionRequest) -> Result<PathBuf, Failed> {
+pub fn make_golem_file(def: &HttpApiDefinitionRequest) -> Result<PathBuf, anyhow::Error> {
     let golem_json = serde_json::to_value(def)?;
 
     make_file(&def.id, &golem_json)
@@ -154,7 +162,7 @@ pub fn make_open_api_file(
     id: &str,
     component_id: &str,
     component_version: u64,
-) -> Result<PathBuf, Failed> {
+) -> Result<PathBuf, anyhow::Error> {
     let open_api_json = json!(
       {
         "openapi": "3.0.0",
@@ -267,11 +275,11 @@ pub fn to_definition(
 
 fn api_definition_import(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("api_definition_import{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -290,11 +298,11 @@ fn api_definition_import(
 
 fn api_definition_add(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("api_definition_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -312,11 +320,11 @@ fn api_definition_add(
 
 fn api_definition_update(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("api_definition_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -345,11 +353,11 @@ fn api_definition_update(
 
 fn api_definition_update_immutable(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("api_definition_update_immutable{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -371,11 +379,11 @@ fn api_definition_update_immutable(
 
 fn api_definition_list(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("api_definition_list{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -399,11 +407,11 @@ fn api_definition_list(
 
 fn api_definition_list_versions(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("api_definition_list_versions{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -432,11 +440,11 @@ fn api_definition_list_versions(
 
 fn api_definition_get(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("api_definition_get{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -466,11 +474,11 @@ fn api_definition_get(
 
 fn api_definition_delete(
     (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let component_name = format!("api_definition_delete{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();

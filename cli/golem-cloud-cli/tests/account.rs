@@ -1,73 +1,80 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use crate::config::CloudEnvBasedTestDependencies;
+use crate::Tracing;
 use assert2::assert;
 use golem_cloud_cli::cloud::model::text::account::GrantGetView;
 use golem_cloud_cli::cloud::model::text::account::{
     AccountAddView, AccountGetView, AccountUpdateView,
 };
 use golem_cloud_cli::cloud::model::Role;
-use libtest_mimic::{Failed, Trial};
-use std::sync::Arc;
+use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
-fn make(
-    suffix: &str,
-    name: &str,
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-) -> Vec<Trial> {
-    let ctx = (deps, name.to_string(), cli);
-    vec![
-        Trial::test_in_context(
-            format!("account_get_self{suffix}"),
-            ctx.clone(),
-            account_get_self,
-        ),
-        Trial::test_in_context(format!("account_add{suffix}"), ctx.clone(), account_add),
-        Trial::test_in_context(
-            format!("account_update{suffix}"),
-            ctx.clone(),
-            account_update,
-        ),
-        Trial::test_in_context(
-            format!("account_deletee{suffix}"),
-            ctx.clone(),
-            account_delete,
-        ),
-        Trial::test_in_context(format!("account_grant{suffix}"), ctx.clone(), account_grant),
-    ]
+inherit_test_dep!(CloudEnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &CloudEnvBasedTestDependencies) -> CliLive {
+    CliLive::make("account", deps).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
-        CliLive::make("account_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        deps.clone(),
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_short", "CLI_short", true);
+    make(r, "_long", "CLI_long", false);
+}
+
+fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
+    add_test!(
+        r,
+        format!("account_get_self{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            account_get_self((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    let mut long_args = make(
-        "_long",
-        "CLI_long",
-        CliLive::make("account_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
+    add_test!(
+        r,
+        format!("account_add{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            account_add((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    short_args.append(&mut long_args);
-
-    short_args
+    add_test!(
+        r,
+        format!("account_update{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            account_update((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("account_delete{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            account_delete((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("account_grant{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            account_grant((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
 }
 
 fn account_get_self(
     (_deps, _name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let account: AccountGetView = cli.run(&["account", "get"])?;
 
     assert_eq!(account.0.name, "Initial User");
@@ -77,11 +84,11 @@ fn account_get_self(
 
 fn account_add(
     (_deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
 
     let name = format!("account add {name}");
@@ -110,11 +117,11 @@ fn account_add(
 
 fn account_update(
     (_deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
 
     let name = format!("account update init {name}");
@@ -160,11 +167,11 @@ fn account_update(
 
 fn account_delete(
     (_deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
 
     let name = format!("account delete {name}");
@@ -198,11 +205,11 @@ fn account_delete(
 
 fn account_grant(
     (_deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
 
     let name = format!("account grant {name}");

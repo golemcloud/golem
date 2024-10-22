@@ -12,12 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test, test_dep};
+
 use crate::api_definition::{
     golem_def, make_golem_file, make_shopping_cart_component, to_definition,
 };
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use crate::config::CloudEnvBasedTestDependencies;
 use crate::worker::make_component;
+use crate::Tracing;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::WorkerMetadataView;
 use golem_client::model::HttpApiDefinitionWithTypeInfo;
@@ -28,57 +32,17 @@ use golem_common::uri::cloud::url::AccountUrl;
 use golem_common::uri::cloud::urn::AccountUrn;
 use golem_common::uri::oss::url::{ApiDefinitionUrl, ComponentUrl, WorkerFunctionUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ApiDefinitionUrn, WorkerFunctionUrn, WorkerUrn};
-use libtest_mimic::{Failed, Trial};
-use std::sync::Arc;
 
-fn make(cli: CliLive, deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let ctx = (deps, cli);
-    vec![
-        Trial::test_in_context(
-            "top_level_get_account".to_string(),
-            ctx.clone(),
-            top_level_get_account,
-        ),
-        Trial::test_in_context(
-            "top_level_get_project".to_string(),
-            ctx.clone(),
-            top_level_get_project,
-        ), // TODO: search by account name
-        Trial::test_in_context(
-            "top_level_get_api_definition".to_string(),
-            ctx.clone(),
-            top_level_get_api_definition,
-        ),
-        Trial::test_in_context(
-            "top_level_get_component".to_string(),
-            ctx.clone(),
-            top_level_get_component,
-        ),
-        Trial::test_in_context(
-            "top_level_get_worker".to_string(),
-            ctx.clone(),
-            top_level_get_worker,
-        ),
-        Trial::test_in_context(
-            "top_level_get_worker_function".to_string(),
-            ctx.clone(),
-            top_level_get_worker_function,
-        ),
-    ]
+inherit_test_dep!(CloudEnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &CloudEnvBasedTestDependencies) -> CliLive {
+    CliLive::make("get", deps).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    make(
-        CliLive::make("top_level_get", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
-    )
-}
-
-fn top_level_get_account(
-    (_, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
+#[test]
+fn top_level_get_account(cli: &CliLive, _tracing: &Tracing) -> Result<(), anyhow::Error> {
     let account: AccountGetView = cli.run(&["account", "get"])?;
 
     let res1: AccountGetView = cli.run(&[
@@ -106,9 +70,8 @@ fn top_level_get_account(
     Ok(())
 }
 
-fn top_level_get_project(
-    (_, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
+#[test]
+fn top_level_get_project(cli: &CliLive, _tracing: &Tracing) -> Result<(), anyhow::Error> {
     let name = "top level get project";
 
     let project: ProjectAddView = cli.run(&["project", "add", "--project-name", name])?;
@@ -124,11 +87,14 @@ fn top_level_get_project(
     Ok(())
 }
 
+#[test]
 fn top_level_get_api_definition(
-    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
+    deps: &CloudEnvBasedTestDependencies,
+    cli: &CliLive,
+    _tracing: &Tracing,
+) -> Result<(), anyhow::Error> {
     let component_name = "top_level_get_api_definition";
-    let component = make_shopping_cart_component(deps, component_name, &cli)?;
+    let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
     let def = golem_def(component_name, &component_id);
     let path = make_golem_file(&def)?;
@@ -158,9 +124,12 @@ fn top_level_get_api_definition(
     Ok(())
 }
 
+#[test]
 fn top_level_get_component(
-    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
+    deps: &CloudEnvBasedTestDependencies,
+    cli: &CliLive,
+    _tracing: &Tracing,
+) -> Result<(), anyhow::Error> {
     let component_name = "top_level_get_component";
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -185,10 +154,13 @@ fn top_level_get_component(
     Ok(())
 }
 
+#[test]
 fn top_level_get_worker(
-    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
-    let component = make_component(deps, "top_level_get_worker", &cli)?;
+    deps: &CloudEnvBasedTestDependencies,
+    cli: &CliLive,
+    _tracing: &Tracing,
+) -> Result<(), anyhow::Error> {
+    let component = make_component(deps, "top_level_get_worker", cli)?;
     let worker_name = "top_level_get_worker";
     let cfg = &cli.config;
 
@@ -217,10 +189,13 @@ fn top_level_get_worker(
     Ok(())
 }
 
+#[test]
 fn top_level_get_worker_function(
-    (deps, cli): (Arc<dyn TestDependencies + Send + Sync + 'static>, CliLive),
-) -> Result<(), Failed> {
-    let component = make_component(deps, "top_level_get_worker_function", &cli)?;
+    deps: &CloudEnvBasedTestDependencies,
+    cli: &CliLive,
+    _tracing: &Tracing,
+) -> Result<(), anyhow::Error> {
+    let component = make_component(deps, "top_level_get_worker_function", cli)?;
     let worker_name = "top_level_get_worker_function";
     let cfg = &cli.config;
 

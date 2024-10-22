@@ -41,15 +41,4 @@ pub trait TestDependencies {
     fn component_directory(&self) -> PathBuf {
         Path::new("./test-components").to_path_buf()
     }
-    fn kill_all(&self) {
-        self.worker_executor_cluster().kill_all();
-        self.worker_service().kill();
-        self.component_compilation_service().kill();
-        self.component_service().kill();
-        self.shard_manager().kill();
-        self.cloud_service().kill();
-        self.rdb().kill();
-        self.redis_monitor().kill();
-        self.redis().kill();
-    }
 }

@@ -1,76 +1,54 @@
 use crate::cli::{Cli, CliLive};
 use crate::components::TestDependencies;
+use crate::config::CloudEnvBasedTestDependencies;
+use crate::Tracing;
 use assert2::assert;
 use golem_cloud_cli::cloud::model::text::project::{
     ProjectAddView, ProjectGetView, ProjectListView,
 };
-use libtest_mimic::{Failed, Trial};
-use std::sync::Arc;
+use test_r::core::{DynamicTestRegistration, TestType};
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
-fn make(
-    suffix: &str,
-    name: &str,
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-) -> Vec<Trial> {
-    let ctx = (deps, name.to_string(), cli);
-    vec![
-        Trial::test_in_context(
-            format!("project_set_default{suffix}"),
-            ctx.clone(),
-            project_set_default,
-        )
-        .with_ignored_flag(true),
-        Trial::test_in_context(
-            format!("project_get_default{suffix}"),
-            ctx.clone(),
-            project_get_default,
-        ),
-        Trial::test_in_context(format!("project_list{suffix}"), ctx.clone(), project_list),
-    ]
+inherit_test_dep!(CloudEnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &CloudEnvBasedTestDependencies) -> CliLive {
+    CliLive::make("project", deps).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
-        CliLive::make("project_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        deps.clone(),
-    );
-
-    let mut long_args = make(
-        "_long",
-        "CLI_long",
-        CliLive::make("project_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
-    );
-
-    short_args.append(&mut long_args);
-
-    short_args
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_short", "CLI_short", true);
+    make(r, "_long", "CLI_long", false);
 }
 
-fn project_set_default(
-    (_deps, _name, _cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
-    todo!("Not implemented")
+fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
+    add_test!(
+        r,
+        format!("project_get_default{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            project_get_default((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("project_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &CloudEnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            project_list((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
 }
 
 fn project_get_default(
     (_deps, _name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let project: ProjectGetView = cli.run(&["project", "get-default"])?;
 
     assert_eq!(project.0.name, "default-project");
@@ -80,11 +58,11 @@ fn project_get_default(
 
 fn project_list(
     (_deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
-) -> Result<(), Failed> {
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
 
     let name = format!("project list {name}");
