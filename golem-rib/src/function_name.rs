@@ -934,6 +934,7 @@ impl DynamicParsedFunctionName {
     }
 
     // Usually resource name in the real metadata consist of prefixes such as [constructor]
+    // However, the one obtained through the dynamic-parsed-function-name is simple without these prefix
     pub fn resource_name_simplified(&self) -> Option<String> {
         self.to_parsed_function_name()
             .function

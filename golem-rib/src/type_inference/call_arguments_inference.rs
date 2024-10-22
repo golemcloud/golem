@@ -59,9 +59,12 @@ mod internal {
 
         match call_type {
             CallType::Function(dynamic_parsed_function_name) => {
-                match dynamic_parsed_function_name.resource_name_simplified() {
+                let resource_constructor_registry_key =
+                    RegistryKey::resource_constructor_registry_key(dynamic_parsed_function_name);
+
+                match resource_constructor_registry_key {
                     Some(resource_constructor_name) => handle_function_with_resource(
-                        resource_constructor_name.as_str(),
+                        &resource_constructor_name,
                         dynamic_parsed_function_name,
                         function_type_registry,
                         function_result_inferred_type,
@@ -72,7 +75,7 @@ mod internal {
                         infer_args_and_result_type(
                             &FunctionDetails::Fqn(dynamic_parsed_function_name.to_string()),
                             function_type_registry,
-                            registry_key,
+                            &registry_key,
                             args,
                             Some(function_result_inferred_type),
                         )
@@ -94,7 +97,7 @@ mod internal {
                 infer_args_and_result_type(
                     &FunctionDetails::VariantName(variant_name.clone()),
                     function_type_registry,
-                    registry_key,
+                    &registry_key,
                     args,
                     Some(function_result_inferred_type),
                 )
@@ -222,7 +225,7 @@ mod internal {
     }
 
     fn handle_function_with_resource(
-        resource_constructor_name: &str,
+        resource_constructor_registry_key: &RegistryKey,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
         function_type_registry: &FunctionTypeRegistry,
         function_result_inferred_type: &mut InferredType,
@@ -230,12 +233,17 @@ mod internal {
     ) -> Result<(), String> {
         // Infer the resource constructors
         infer_resource_constructor_arguments(
-            resource_constructor_name,
+            resource_constructor_registry_key,
             dynamic_parsed_function_name,
             function_type_registry,
         )?;
+
+        let resource_method_registry_key =
+            RegistryKey::from_function_name(dynamic_parsed_function_name);
+
         // Infer the resource arguments
         infer_resource_method_arguments(
+            &resource_method_registry_key,
             dynamic_parsed_function_name,
             function_type_registry,
             resource_method_args,
@@ -244,6 +252,7 @@ mod internal {
     }
 
     fn infer_resource_method_arguments(
+        resource_method_registry_key: &RegistryKey,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
         function_type_registry: &FunctionTypeRegistry,
         resource_method_args: &mut [Expr],
@@ -252,11 +261,6 @@ mod internal {
         // Infer the types of resource method parameters
         let resource_method_name_in_metadata =
             dynamic_parsed_function_name.function_name_with_prefix_identifiers();
-
-        let registry_key =
-            RegistryKey::resource_method_registry_key(
-                &dynamic_parsed_function_name
-            );
 
         infer_args_and_result_type(
             &FunctionDetails::ResourceMethodName {
@@ -270,7 +274,7 @@ mod internal {
                 resource_method_name: resource_method_name_in_metadata,
             },
             function_type_registry,
-            registry_key,
+            resource_method_registry_key,
             resource_method_args,
             Some(function_result_inferred_type),
         )
@@ -278,16 +282,14 @@ mod internal {
     }
 
     fn infer_resource_constructor_arguments(
-        resource_constructor_name: &str,
+        resource_constructor_registry_key: &RegistryKey,
         dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), String> {
-        let site = dynamic_parsed_function_name.site.clone();
         let fqn = dynamic_parsed_function_name.to_string();
-        // The resource name obtained in the parsed structure does not correspond exact
-        // to what's in metadata/type-registry. For example, constructors will be prefixed with `[constructor]`
-        let resource_constructor_name_in_metadata =
-            format!["[constructor]{}", resource_constructor_name];
+        // Mainly for error reporting
+        let resource_constructor_name_pretty =
+            dynamic_parsed_function_name.resource_name_simplified().unwrap_or_default();
 
         let mut constructor_params: &mut Vec<Expr> = &mut vec![];
 
@@ -295,20 +297,15 @@ mod internal {
             constructor_params = resource_params
         }
 
-        // The resource constructor name obtained in the parsed string
-        // is looked up on the Rib's type-registry
-        let registry_key =
-            RegistryKey::from_function_name(&site, resource_constructor_name_in_metadata.as_str());
-
         // Infer the types of constructor parameter expressions
         infer_args_and_result_type(
             &FunctionDetails::ResourceConstructorName {
                 fqn,
-                resource_constructor_name_pretty: resource_constructor_name.to_string(),
-                resource_constructor_name: resource_constructor_name_in_metadata,
+                resource_constructor_name_pretty,
+                resource_constructor_name: resource_constructor_registry_key.get_function_name(),
             },
             function_type_registry,
-            registry_key,
+            resource_constructor_registry_key,
             constructor_params,
             None,
         )
@@ -318,7 +315,7 @@ mod internal {
     fn infer_args_and_result_type(
         function_name: &FunctionDetails,
         function_type_registry: &FunctionTypeRegistry,
-        key: RegistryKey,
+        key: &RegistryKey,
         args: &mut [Expr],
         function_result_inferred_type: Option<&mut InferredType>,
     ) -> Result<(), FunctionArgsTypeInferenceError> {
