@@ -34,9 +34,8 @@ use golem_api_grpc::proto::golem::component::v1::{
     GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
     UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
 };
-use golem_api_grpc::proto::golem::component::{
-    Component, ComponentConstraints, FunctionConstraint,
-};
+use golem_api_grpc::proto::golem::component::{Component, ComponentConstraints};
+use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use golem_common::grpc::proto_component_id_string;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
@@ -207,12 +206,7 @@ impl ComponentGrpcApi {
             .await
             .map(|v| ComponentConstraints {
                 component_id: Some(v.component_id.into()),
-                constraints: v
-                    .constraints
-                    .constraints
-                    .iter()
-                    .map(|x| FunctionConstraint::from(x.clone()))
-                    .collect(),
+                constraints: Some(WorkerFunctionsInRibProto::from(v.constraints)),
             })?;
 
         Ok(response)
@@ -507,36 +501,38 @@ impl ComponentService for ComponentGrpcApi {
                     }
                 };
 
-                let mut constraints = vec![];
+                let constraints =
+                    if let Some(worker_functions_in_rib) = proto_constraints.constraints {
+                        let result = rib::WorkerFunctionsInRib::try_from(worker_functions_in_rib)
+                            .map_err(|err| bad_request_error(err.as_str()));
 
-                for proto_constraint in proto_constraints.constraints {
-                    let result =
-                        golem_common::model::function_constraint::FunctionConstraint::try_from(
-                            proto_constraint.clone(),
-                        )
-                        .map_err(|err| bad_request_error(err.as_str()));
-
-                    match result {
-                        Ok(constraint) => constraints.push(constraint),
-                        Err(fail) => {
-                            return Ok(Response::new(CreateComponentConstraintsResponse {
-                                result: Some(record.fail(
-                                    create_component_constraints_response::Result::Error(
-                                        fail.clone(),
-                                    ),
-                                    &ComponentTraceErrorKind(&fail),
-                                )),
-                            }))
+                        match result {
+                            Ok(worker_functions_in_rib) => worker_functions_in_rib,
+                            Err(fail) => {
+                                return Ok(Response::new(CreateComponentConstraintsResponse {
+                                    result: Some(record.fail(
+                                        create_component_constraints_response::Result::Error(
+                                            fail.clone(),
+                                        ),
+                                        &ComponentTraceErrorKind(&fail),
+                                    )),
+                                }))
+                            }
                         }
-                    }
-                }
+                    } else {
+                        let error = internal_error("Failed to create constraints");
+                        return Ok(Response::new(CreateComponentConstraintsResponse {
+                            result: Some(record.fail(
+                                create_component_constraints_response::Result::Error(error.clone()),
+                                &ComponentTraceErrorKind(&error),
+                            )),
+                        }));
+                    };
 
                 let component_constraint = ComponentConstraint {
                     namespace: DefaultNamespace::default(),
                     component_id,
-                    constraints: golem_component_service_base::model::FunctionConstraints {
-                        constraints: constraints,
-                    },
+                    constraints,
                 };
 
                 let response = match self
