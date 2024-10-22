@@ -16,6 +16,7 @@ use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
 use golem_api_grpc::proto::golem::rib::WorkerInvokeCallInRib as WorkerInvokeCallInRibProto;
 use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
 use golem_wasm_ast::analysis::AnalysedType;
+use serde::{Deserialize, Serialize};
 
 // An easier data type that focus just the function calls,
 // return types and parameter types, corresponding to a function
@@ -94,7 +95,7 @@ impl From<WorkerInvokeCallsInRib> for WorkerInvokeCallsInRibProto {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkerInvokeCallInRib {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,

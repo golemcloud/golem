@@ -3,7 +3,7 @@ use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
-use golem_common::model::function_constraint::FunctionConstraint;
+use rib::WorkerInvokeCallInRib;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component<Namespace> {
@@ -20,42 +20,8 @@ pub struct Component<Namespace> {
 pub struct ComponentConstraint<Namespace> {
     pub namespace: Namespace,
     pub component_id: ComponentId,
-    pub constraints: FunctionConstraints,
+    pub constraints: WorkerInvokeCallInRib,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FunctionConstraints {
-    pub constraints: Vec<FunctionConstraint>,
-}
-
-impl From<FunctionConstraints> for golem_api_grpc::proto::golem::component::FunctionConstraints {
-    fn from(value: FunctionConstraints) -> Self {
-        Self {
-            constraints: value
-                .constraints
-                .into_iter()
-                .map(|function_detail| function_detail.into())
-                .collect(),
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraints> for FunctionConstraints {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::component::FunctionConstraints,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            constraints: value
-                .constraints
-                .into_iter()
-                .map(|function_constraint| FunctionConstraint::try_from(function_constraint))
-                .collect::<Result<_, _>>()?,
-        })
-    }
-}
-
 
 impl<Namespace> Component<Namespace> {
     pub fn next_version(self) -> Self {
