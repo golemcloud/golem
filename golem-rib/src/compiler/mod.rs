@@ -20,7 +20,7 @@ pub use type_with_unit::*;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{Expr, InferredExpr, RibInputTypeInfo};
 use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
-use crate::compiler::function_calls::FunctionCallsInRib;
+use crate::compiler::function_calls::WorkerInvokeCallsInRib;
 
 mod byte_code;
 mod desugar;
@@ -45,6 +45,8 @@ pub fn compile_with_limited_globals(
 ) -> Result<CompilerOutput, String> {
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let inferred_expr = InferredExpr::from_expr(expr, &type_registry)?;
+    let function_calls_identified =
+        WorkerInvokeCallsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
 
     let global_input_type_info =
         RibInputTypeInfo::from_expr(&inferred_expr.0).map_err(|e| format!("Error: {}", e))?;
@@ -70,6 +72,7 @@ pub fn compile_with_limited_globals(
     let byte_code = RibByteCode::from_expr(inferred_expr.0.clone())?;
 
     Ok(CompilerOutput {
+        function_calls: function_calls_identified,
         byte_code,
         global_input_type_info,
     })
@@ -77,7 +80,7 @@ pub fn compile_with_limited_globals(
 
 #[derive(Debug, Clone)]
 pub struct CompilerOutput {
-    pub function_calls: FunctionCallsInRib,
+    pub function_calls: WorkerInvokeCallsInRib,
     pub byte_code: RibByteCode,
     pub global_input_type_info: RibInputTypeInfo,
 }
