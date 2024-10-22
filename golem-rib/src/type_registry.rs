@@ -65,7 +65,7 @@ impl FunctionTypeRegistry {
         match key {
             CallType::Function(parsed_fn_name) => self
                 .types
-                .get(&RegistryKey::function_name_registry_key(parsed_fn_name)),
+                .get(&RegistryKey::fqn_registry_key(parsed_fn_name)),
             CallType::VariantConstructor(variant_name) => self
                 .types
                 .get(&RegistryKey::FunctionName(variant_name.clone())),
@@ -203,7 +203,7 @@ impl RegistryKey {
         function_name: &DynamicParsedFunctionName,
     ) -> Vec<RegistryKey> {
         let resource_constructor_key = Self::resource_constructor_registry_key(function_name);
-        let function_name_registry_key = Self::function_name_registry_key(function_name);
+        let function_name_registry_key = Self::fqn_registry_key(function_name);
         if let Some(resource_constructor_key) = resource_constructor_key {
             vec![resource_constructor_key, function_name_registry_key]
         } else {
@@ -213,7 +213,7 @@ impl RegistryKey {
 
     // To obtain the registry key that correspond to the FQN of the function
     // Not that it doesn't provide the registry key corresponding to the constructor of a resource
-    pub fn function_name_registry_key(function: &DynamicParsedFunctionName) -> RegistryKey {
+    pub fn fqn_registry_key(function: &DynamicParsedFunctionName) -> RegistryKey {
         let resource_method_name_in_metadata = function.function_name_with_prefix_identifiers();
 
         match function.site.interface_name() {

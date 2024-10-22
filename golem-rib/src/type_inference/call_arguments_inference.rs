@@ -239,7 +239,7 @@ mod internal {
         )?;
 
         let resource_method_registry_key =
-            RegistryKey::function_name_registry_key(dynamic_parsed_function_name);
+            RegistryKey::fqn_registry_key(dynamic_parsed_function_name);
 
         // Infer the resource arguments
         infer_resource_method_arguments(
