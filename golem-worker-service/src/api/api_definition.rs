@@ -319,8 +319,6 @@ mod test {
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
-    use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib;
-    use golem_common::model::function_constraint::FunctionConstraint;
 
     struct SqliteDb<'c> {
         db_path: String,
@@ -365,7 +363,7 @@ mod test {
             unimplemented!()
         }
 
-        async fn create_or_update_constraints(&self, component_id: &ComponentId, constraints: WorkerFunctionsInRib, auth_ctx: &EmptyAuthCtx) -> ComponentResult<WorkerFunctionsInRib> {
+        async fn create_or_update_constraints(&self, _component_id: &ComponentId, _constraints: rib::WorkerFunctionsInRib, _auth_ctx: &EmptyAuthCtx) -> ComponentResult<rib::WorkerFunctionsInRib> {
             unimplemented!()
         }
     }

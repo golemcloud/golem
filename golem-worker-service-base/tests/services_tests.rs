@@ -29,7 +29,6 @@ use golem_worker_service_base::service::http::http_api_definition_validator::{
 };
 
 use chrono::Utc;
-use golem_common::model::function_constraint::FunctionConstraint;
 use golem_wasm_ast::analysis::analysed_type::str;
 use rib::WorkerFunctionsInRib;
 use std::sync::Arc;
