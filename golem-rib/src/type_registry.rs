@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::DynamicParsedFunctionName;
+use crate::{DynamicParsedFunctionName, InferredExpr};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
@@ -29,111 +29,6 @@ use std::collections::{HashMap, HashSet};
 // then the RegistryValue is simply an AnalysedType representing the variant type itself.
 // RegistryKey is more alligned to the component metdata, and possess all the complexities that the component metadata
 // may have.
-#[derive(Hash, Eq, PartialEq, Clone, Debug)]
-pub enum RegistryKey {
-    FunctionName(String),
-    FunctionNameWithInterface {
-        interface_name: String,
-        function_name: String,
-    },
-}
-
-impl RegistryKey {
-    // Get jut the function name without the interface
-    // Note that this function name can be the name of the resource constructor,
-    // or resource method, or simple function name, that correspond to the real
-    // component metadata. Examples:
-    // [constructor]shopping-cart,
-    // [method]add-to-cart,
-    // checkout
-    pub fn get_function_name(&self) -> String {
-        match self {
-            Self::FunctionName(str) => str.clone(),
-            Self::FunctionNameWithInterface { function_name, .. } => function_name.clone(),
-        }
-    }
-
-    // To obtain the registry key that correspond to the FQN of the function
-    // Not that it doesn't provide the registry key corresponding to the constructor of a resource
-    pub fn from_function_name(function: &DynamicParsedFunctionName) -> RegistryKey {
-        let resource_method_name_in_metadata = function.function_name_with_prefix_identifiers();
-
-        match function.site.interface_name() {
-            None => RegistryKey::FunctionName(resource_method_name_in_metadata),
-            Some(interface) => RegistryKey::FunctionNameWithInterface {
-                interface_name: interface.to_string(),
-                function_name: resource_method_name_in_metadata,
-            },
-        }
-    }
-
-    // Obtain the registry-key corresponding to the resource constructor in a dynamic parsed function name
-    pub fn resource_constructor_registry_key(
-        function: &DynamicParsedFunctionName,
-    ) -> Option<RegistryKey> {
-        let resource_name_without_prefixes = function.resource_name_simplified();
-
-        resource_name_without_prefixes.map(|resource_name_without_prefix| {
-            let resource_constructor_with_prefix =
-                format!["[constructor]{}", resource_name_without_prefix];
-
-            match function.site.interface_name() {
-                None => RegistryKey::FunctionName(resource_constructor_with_prefix),
-                Some(interface) => RegistryKey::FunctionNameWithInterface {
-                    interface_name: interface.to_string(),
-                    function_name: resource_constructor_with_prefix,
-                },
-            }
-        })
-    }
-
-    pub fn from_call_type(call_type: &CallType) -> RegistryKey {
-        match call_type {
-            CallType::VariantConstructor(variant_name) => {
-                RegistryKey::FunctionName(variant_name.clone())
-            }
-            CallType::EnumConstructor(enum_name) => RegistryKey::FunctionName(enum_name.clone()),
-            CallType::Function(function_name) => match function_name.site.interface_name() {
-                None => {
-                    RegistryKey::FunctionName(function_name.function_name_with_prefix_identifiers())
-                }
-                Some(interface_name) => RegistryKey::FunctionNameWithInterface {
-                    interface_name: interface_name.to_string(),
-                    function_name: function_name.function_name_with_prefix_identifiers(),
-                },
-            },
-        }
-    }
-}
-
-#[derive(PartialEq, Clone, Debug)]
-pub enum RegistryValue {
-    Value(AnalysedType),
-    Variant {
-        parameter_types: Vec<AnalysedType>,
-        variant_type: TypeVariant,
-    },
-    Function {
-        parameter_types: Vec<AnalysedType>,
-        return_types: Vec<AnalysedType>,
-    },
-}
-
-impl RegistryValue {
-    pub fn argument_types(&self) -> Vec<AnalysedType> {
-        match self {
-            RegistryValue::Function {
-                parameter_types,
-                return_types: _,
-            } => parameter_types.clone(),
-            RegistryValue::Variant {
-                parameter_types,
-                variant_type: _,
-            } => parameter_types.clone(),
-            RegistryValue::Value(_) => vec![],
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionTypeRegistry {
@@ -157,7 +52,7 @@ impl FunctionTypeRegistry {
         match key {
             CallType::Function(parsed_fn_name) => self
                 .types
-                .get(&RegistryKey::from_function_name(parsed_fn_name)),
+                .get(&RegistryKey::function_name_registry_key(parsed_fn_name)),
             CallType::VariantConstructor(variant_name) => self
                 .types
                 .get(&RegistryKey::FunctionName(variant_name.clone())),
@@ -261,6 +156,130 @@ impl FunctionTypeRegistry {
 
     pub fn lookup(&self, registry_key: &RegistryKey) -> Option<RegistryValue> {
         self.types.get(registry_key).cloned()
+    }
+}
+
+#[derive(Hash, Eq, PartialEq, Clone, Debug)]
+pub enum RegistryKey {
+    FunctionName(String),
+    FunctionNameWithInterface {
+        interface_name: String,
+        function_name: String,
+    },
+}
+
+impl RegistryKey {
+    // Get jut the function name without the interface
+    // Note that this function name can be the name of the resource constructor,
+    // or resource method, or simple function name, that correspond to the real
+    // component metadata. Examples:
+    // [constructor]shopping-cart,
+    // [method]add-to-cart,
+    // checkout
+    pub fn get_function_name(&self) -> String {
+        match self {
+            Self::FunctionName(str) => str.clone(),
+            Self::FunctionNameWithInterface { function_name, .. } => function_name.clone(),
+        }
+    }
+
+    // A fully inferred expr will tell us the exact function calls
+    pub fn registry_keys_from_inferred_expr(expr: &InferredExpr) -> Vec<RegistryKey> {
+
+    }
+
+    // A parsed function name (the one that gets invoked with a worker) can correspond
+    // to multiple registry keys. This is mainly because a function may have a constructor component
+    // along with the method name. Otherwise it's only 1 key that correspond to the Fqn.
+    pub fn registry_keys_of_function(function_name: &DynamicParsedFunctionName) -> Vec<RegistryKey> {
+        let resource_constructor_key = Self::resource_constructor_registry_key(function_name);
+        let function_name_registry_key = Self::function_name_registry_key(function_name);
+        if let Some(resource_constructor_key) = resource_constructor_key {
+            vec![resource_constructor_key, function_name_registry_key]
+        } else {
+            vec![function_name_registry_key]
+        }
+    }
+
+    // To obtain the registry key that correspond to the FQN of the function
+    // Not that it doesn't provide the registry key corresponding to the constructor of a resource
+    pub fn function_name_registry_key(function: &DynamicParsedFunctionName) -> RegistryKey {
+        let resource_method_name_in_metadata = function.function_name_with_prefix_identifiers();
+
+        match function.site.interface_name() {
+            None => RegistryKey::FunctionName(resource_method_name_in_metadata),
+            Some(interface) => RegistryKey::FunctionNameWithInterface {
+                interface_name: interface.to_string(),
+                function_name: resource_method_name_in_metadata,
+            },
+        }
+    }
+
+    // Obtain the registry-key corresponding to the resource constructor in a dynamic parsed function name
+    pub fn resource_constructor_registry_key(
+        function: &DynamicParsedFunctionName,
+    ) -> Option<RegistryKey> {
+        let resource_name_without_prefixes = function.resource_name_simplified();
+
+        resource_name_without_prefixes.map(|resource_name_without_prefix| {
+            let resource_constructor_with_prefix =
+                format!["[constructor]{}", resource_name_without_prefix];
+
+            match function.site.interface_name() {
+                None => RegistryKey::FunctionName(resource_constructor_with_prefix),
+                Some(interface) => RegistryKey::FunctionNameWithInterface {
+                    interface_name: interface.to_string(),
+                    function_name: resource_constructor_with_prefix,
+                },
+            }
+        })
+    }
+
+    pub fn from_call_type(call_type: &CallType) -> RegistryKey {
+        match call_type {
+            CallType::VariantConstructor(variant_name) => {
+                RegistryKey::FunctionName(variant_name.clone())
+            }
+            CallType::EnumConstructor(enum_name) => RegistryKey::FunctionName(enum_name.clone()),
+            CallType::Function(function_name) => match function_name.site.interface_name() {
+                None => {
+                    RegistryKey::FunctionName(function_name.function_name_with_prefix_identifiers())
+                }
+                Some(interface_name) => RegistryKey::FunctionNameWithInterface {
+                    interface_name: interface_name.to_string(),
+                    function_name: function_name.function_name_with_prefix_identifiers(),
+                },
+            },
+        }
+    }
+}
+
+#[derive(PartialEq, Clone, Debug)]
+pub enum RegistryValue {
+    Value(AnalysedType),
+    Variant {
+        parameter_types: Vec<AnalysedType>,
+        variant_type: TypeVariant,
+    },
+    Function {
+        parameter_types: Vec<AnalysedType>,
+        return_types: Vec<AnalysedType>,
+    },
+}
+
+impl RegistryValue {
+    pub fn argument_types(&self) -> Vec<AnalysedType> {
+        match self {
+            RegistryValue::Function {
+                parameter_types,
+                return_types: _,
+            } => parameter_types.clone(),
+            RegistryValue::Variant {
+                parameter_types,
+                variant_type: _,
+            } => parameter_types.clone(),
+            RegistryValue::Value(_) => vec![],
+        }
     }
 }
 
