@@ -27,6 +27,8 @@ use std::collections::{HashMap, HashSet};
 // has parameters, then the RegistryValue is considered a function type itself with parameter types,
 // and a return type that the member variant represents. If the variant has no parameters,
 // then the RegistryValue is simply an AnalysedType representing the variant type itself.
+// RegistryKey is more alligned to the component metdata, and possess all the complexities that the component metadata
+// may have.
 #[derive(Hash, Eq, PartialEq, Clone, Debug)]
 pub enum RegistryKey {
     FunctionName(String),
@@ -46,6 +48,7 @@ impl RegistryKey {
             },
         }
     }
+
     pub fn from_call_type(call_type: &CallType) -> RegistryKey {
         match call_type {
             CallType::VariantConstructor(variant_name) => {
@@ -53,10 +56,12 @@ impl RegistryKey {
             }
             CallType::EnumConstructor(enum_name) => RegistryKey::FunctionName(enum_name.clone()),
             CallType::Function(function_name) => match function_name.site.interface_name() {
-                None => RegistryKey::FunctionName(function_name.function_name()),
+                None => {
+                    RegistryKey::FunctionName(function_name.function_name_with_prefix_identifiers())
+                }
                 Some(interface_name) => RegistryKey::FunctionNameWithInterface {
                     interface_name: interface_name.to_string(),
-                    function_name: function_name.function_name(),
+                    function_name: function_name.function_name_with_prefix_identifiers(),
                 },
             },
         }
@@ -114,7 +119,7 @@ impl FunctionTypeRegistry {
         match key {
             CallType::Function(parsed_fn_name) => self.types.get(&RegistryKey::from_function_name(
                 &parsed_fn_name.site,
-                &parsed_fn_name.function_name(),
+                &parsed_fn_name.function_name_with_prefix_identifiers(),
             )),
             CallType::VariantConstructor(variant_name) => self
                 .types

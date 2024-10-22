@@ -15,9 +15,11 @@
 pub use call_arguments_inference::*;
 pub use enum_resolution::*;
 pub use expr_visitor::*;
+pub use function_calls::*;
 pub use global_input_inference::*;
 pub use identifier_inference::*;
 pub use inference_fix_point::*;
+pub use inferred_expr::*;
 pub use name_binding::*;
 pub use pattern_match_binding::*;
 pub use rib_input_type::*;
@@ -27,8 +29,6 @@ pub use type_push_down::*;
 pub use type_reset::*;
 pub use type_unification::*;
 pub use variant_resolution::*;
-pub use inferred_expr::*;
-pub use function_calls::*;
 
 mod call_arguments_inference;
 mod expr_visitor;
@@ -43,12 +43,12 @@ mod type_unification;
 mod variant_resolution;
 
 mod enum_resolution;
+mod function_calls;
 mod global_input_inference;
 mod inference_fix_point;
+mod inferred_expr;
 pub(crate) mod kind;
 mod type_binding;
-mod inferred_expr;
-mod function_calls;
 
 #[cfg(test)]
 mod type_inference_tests {

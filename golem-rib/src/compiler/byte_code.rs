@@ -14,7 +14,7 @@
 
 use crate::compiler::byte_code::internal::ExprState;
 use crate::compiler::ir::RibIR;
-use crate::{Expr, InstructionId, ParsedFunctionName};
+use crate::{Expr, InstructionId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::RibByteCode as ProtoRibByteCode;
 
