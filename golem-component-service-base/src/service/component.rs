@@ -31,6 +31,7 @@ use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
 use tap::TapFallible;
 use tracing::{error, info};
+use rib::WorkerFunctionsInRib;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -195,10 +196,15 @@ pub trait ComponentService<Namespace> {
         namespace: &Namespace,
     ) -> Result<(), ComponentError>;
 
-    async fn create_constraint(
+    async fn create_or_update_constraint(
         &self,
         component_constraint: &ComponentConstraint<Namespace>,
     ) -> Result<ComponentConstraint<Namespace>, ComponentError>;
+
+    async fn get_constraint(
+        &self,
+        component_id: &ComponentId
+    ) -> Result<Option<WorkerFunctionsInRib>, ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
@@ -564,7 +570,7 @@ where
         }
     }
 
-    async fn create_constraint(
+    async fn create_or_update_constraint(
         &self,
         component_constraint: &ComponentConstraint<Namespace>,
     ) -> Result<ComponentConstraint<Namespace>, ComponentError> {
@@ -574,6 +580,12 @@ where
 
         self.component_repo.create_or_update_constraint(&record).await?;
         Ok(component_constraint.clone())
+    }
+
+    async fn get_constraint(&self, component_id: &ComponentId) -> Result<Option<WorkerFunctionsInRib>, ComponentError> {
+        let result = self.component_repo.get_constraint(&component_id).await?;
+        Ok(result)
+
     }
 }
 

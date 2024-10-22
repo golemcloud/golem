@@ -171,6 +171,8 @@ pub trait ComponentRepo {
         &self,
         component_constraint_record: &ComponentConstraintRecord,
     ) -> Result<(), RepoError>;
+
+    async fn get_constraint(&self, component_id: &ComponentId) -> Result<Option<WorkerFunctionsInRib>, RepoError>;
 }
 
 pub struct DbComponentRepo<DB: Database> {
@@ -284,6 +286,15 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
             .create_or_update_constraint(component_constraint_record)
             .await;
         Self::logged("create_component_constraint", result)
+    }
+
+    async fn get_constraint(&self, component_id: &ComponentId) -> Result<Option<WorkerFunctionsInRib>, RepoError> {
+        let result = self
+            .repo
+            .get_constraint(component_id)
+            .await;
+
+        Self::logged("get_component_constraint", result)
     }
 }
 
@@ -701,6 +712,30 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         transaction.commit().await?;
 
         Ok(())
+    }
+
+    async fn get_constraint(&self, component_id: &ComponentId) -> Result<Option<WorkerFunctionsInRib>, RepoError> {
+        let existing_record = sqlx::query_as::<_, ComponentConstraintRecord>(
+            r#"
+                SELECT
+                    namespace,
+                    component_id,
+                    constraints
+                FROM component_constraints WHERE component_id = $1
+                "#,
+        )
+            .bind(component_id.0)
+            .fetch_optional(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())?;
+
+        if let Some(existing_record) = existing_record {
+            let existing_worker_calls_used = constraint_serde::deserialize(&existing_record.constraint_data)
+                .map_err(|err| RepoError::Internal(err))?;
+            Ok(Some(existing_worker_calls_used))
+        } else {
+            Ok(None)
+        }
     }
 }
 

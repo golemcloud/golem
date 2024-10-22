@@ -202,7 +202,7 @@ impl ComponentGrpcApi {
     ) -> Result<ComponentConstraints, ComponentError> {
         let response = self
             .component_service
-            .create_constraint(component_constraint)
+            .create_or_update_constraint(component_constraint)
             .await
             .map(|v| ComponentConstraints {
                 component_id: Some(v.component_id.into()),
