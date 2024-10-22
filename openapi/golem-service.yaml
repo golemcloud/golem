@@ -1873,6 +1873,10 @@ paths:
                 component:
                   type: string
                   format: binary
+                initial_files:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/InitialFile'
               required:
               - name
               - component
@@ -1948,10 +1952,19 @@ paths:
         style: form
       requestBody:
         content:
-          application/octet-stream:
+          multipart/form-data:
             schema:
-              type: string
-              format: binary
+              type: object
+              properties:
+                component:
+                  type: string
+                  format: binary
+                initial_files:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/InitialFile'
+              required:
+              - component
         required: true
       responses:
         '200':
@@ -4925,6 +4938,27 @@ components:
       enum:
       - Durable
       - Ephemeral
+    InitialFile:
+      type: object
+      properties:
+        file_path:
+          type: string
+        file_permission:
+          $ref: '#/components/schemas/InitialFilePermission'
+        file_content:
+          type: array
+          items:
+            type: integer
+            format: uint8
+      required:
+      - file_path
+      - file_permission
+      - file_content
+    InitialFilePermission:
+      type: string
+      enum:
+      - ReadOnly
+      - ReadWrite
     LinearMemory:
       type: object
       properties:

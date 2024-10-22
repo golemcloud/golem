@@ -1713,5 +1713,5 @@ impl TryFrom<i32> for InitialFilePermission {
 pub struct InitialFile {
     pub file_path: String,
     pub file_permission: InitialFilePermission,
-    pub file_content: Vec<u8>
+    pub file_content: Vec<u8>,
 }

@@ -1,10 +1,10 @@
-use std::path::PathBuf;
+use crate::repo::component::InitialFileRecord;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::ComponentType;
 use golem_service_base::model::{ComponentName, InitialFilePermission, VersionedComponentId};
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use std::time::SystemTime;
-use crate::repo::component::InitialFileRecord;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component<Namespace> {

@@ -19,7 +19,6 @@ use tracing::Instrument;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
-use tap::TapFallible;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -41,9 +40,10 @@ use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
-use golem_service_base::stream::ByteStream;
-use tonic::{Request, Response, Status, Streaming};
 use golem_service_base::model::InitialFile;
+use golem_service_base::stream::ByteStream;
+use tap::TapFallible;
+use tonic::{Request, Response, Status, Streaming};
 
 fn bad_request_error(error: &str) -> ComponentError {
     ComponentError {
@@ -157,7 +157,7 @@ impl ComponentGrpcApi {
         &self,
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
-        initial_files: Vec<InitialFile>
+        initial_files: Vec<InitialFile>,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let result = self
@@ -168,7 +168,7 @@ impl ComponentGrpcApi {
                 request.component_type().into(),
                 data,
                 &DefaultNamespace::default(),
-                initial_files
+                initial_files,
             )
             .await?;
         Ok(result.into())
@@ -178,7 +178,7 @@ impl ComponentGrpcApi {
         &self,
         request: UpdateComponentRequestHeader,
         data: Vec<u8>,
-        initial_files: Vec<InitialFile>
+        initial_files: Vec<InitialFile>,
     ) -> Result<Component, ComponentError> {
         let id: ComponentId = request
             .component_id
@@ -193,7 +193,13 @@ impl ComponentGrpcApi {
         };
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultNamespace::default(), initial_files)
+            .update(
+                &id,
+                data,
+                component_type,
+                &DefaultNamespace::default(),
+                initial_files,
+            )
             .await?;
         Ok(result.into())
     }
@@ -255,41 +261,51 @@ impl ComponentService for ComponentGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                let initial_file_data_map = chunks.iter().try_fold(
-                    HashMap::new(),
-                    |mut acc_map, c| {
-                        if let Some(create_component_request::Data::FileHeader(d)) = c.clone().data {
+                let initial_file_data_map =
+                    chunks.iter().try_fold(HashMap::new(), |mut acc_map, c| {
+                        if let Some(create_component_request::Data::FileHeader(d)) = c.clone().data
+                        {
                             if acc_map.contains_key(&d.file_path) {
                                 Err(bad_request_error("Duplicated file path"))
                             } else {
-                                acc_map.insert(d.file_path.clone(), InitialFile {
-                                    file_path: d.file_path.clone(),
-                                    file_permission: d.file_permission.try_into().map_err(|e: String| {
-                                        bad_request_error(&e)
-                                    })?,
-                                    file_content: Vec::new(),
-                                });
+                                acc_map.insert(
+                                    d.file_path.clone(),
+                                    InitialFile {
+                                        file_path: d.file_path.clone(),
+                                        file_permission: d
+                                            .file_permission
+                                            .try_into()
+                                            .map_err(|e: String| bad_request_error(&e))?,
+                                        file_content: Vec::new(),
+                                    },
+                                );
                                 Ok(acc_map)
                             }
                         } else {
                             Ok(acc_map)
                         }
-                    }
-                );
-                let initial_file_data_map = initial_file_data_map.tap_ok_mut(|initial_file_data_map| {
-                    chunks.iter().for_each(|c| {
-                        if let Some(create_component_request::Data::FileChunk(mut d)) = c.clone().data {
-                            if let Some(initial_file) = initial_file_data_map.get_mut(&d.file_path) { initial_file.file_content.append(&mut d.file_chunk) }
-                        }
                     });
-                });
+                let initial_file_data_map =
+                    initial_file_data_map.tap_ok_mut(|initial_file_data_map| {
+                        chunks.iter().for_each(|c| {
+                            if let Some(create_component_request::Data::FileChunk(mut d)) =
+                                c.clone().data
+                            {
+                                if let Some(initial_file) =
+                                    initial_file_data_map.get_mut(&d.file_path)
+                                {
+                                    initial_file.file_content.append(&mut d.file_chunk)
+                                }
+                            }
+                        });
+                    });
                 match initial_file_data_map {
                     Ok(initial_file_data_map) => {
                         let initial_file_data = initial_file_data_map.into_values().collect();
                         self.create(request, data, initial_file_data)
                             .instrument(record.span.clone())
                             .await
-                    },
+                    }
                     Err(error) => Err(error),
                 }
             }
@@ -447,41 +463,51 @@ impl ComponentService for ComponentGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                let initial_file_data_map = chunks.iter().try_fold(
-                    HashMap::new(),
-                    |mut acc_map, c| {
-                        if let Some(update_component_request::Data::FileHeader(d)) = c.clone().data {
+                let initial_file_data_map =
+                    chunks.iter().try_fold(HashMap::new(), |mut acc_map, c| {
+                        if let Some(update_component_request::Data::FileHeader(d)) = c.clone().data
+                        {
                             if acc_map.contains_key(&d.file_path) {
                                 Err(bad_request_error("Duplicated file path"))
                             } else {
-                                acc_map.insert(d.file_path.clone(), InitialFile {
-                                    file_path: d.file_path.clone(),
-                                    file_permission: d.file_permission.try_into().map_err(|e: String| {
-                                        bad_request_error(&e)
-                                    })?,
-                                    file_content: Vec::new(),
-                                });
+                                acc_map.insert(
+                                    d.file_path.clone(),
+                                    InitialFile {
+                                        file_path: d.file_path.clone(),
+                                        file_permission: d
+                                            .file_permission
+                                            .try_into()
+                                            .map_err(|e: String| bad_request_error(&e))?,
+                                        file_content: Vec::new(),
+                                    },
+                                );
                                 Ok(acc_map)
                             }
                         } else {
                             Ok(acc_map)
                         }
-                    }
-                );
-                let initial_file_data_map = initial_file_data_map.tap_ok_mut(|initial_file_data_map| {
-                    chunks.iter().for_each(|c| {
-                        if let Some(update_component_request::Data::FileChunk(mut d)) = c.clone().data {
-                            if let Some(initial_file) = initial_file_data_map.get_mut(&d.file_path) { initial_file.file_content.append(&mut d.file_chunk) }
-                        }
                     });
-                });
+                let initial_file_data_map =
+                    initial_file_data_map.tap_ok_mut(|initial_file_data_map| {
+                        chunks.iter().for_each(|c| {
+                            if let Some(update_component_request::Data::FileChunk(mut d)) =
+                                c.clone().data
+                            {
+                                if let Some(initial_file) =
+                                    initial_file_data_map.get_mut(&d.file_path)
+                                {
+                                    initial_file.file_content.append(&mut d.file_chunk)
+                                }
+                            }
+                        });
+                    });
                 match initial_file_data_map {
                     Ok(initial_file_data_map) => {
                         let initial_file_data = initial_file_data_map.into_values().collect();
                         self.update(request, data, initial_file_data)
                             .instrument(record.span.clone())
                             .await
-                    },
+                    }
                     Err(error) => Err(error),
                 }
             }

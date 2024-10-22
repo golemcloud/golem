@@ -16,7 +16,7 @@ use std::fmt::{Debug, Display};
 use std::num::TryFromIntError;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
+use anyhow::anyhow;
 use crate::model::Component;
 use crate::repo::component::ComponentRepo;
 use crate::service::component_compilation::ComponentCompilationService;
@@ -124,7 +124,7 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
-        initial_files: Vec<InitialFile>
+        initial_files: Vec<InitialFile>,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
@@ -133,7 +133,7 @@ pub trait ComponentService<Namespace> {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
-        initial_files: Vec<InitialFile>
+        initial_files: Vec<InitialFile>,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
@@ -257,22 +257,31 @@ where
 
         let mut initial_file_records = Vec::new();
         for initial_file in initial_files {
-            let file_path_buf = PathBuf::from(&initial_file.file_path).canonicalize().map_err(|e| {
-                ComponentError::component_store_error("File path error", anyhow::Error::from(e))
-            })?;
-            let blob_storage_id = self.upload_initial_file(
-                &component.versioned_component_id,
-                file_path_buf.as_path(),
-                initial_file.file_content,
-            ).await?;
+            let file_path_buf = PathBuf::from(&initial_file.file_path);
+            if file_path_buf.is_absolute() {
+                let blob_storage_id = self
+                    .upload_initial_file(
+                        &component.versioned_component_id,
+                        file_path_buf.as_path(),
+                        initial_file.file_content,
+                    )
+                    .await?;
 
-            initial_file_records.push(crate::model::InitialFile {
-                versioned_component_id: component.versioned_component_id.clone(),
-                file_path: file_path_buf,
-                file_permission: initial_file.file_permission,
-                created_at: Utc::now(),
-                blob_storage_id,
-            }.into());
+                initial_file_records.push(
+                    crate::model::InitialFile {
+                        versioned_component_id: component.versioned_component_id.clone(),
+                        file_path: file_path_buf,
+                        file_permission: initial_file.file_permission,
+                        created_at: Utc::now(),
+                        blob_storage_id,
+                    }
+                        .into(),
+                );
+            } else {
+                return Err(
+                    ComponentError::component_store_error("File path error", anyhow!("{} is not an absolute path", file_path_buf.to_string_lossy()))
+                );
+            }
         }
 
         let record = component
@@ -289,7 +298,8 @@ where
             .enqueue_compilation(component_id, component.versioned_component_id.version)
             .await;
 
-        self.component_repo.upload_initial_file(initial_file_records)
+        self.component_repo
+            .upload_initial_files(initial_file_records)
             .await
             .map_err(ComponentError::from)?;
 
@@ -334,22 +344,31 @@ where
 
         let mut initial_file_records = Vec::new();
         for initial_file in initial_files {
-            let file_path_buf = PathBuf::from(&initial_file.file_path).canonicalize().map_err(|e| {
-                ComponentError::component_store_error("File path error", anyhow::Error::from(e))
-            })?;
-            let blob_storage_id = self.upload_initial_file(
-                &next_component.versioned_component_id,
-                file_path_buf.as_path(),
-                initial_file.file_content,
-            ).await?;
+            let file_path_buf = PathBuf::from(&initial_file.file_path);
+            if file_path_buf.is_absolute() {
+                let blob_storage_id = self
+                    .upload_initial_file(
+                        &next_component.versioned_component_id,
+                        file_path_buf.as_path(),
+                        initial_file.file_content,
+                    )
+                    .await?;
 
-            initial_file_records.push(crate::model::InitialFile {
-                versioned_component_id: next_component.versioned_component_id.clone(),
-                file_path: file_path_buf,
-                file_permission: initial_file.file_permission,
-                created_at: Utc::now(),
-                blob_storage_id,
-            }.into());
+                initial_file_records.push(
+                    crate::model::InitialFile {
+                        versioned_component_id: next_component.versioned_component_id.clone(),
+                        file_path: file_path_buf,
+                        file_permission: initial_file.file_permission,
+                        created_at: Utc::now(),
+                        blob_storage_id,
+                    }
+                        .into(),
+                );
+            } else {
+                return Err(
+                    ComponentError::component_store_error("File path error", anyhow!("{} is not an absolute path", file_path_buf.to_string_lossy()))
+                );
+            }
         }
 
         let component = Component {
@@ -370,7 +389,8 @@ where
             .enqueue_compilation(component_id, component.versioned_component_id.version)
             .await;
 
-        self.component_repo.upload_initial_file(initial_file_records)
+        self.component_repo
+            .upload_initial_files(initial_file_records)
             .await
             .map_err(ComponentError::from)?;
 
@@ -623,7 +643,7 @@ impl ComponentServiceDefault {
     }
 
     fn get_initial_file_store_key(&self, id: &VersionedComponentId, file_path: &Path) -> String {
-        let file_path_string = file_path.to_string_lossy().to_string();
+        let file_path_string = file_path.to_string_lossy().replace("/", ":");
         format!("{id}:files{file_path_string}")
     }
 
@@ -664,13 +684,13 @@ impl ComponentServiceDefault {
     ) -> Result<String, ComponentError> {
         let file_storage_key = self.get_initial_file_store_key(protected_component_id, file_path);
         self.object_store
-            .put(
-                &file_storage_key,
-                data,
-            )
+            .put(&file_storage_key, data)
             .await
             .map_err(|e| {
-                ComponentError::component_store_error("Failed to upload component's initial file", e)
+                ComponentError::component_store_error(
+                    "Failed to upload component's initial file",
+                    e,
+                )
             })?;
         Ok(file_storage_key)
     }

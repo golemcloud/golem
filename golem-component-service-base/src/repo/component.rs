@@ -101,7 +101,7 @@ pub struct InitialFileRecord {
     pub file_path: String,
     pub file_permission: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub blob_storage_id: String
+    pub blob_storage_id: String,
 }
 
 #[async_trait]
@@ -135,10 +135,16 @@ pub trait ComponentRepo {
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError>;
 
-    async fn upload_initial_file(
+    async fn upload_initial_files(
         &self,
-        initial_file_records: Vec<InitialFileRecord>
+        initial_file_records: Vec<InitialFileRecord>,
     ) -> Result<(), RepoError>;
+
+    async fn get_all_initial_files(
+        &self,
+        component_id: &Uuid,
+        version: u64,
+    ) -> Result<Vec<InitialFileRecord>, RepoError>;
 }
 
 pub struct DbComponentRepo<DB: Database> {
@@ -243,9 +249,17 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
         Self::logged_with_id("delete", component_id, result)
     }
 
-    async fn upload_initial_file(&self, initial_file_records: Vec<InitialFileRecord>) -> Result<(), RepoError> {
-        let result = self.repo.upload_initial_file(initial_file_records).await;
-        Self::logged("upload_initial_file", result)
+    async fn upload_initial_files(
+        &self,
+        initial_file_records: Vec<InitialFileRecord>,
+    ) -> Result<(), RepoError> {
+        let result = self.repo.upload_initial_files(initial_file_records).await;
+        Self::logged("upload_initial_files", result)
+    }
+
+    async fn get_all_initial_files(&self, component_id: &Uuid, version: u64) -> Result<Vec<InitialFileRecord>, RepoError> {
+        let result = self.repo.get_all_initial_files(component_id, version).await;
+        Self::logged_with_id("get_all_initial_files", component_id, result)
     }
 }
 
@@ -306,7 +320,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
+    #[when(sqlx::Postgres -> get)]
+    async fn get_postgres(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
@@ -327,6 +342,30 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .fetch_all(self.db_pool.deref())
         .await
         .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Sqlite -> get)]
+    async fn get_sqlite(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
+        sqlx::query_as::<_, ComponentRecord>(
+            r#"
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.metadata AS metadata,
+                    cv.created_at AS created_at,
+                    cv.component_type AS component_type
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
+                WHERE c.component_id = $1
+                "#,
+        )
+            .bind(component_id)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
     }
 
     #[when(sqlx::Postgres -> get_all)]
@@ -573,6 +612,17 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         let mut transaction = self.db_pool.begin().await?;
         sqlx::query(
             r#"
+                DELETE FROM component_initial_files
+                WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
+            "#
+        )
+            .bind(namespace)
+            .bind(component_id)
+            .execute(&mut *transaction)
+            .await?;
+
+        sqlx::query(
+            r#"
                 DELETE FROM component_versions
                 WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
             "#
@@ -592,7 +642,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn upload_initial_file(&self, initial_file_records: Vec<InitialFileRecord>) -> Result<(), RepoError> {
+    async fn upload_initial_files(
+        &self,
+        initial_file_records: Vec<InitialFileRecord>,
+    ) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
         for initial_file_record in initial_file_records {
             sqlx::query(
@@ -603,19 +656,63 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     ($1, $2, $3, $4, $5, $6)
                    "#,
             )
-                .bind(initial_file_record.component_id)
-                .bind(initial_file_record.version)
-                .bind(initial_file_record.file_path)
-                .bind(initial_file_record.file_permission)
-                .bind(initial_file_record.created_at)
-                .bind(initial_file_record.blob_storage_id)
-                .execute(&mut *transaction)
-                .await?;
+            .bind(initial_file_record.component_id)
+            .bind(initial_file_record.version)
+            .bind(initial_file_record.file_path)
+            .bind(initial_file_record.file_permission)
+            .bind(initial_file_record.created_at)
+            .bind(initial_file_record.blob_storage_id)
+            .execute(&mut *transaction)
+            .await?;
         }
 
         transaction.commit().await?;
 
         Ok(())
+    }
+
+    #[when(sqlx::Postgres -> get_all_initial_files)]
+    async fn get_all_initial_files_postgres(&self, component_id: &Uuid, version: u64) -> Result<Vec<InitialFileRecord>, RepoError> {
+        sqlx::query_as::<_, InitialFileRecord>(
+            r#"
+                SELECT
+                    c.component_id AS component_id,
+                    c.version AS version,
+                    c.file_path AS file_path,
+                    c.file_permission AS file_permission,
+                    c.created_at::timestamptz AS created_at,
+                    c.blob_storage_id AS blob_storage_id
+                FROM component_initial_files c
+                WHERE c.component_id = $1 AND c.version = $2
+                "#,
+        )
+            .bind(component_id)
+            .bind(version as i64)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Sqlite -> get_all_initial_files)]
+    async fn get_all_initial_files_sqlite(&self, component_id: &Uuid, version: u64) -> Result<Vec<InitialFileRecord>, RepoError> {
+        sqlx::query_as::<_, InitialFileRecord>(
+            r#"
+                SELECT
+                    c.component_id AS component_id,
+                    c.version AS version,
+                    c.file_path AS file_path,
+                    c.file_permission AS file_permission,
+                    c.created_at AS created_at,
+                    c.blob_storage_id AS blob_storage_id
+                FROM component_initial_files c
+                WHERE c.component_id = $1 AND c.version = $2
+                "#,
+        )
+            .bind(component_id)
+            .bind(version as i64)
+            .fetch_all(self.db_pool.deref())
+            .await
+            .map_err(|e| e.into())
     }
 }
 

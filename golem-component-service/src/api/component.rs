@@ -149,10 +149,9 @@ impl ComponentApi {
         let response = {
             let data = payload.component.into_vec().await?;
             let component_name = payload.name;
-            let initial_files = payload.initial_files.map_or(
-                Vec::new(),
-                |initial_files_json| initial_files_json.0
-            );
+            let initial_files = payload
+                .initial_files
+                .map_or(Vec::new(), |initial_files_json| initial_files_json.0);
             self.component_service
                 .create(
                     &ComponentId::new_v4(),
@@ -160,7 +159,7 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     &DefaultNamespace::default(),
-                    initial_files
+                    initial_files,
                 )
                 .instrument(record.span.clone())
                 .await
@@ -191,17 +190,16 @@ impl ComponentApi {
         );
         let response = {
             let data = payload.component.into_vec().await?;
-            let initial_files = payload.initial_files.map_or(
-                Vec::new(),
-                |initial_files_json| initial_files_json.0
-            );
+            let initial_files = payload
+                .initial_files
+                .map_or(Vec::new(), |initial_files_json| initial_files_json.0);
             self.component_service
                 .update(
                     &component_id.0,
                     data,
                     component_type.0,
                     &DefaultNamespace::default(),
-                    initial_files
+                    initial_files,
                 )
                 .instrument(record.span.clone())
                 .await

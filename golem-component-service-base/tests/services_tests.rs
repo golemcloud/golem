@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+
     use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::config::ComponentStoreLocalConfig;
@@ -7,16 +8,17 @@ mod tests {
 
     use golem_common::model::{ComponentId, ComponentType};
     use golem_component_service_base::model::Component;
-    use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
+    use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo, InitialFileRecord};
     use golem_component_service_base::service::component::{
         create_new_component, ComponentService, ComponentServiceDefault,
     };
     use golem_component_service_base::service::component_compilation::{
         ComponentCompilationService, ComponentCompilationServiceDisabled,
     };
-    use golem_service_base::model::ComponentName;
+    use golem_service_base::model::{ComponentName, InitialFile, InitialFilePermission};
     use golem_service_base::service::component_object_store;
     use std::sync::Arc;
+    use chrono::Utc;
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};
     use testcontainers_modules::postgres::Postgres;
@@ -104,6 +106,11 @@ mod tests {
         std::fs::read(path).unwrap()
     }
 
+    fn get_test_file(file_name: &str) -> Vec<u8> {
+        let path = format!("../test-files/{}", file_name);
+        std::fs::read(path).unwrap()
+    }
+
     async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
         let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
             Arc::new(
@@ -126,6 +133,47 @@ mod tests {
 
         let component_name1 = ComponentName("shopping-cart".to_string());
         let component_name2 = ComponentName("rust-echo".to_string());
+        let files_1 = vec![
+            InitialFile {
+                file_path: String::from("/tests/test_json.json"),
+                file_permission: InitialFilePermission::ReadOnly,
+                file_content: get_test_file("test_json.json"),
+            },
+            InitialFile {
+                file_path: String::from("/tests/inner/test_pdf.pdf"),
+                file_permission: InitialFilePermission::ReadWrite,
+                file_content: get_test_file("test_pdf.pdf"),
+            },
+        ];
+        let files_2 = vec![
+            InitialFile {
+                file_path: String::from("/test_txt.txt"),
+                file_permission: InitialFilePermission::ReadWrite,
+                file_content: get_test_file("test_txt.txt"),
+            },
+            InitialFile {
+                file_path: String::from("/a/b/c/test_sql.sql"),
+                file_permission: InitialFilePermission::ReadWrite,
+                file_content: get_test_file("test_sql.sql"),
+            },
+        ];
+        let files_3 = vec![
+            InitialFile {
+                file_path: String::from("/a/b/c/d/test_jpg.jpg"),
+                file_permission: InitialFilePermission::ReadWrite,
+                file_content: get_test_file("test_jpg.jpg"),
+            },
+            InitialFile {
+                file_path: String::from("/x/y/test_pdf.pdf"),
+                file_permission: InitialFilePermission::ReadOnly,
+                file_content: get_test_file("test_pdf.pdf"),
+            },
+            InitialFile {
+                file_path: String::from("/a/b/test_txt.txt"),
+                file_permission: InitialFilePermission::ReadOnly,
+                file_content: get_test_file("test_txt.txt"),
+            },
+        ];
 
         let component1 = component_service
             .create(
@@ -134,6 +182,7 @@ mod tests {
                 ComponentType::Durable,
                 get_component_data("shopping-cart"),
                 &DefaultNamespace::default(),
+                files_1,
             )
             .await
             .unwrap();
@@ -145,6 +194,7 @@ mod tests {
                 ComponentType::Durable,
                 get_component_data("rust-echo"),
                 &DefaultNamespace::default(),
+                files_2,
             )
             .await
             .unwrap();
@@ -193,6 +243,7 @@ mod tests {
                 get_component_data("shopping-cart"),
                 None,
                 &DefaultNamespace::default(),
+                files_3,
             )
             .await
             .unwrap();
@@ -357,6 +408,7 @@ mod tests {
         test_repo_component_id_unique(component_repo.clone()).await;
         test_repo_component_name_unique_in_namespace(component_repo.clone()).await;
         test_repo_component_delete(component_repo.clone()).await;
+        test_repo_initial_file(component_repo.clone()).await;
     }
 
     async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
@@ -485,5 +537,73 @@ mod tests {
         assert!(result3.is_ok());
         assert!(result4.is_ok());
         assert!(result4.unwrap().is_empty());
+    }
+
+    async fn test_repo_initial_file(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+        let namespace1 = Uuid::new_v4().to_string();
+
+        let component_name1 = ComponentName("shopping-cart1".to_string());
+        let data = get_component_data("shopping-cart");
+
+        let component1 = create_new_component(
+            &ComponentId::new_v4(),
+            &component_name1,
+            ComponentType::Durable,
+            &data,
+            &namespace1,
+        )
+            .unwrap();
+
+        let result1 = component_repo
+            .create(&component1.clone().try_into().unwrap())
+            .await;
+
+        let files = vec![
+            InitialFile {
+                file_path: String::from("/a/b/c/d/test_jpg.jpg"),
+                file_permission: InitialFilePermission::ReadWrite,
+                file_content: vec![],
+            },
+            InitialFile {
+                file_path: String::from("/x/y/test_pdf.pdf"),
+                file_permission: InitialFilePermission::ReadOnly,
+                file_content: vec![],
+            },
+            InitialFile {
+                file_path: String::from("/a/b/test_txt.txt"),
+                file_permission: InitialFilePermission::ReadOnly,
+                file_content: vec![],
+            },
+            InitialFile {
+                file_path: String::from("/test_json.json"),
+                file_permission: InitialFilePermission::ReadWrite,
+                file_content: vec![],
+            },
+        ].into_iter().map(|r| {
+            InitialFileRecord {
+                component_id: component1.versioned_component_id.component_id.0,
+                version: component1.versioned_component_id.version as i64,
+                file_path: r.file_path,
+                file_permission: r.file_permission.into(),
+                created_at: Utc::now(),
+                blob_storage_id: "".to_string(),
+            }
+        }).collect();
+
+        let result2 = component_repo
+            .upload_initial_files(files)
+            .await;
+
+        let result3 = component_repo
+            .get_all_initial_files(
+                &component1.versioned_component_id.component_id.0,
+                component1.versioned_component_id.version
+            )
+            .await;
+
+        assert!(result1.is_ok());
+        assert!(result2.is_ok());
+        assert!(result3.is_ok());
+        assert_eq!(result3.unwrap().len(), 4);
     }
 }

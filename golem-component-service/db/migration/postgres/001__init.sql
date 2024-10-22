@@ -28,3 +28,5 @@ CREATE TABLE component_initial_files
     PRIMARY KEY (component_id, version, file_path),
     FOREIGN KEY (component_id, version) REFERENCES component_versions (component_id, version)
 );
+
+CREATE INDEX component_initial_files_id_version ON component_initial_files (component_id, version);
