@@ -372,7 +372,7 @@ where
         if let Some(constraints) =constraints {
             let conflicts = Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
             if !conflicts.is_empty() {
-                return  Err(ComponentError::ComponentConstraintError("record", conflicts))
+                return Err(ComponentError::ComponentConstraintError(format!("The updated component has conflicting types to the previous version of component that's already in use. {:?}", conflicts)))
             }
         }
 
