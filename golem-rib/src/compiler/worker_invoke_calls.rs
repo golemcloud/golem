@@ -27,16 +27,16 @@ use serde::{Deserialize, Serialize};
 // which has specific details, along with original type registry to construct this data.
 // These function calls are specifically worker invoke calls and nothing else.
 // If Rib has inbuilt function support, that will not be included here either.
-#[derive(Clone, Debug)]
-pub struct WorkerInvokeCallsInRib {
-    function_calls: Vec<WorkerInvokeCallInRib>,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerFunctionsInRib {
+    function_calls: Vec<WorkerFunctionInRibMetadata>,
 }
 
-impl WorkerInvokeCallsInRib {
+impl WorkerFunctionsInRib {
     pub fn from_inferred_expr(
         inferred_expr: &InferredExpr,
         original_type_registry: &FunctionTypeRegistry,
-    ) -> Result<Option<WorkerInvokeCallsInRib>, String> {
+    ) -> Result<Option<WorkerFunctionsInRib>, String> {
         let worker_invoke_registry_keys = inferred_expr.worker_invoke_registry_keys();
         let type_registry_subset =
             original_type_registry.get_from_keys(worker_invoke_registry_keys);
@@ -48,7 +48,7 @@ impl WorkerInvokeCallsInRib {
                 return_types,
             } = value
             {
-                let function_call_in_rib = WorkerInvokeCallInRib {
+                let function_call_in_rib = WorkerFunctionInRibMetadata {
                     function_key: key,
                     parameter_types,
                     return_types,
@@ -65,26 +65,26 @@ impl WorkerInvokeCallsInRib {
         if function_calls.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(WorkerInvokeCallsInRib { function_calls }))
+            Ok(Some(WorkerFunctionsInRib { function_calls }))
         }
     }
 }
 
-impl TryFrom<WorkerInvokeCallsInRibProto> for WorkerInvokeCallsInRib {
+impl TryFrom<WorkerInvokeCallsInRibProto> for WorkerFunctionsInRib {
     type Error = String;
 
     fn try_from(value: WorkerInvokeCallsInRibProto) -> Result<Self, Self::Error> {
         let function_calls_proto = value.function_calls;
         let function_calls = function_calls_proto
             .iter()
-            .map(|x| WorkerInvokeCallInRib::try_from(x.clone()))
+            .map(|x| WorkerFunctionInRibMetadata::try_from(x.clone()))
             .collect::<Result<_, _>>()?;
         Ok(Self { function_calls })
     }
 }
 
-impl From<WorkerInvokeCallsInRib> for WorkerInvokeCallsInRibProto {
-    fn from(value: WorkerInvokeCallsInRib) -> Self {
+impl From<WorkerFunctionsInRib> for WorkerInvokeCallsInRibProto {
+    fn from(value: WorkerFunctionsInRib) -> Self {
         WorkerInvokeCallsInRibProto {
             function_calls: value
                 .function_calls
@@ -96,13 +96,13 @@ impl From<WorkerInvokeCallsInRib> for WorkerInvokeCallsInRibProto {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkerInvokeCallInRib {
+pub struct WorkerFunctionInRibMetadata {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,
     pub return_types: Vec<AnalysedType>,
 }
 
-impl TryFrom<WorkerInvokeCallInRibProto> for WorkerInvokeCallInRib {
+impl TryFrom<WorkerInvokeCallInRibProto> for WorkerFunctionInRibMetadata {
     type Error = String;
 
     fn try_from(value: WorkerInvokeCallInRibProto) -> Result<Self, Self::Error> {
@@ -129,8 +129,8 @@ impl TryFrom<WorkerInvokeCallInRibProto> for WorkerInvokeCallInRib {
     }
 }
 
-impl From<WorkerInvokeCallInRib> for WorkerInvokeCallInRibProto {
-    fn from(value: WorkerInvokeCallInRib) -> Self {
+impl From<WorkerFunctionInRibMetadata> for WorkerInvokeCallInRibProto {
+    fn from(value: WorkerFunctionInRibMetadata) -> Self {
         let registry_key = value.function_key.into();
 
         WorkerInvokeCallInRibProto {

@@ -47,7 +47,7 @@ pub fn compile_with_limited_globals(
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
     let inferred_expr = InferredExpr::from_expr(expr, &type_registry)?;
     let function_calls_identified =
-        WorkerInvokeCallsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
+        WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
 
     let global_input_type_info =
         RibInputTypeInfo::from_expr(&inferred_expr.0).map_err(|e| format!("Error: {}", e))?;

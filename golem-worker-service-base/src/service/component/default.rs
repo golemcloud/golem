@@ -15,7 +15,7 @@ use http::Uri;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
-use rib::WorkerInvokeCallsInRib;
+use rib::WorkerFunctionsInRib;
 use crate::service::component::ComponentServiceError;
 use crate::service::with_metadata;
 use crate::UriBackConversion;
@@ -40,9 +40,9 @@ pub trait ComponentService<AuthCtx> {
     async fn create_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: WorkerInvokeCallsInRib,
+        constraints: WorkerFunctionsInRib,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<WorkerInvokeCallsInRib>;
+    ) -> ComponentResult<WorkerFunctionsInRib>;
 }
 
 #[derive(Clone)]
@@ -102,7 +102,7 @@ impl RemoteComponentService {
 
     fn process_create_component_metadata_response(
         response: CreateComponentConstraintsResponse,
-    ) -> Result<rib::WorkerInvokeCallsInRib, ComponentServiceError> {
+    ) -> Result<rib::WorkerFunctionsInRib, ComponentServiceError> {
         match response.result {
             None => Err(
                 ComponentServiceError::Internal("Failed to create component constraints. Empty results".to_string())
@@ -114,7 +114,7 @@ impl RemoteComponentService {
 
                             if let Some(constraints) = constraints_optional {
                                let  worker_invoke_calls_in_rib =
-                                   rib::WorkerInvokeCallsInRib::try_from(constraints).map_err(|err| {
+                                   rib::WorkerFunctionsInRib::try_from(constraints).map_err(|err| {
                                     ComponentServiceError::Internal(format!(
                                         "Response conversion error: {err}"
                                     ))
@@ -226,9 +226,9 @@ where
     async fn create_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: rib::WorkerInvokeCallsInRib,
+        constraints: rib::WorkerFunctionsInRib,
         metadata: &AuthCtx,
-    ) -> ComponentResult<rib::WorkerInvokeCallsInRib> {
+    ) -> ComponentResult<rib::WorkerFunctionsInRib> {
         let value = with_retries(
             "component",
             "create_component_constraints",

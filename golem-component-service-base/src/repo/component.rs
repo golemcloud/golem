@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{Component, ComponentConstraint, FunctionConstraints};
+use crate::model::{Component, ComponentConstraint};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -688,29 +688,29 @@ pub mod record_metadata_serde {
 }
 
 pub mod constraint_serde {
-    use crate::model::FunctionConstraints;
     use bytes::{BufMut, Bytes, BytesMut};
-    use golem_api_grpc::proto::golem::component::FunctionConstraints as FunctionConstraintsProto;
+    use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
     use prost::Message;
+    use rib::WorkerFunctionsInRib;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize(value: &FunctionConstraints) -> Result<Bytes, String> {
-        let proto_value: FunctionConstraintsProto = FunctionConstraintsProto::from(value.clone());
+    pub fn serialize(value: &WorkerFunctionsInRib) -> Result<Bytes, String> {
+        let proto_value: WorkerInvokeCallsInRibProto = WorkerInvokeCallsInRibProto::from(value.clone());
         let mut bytes = BytesMut::new();
         bytes.put_u8(SERIALIZATION_VERSION_V1);
         bytes.extend_from_slice(&proto_value.encode_to_vec());
         Ok(bytes.freeze())
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<FunctionConstraints, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<WorkerFunctionsInRib, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let proto_value: FunctionConstraintsProto = Message::decode(data)
+                let proto_value: WorkerInvokeCallsInRibProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
-                let value = FunctionConstraints::try_from(proto_value)?;
+                let value = WorkerFunctionsInRib::try_from(proto_value)?;
                 Ok(value)
             }
             _ => Err("Unsupported serialization version".to_string()),
