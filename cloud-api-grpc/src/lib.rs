@@ -1,3 +1,6 @@
+#[cfg(test)]
+test_r::enable!();
+
 pub mod proto {
     tonic::include_proto!("mod");
 
@@ -5,6 +8,8 @@ pub mod proto {
 
     #[cfg(test)]
     mod tests {
+        use test_r::test;
+
         use crate::proto::golem::cloud::projectpolicy::{ProjectAction, ProjectActions};
         use std::collections::HashSet;
 

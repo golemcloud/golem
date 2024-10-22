@@ -6,3 +6,8 @@ edition = "2021"
 [dependencies]
 golem-shard-manager = { workspace = true }
 rustls = { workspace = true }
+
+[[bin]]
+name = "cloud-shard-manager"
+path = "src/main.rs"
+test = false

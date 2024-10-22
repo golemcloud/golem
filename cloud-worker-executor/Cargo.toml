@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
+harness = false
 
 [[bin]]
 name = "cloud-worker-executor"
 path = "src/server.rs"
+test = false
 
 [dependencies]
 golem-common = { workspace = true }
@@ -43,6 +45,7 @@ humantime-serde = { workspace = true }
 hyper = { workspace = true }
 io-extras = "0.18.1"
 lazy_static = { workspace = true }
+log = "0.4.22"
 prometheus = { workspace = true }
 prost = { workspace = true }
 rustix = { version = "0.38.30", features = ["event"] }
@@ -63,12 +66,7 @@ wasmtime-wasi = { version = "=21.0.1" }
 wasmtime-wasi-http = { version = "=21.0.1" }
 webpki-roots = { workspace = true }
 windows-sys = "0.52.0"
-log = "0.4.22"
 
 [dev-dependencies]
-golem-worker-executor-base = { workspace = true }
-ctor = "0.2.6"
-assert2 = "0.3.11"
-serde_json = { workspace = true }
-warp = { workspace = true }
+test-r = { workspace = true }
 

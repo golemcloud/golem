@@ -169,6 +169,8 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::grpcapi::get_authorisation_token;
     use cloud_common::model::TokenSecret as ModelTokenSecret;
     use tonic::metadata::MetadataMap;

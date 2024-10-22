@@ -6,8 +6,10 @@ edition = "2021"
 [[bin]]
 name = "cloud-component-service"
 path = "src/server.rs"
+test = false
 
 [lib]
+harness = false
 
 [dependencies]
 
@@ -60,3 +62,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }

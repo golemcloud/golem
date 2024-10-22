@@ -151,6 +151,8 @@ impl TryFrom<Claims> for OAuth2Session {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
     use crate::model::{EncodedOAuth2Session, OAuth2Session};
 

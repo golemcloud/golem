@@ -6,8 +6,15 @@ edition = "2021"
 [[bin]]
 name = "cloud-service"
 path = "src/server.rs"
+test = false
 
 [lib]
+harness = false
+
+[[test]]
+name = "it_tests"
+path = "tests/it_tests.rs"
+harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
@@ -62,6 +69,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-futures.workspace = true
+futures = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+test-r = { workspace = true }

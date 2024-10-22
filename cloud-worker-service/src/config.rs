@@ -145,6 +145,8 @@ pub fn load_or_dump_config() -> Option<WorkerServiceCloudConfig> {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::config::{domain_match, load_or_dump_config, DomainRecordsConfig};
 
     #[test]

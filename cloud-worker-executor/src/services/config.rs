@@ -87,6 +87,8 @@ pub fn load_or_dump_config() -> Option<(GolemConfig, AdditionalGolemConfig)> {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use golem_worker_executor_base::services::golem_config::make_config_loader;
 
     use crate::services::config::{load_or_dump_config, make_additional_config_loader};

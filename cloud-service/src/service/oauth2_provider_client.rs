@@ -157,10 +157,12 @@ struct GithubUserEmail {
 
 #[cfg(test)]
 mod test {
+    use test_r::test;
+
     use super::*;
 
     #[ignore]
-    #[tokio::test]
+    #[test]
     async fn manual_test() -> Result<(), OAuth2ProviderClientError> {
         let access_token = "ACCESS_TOKEN";
         let client = OAuth2ProviderClientDefault {};

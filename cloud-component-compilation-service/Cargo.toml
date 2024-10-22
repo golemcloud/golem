@@ -5,3 +5,7 @@ edition = "2021"
 
 [dependencies]
 golem-component-compilation-service = { workspace = true }
+
+[[bin]]
+name = "cloud-component-compilation-service"
+test = false

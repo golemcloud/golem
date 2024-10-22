@@ -980,6 +980,8 @@ impl RegisterDomainRoute for InMemoryRegisterDomainRoute {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::aws_config::AwsConfig;
     use crate::config::DomainRecordsConfig;
     use crate::service::api_domain::{
@@ -993,7 +995,7 @@ mod tests {
     use rusoto_core::Region;
     use rusoto_route53::Route53Client;
 
-    #[tokio::test]
+    #[test]
     #[ignore]
     pub async fn test_get_name_servers() {
         let client = Route53Client::new(Region::default());
@@ -1008,7 +1010,7 @@ mod tests {
         assert!(!result.unwrap_or_default().is_empty());
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
     pub async fn test_register_and_unregister_hosted_zone() {
         let account_id = AccountId::from("a1");
@@ -1045,7 +1047,7 @@ mod tests {
         assert!(get_result.is_none());
     }
 
-    #[tokio::test]
+    #[test]
     pub async fn test_domain_route() {
         let domain_records_config = DomainRecordsConfig {
             domain_allow_list: vec!["dev-api.golem.cloud".to_string()],
@@ -1078,7 +1080,7 @@ mod tests {
         AwsConfig::new("TOKEN", "ARN")
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
     pub async fn test_aws_domain_route() {
         let domain_config = DomainRecordsConfig {
@@ -1110,7 +1112,7 @@ mod tests {
         assert!(reg_domain_error_result.is_err());
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
     pub async fn test_aws_route53_hosted_zone() {
         let client = Route53Client::new(Region::default());

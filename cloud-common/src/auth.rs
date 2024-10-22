@@ -170,6 +170,8 @@ impl TryFrom<String> for CloudNamespace {
 
 #[cfg(test)]
 mod test {
+    use test_r::test;
+
     use http::StatusCode;
     use poem::{
         middleware::CookieJarManager,
@@ -319,73 +321,73 @@ mod test {
     }
 
     // OpenAPI tests
-    #[tokio::test]
+    #[test]
     async fn bearer_valid_auth_openapi() {
         bearer_valid_auth(make_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn cookie_valid_auth_openapi() {
         cookie_valid_auth(make_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn no_auth_openapi() {
         no_auth(make_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_bearer_valid_openapi() {
         conflict_bearer_valid(make_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_cookie_valid_openapi() {
         conflict_cookie_valid(make_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_both_uuid_invalid_cookie_auth_openapi() {
         conflict_both_uuid_invalid_cookie_auth(make_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_both_uuid_invalid_bearer_auth_openapi() {
         conflict_both_uuid_invalid_bearer_auth(make_openapi()).await;
     }
 
     // Non-OpenAPI tests
-    #[tokio::test]
+    #[test]
     async fn bearer_valid_auth_non_openapi() {
         bearer_valid_auth(make_non_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn cookie_valid_auth_non_openapi() {
         cookie_valid_auth(make_non_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn no_auth_non_openapi() {
         no_auth(make_non_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_bearer_valid_non_openapi() {
         conflict_bearer_valid(make_non_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_cookie_valid_non_openapi() {
         conflict_cookie_valid(make_non_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_both_uuid_invalid_cookie_auth_non_openapi() {
         conflict_both_uuid_invalid_cookie_auth(make_non_openapi()).await;
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_both_uuid_invalid_bearer_auth_non_openapi() {
         conflict_both_uuid_invalid_bearer_auth(make_non_openapi()).await;
     }

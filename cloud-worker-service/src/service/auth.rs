@@ -183,6 +183,8 @@ fn is_retriable(error: &ComponentServiceError) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use golem_worker_service_base::service::with_metadata;
     use uuid::Uuid;
 

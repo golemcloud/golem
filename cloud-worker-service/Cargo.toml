@@ -8,6 +8,15 @@ edition = "2021"
 [[bin]]
 name = "cloud-worker-service"
 path = "src/main.rs"
+test = false
+
+[lib]
+harness = false
+
+[[test]]
+name = "services_tests"
+path = "tests/services_tests.rs"
+harness = false
 
 [dependencies]
 golem-common = { workspace = true }
@@ -71,3 +80,4 @@ x509-certificate = "0.23.1"
 reqwest = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+test-r = { workspace = true }

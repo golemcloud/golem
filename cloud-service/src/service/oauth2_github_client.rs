@@ -429,12 +429,14 @@ impl serde::ser::Serialize for ErrorResponseKind {
 // Manual integration test.
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
 
     const CLIENT_ID: &str = "1031b4cbcc32449a9151";
 
     #[ignore]
-    #[tokio::test]
+    #[test]
     async fn test_device_flow() {
         let client = OAuth2GithubClientDefault {
             config: crate::config::OAuth2Config {

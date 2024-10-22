@@ -131,6 +131,8 @@ impl AwsLoadBalancer {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::aws_config::AwsConfig;
     use crate::aws_load_balancer::AwsLoadBalancer;
 
@@ -138,7 +140,7 @@ mod tests {
         AwsConfig::new("TOKEN", "ARN")
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
     pub async fn test_aws_load_balancer() {
         let config = aws_config();

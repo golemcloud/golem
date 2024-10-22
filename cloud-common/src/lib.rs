@@ -4,6 +4,9 @@ pub mod config;
 pub mod grpc;
 pub mod model;
 
+#[cfg(test)]
+test_r::enable!();
+
 pub trait UriBackConversion {
     fn as_http_02(&self) -> http_02::Uri;
 }

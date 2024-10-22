@@ -1,6 +1,6 @@
-use std::sync::Arc;
-
 use crate::context::Context;
+use crate::services::config::AdditionalGolemConfig;
+use crate::services::{resource_limits, AdditionalDeps};
 use async_trait::async_trait;
 use golem_worker_executor_base::durable_host::DurableWorkerCtx;
 use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0_rc1};
@@ -26,13 +26,14 @@ use golem_worker_executor_base::services::All;
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::Bootstrap;
 use prometheus::Registry;
+use std::sync::Arc;
 use tokio::runtime::Handle;
 use tracing::info;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 
-use crate::services::config::AdditionalGolemConfig;
-use crate::services::{resource_limits, AdditionalDeps};
+#[cfg(test)]
+test_r::enable!();
 
 pub mod context;
 pub mod metrics;

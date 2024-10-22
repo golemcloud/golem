@@ -8,6 +8,7 @@ description = "GRPC API for Golem Cloud services"
 
 
 [lib]
+harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
@@ -23,6 +24,9 @@ tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
 
 [build-dependencies]
 cargo_metadata = "0.18.1"

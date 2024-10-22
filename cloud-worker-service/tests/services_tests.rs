@@ -1,3 +1,5 @@
+use test_r::test;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
@@ -17,18 +19,20 @@ use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_service_base::db;
 use std::sync::Arc;
-use testcontainers::clients::Cli;
-use testcontainers::{Container, RunnableImage};
+use testcontainers::runners::AsyncRunner;
+use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
-fn start_docker_postgres<'d>(docker: &'d Cli) -> (DbPostgresConfig, Container<'d, Postgres>) {
-    let image = RunnableImage::from(Postgres::default()).with_tag("14.7-alpine");
-    let container: Container<'d, Postgres> = docker.run(image);
+test_r::enable!();
+
+async fn start_docker_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
+    let image = Postgres::default().with_tag("14.7-alpine");
+    let container = image.start().await.unwrap();
 
     let config = DbPostgresConfig {
         host: "localhost".to_string(),
-        port: container.get_host_port_ipv4(5432),
+        port: container.get_host_port_ipv4(5432).await.unwrap(),
         database: "postgres".to_string(),
         username: "postgres".to_string(),
         password: "postgres".to_string(),
@@ -46,7 +50,7 @@ struct SqliteDb {
 impl Default for SqliteDb {
     fn default() -> Self {
         Self {
-            db_path: format!("/tmp/golem-worker-{}.db", uuid::Uuid::new_v4()),
+            db_path: format!("/tmp/golem-worker-{}.db", Uuid::new_v4()),
         }
     }
 }
@@ -95,7 +99,7 @@ impl AuthService for TestAuthService {
     }
 }
 
-#[tokio::test]
+#[test]
 pub async fn test_with_sqlite_db() {
     let db = SqliteDb::default();
     let db_config = DbSqliteConfig {
@@ -141,10 +145,9 @@ pub async fn test_with_sqlite_db() {
 }
 
 // TODO: lot of duplications of above
-#[tokio::test]
+#[test]
 pub async fn test_with_postgres_db() {
-    let cli = Cli::default();
-    let (db_config, _container) = start_docker_postgres(&cli);
+    let (db_config, _container) = start_docker_postgres().await;
 
     db::postgres_migrate(&db_config, "./db/migration/postgres")
         .await

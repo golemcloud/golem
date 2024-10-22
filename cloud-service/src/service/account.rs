@@ -265,6 +265,8 @@ fn check_root(auth: &AccountAuthorisation) -> Result<(), AccountError> {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::auth::AccountAuthorisation;
     use crate::service::account::{check_authorized, check_root};
     use cloud_common::model::Role;

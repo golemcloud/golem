@@ -787,6 +787,8 @@ async fn remove_certificate_from_load_balancer(
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::aws_config::AwsConfig;
     use crate::config::DomainRecordsConfig;
     use crate::service::api_certificate::{AwsCertificateManager, CertificateManager};
@@ -858,7 +860,7 @@ rnhtC5zQq8F/lo4kJjmvwQ==
         AwsConfig::new("TOKEN", "ARN")
     }
 
-    #[tokio::test]
+    #[test]
     #[ignore]
     pub async fn test_aws_certificate_manager() {
         let domain_config = DomainRecordsConfig::default();
