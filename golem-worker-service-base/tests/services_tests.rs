@@ -219,12 +219,13 @@ async fn test_services(
         api_definition_validator_service.clone(),
     ));
 
-    let deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send> =
-        Arc::new(ApiDeploymentServiceDefault::new(
-            api_deployment_repo.clone(),
-            api_definition_repo.clone(),
-            component_service.clone()
-        ));
+    let deployment_service: Arc<
+        dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
+    > = Arc::new(ApiDeploymentServiceDefault::new(
+        api_deployment_repo.clone(),
+        api_definition_repo.clone(),
+        component_service.clone(),
+    ));
 
     test_definition_crud(definition_service.clone()).await;
     test_delete_non_existing(definition_service.clone()).await;

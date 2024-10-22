@@ -1,3 +1,6 @@
+use crate::service::component::ComponentServiceError;
+use crate::service::with_metadata;
+use crate::UriBackConversion;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -6,19 +9,16 @@ use golem_api_grpc::proto::golem::component::v1::{
     GetComponentMetadataResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
+use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
 use http::Uri;
+use rib::WorkerFunctionsInRib;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
-use rib::WorkerFunctionsInRib;
-use crate::service::component::ComponentServiceError;
-use crate::service::with_metadata;
-use crate::UriBackConversion;
 
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
@@ -104,34 +104,35 @@ impl RemoteComponentService {
         response: CreateComponentConstraintsResponse,
     ) -> Result<rib::WorkerFunctionsInRib, ComponentServiceError> {
         match response.result {
-            None => Err(
-                ComponentServiceError::Internal("Failed to create component constraints. Empty results".to_string())
-            ),
+            None => Err(ComponentServiceError::Internal(
+                "Failed to create component constraints. Empty results".to_string(),
+            )),
             Some(create_component_constraints_response::Result::Success(response)) => {
-                    match response.components {
-                        Some(constraints) => {
-                            let constraints_optional = constraints.constraints;
+                match response.components {
+                    Some(constraints) => {
+                        let constraints_optional = constraints.constraints;
 
-                            if let Some(constraints) = constraints_optional {
-                               let  worker_invoke_calls_in_rib =
-                                   rib::WorkerFunctionsInRib::try_from(constraints).map_err(|err| {
-                                    ComponentServiceError::Internal(format!(
-                                        "Response conversion error: {err}"
-                                    ))
-                                })?;
+                        if let Some(constraints) = constraints_optional {
+                            let worker_invoke_calls_in_rib = rib::WorkerFunctionsInRib::try_from(
+                                constraints,
+                            )
+                            .map_err(|err| {
+                                ComponentServiceError::Internal(format!(
+                                    "Response conversion error: {err}"
+                                ))
+                            })?;
 
-                                Ok(worker_invoke_calls_in_rib)
-
-                            } else {
-                               Err(ComponentServiceError::Internal(
-                                   "Failed to create component constraints".to_string(),
-                               ))
-                            }
+                            Ok(worker_invoke_calls_in_rib)
+                        } else {
+                            Err(ComponentServiceError::Internal(
+                                "Failed to create component constraints".to_string(),
+                            ))
                         }
-                        None => Err(ComponentServiceError::Internal(
-                            "Empty component response".to_string(),
-                        )),
                     }
+                    None => Err(ComponentServiceError::Internal(
+                        "Empty component response".to_string(),
+                    )),
+                }
             }
             Some(create_component_constraints_response::Result::Error(error)) => Err(error.into()),
         }
@@ -234,7 +235,12 @@ where
             "create_component_constraints",
             Some(component_id.to_string()),
             &self.retry_config,
-            &(self.client.clone(), component_id.clone(), metadata.clone(), constraints.clone()),
+            &(
+                self.client.clone(),
+                component_id.clone(),
+                metadata.clone(),
+                constraints.clone(),
+            ),
             |(client, id, metadata, constraints)| {
                 Box::pin(async move {
                     let response = client
@@ -242,9 +248,15 @@ where
                             let request = CreateComponentConstraintsRequest {
                                 project_id: None,
                                 component_constraints: Some(ComponentConstraints {
-                                    component_id: Some(golem_api_grpc::proto::golem::component::ComponentId::from(id.clone())),
-                                    constraints: Some(WorkerFunctionsInRibProto::from(constraints.clone()))
-                                })
+                                    component_id: Some(
+                                        golem_api_grpc::proto::golem::component::ComponentId::from(
+                                            id.clone(),
+                                        ),
+                                    ),
+                                    constraints: Some(WorkerFunctionsInRibProto::from(
+                                        constraints.clone(),
+                                    )),
+                                }),
                             };
                             let request = with_metadata(request, metadata.clone());
 
@@ -258,7 +270,7 @@ where
             },
             Self::is_retriable,
         )
-            .await?;
+        .await?;
 
         Ok(value)
     }

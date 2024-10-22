@@ -32,13 +32,13 @@ use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
+use crate::service::component::ComponentService;
 use chrono::Utc;
+use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
-use std::fmt::{Debug, Display};
-use golem_common::model::ComponentId;
 use rib::WorkerFunctionsInRib;
-use crate::service::component::ComponentService;
+use std::fmt::{Debug, Display};
 
 #[async_trait]
 pub trait ApiDeploymentService<AuthCtx, Namespace> {
@@ -177,7 +177,7 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
         Self {
             deployment_repo,
             definition_repo,
-            component_service
+            component_service,
         }
     }
 
@@ -210,7 +210,9 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
         Ok(())
     }
 
-    fn get_worker_functions_in_definition<Namespace>(definitions: Vec<CompiledHttpApiDefinition>) ->  Result<HashMap<ComponentId, WorkerFunctionsInRib>, ApiDeploymentError<Namespace>> {
+    fn get_worker_functions_in_definition<Namespace>(
+        definitions: Vec<CompiledHttpApiDefinition>,
+    ) -> Result<HashMap<ComponentId, WorkerFunctionsInRib>, ApiDeploymentError<Namespace>> {
         let mut worker_functions_in_rib = HashMap::new();
 
         for definition in definitions {
@@ -218,7 +220,10 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
                 let component_id = route.binding.component_id;
                 let worker_calls = route.binding.response_compiled.worker_calls;
                 if let Some(worker_calls) = worker_calls {
-                    worker_functions_in_rib.entry(component_id.component_id).or_insert_with(Vec::new).push(worker_calls)
+                    worker_functions_in_rib
+                        .entry(component_id.component_id)
+                        .or_insert_with(Vec::new)
+                        .push(worker_calls)
                 }
             }
         }
@@ -229,14 +234,12 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
     fn merge_worker_functions_in_rib<Namespace>(
         worker_functions: HashMap<ComponentId, Vec<WorkerFunctionsInRib>>,
     ) -> Result<HashMap<ComponentId, WorkerFunctionsInRib>, ApiDeploymentError<Namespace>> {
-        let mut merged_worker_functions: HashMap<ComponentId, WorkerFunctionsInRib> = HashMap::new();
+        let mut merged_worker_functions: HashMap<ComponentId, WorkerFunctionsInRib> =
+            HashMap::new();
 
         for (component_id, worker_calls_vec) in worker_functions {
-            let merged_calls = WorkerFunctionsInRib::try_merge(worker_calls_vec).map_err(|err| {
-                Err(ApiDeploymentError::ApiDefinitionsConflict(
-                    err
-                ))
-            })?;
+            let merged_calls = WorkerFunctionsInRib::try_merge(worker_calls_vec)
+                .map_err(|err| Err(ApiDeploymentError::ApiDefinitionsConflict(err)))?;
 
             merged_worker_functions.insert(component_id, merged_calls);
         }
@@ -246,7 +249,8 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace> ApiDeploymentService<AuthCtx, Namespace> for ApiDeploymentServiceDefault<AuthCtx>
+impl<AuthCtx, Namespace> ApiDeploymentService<AuthCtx, Namespace>
+    for ApiDeploymentServiceDefault<AuthCtx>
 where
     Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
     <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
@@ -380,11 +384,14 @@ where
                     .await?;
             }
 
-            let constraints =
-                Self::get_worker_functions_in_definition(new_definitions.clone())?;
+            let constraints = Self::get_worker_functions_in_definition(new_definitions.clone())?;
 
             for (component_id, constraints) in constraints {
-                self.component_service.create_or_update_constraints(&component_id, constraints, auth_ctx)
+                self.component_service.create_or_update_constraints(
+                    &component_id,
+                    constraints,
+                    auth_ctx,
+                )
             }
 
             self.deployment_repo.create(new_deployment_records).await?;

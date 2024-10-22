@@ -44,7 +44,9 @@ pub struct HttpApiDefinitionLookup<AuthCtx, Namespace> {
 }
 
 impl<AuthCtx, Namespace> HttpApiDefinitionLookup<AuthCtx, Namespace> {
-    pub fn new(deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>) -> Self {
+    pub fn new(
+        deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>,
+    ) -> Self {
         Self { deployment_service }
     }
 }

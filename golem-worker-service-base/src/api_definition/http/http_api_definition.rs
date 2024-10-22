@@ -3,19 +3,19 @@ use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use Iterator;
 
-use bincode::{Decode, Encode};
-use derive_more::Display;
-use golem_service_base::model::{Component, VersionedComponentId};
-use golem_wasm_ast::analysis::AnalysedExport;
-use poem_openapi::Enum;
-use serde::{Deserialize, Serialize, Serializer};
-use serde_json::Value;
-use rib::WorkerFunctionsInRib;
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::parser::{GolemParser, ParseError};
 use crate::worker_binding::CompiledGolemWorkerBinding;
 use crate::worker_binding::GolemWorkerBinding;
+use bincode::{Decode, Encode};
+use derive_more::Display;
+use golem_service_base::model::{Component, VersionedComponentId};
+use golem_wasm_ast::analysis::AnalysedExport;
+use poem_openapi::Enum;
+use rib::WorkerFunctionsInRib;
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
