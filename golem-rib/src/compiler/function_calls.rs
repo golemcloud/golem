@@ -1,5 +1,21 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use golem_wasm_ast::analysis::AnalysedType;
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
+use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib as WorkerInvokeCallsInRibProto;
+use golem_api_grpc::proto::golem::rib::WorkerInvokeCallInRib as WorkerInvokeCallInRibProto;
 
 // An easier data type that focus just the function calls,
 // return types and parameter types, corresponding to a function
@@ -16,7 +32,7 @@ pub struct WorkerInvokeCallsInRib {
 }
 
 impl WorkerInvokeCallsInRib {
-    pub fn from_inferred_expr(inferred_expr: &InferredExpr, original_type_registry: &FunctionTypeRegistry) -> Result<WorkerInvokeCallsInRib, String> {
+    pub fn from_inferred_expr(inferred_expr: &InferredExpr, original_type_registry: &FunctionTypeRegistry) -> Result<Option<WorkerInvokeCallsInRib>, String> {
         let worker_invoke_registry_keys =
             inferred_expr.worker_invoke_registry_keys();
         let type_registry_subset =
@@ -36,7 +52,24 @@ impl WorkerInvokeCallsInRib {
             }
         }
 
-        Ok(WorkerInvokeCallsInRib {
+        if function_calls.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(WorkerInvokeCallsInRib {
+                function_calls
+            }))
+        }
+
+    }
+}
+
+impl TryFrom<WorkerInvokeCallsInRibProto> for WorkerInvokeCallsInRib {
+    type Error = String;
+
+    fn try_from(value: WorkerInvokeCallsInRibProto) -> Result<Self, Self::Error> {
+        let function_calls_proto = value.function_calls;
+        let function_calls = function_calls_proto.iter().map(|x| WorkerInvokeCallInRib::try_from(x.clone())).collect::<Result<_, _>>()?;
+        Ok(Self {
             function_calls
         })
     }
@@ -47,4 +80,25 @@ pub struct WorkerInvokeCallInRib {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,
     pub return_types: Vec<AnalysedType>
+}
+
+impl TryFrom<WorkerInvokeCallInRibProto> for WorkerInvokeCallInRib {
+    type Error = String;
+
+    fn try_from(value: WorkerInvokeCallInRibProto) -> Result<Self, Self::Error> {
+        let return_types =
+            value.return_types.iter().map(|x| AnalysedType::try_from(x)).collect::<Result<_, _>>()?;
+
+        let parameter_types =
+            value.parameter_types.iter().map(|x| AnalysedType::try_from(x)).collect::<Result<_, _>>()?;
+
+        let registry_key_proto = value.function_key.ok_or("Function key missing")?;
+        let function_key = RegistryKey::try_from(registry_key_proto)?;
+
+        Ok(Self {
+            function_key,
+            return_types,
+            parameter_types
+        })
+    }
 }

@@ -80,7 +80,7 @@ pub fn compile_with_limited_globals(
 
 #[derive(Debug, Clone)]
 pub struct CompilerOutput {
-    pub worker_invoke_calls: WorkerInvokeCallsInRib,
+    pub worker_invoke_calls: Option<WorkerInvokeCallsInRib>,
     pub byte_code: RibByteCode,
     pub global_input_type_info: RibInputTypeInfo,
 }
@@ -93,8 +93,14 @@ impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
         let proto_byte_code = value.byte_code.ok_or("Missing byte_code")?;
         let rib_input = RibInputTypeInfo::try_from(proto_rib_input)?;
         let byte_code = RibByteCode::try_from(proto_byte_code)?;
+        let worker_invoke_calls = if let Some(value) = value.worker_invoke_calls {
+            Some(WorkerInvokeCallsInRib::try_from(value)?)
+        } else {
+            None
+        };
 
         Ok(CompilerOutput {
+            worker_invoke_calls,
             byte_code,
             global_input_type_info: rib_input,
         })

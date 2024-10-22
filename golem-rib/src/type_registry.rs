@@ -17,6 +17,7 @@ use crate::{DynamicParsedFunctionName, InferredExpr};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
+use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 
 // A type-registry is a mapping from a function name (global or part of an interface in WIT)
 // to the registry value that represents the type of the name.
@@ -29,7 +30,6 @@ use std::collections::{HashMap, HashSet};
 // then the RegistryValue is simply an AnalysedType representing the variant type itself.
 // RegistryKey is more alligned to the component metdata, and possess all the complexities that the component metadata
 // may have.
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct FunctionTypeRegistry {
     pub types: HashMap<RegistryKey, RegistryValue>,
@@ -195,11 +195,6 @@ impl RegistryKey {
         }
     }
 
-    // A fully inferred expr will tell us the exact function calls
-    pub fn registry_keys_from_inferred_expr(expr: &InferredExpr) -> Vec<RegistryKey> {
-
-    }
-
     // A parsed function name (the one that gets invoked with a worker) can correspond
     // to multiple registry keys. This is mainly because a function may have a constructor component
     // along with the method name. Otherwise it's only 1 key that correspond to the Fqn.
@@ -263,6 +258,31 @@ impl RegistryKey {
                 },
             },
         }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::rib::RegistryKey> for RegistryKey {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::rib::RegistryKey) -> Result<Self, Self::Error> {
+        let key_type = value.key_type.ok_or("key type missing")?;
+
+         let registry_key = match key_type {
+             KeyType::FunctionName(string) => {
+                 RegistryKey::FunctionName(string.name)
+             }
+             KeyType::FunctionNameWithInterface(function_with_interface) => {
+                 let interface_name = function_with_interface.interface_name.clone();
+                 let function_name = function_with_interface.interface_name;
+
+                 RegistryKey::FunctionNameWithInterface {
+                     interface_name: interface_name,
+                     function_name: function_name
+                 }
+             }
+         };
+
+        Ok(registry_key)
     }
 }
 
