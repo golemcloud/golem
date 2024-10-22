@@ -105,6 +105,11 @@ impl From<ComponentServiceError> for ComponentError {
                     error: error.to_safe_string(),
                 }))
             }
+            ComponentServiceError::ComponentConstraintError(_) => {
+                ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                }))
+            }
         }
     }
 }

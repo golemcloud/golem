@@ -30,7 +30,7 @@ use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
-use rib::{ConflictReport, FunctionTypeRegistry, RegistryKey, RegistryValue, WorkerFunctionsInRib};
+use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue, WorkerFunctionsInRib};
 use tap::TapFallible;
 use tracing::{error, info};
 
@@ -81,6 +81,7 @@ impl SafeDisplay for ComponentError {
             ComponentError::InternalRepoError(inner) => inner.to_safe_string(),
             ComponentError::InternalConversionError { .. } => self.to_string(),
             ComponentError::ComponentStoreError { .. } => self.to_string(),
+            ComponentError::ComponentConstraintError(_) => self.to_string()
         }
     }
 }
@@ -205,7 +206,7 @@ pub trait ComponentService<Namespace> {
         component_constraint: &ComponentConstraint<Namespace>,
     ) -> Result<ComponentConstraint<Namespace>, ComponentError>;
 
-    async fn get_constraint(
+    async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
     ) -> Result<Option<WorkerFunctionsInRib>, ComponentError>;
@@ -364,7 +365,7 @@ where
             process_component(&data).map_err(ComponentError::ComponentProcessingError)?;
 
         let constraints =
-            self.get_constraint(component_id).await?;
+            self.component_repo.get_constraint(&component_id).await?;
 
         let new_type_registry =
             FunctionTypeRegistry::from_export_metadata(&metadata.exports);
@@ -669,7 +670,7 @@ where
         Ok(component_constraint.clone())
     }
 
-    async fn get_constraint(
+    async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
     ) -> Result<Option<WorkerFunctionsInRib>, ComponentError> {
