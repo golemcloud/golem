@@ -29,9 +29,9 @@ use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
+use rib::WorkerFunctionsInRib;
 use tap::TapFallible;
 use tracing::{error, info};
-use rib::WorkerFunctionsInRib;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -203,7 +203,7 @@ pub trait ComponentService<Namespace> {
 
     async fn get_constraint(
         &self,
-        component_id: &ComponentId
+        component_id: &ComponentId,
     ) -> Result<Option<WorkerFunctionsInRib>, ComponentError>;
 }
 
@@ -578,14 +578,18 @@ where
         let record = ComponentConstraintRecord::try_from(component_constraint.clone())
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
-        self.component_repo.create_or_update_constraint(&record).await?;
+        self.component_repo
+            .create_or_update_constraint(&record)
+            .await?;
         Ok(component_constraint.clone())
     }
 
-    async fn get_constraint(&self, component_id: &ComponentId) -> Result<Option<WorkerFunctionsInRib>, ComponentError> {
+    async fn get_constraint(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<WorkerFunctionsInRib>, ComponentError> {
         let result = self.component_repo.get_constraint(&component_id).await?;
         Ok(result)
-
     }
 }
 

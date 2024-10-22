@@ -172,7 +172,10 @@ pub trait ComponentRepo {
         component_constraint_record: &ComponentConstraintRecord,
     ) -> Result<(), RepoError>;
 
-    async fn get_constraint(&self, component_id: &ComponentId) -> Result<Option<WorkerFunctionsInRib>, RepoError>;
+    async fn get_constraint(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<WorkerFunctionsInRib>, RepoError>;
 }
 
 pub struct DbComponentRepo<DB: Database> {
@@ -288,11 +291,11 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
         Self::logged("create_component_constraint", result)
     }
 
-    async fn get_constraint(&self, component_id: &ComponentId) -> Result<Option<WorkerFunctionsInRib>, RepoError> {
-        let result = self
-            .repo
-            .get_constraint(component_id)
-            .await;
+    async fn get_constraint(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<WorkerFunctionsInRib>, RepoError> {
+        let result = self.repo.get_constraint(component_id).await;
 
         Self::logged("get_component_constraint", result)
     }
@@ -657,25 +660,31 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                 FROM component_constraints WHERE component_id = $1
                 "#,
         )
-            .bind(component_constraint_record.component_id)
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|e| e.into())?;
+        .bind(component_constraint_record.component_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
 
         if let Some(existing_record) = existing_record {
-            let existing_worker_calls_used = constraint_serde::deserialize(&existing_record.constraint_data)
-                .map_err(|err| RepoError::Internal(err))?;
-            let new_worker_calls_used = constraint_serde::deserialize(&component_constraint_record.constraint_data)
-                .map_err(|err| RepoError::Internal(err))?;
+            let existing_worker_calls_used =
+                constraint_serde::deserialize(&existing_record.constraint_data)
+                    .map_err(|err| RepoError::Internal(err))?;
+            let new_worker_calls_used =
+                constraint_serde::deserialize(&component_constraint_record.constraint_data)
+                    .map_err(|err| RepoError::Internal(err))?;
 
             // This shouldn't happen as it is validated in service layers.
             // However, repo gives us more transactional guarantee.
-            let merged_worker_calls = WorkerFunctionsInRib::try_merge(vec![existing_worker_calls_used, new_worker_calls_used])
-                .map_err(|err| RepoError::Internal(err))?;
+            let merged_worker_calls = WorkerFunctionsInRib::try_merge(vec![
+                existing_worker_calls_used,
+                new_worker_calls_used,
+            ])
+            .map_err(|err| RepoError::Internal(err))?;
 
             // Serialize the merged result back to store in the database
-            let merged_constraint_data = constraint_serde::serialize(&merged_worker_calls)
-                .map_err(|err| RepoError::Internal(err))?;
+            let merged_constraint_data: Vec<u8> = constraint_serde::serialize(&merged_worker_calls)
+                .map_err(|err| RepoError::Internal(err))?
+                .into();
 
             // Update the existing record in the database
             sqlx::query(
@@ -686,13 +695,12 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     WHERE namespace = $2 AND component_id = $3
                     "#,
             )
-                .bind(merged_constraint_data.into())
-                .bind(component_constraint_record.namespace)
-                .bind(component_constraint_record.component_id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(|e| RepoError::from(e))?;
-
+            .bind(merged_constraint_data)
+            .bind(component_constraint_record.namespace)
+            .bind(component_constraint_record.component_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| RepoError::from(e))?;
         } else {
             sqlx::query(
                 r#"
@@ -702,11 +710,11 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                 ($1, $2, $3)
                "#,
             )
-                .bind(component_constraint_record.namespace)
-                .bind(component_constraint_record.component_id)
-                .bind(component_constraint_record.constraint_data)
-                .execute(&mut *transaction)
-                .await?;
+            .bind(component_constraint_record.namespace)
+            .bind(component_constraint_record.component_id)
+            .bind(component_constraint_record.constraint_data)
+            .execute(&mut *transaction)
+            .await?;
         }
 
         transaction.commit().await?;
@@ -714,7 +722,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn get_constraint(&self, component_id: &ComponentId) -> Result<Option<WorkerFunctionsInRib>, RepoError> {
+    async fn get_constraint(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<WorkerFunctionsInRib>, RepoError> {
         let existing_record = sqlx::query_as::<_, ComponentConstraintRecord>(
             r#"
                 SELECT
@@ -724,14 +735,15 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                 FROM component_constraints WHERE component_id = $1
                 "#,
         )
-            .bind(component_id.0)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())?;
+        .bind(component_id.0)
+        .fetch_optional(self.db_pool.deref())
+        .await
+        .map_err(|e| RepoError::Internal(e.to_string()))?;
 
         if let Some(existing_record) = existing_record {
-            let existing_worker_calls_used = constraint_serde::deserialize(&existing_record.constraint_data)
-                .map_err(|err| RepoError::Internal(err))?;
+            let existing_worker_calls_used =
+                constraint_serde::deserialize(&existing_record.constraint_data)
+                    .map_err(|err| RepoError::Internal(err))?;
             Ok(Some(existing_worker_calls_used))
         } else {
             Ok(None)

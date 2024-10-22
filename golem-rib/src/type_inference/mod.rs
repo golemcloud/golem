@@ -15,7 +15,6 @@
 pub use call_arguments_inference::*;
 pub use enum_resolution::*;
 pub use expr_visitor::*;
-pub use function_calls::*;
 pub use global_input_inference::*;
 pub use identifier_inference::*;
 pub use inference_fix_point::*;
@@ -43,7 +42,6 @@ mod type_unification;
 mod variant_resolution;
 
 mod enum_resolution;
-mod function_calls;
 mod global_input_inference;
 mod inference_fix_point;
 mod inferred_expr;
