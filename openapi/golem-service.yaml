@@ -1873,6 +1873,11 @@ paths:
                 component:
                   type: string
                   format: binary
+                ifs:
+                  type: string
+                  format: binary
+                file_permissions:
+                  type: string
               required:
               - name
               - component

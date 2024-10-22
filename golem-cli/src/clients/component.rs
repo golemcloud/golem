@@ -12,9 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::PathBuf;
 use crate::model::component::Component;
 use crate::model::{ComponentName, GolemError, PathBufOrStdin};
 use async_trait::async_trait;
+use golem_wasm_rpc_stubgen::model::oam::Application;
+use tokio::fs::File;
 use golem_client::model::ComponentType;
 use golem_common::uri::oss::urn::ComponentUrn;
 
@@ -42,6 +45,8 @@ pub trait ComponentClient {
         file: PathBufOrStdin,
         project: &Option<Self::ProjectContext>,
         component_type: ComponentType,
+        ifs: PathBuf,
+        config: Application,
     ) -> Result<Component, GolemError>;
     async fn update(
         &self,

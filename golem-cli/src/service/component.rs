@@ -25,6 +25,9 @@ use golem_common::uri::oss::urn::ComponentUrn;
 use indoc::formatdoc;
 use itertools::Itertools;
 use std::fmt::Display;
+use std::path::PathBuf;
+use golem_wasm_rpc_stubgen::model::oam::Application;
+use tokio::fs::File;
 
 #[async_trait]
 pub trait ComponentService {
@@ -38,6 +41,8 @@ pub trait ComponentService {
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
+        ifs: PathBuf,
+        config: Application,
     ) -> Result<GolemResult, GolemError>;
     async fn update(
         &self,
@@ -47,6 +52,8 @@ pub trait ComponentService {
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
+        ifs: PathBuf,
+        config: Application,
     ) -> Result<GolemResult, GolemError>;
     async fn list(
         &self,
@@ -93,6 +100,8 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
+        ifs: PathBuf,
+        config: Application,
     ) -> Result<GolemResult, GolemError> {
         let result = self
             .client
@@ -101,6 +110,8 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                 component_file.clone(),
                 &project,
                 component_type,
+                ifs,
+                config
             )
             .await;
 
@@ -150,6 +161,8 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
+        ifs: PathBuf,
+        config: Application,
     ) -> Result<GolemResult, GolemError> {
         let result = self.resolve_uri(component_uri.clone(), &project).await;
 
@@ -176,7 +189,8 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                                 ComponentUri::URL(ComponentUrl { name }) => ComponentName(name.clone()),
                                 _ => unreachable!(),
                             };
-                            self.client.add(component_name, component_file, &project, component_type.unwrap_or(ComponentType::Durable)).await.map(|component| {
+                            // let application = Application::new("Application name".to_string());
+                            self.client.add(component_name, component_file, &project, component_type.unwrap_or(ComponentType::Durable), ifs , config).await.map(|component| {
                                 GolemResult::Ok(Box::new(ComponentAddView(component.into())))
                             })
 

@@ -29,7 +29,7 @@ use poem_openapi::*;
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::Instrument;
-
+use tracing::log::info;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::{recorded_http_api_request, SafeDisplay};
 
@@ -67,6 +67,8 @@ pub struct UploadPayload {
     name: ComponentName,
     component_type: Option<ComponentType>,
     component: Upload,
+    ifs: Upload,
+    file_permissions: FilePermissions
 }
 
 type Result<T> = std::result::Result<T, ComponentError>;
@@ -137,8 +139,12 @@ impl ComponentApi {
     /// If the component type is not specified, it will be considered as a `Durable` component.
     #[oai(path = "/", method = "post", operation_id = "create_component")]
     async fn create_component(&self, payload: UploadPayload) -> Result<Json<Component>> {
+
         let record =
             recorded_http_api_request!("create_component", component_name = payload.name.0);
+        info!("------------------------------------");
+        info!("{:?}",payload.file_permissions);
+        info!("------------------------------------");
         let response = {
             let data = payload.component.into_vec().await?;
             let component_name = payload.name;
