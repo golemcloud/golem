@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{DynamicParsedFunctionName, InferredExpr};
+use crate::{DynamicParsedFunctionName};
 use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
