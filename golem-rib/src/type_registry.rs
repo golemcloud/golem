@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
+use crate::parser::call::function_name;
 use crate::{DynamicParsedFunctionName, ParsedFunctionSite};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
-use crate::parser::call::function_name;
 
 // A type-registry is a mapping from a function name (global or part of an interface in WIT)
 // to the registry value that represents the type of the name.
@@ -50,30 +50,29 @@ impl RegistryKey {
     pub fn get_function_name(&self) -> String {
         match self {
             Self::FunctionName(str) => str.clone(),
-            Self::FunctionNameWithInterface { function_name, ..} => function_name.clone()
+            Self::FunctionNameWithInterface { function_name, .. } => function_name.clone(),
         }
     }
 
     // To obtain the registry key that correspond to the FQN of the function
     // Not that it doesn't provide the registry key corresponding to the constructor of a resource
     pub fn from_function_name(function: &DynamicParsedFunctionName) -> RegistryKey {
-        let resource_method_name_in_metadata =
-            function.function_name_with_prefix_identifiers();
+        let resource_method_name_in_metadata = function.function_name_with_prefix_identifiers();
 
         match function.site.interface_name() {
             None => RegistryKey::FunctionName(resource_method_name_in_metadata),
             Some(interface) => RegistryKey::FunctionNameWithInterface {
                 interface_name: interface.to_string(),
-                function_name: resource_method_name_in_metadata
-            }
+                function_name: resource_method_name_in_metadata,
+            },
         }
     }
 
-
     // Obtain the registry-key corresponding to the resource constructor in a dynamic parsed function name
-    pub fn resource_constructor_registry_key(function: &DynamicParsedFunctionName) -> Option<RegistryKey> {
-        let resource_name_without_prefixes =
-            function.resource_name_simplified();
+    pub fn resource_constructor_registry_key(
+        function: &DynamicParsedFunctionName,
+    ) -> Option<RegistryKey> {
+        let resource_name_without_prefixes = function.resource_name_simplified();
 
         resource_name_without_prefixes.map(|resource_name_without_prefix| {
             let resource_constructor_with_prefix =
@@ -83,8 +82,8 @@ impl RegistryKey {
                 None => RegistryKey::FunctionName(resource_constructor_with_prefix),
                 Some(interface) => RegistryKey::FunctionNameWithInterface {
                     interface_name: interface.to_string(),
-                    function_name: resource_constructor_with_prefix
-                }
+                    function_name: resource_constructor_with_prefix,
+                },
             }
         })
     }
@@ -157,8 +156,9 @@ impl FunctionTypeRegistry {
 
     pub fn get(&self, key: &CallType) -> Option<&RegistryValue> {
         match key {
-            CallType::Function(parsed_fn_name) =>
-                self.types.get(&RegistryKey::from_function_name(&parsed_fn_name)),
+            CallType::Function(parsed_fn_name) => self
+                .types
+                .get(&RegistryKey::from_function_name(&parsed_fn_name)),
             CallType::VariantConstructor(variant_name) => self
                 .types
                 .get(&RegistryKey::FunctionName(variant_name.clone())),

@@ -53,7 +53,9 @@ pub enum FunctionCallTypeError {
 impl Display for FunctionCallTypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FunctionCallTypeError::InvalidFunctionCall { function_call_name: function_name } => {
+            FunctionCallTypeError::InvalidFunctionCall {
+                function_call_name: function_name,
+            } => {
                 write!(
                     f,
                     "Function {} is not defined in the registry",

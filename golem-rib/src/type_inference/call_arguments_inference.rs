@@ -288,8 +288,9 @@ mod internal {
     ) -> Result<(), String> {
         let fqn = dynamic_parsed_function_name.to_string();
         // Mainly for error reporting
-        let resource_constructor_name_pretty =
-            dynamic_parsed_function_name.resource_name_simplified().unwrap_or_default();
+        let resource_constructor_name_pretty = dynamic_parsed_function_name
+            .resource_name_simplified()
+            .unwrap_or_default();
 
         let mut constructor_params: &mut Vec<Expr> = &mut vec![];
 
