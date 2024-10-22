@@ -44,6 +44,9 @@ async fn compose_with_single_stub() {
     )
     .unwrap();
 
+    // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
+    uncomment_imports(&caller_dir.path().join("wit/caller.wit"));
+
     println!(
         "{}",
         std::fs::read_to_string(stub_dir.path().join("wit/_stub.wit")).unwrap()
@@ -158,4 +161,10 @@ fn assert_not_importing(wasm_path: &Path, import_name: &str) {
         let ComponentExternName::Name(name) = &import.name;
         name != import_name
     });
+}
+
+fn uncomment_imports(path: &Path) {
+    let contents = std::fs::read_to_string(path).unwrap();
+    let uncommented = contents.replace("//!!", "");
+    std::fs::write(path, uncommented).unwrap();
 }

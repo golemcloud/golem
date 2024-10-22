@@ -18,7 +18,7 @@ harness = false
 [[bin]]
 name = "wasm-rpc-stubgen"
 path = "src/main.rs"
-harness = false
+test = false
 
 [[test]]
 name = "wit"
@@ -60,7 +60,7 @@ toml = "0.8.14"
 walkdir = "2.5.0"
 wac-graph = "0.6.0"
 wit-bindgen-rust = "=0.26.0"
-wit-parser = "0.207.0"
+wit-parser = "=0.219.0"
 
 [dev-dependencies]
 test-r = { workspace = true }

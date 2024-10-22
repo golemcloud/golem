@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::log_warn_action;
-use crate::stub::StubDefinition;
-use crate::wit::{get_stub_wit, verify_action, StubTypeGen, WitAction};
-use crate::{cargo, wit, WasmRpcOverride};
+use crate::commands::log::{log_action_plan, log_warn_action};
+use crate::fs::{get_file_name, strip_path_prefix, OverwriteSafeAction, OverwriteSafeActions};
+use crate::wit::{generate_stub_wit_from_wit_dir, import_remover};
+use crate::wit_resolve::ResolvedWitDir;
+use crate::{cargo, naming};
 use anyhow::{anyhow, Context};
-use regex::Regex;
-use std::fs;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use tempfile::TempDir;
-use wit_parser::{PackageName, UnresolvedPackage};
+use wit_parser::PackageName;
 
 #[derive(PartialEq, Eq)]
 pub enum UpdateCargoToml {
@@ -36,120 +35,97 @@ pub fn add_stub_dependency(
     overwrite: bool,
     update_cargo_toml: UpdateCargoToml,
 ) -> anyhow::Result<()> {
-    // Parsing the destination WIT root
-    let parsed_dest = UnresolvedPackage::parse_dir(dest_wit_root)?;
+    let stub_resolved_wit_root = ResolvedWitDir::new(stub_wit_root)?;
+    let stub_package = stub_resolved_wit_root.main_package()?;
+    let stub_wit = stub_wit_root.join(naming::wit::STUB_WIT_FILE_NAME);
 
-    // Dependencies of stub as directories
-    let stub_deps = wit::get_dep_dirs(stub_wit_root)?;
+    let dest_deps_dir = dest_wit_root.join(naming::wit::DEPS_DIR);
+    let dest_resolved_wit_root = ResolvedWitDir::new(dest_wit_root)?;
+    let dest_package = dest_resolved_wit_root.main_package()?;
+    let dest_stub_package_name = naming::wit::stub_package_name(&dest_package.name);
+    let dest_stub_import_remover = import_remover(&dest_stub_package_name);
 
-    let stub_wit = stub_wit_root.join("_stub.wit");
-    let parsed_stub = UnresolvedPackage::parse_file(&stub_wit)?;
-
-    let destination_package_name = parsed_dest.name.clone();
-
-    let stub_target_package_name = PackageName {
-        name: parsed_stub
-            .name
-            .name
-            .strip_suffix("-stub")
-            .expect("Unexpected stub package name")
-            .to_string(),
-        ..parsed_stub.name.clone()
-    };
-    if destination_package_name == stub_target_package_name
-        && !is_self_stub(&stub_wit, dest_wit_root)?
     {
-        return Err(anyhow!(
-            "Both the caller and the target components are using the same package name ({destination_package_name}), which is not supported."
+        let is_self_stub_by_name =
+            dest_package.name == naming::wit::stub_target_package_name(&stub_package.name);
+        let is_self_stub_by_content = is_self_stub(&stub_wit, dest_wit_root);
+
+        if is_self_stub_by_name && !is_self_stub_by_content? {
+            return Err(anyhow!(
+            "Both the caller and the target components are using the same package name ({}), which is not supported.",
+            dest_package.name
         ));
+        }
     }
 
-    let stub_package_name = parsed_stub.name.clone();
+    let mut actions = OverwriteSafeActions::new();
+    let mut package_names_to_package_path = BTreeMap::<PackageName, PathBuf>::new();
 
-    let mut actions = Vec::new();
+    for (package_name, package_id) in &stub_resolved_wit_root.resolve.package_names {
+        let (package_path, package_sources) = stub_resolved_wit_root
+            .sources
+            .get(package_id)
+            .ok_or_else(|| anyhow!("Failed to get package sources for {}", package_name))?;
+        let package_path =
+            naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(package_path)?);
 
-    // Checking if the destination package is the same as the stub's package - if yes, then this is the case of adding a self-dependency
-    // (adding A-stub to A as a dependency)
-    if is_package_same_or_stub(&parsed_dest, &parsed_stub) {
-        let stub_root = &stub_wit_root
-            .parent()
-            .ok_or(anyhow!("Failed to get parent of stub wit root"))?;
+        let is_stub_main_package = *package_id == stub_resolved_wit_root.package_id;
+        let is_dest_package = *package_name == dest_package.name;
+        let is_dest_stub_package = *package_name == dest_stub_package_name;
 
-        // We re-generate stub instead of copying it and inline types
-        let stub_definition = StubDefinition::new(
-            dest_wit_root,
-            stub_root,
-            &None,
-            "0.0.1", // Version is unused when it comes to re-generating stub at this stage.
-            &WasmRpcOverride::default(), // wasm-rpc path is unused when it comes to re-generating stub during dependency addition
-            true,
-        )?;
+        // We skip self as a dependency
+        if is_dest_package {
+            log_warn_action(
+                "Skipping",
+                format!("cyclic self dependency for {}", package_name),
+            );
+        } else if is_dest_stub_package || is_stub_main_package {
+            let package_dep_dir_name = naming::wit::package_dep_dir_name(package_name);
+            let package_path = naming::wit::package_wit_dep_dir_from_package_name(package_name);
 
-        // We filter the dependencies of stub that's already existing in dest_wit_root
-        let filtered_source_deps = stub_deps
-            .into_iter()
-            .filter(|dep| find_if_same_package(dep, &parsed_dest).unwrap())
-            .collect::<Vec<_>>();
+            package_names_to_package_path.insert(package_name.clone(), package_path);
 
-        // New stub string
-        let new_stub = get_stub_wit(&stub_definition, StubTypeGen::InlineRootTypes)
-            .context("Failed to regenerate inlined stub")?;
-
-        for source_dir in filtered_source_deps {
-            actions.push(WitAction::CopyDepDir { source_dir })
-        }
-
-        actions.push(WitAction::WriteWit {
-            source_wit: new_stub,
-            dir_name: format!("{}_{}", stub_package_name.namespace, stub_package_name.name),
-            file_name: "_stub.wit".to_string(),
-        });
-    } else {
-        for source_dir in stub_deps {
-            let parsed_dep = UnresolvedPackage::parse_dir(&source_dir)?;
-
-            if is_package_same_or_stub(&parsed_dest, &parsed_dep) {
-                log_warn_action(
-                    "Skipping",
-                    format!("copying cyclic dependencies {}", parsed_dep.name),
-                );
+            // Handle self stub packages: use regenerated stub with inlining, to break the recursive cycle
+            if is_dest_stub_package {
+                actions.add(OverwriteSafeAction::WriteFile {
+                    content: generate_stub_wit_from_wit_dir(dest_wit_root, true)?,
+                    target: dest_deps_dir
+                        .join(&package_dep_dir_name)
+                        .join(naming::wit::STUB_WIT_FILE_NAME),
+                });
+            // Non-self stub package has to be copied into target deps
             } else {
-                let entries = fs::read_dir(&source_dir)?;
-                for entry in entries {
-                    let dependency_path = entry?.path();
-                    let updated_source =
-                        remove_stub_import(&dependency_path, &destination_package_name)?;
-
-                    let dependency_file_name = get_file_name(&dependency_path)?;
-                    let dependency_directory_name = get_file_name(&source_dir)?;
-
-                    actions.push(WitAction::WriteWit {
-                        source_wit: updated_source,
-                        dir_name: dependency_directory_name,
-                        file_name: dependency_file_name,
+                for source in package_sources {
+                    actions.add(OverwriteSafeAction::CopyFile {
+                        source: source.clone(),
+                        target: dest_deps_dir
+                            .join(&package_dep_dir_name)
+                            .join(get_file_name(source)?),
                     });
                 }
             }
-        }
+        // Handle other package by copying while removing imports
+        } else {
+            package_names_to_package_path.insert(package_name.clone(), package_path);
 
-        actions.push(WitAction::CopyDepWit {
-            source_wit: stub_wit,
-            dir_name: format!("{}_{}", stub_package_name.namespace, stub_package_name.name),
-        });
-    }
-
-    let mut proceed = true;
-    for action in &actions {
-        if !verify_action(action, dest_wit_root, overwrite)? {
-            eprintln!("Cannot {action} because the destination already exists with a different content. Use --overwrite to force.");
-            proceed = false;
+            for source in package_sources {
+                actions.add(OverwriteSafeAction::copy_file_transformed(
+                    source.clone(),
+                    dest_wit_root.join(strip_path_prefix(stub_wit_root, source)?),
+                    &dest_stub_import_remover,
+                )?);
+            }
         }
     }
 
-    if proceed {
-        for action in &actions {
-            action.perform(dest_wit_root)?;
+    let forbidden_overwrites = actions.run(overwrite, log_action_plan)?;
+    if !forbidden_overwrites.is_empty() {
+        eprintln!("The following files would have been overwritten with new content:");
+        for action in forbidden_overwrites {
+            eprintln!("  {}", action.target().to_string_lossy());
         }
+        eprintln!();
+        eprintln!("Use --overwrite to force overwrite.");
     }
 
     if let Some(target_parent) = dest_wit_root.parent() {
@@ -161,11 +137,10 @@ pub fn add_stub_dependency(
                 cargo::is_cargo_component_toml(&target_cargo_toml).context(format!(
                     "The file {target_cargo_toml:?} is not a valid cargo-component project"
                 ))?;
-                let mut names = Vec::new();
-                for action in actions {
-                    names.push(action.get_dep_dir_name()?);
-                }
-                cargo::add_dependencies_to_cargo_toml(&target_cargo_toml, &names)?;
+                cargo::add_dependencies_to_cargo_toml(
+                    &target_cargo_toml,
+                    package_names_to_package_path,
+                )?;
             }
         } else if update_cargo_toml == UpdateCargoToml::Update {
             return Err(anyhow!(
@@ -182,88 +157,11 @@ pub fn add_stub_dependency(
 
 /// Checks whether `stub_wit` is a stub generated for `dest_wit_root`
 fn is_self_stub(stub_wit: &Path, dest_wit_root: &Path) -> anyhow::Result<bool> {
-    let temp_root = TempDir::new()?;
-    let canonical_temp_root = temp_root.path().canonicalize()?;
-    let dest_stub_def = StubDefinition::new(
-        dest_wit_root,
-        &canonical_temp_root,
-        &None,
-        "0.0.1",
-        &WasmRpcOverride::default(),
-        false,
-    )?;
-    let dest_stub_wit_imported = get_stub_wit(&dest_stub_def, StubTypeGen::ImportRootTypes)?;
-    let dest_stub_wit_inlined = get_stub_wit(&dest_stub_def, StubTypeGen::InlineRootTypes)?;
-
+    // TODO: can we make it diff exports instead of generated content?
+    let dest_stub_wit_imported = generate_stub_wit_from_wit_dir(dest_wit_root, false)?;
+    let dest_stub_wit_inlined = generate_stub_wit_from_wit_dir(dest_wit_root, true)?;
     let stub_wit = std::fs::read_to_string(stub_wit)?;
 
+    // TODO: this can also be false in case the stub is lagging
     Ok(stub_wit == dest_stub_wit_imported || stub_wit == dest_stub_wit_inlined)
-}
-
-fn find_if_same_package(dep_dir: &Path, target_wit: &UnresolvedPackage) -> anyhow::Result<bool> {
-    let dep_package_name = UnresolvedPackage::parse_dir(dep_dir)?.name;
-    let dest_package = target_wit.name.clone();
-
-    if dep_package_name != dest_package {
-        Ok(true)
-    } else {
-        log_warn_action(
-            "Skipping",
-            format!("copying cyclic dependencies {}", dep_package_name),
-        );
-        Ok(false)
-    }
-}
-
-/// Checks whether `dependency`'s package name is either the same as `destination`'s, or
-/// the same as the **stub package name** that would be generated for `destination`.
-///
-/// With this check it is possible to skip copying cyclic dependencies.
-fn is_package_same_or_stub(
-    destination: &UnresolvedPackage,
-    dependency: &UnresolvedPackage,
-) -> bool {
-    let self_stub_name = format!("{}-stub", destination.name.name);
-
-    dependency.name == destination.name
-        || (dependency.name.namespace == destination.name.namespace
-            && dependency.name.name == self_stub_name)
-}
-
-/// Removes all 'import pkg:name-stub/*;' statements from the given WIT file
-///
-/// This is used when there are circular references between the stubbed components.
-/// When adding a stub dependency to a component A, these dependencies may have imports to A's stub.
-/// We cannot keep these imports, because that would mean that A's own stub has to be also added to A
-/// as a dependency. So we remove these imports from the worlds.
-///
-/// Note that this has no effect on the outcome because these import statements are in `world` sections
-/// which are not used when these WITs are added as dependencies.
-fn remove_stub_import(wit_file: &PathBuf, package_name: &PackageName) -> anyhow::Result<String> {
-    let read_data = fs::read_to_string(wit_file)?;
-    let self_stub_package = format!("{}:{}-stub", package_name.namespace, package_name.name);
-
-    let re = Regex::new(
-        format!(
-            r"import\s+{}(/[^;]*)?;",
-            regex::escape(self_stub_package.as_str())
-        )
-        .as_str(),
-    )?;
-
-    Ok(re.replace_all(&read_data, "").to_string())
-}
-
-fn get_file_name(path: &Path) -> anyhow::Result<String> {
-    let msg = format!(
-        "Failed to get the file name of the dependency wit path {:?}",
-        path
-    );
-
-    Ok(path
-        .file_name()
-        .ok_or(anyhow::Error::msg(msg.clone()))?
-        .to_str()
-        .ok_or(anyhow::Error::msg(msg))?
-        .to_string())
 }

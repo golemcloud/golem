@@ -15,12 +15,14 @@
 pub mod cargo;
 pub mod commands;
 pub mod compilation;
-pub mod copy;
+pub mod fs;
 pub mod make;
 pub mod model;
+pub mod naming;
 pub mod rust;
 pub mod stub;
 pub mod wit;
+pub mod wit_resolve;
 
 use crate::commands::dependencies::UpdateCargoToml;
 use crate::stub::StubDefinition;

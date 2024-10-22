@@ -2,7 +2,7 @@ use crate::commands::dependencies::UpdateCargoToml;
 use crate::commands::log::{
     log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action,
 };
-use crate::copy::copy;
+use crate::fs::copy;
 use crate::model::oam;
 use crate::model::validation::ValidatedResult;
 use crate::model::wasm_rpc::{

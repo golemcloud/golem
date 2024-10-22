@@ -14,16 +14,17 @@
 
 use crate::cargo::generate_cargo_toml;
 use crate::compilation::compile;
-use crate::copy::copy;
+use crate::fs::copy;
+use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit::{copy_wit_files, generate_stub_wit};
+use crate::wit::{copy_wit_dependencies, generate_stub_wit_to_target};
+use crate::wit_resolve::ResolvedWitDir;
 use anyhow::Context;
 use fs_extra::dir::CopyOptions;
 use heck::ToSnakeCase;
 use std::fs;
 use std::path::{Path, PathBuf};
-use wit_parser::Resolve;
 
 pub fn generate(stub_def: &StubDefinition) -> anyhow::Result<()> {
     let _ = generate_stub_wit_dir(stub_def)?;
@@ -44,7 +45,7 @@ pub async fn build(
     fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
 
     fs_extra::dir::copy(
-        stub_def.target_root.join("wit"),
+        stub_def.target_root.join(naming::wit::WIT_DIR),
         dest_wit_root,
         &CopyOptions::new().content_only(true).overwrite(true),
     )
@@ -53,11 +54,11 @@ pub async fn build(
     Ok(())
 }
 
-pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<Resolve> {
-    generate_stub_wit(stub_def).context("Failed to generate the stub wit file")?;
-    copy_wit_files(stub_def).context("Failed to copy the dependent wit files")?;
+pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
+    generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
+    copy_wit_dependencies(stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
-        .verify_target_wits()
+        .resolve_target_wit()
         .context("Failed to resolve the result WIT root")
 }
 
@@ -77,7 +78,7 @@ pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Resul
         .join("release")
         .join(format!(
             "{}.wasm",
-            stub_def.target_crate_name()?.to_snake_case()
+            stub_def.target_crate_name().to_snake_case()
         ));
     Ok(wasm_path)
 }

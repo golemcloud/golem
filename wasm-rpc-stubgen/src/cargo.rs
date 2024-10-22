@@ -14,20 +14,20 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context};
+use crate::commands::log::{log_action, log_warn_action};
+use crate::fs::get_file_name;
+use crate::naming;
+use crate::stub::StubDefinition;
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
     Profiles, StripSetting,
 };
+use golem_wasm_rpc::WASM_RPC_VERSION;
 use serde::{Deserialize, Serialize};
 use toml::Value;
-
-use crate::commands::log::{log_action, log_warn_action};
-use crate::stub::StubDefinition;
-use crate::wit;
-use golem_wasm_rpc::WASM_RPC_VERSION;
+use wit_parser::PackageName;
 
 #[derive(Serialize, Deserialize, Default)]
 struct MetadataRoot {
@@ -74,15 +74,6 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     let mut wit_dependencies = BTreeMap::new();
 
     wit_dependencies.insert(
-        def.root_package_name.to_string(),
-        WitDependency {
-            path: format!(
-                "wit/deps/{}_{}",
-                def.root_package_name.namespace, def.root_package_name.name
-            ),
-        },
-    );
-    wit_dependencies.insert(
         "golem:rpc".to_string(),
         WitDependency {
             path: "wit/deps/wasm-rpc".to_string(),
@@ -96,33 +87,32 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         },
     );
 
-    for dep in &def.unresolved_deps {
-        let dep_package = &dep.name;
-        let stub_package_name = format!("{}-stub", def.root_package_name);
+    let stub_package_name = def.stub_package_name();
+    for (dep_package, (dep_package_path, _)) in def.packages_with_wit_sources() {
+        if dep_package.name == stub_package_name {
+            continue;
+        }
 
-        if dep_package.to_string() == stub_package_name {
-            log_warn_action(
-                "Skipping",
-                format!("updating WIT dependency for {}", dep_package),
+        if dep_package.name == def.source_package_name {
+            wit_dependencies.insert(
+                format_package_name_without_version(&def.source_package_name),
+                WitDependency {
+                    path: naming::wit::package_wit_dep_dir_from_package_name(
+                        &def.source_package_name,
+                    )
+                    .to_string_lossy()
+                    .to_string(),
+                },
             );
         } else {
-            let mut dirs = BTreeSet::new();
-            for source in dep.source_files() {
-                let relative = source.strip_prefix(&def.source_wit_root)?;
-                let dir = relative
-                    .parent()
-                    .ok_or(anyhow!("Package source {source:?} has no parent directory"))?;
-                dirs.insert(dir);
-            }
-
-            if dirs.len() != 1 {
-                bail!("Package {} has multiple source directories", dep.name);
-            }
-
             wit_dependencies.insert(
-                format!("{}:{}", dep.name.namespace, dep.name.name),
+                format_package_name_without_version(&dep_package.name),
                 WitDependency {
-                    path: format!("wit/{}", dirs.iter().next().unwrap().to_str().unwrap()),
+                    path: naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(
+                        dep_package_path,
+                    )?)
+                    .to_string_lossy()
+                    .to_string(),
                 },
             );
         }
@@ -130,19 +120,18 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
 
     let metadata = MetadataRoot {
         component: Some(ComponentMetadata {
-            package: Some(format!(
-                "{}:{}",
-                def.root_package_name.namespace, def.root_package_name.name
+            package: Some(format_package_name_without_version(
+                &def.source_package_name,
             )),
             target: Some(ComponentTarget {
-                world: Some(def.target_world_name()?),
+                world: Some(def.target_world_name()),
                 path: "wit".to_string(),
                 dependencies: wit_dependencies,
             }),
         }),
     };
 
-    let mut package = cargo_toml::Package::new(def.target_crate_name()?, &def.stub_crate_version);
+    let mut package = cargo_toml::Package::new(def.target_crate_name(), &def.stub_crate_version);
     package.edition = Inheritable::Set(Edition::E2021);
     package.metadata = Some(metadata);
     manifest.package = Some(package);
@@ -258,8 +247,11 @@ pub fn add_workspace_members(path: &Path, members: &[String]) -> anyhow::Result<
     Ok(())
 }
 
-pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> anyhow::Result<()> {
-    let raw_manifest = std::fs::read_to_string(cargo_path)?;
+pub fn add_dependencies_to_cargo_toml(
+    cargo_path: &Path,
+    wit_sources: BTreeMap<PackageName, PathBuf>,
+) -> anyhow::Result<()> {
+    let raw_manifest = fs::read_to_string(cargo_path)?;
     let mut manifest: Manifest<MetadataRoot> =
         Manifest::from_slice_with_metadata(raw_manifest.as_bytes())?;
     if let Some(ref mut package) = manifest.package {
@@ -268,19 +260,13 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
                 let mut new_target = ComponentTarget::default();
                 let target = component.target.as_mut().unwrap_or(&mut new_target);
                 let existing: BTreeSet<_> = target.dependencies.keys().cloned().collect();
-                for name in names {
-                    if !existing.contains(name) {
-                        let relative_path = format!("wit/deps/{}", name);
-                        let path = cargo_path
-                            .parent()
-                            .context("Parent directory of Cargo.toml")?
-                            .join(&relative_path);
-                        let package_name = wit::get_package_name(&path)?;
-
+                for (package_name, package_path) in wit_sources {
+                    let name = format_package_name_without_version(&package_name);
+                    if !existing.contains(&name) {
                         target.dependencies.insert(
-                            format!("{}:{}", package_name.namespace, package_name.name),
+                            name,
                             WitDependency {
-                                path: relative_path,
+                                path: package_path.to_string_lossy().to_string(),
                             },
                         );
                     }
@@ -299,4 +285,8 @@ pub fn add_dependencies_to_cargo_toml(cargo_path: &Path, names: &[String]) -> an
     }
 
     Ok(())
+}
+
+fn format_package_name_without_version(package_name: &PackageName) -> String {
+    format!("{}:{}", package_name.namespace, package_name.name)
 }
