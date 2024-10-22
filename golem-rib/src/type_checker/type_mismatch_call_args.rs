@@ -1,4 +1,3 @@
-use crate::call_type::CallType;
 use crate::type_checker::{Path, TypeMismatchError, UnResolvedTypesError};
 use crate::{Expr, FunctionTypeRegistry, RegistryKey, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
