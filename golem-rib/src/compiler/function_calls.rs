@@ -108,13 +108,13 @@ impl TryFrom<WorkerInvokeCallInRibProto> for WorkerInvokeCallInRib {
         let return_types = value
             .return_types
             .iter()
-            .map(|x| AnalysedType::try_from(x))
+            .map(AnalysedType::try_from)
             .collect::<Result<_, _>>()?;
 
         let parameter_types = value
             .parameter_types
             .iter()
-            .map(|x| AnalysedType::try_from(x))
+            .map(AnalysedType::try_from)
             .collect::<Result<_, _>>()?;
 
         let registry_key_proto = value.function_key.ok_or("Function key missing")?;
