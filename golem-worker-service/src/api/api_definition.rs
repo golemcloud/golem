@@ -364,7 +364,7 @@ mod test {
             unimplemented!()
         }
 
-        async fn create_constraints(&self, component_id: &ComponentId, constraints: Vec<FunctionConstraint>, auth_ctx: &EmptyAuthCtx) -> ComponentResult<Vec<FunctionConstraint>> {
+        async fn create_or_update_constraints(&self, component_id: &ComponentId, constraints: Vec<FunctionConstraint>, auth_ctx: &EmptyAuthCtx) -> ComponentResult<Vec<FunctionConstraint>> {
             unimplemented!()
         }
     }

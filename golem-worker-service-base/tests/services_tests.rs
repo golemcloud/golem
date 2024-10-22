@@ -189,7 +189,7 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
         Ok(Self::test_component())
     }
 
-    async fn create_constraints(
+    async fn create_or_update_constraints(
         &self,
         _component_id: &ComponentId,
         _constraints: Vec<FunctionConstraint>,
@@ -219,10 +219,11 @@ async fn test_services(
         api_definition_validator_service.clone(),
     ));
 
-    let deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send> =
+    let deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send> =
         Arc::new(ApiDeploymentServiceDefault::new(
             api_deployment_repo.clone(),
             api_definition_repo.clone(),
+            component_service.clone()
         ));
 
     test_definition_crud(definition_service.clone()).await;
@@ -237,7 +238,7 @@ async fn test_deployment(
             + Sync
             + Send,
     >,
-    deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
+    deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let def1 = get_api_definition(
             &Uuid::new_v4().to_string(),
@@ -464,7 +465,7 @@ async fn test_deployment_conflict(
             + Sync
             + Send,
     >,
-    deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
+    deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let def1 = get_api_definition(
             &Uuid::new_v4().to_string(),

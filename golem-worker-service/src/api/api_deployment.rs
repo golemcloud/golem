@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::auth::DefaultNamespace;
+use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::{ApiDeployment, ApiDeploymentRequest};
 use golem_worker_service_base::api_definition;
@@ -15,13 +15,13 @@ use poem_openapi::*;
 use tracing::Instrument;
 
 pub struct ApiDeploymentApi {
-    deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
+    deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/deployments", tag = ApiTags::ApiDeployment)]
 impl ApiDeploymentApi {
     pub fn new(
-        deployment_service: Arc<dyn ApiDeploymentService<DefaultNamespace> + Sync + Send>,
+        deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     ) -> Self {
         Self { deployment_service }
     }
@@ -52,7 +52,7 @@ impl ApiDeploymentApi {
             };
 
             self.deployment_service
-                .deploy(&api_deployment)
+                .deploy(&api_deployment, &EmptyAuthCtx::default())
                 .instrument(record.span.clone())
                 .await?;
 

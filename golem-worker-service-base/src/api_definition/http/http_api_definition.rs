@@ -10,7 +10,7 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-
+use rib::WorkerFunctionsInRib;
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::parser::path_pattern_parser::PathPatternParser;
 use crate::parser::{GolemParser, ParseError};

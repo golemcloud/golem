@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
 use golem_api_grpc::proto::golem::rib::WorkerFunctionInRibMetadata as WorkerFunctionInRibMetadataProto;
 use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
@@ -33,6 +34,45 @@ pub struct WorkerFunctionsInRib {
 }
 
 impl WorkerFunctionsInRib {
+    pub fn try_merge(worker_functions: Vec<WorkerFunctionsInRib>) -> Result<WorkerFunctionsInRib, String> {
+        let mut merged_function_calls: HashMap<RegistryKey, WorkerFunctionInRibMetadata> = HashMap::new();
+
+        for wf in worker_functions {
+            for call in wf.function_calls {
+                match merged_function_calls.get(&call.function_key) {
+                    Some(existing_call) => {
+                        // Check for parameter type conflicts
+                        if existing_call.parameter_types != call.parameter_types {
+                            return Err(format!(
+                                "Parameter type conflict for function key {:?}: {:?} vs {:?}",
+                                call.function_key, existing_call.parameter_types, call.parameter_types
+                            ));
+                        }
+
+                        // Check for return type conflicts
+                        if existing_call.return_types != call.return_types {
+                            return Err(format!(
+                                "Return type conflict for function key {:?}: {:?} vs {:?}",
+                                call.function_key, existing_call.return_types, call.return_types
+                            ));
+                        }
+                    }
+                    None => {
+                        // Insert if no conflict is found
+                        merged_function_calls.insert(call.function_key.clone(), call);
+                    }
+                }
+            }
+        }
+
+        let merged_function_calls_vec =
+            merged_function_calls.into_iter().map(|(_, call)| call).collect();
+
+        Ok(WorkerFunctionsInRib {
+            function_calls: merged_function_calls_vec,
+        })
+    }
+
     pub fn from_inferred_expr(
         inferred_expr: &InferredExpr,
         original_type_registry: &FunctionTypeRegistry,

@@ -37,7 +37,7 @@ pub trait ComponentService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component>;
 
-    async fn create_constraints(
+    async fn create_or_update_constraints(
         &self,
         component_id: &ComponentId,
         constraints: WorkerFunctionsInRib,
@@ -223,7 +223,7 @@ where
         Ok(value)
     }
 
-    async fn create_constraints(
+    async fn create_or_update_constraints(
         &self,
         component_id: &ComponentId,
         constraints: rib::WorkerFunctionsInRib,
