@@ -36,6 +36,18 @@ pub struct FunctionTypeRegistry {
 }
 
 impl FunctionTypeRegistry {
+    pub fn get_from_keys(&self, keys: HashSet<RegistryKey>) -> FunctionTypeRegistry {
+        let mut types = HashMap::new();
+        for key in keys {
+            let registry_value = self.lookup(&key);
+            if let Some(registry_value) = registry_value {
+                types.insert(key, registry_value);
+            }
+        }
+
+        FunctionTypeRegistry { types }
+    }
+
     pub fn get_variants(&self) -> Vec<TypeVariant> {
         let mut variants = vec![];
 

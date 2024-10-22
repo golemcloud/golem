@@ -1,5 +1,5 @@
-use std::collections::VecDeque;
-use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry};
+use std::collections::{HashSet, VecDeque};
+use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey};
 use crate::call_type::CallType;
 
 #[derive(Debug, Clone)]
@@ -17,10 +17,35 @@ impl InferredExpr {
         Ok(InferredExpr(mutable_expr))
     }
 
-    pub fn worker_function_calls(&self) -> Vec<DynamicParsedFunctionName> {
-        let expr = self.0.clone();
+    // Only a fully inferred Rib can reliably tell us what are the exact
+    // function calls.
+    pub fn worker_invoke_calls(&self) -> Vec<DynamicParsedFunctionName> {
+        let mut worker_calls = vec![];
         let mut queue = VecDeque::new();
-        queue.push_back(self.0.clone());
-        if let expr = 
+        queue.push_back(&self.0);
+        while let Some(expr) = queue.pop_back() {
+            match expr {
+                Expr::Call(CallType::Function(function_name), _, _) => {
+                    worker_calls.push(function_name.clone())
+                }
+                _ => expr.visit_children_bottom_up(&mut queue)
+            }
+        }
+
+        worker_calls
+    }
+
+    pub fn worker_invoke_registry_keys(&self) -> HashSet<RegistryKey> {
+        let worker_calls = self.worker_invoke_calls();
+
+        let mut registry_keys = HashSet::new();
+
+        for call in worker_calls {
+            let keys = RegistryKey::registry_keys_of_function(&call);
+            registry_keys.extend(keys)
+        }
+
+        registry_keys
+
     }
 }

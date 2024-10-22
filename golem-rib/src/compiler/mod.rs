@@ -20,11 +20,13 @@ pub use type_with_unit::*;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{Expr, InferredExpr, RibInputTypeInfo};
 use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
+use crate::compiler::function_calls::FunctionCallsInRib;
 
 mod byte_code;
 mod desugar;
 mod ir;
 mod type_with_unit;
+mod function_calls;
 
 pub fn compile(
     expr: &Expr,
@@ -75,6 +77,7 @@ pub fn compile_with_limited_globals(
 
 #[derive(Debug, Clone)]
 pub struct CompilerOutput {
+    pub function_calls: FunctionCallsInRib,
     pub byte_code: RibByteCode,
     pub global_input_type_info: RibInputTypeInfo,
 }
