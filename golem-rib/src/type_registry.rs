@@ -181,7 +181,7 @@ pub enum RegistryKey {
 }
 
 impl RegistryKey {
-    // Get jut the function name without the interface
+    // Get the function name without the interface
     // Note that this function name can be the name of the resource constructor,
     // or resource method, or simple function name, that correspond to the real
     // component metadata. Examples:
