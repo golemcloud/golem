@@ -36,7 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/component/export_instance.proto",
                 "proto/golem/component/function_parameter.proto",
                 "proto/golem/component/function_result.proto",
-                "proto/golem/component/function_constraints.proto",
+                "proto/golem/component/component_constraints.proto",
                 "proto/golem/component/component.proto",
                 "proto/golem/component/component_id.proto",
                 "proto/golem/component/component_metadata.proto",

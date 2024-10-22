@@ -15,7 +15,7 @@ use golem_service_base::model::Component;
 use http::Uri;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-
+use golem_api_grpc::proto::golem::rib::WorkerInvokeCallsInRib;
 use crate::service::component::ComponentServiceError;
 use crate::service::with_metadata;
 use crate::UriBackConversion;
@@ -40,9 +40,9 @@ pub trait ComponentService<AuthCtx> {
     async fn create_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: Vec<FunctionConstraint>,
+        constraints: WorkerInvokeCallsInRib,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Vec<FunctionConstraint>>;
+    ) -> ComponentResult<WorkerInvokeCallsInRib>;
 }
 
 #[derive(Clone)]
@@ -102,7 +102,7 @@ impl RemoteComponentService {
 
     fn process_create_component_metadata_response(
         response: CreateComponentConstraintsResponse,
-    ) -> Result<Vec<FunctionConstraint>, ComponentServiceError> {
+    ) -> Result<WorkerInvokeCallsInRib, ComponentServiceError> {
         match response.result {
             None => Ok(vec![]),
             Some(create_component_constraints_response::Result::Success(response)) => {

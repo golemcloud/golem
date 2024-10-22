@@ -3,9 +3,9 @@ syntax = "proto3";
 package golem.component;
 
 import "golem/component/component_id.proto";
-import "golem/component/function_constraints.proto";
+import "golem/rib/worker_invoke_calls_in_rib.proto";
 
 message ComponentConstraints {
   ComponentId component_id = 1;
-  repeated FunctionConstraint constraints = 2;
+  golem.rib.WorkerInvokeCallsInRib constraints = 2;
 }
