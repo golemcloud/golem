@@ -19,6 +19,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
+use rib::WorkerFunctionsInRib;
 use sqlx::{Database, Pool, Row};
 use std::fmt::Display;
 use std::ops::Deref;
@@ -26,7 +27,6 @@ use std::result::Result;
 use std::sync::Arc;
 use tracing::{debug, error};
 use uuid::Uuid;
-use rib::WorkerFunctionsInRib;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord {
