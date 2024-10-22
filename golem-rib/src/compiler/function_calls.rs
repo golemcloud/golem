@@ -1,11 +1,13 @@
 use golem_wasm_ast::analysis::AnalysedType;
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
 
-// An easier data type to deal with extracting the metadata
-// of the original metadata in a compiled Rib.
-// While a type registry is concerned with every types
-// this is narrow down version of the real function invokes
-// used in Rib.
+// An easier data type that focus just the function calls,
+// return types and parameter types, corresponding to a function
+// that can also be a resource constructor, resource method, as well
+// as a simple function name.
+// These will not include variant or enum calls, that are originally
+// tagged as functions. This is why we need a fully inferred Rib (fully compiled rib),
+// which has specific details, along with original type registry to construct this data.
 #[derive(Clone, Debug)]
 pub struct FunctionCallsInRib {
     function_calls: Vec<FunctionCallInRib>
