@@ -13,8 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::parser::call::function_name;
-use crate::{DynamicParsedFunctionName, ParsedFunctionSite};
+use crate::DynamicParsedFunctionName;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
@@ -158,7 +157,7 @@ impl FunctionTypeRegistry {
         match key {
             CallType::Function(parsed_fn_name) => self
                 .types
-                .get(&RegistryKey::from_function_name(&parsed_fn_name)),
+                .get(&RegistryKey::from_function_name(parsed_fn_name)),
             CallType::VariantConstructor(variant_name) => self
                 .types
                 .get(&RegistryKey::FunctionName(variant_name.clone())),

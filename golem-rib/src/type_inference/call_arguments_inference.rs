@@ -320,7 +320,7 @@ mod internal {
         args: &mut [Expr],
         function_result_inferred_type: Option<&mut InferredType>,
     ) -> Result<(), FunctionArgsTypeInferenceError> {
-        if let Some(value) = function_type_registry.types.get(&key) {
+        if let Some(value) = function_type_registry.types.get(key) {
             match value {
                 RegistryValue::Value(_) => Ok(()),
                 RegistryValue::Variant {
