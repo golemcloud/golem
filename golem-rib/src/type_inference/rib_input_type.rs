@@ -45,7 +45,7 @@ impl RibInputTypeInfo {
             match expr {
                 Expr::Identifier(variable_id, inferred_type) => {
                     if variable_id.is_global() {
-                        let analysed_type = AnalysedType::try_from(&*inferred_type)?;
+                        let analysed_type = AnalysedType::try_from(inferred_type)?;
                         global_variables.insert(variable_id.name(), analysed_type);
                     }
                 }
