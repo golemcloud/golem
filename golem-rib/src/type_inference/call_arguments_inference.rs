@@ -253,10 +253,10 @@ mod internal {
         let resource_method_name_in_metadata =
             dynamic_parsed_function_name.function_name_with_prefix_identifiers();
 
-        let registry_key = RegistryKey::from_function_name(
-            &dynamic_parsed_function_name.site,
-            resource_method_name_in_metadata.as_str(),
-        );
+        let registry_key =
+            RegistryKey::resource_method_registry_key(
+                &dynamic_parsed_function_name
+            );
 
         infer_args_and_result_type(
             &FunctionDetails::ResourceMethodName {

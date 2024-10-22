@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::ParsedFunctionSite;
+use crate::{DynamicParsedFunctionName, ParsedFunctionSite};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use std::collections::{HashMap, HashSet};
@@ -46,6 +46,20 @@ impl RegistryKey {
                 interface_name: name.to_string(),
                 function_name: function_name.to_string(),
             },
+        }
+    }
+
+    // To obtain the registry key that correspond to the resource method in a dynamic parsed function name
+    pub fn resource_method_registry_key(function: &DynamicParsedFunctionName) -> RegistryKey {
+        let resource_method_name_in_metadata =
+            function.function_name_with_prefix_identifiers();
+
+        match function.site.interface_name() {
+            None => RegistryKey::FunctionName(resource_method_name_in_metadata),
+            Some(interface) => RegistryKey::FunctionNameWithInterface {
+                interface_name: interface.to_string(),
+                function_name: resource_method_name_in_metadata
+            }
         }
     }
 
