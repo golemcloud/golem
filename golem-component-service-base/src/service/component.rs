@@ -22,6 +22,7 @@ use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
 use chrono::Utc;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
@@ -29,7 +30,7 @@ use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
-use rib::WorkerFunctionsInRib;
+use rib::{ConflictReport, FunctionTypeRegistry, RegistryKey, RegistryValue, WorkerFunctionsInRib};
 use tap::TapFallible;
 use tracing::{error, info};
 
@@ -49,6 +50,7 @@ pub enum ComponentError {
     InternalConversionError { what: String, error: String },
     #[error("Internal component store error: {message}: {error}")]
     ComponentStoreError { message: String, error: String },
+
 }
 
 impl ComponentError {
@@ -225,6 +227,72 @@ impl ComponentServiceDefault {
             component_compilation,
         }
     }
+
+    pub fn find_component_metadata_conflicts(worker_functions_in_rib: &WorkerFunctionsInRib, function_type_registry: &FunctionTypeRegistry) -> ConflictReport {
+        let mut missing_functions = vec![];
+        let mut conflicting_functions = vec![];
+
+        for call in &worker_functions_in_rib.function_calls {
+            if let Some(new_value) = function_type_registry.lookup(&call.function_key) {
+                let mut parameter_conflict = false;
+                let mut return_conflict = false;
+
+                if call.parameter_types != new_value.argument_types() {
+                    parameter_conflict = true;
+                }
+
+                let return_types = match new_value.clone() {
+                    RegistryValue::Function {
+                        return_types,
+                        ..
+                    } => return_types,
+                    _ => vec![],
+                };
+
+                if call.return_types != return_types {
+                    return_conflict = true;
+                }
+
+                if parameter_conflict || return_conflict {
+                    conflicting_functions.push(ConflictingFunction {
+                        function: call.function_key.clone(),
+                        existing_parameter_types: call.parameter_types.clone(),
+                        new_parameter_types: new_value.clone().argument_types().clone(),
+                        existing_result_types: call.return_types.clone(),
+                        new_result_types: return_types
+                    });
+                }
+            } else {
+                missing_functions.push(call.function_key.clone());
+            }
+        }
+
+        ConflictReport {
+            missing_functions,
+            conflicting_functions,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConflictingFunction {
+    pub function: RegistryKey,
+    pub existing_parameter_types: Vec<AnalysedType>,
+    pub new_parameter_types: Vec<AnalysedType>,
+    pub existing_result_types: Vec<AnalysedType>,
+    pub new_result_types: Vec<AnalysedType>,
+}
+
+#[derive(Debug)]
+pub struct ConflictReport {
+    pub missing_functions: Vec<RegistryKey>,
+    pub conflicting_functions: Vec<ConflictingFunction>
+}
+
+impl ConflictReport {
+    pub fn is_empty(&self) -> bool {
+        self.missing_functions.is_empty() && self.conflicting_functions.is_empty()
+    }
 }
 
 #[async_trait]
@@ -287,9 +355,24 @@ where
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
+
         let created_at = Utc::now();
+
         let metadata =
             process_component(&data).map_err(ComponentError::ComponentProcessingError)?;
+
+        let constraints =
+            self.get_constraint(component_id).await?;
+
+        let new_type_registry =
+            FunctionTypeRegistry::from_export_metadata(&metadata.exports);
+
+        if let Some(constraints) =constraints {
+            let conflicts = Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
+            if !conflicts.is_empty() {
+                return  Err(ComponentError::conversion_error("record", conflicts))
+            }
+        }
 
         let next_component = self
             .component_repo
