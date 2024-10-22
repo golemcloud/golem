@@ -363,7 +363,12 @@ mod test {
             unimplemented!()
         }
 
-        async fn create_or_update_constraints(&self, _component_id: &ComponentId, _constraints: rib::WorkerFunctionsInRib, _auth_ctx: &EmptyAuthCtx) -> ComponentResult<rib::WorkerFunctionsInRib> {
+        async fn create_or_update_constraints(
+            &self,
+            _component_id: &ComponentId,
+            _constraints: rib::WorkerFunctionsInRib,
+            _auth_ctx: &EmptyAuthCtx,
+        ) -> ComponentResult<rib::WorkerFunctionsInRib> {
             unimplemented!()
         }
     }

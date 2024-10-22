@@ -21,7 +21,9 @@ pub struct ApiDeploymentApi {
 #[OpenApi(prefix_path = "/v1/api/deployments", tag = ApiTags::ApiDeployment)]
 impl ApiDeploymentApi {
     pub fn new(
-        deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
+        deployment_service: Arc<
+            dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
+        >,
     ) -> Self {
         Self { deployment_service }
     }

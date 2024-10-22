@@ -49,7 +49,8 @@ pub struct Services {
             + Sync
             + Send,
     >,
-    pub deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
+    pub deployment_service:
+        Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
@@ -149,12 +150,13 @@ impl Services {
             api_definition_validator_service.clone(),
         ));
 
-        let deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send> =
-            Arc::new(ApiDeploymentServiceDefault::new(
-                api_deployment_repo.clone(),
-                api_definition_repo.clone(),
-                component_service.clone()
-            ));
+        let deployment_service: Arc<
+            dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
+        > = Arc::new(ApiDeploymentServiceDefault::new(
+            api_deployment_repo.clone(),
+            api_definition_repo.clone(),
+            component_service.clone(),
+        ));
 
         let http_definition_lookup_service =
             Arc::new(HttpApiDefinitionLookup::new(deployment_service.clone()));
