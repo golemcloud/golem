@@ -17,7 +17,7 @@ use std::num::TryFromIntError;
 use std::sync::Arc;
 
 use crate::model::{Component, ComponentConstraints};
-use crate::repo::component::{ComponentConstraintRecord, ComponentRepo};
+use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
@@ -723,7 +723,7 @@ where
     ) -> Result<ComponentConstraints<Namespace>, ComponentError> {
         info!(namespace = %component_constraint.namespace, "Create Component Constraint");
         let component_id = &component_constraint.component_id;
-        let record = ComponentConstraintRecord::try_from(component_constraint.clone())
+        let record = ComponentConstraintsRecord::try_from(component_constraint.clone())
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         self.component_repo

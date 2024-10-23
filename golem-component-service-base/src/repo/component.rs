@@ -96,13 +96,13 @@ where
 }
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct ComponentConstraintRecord {
+pub struct ComponentConstraintsRecord {
     pub namespace: String,
     pub component_id: Uuid,
     pub constraints: Vec<u8>,
 }
 
-impl<Namespace> TryFrom<ComponentConstraints<Namespace>> for ComponentConstraintRecord
+impl<Namespace> TryFrom<ComponentConstraints<Namespace>> for ComponentConstraintsRecord
 where
     Namespace: Display,
 {
@@ -118,13 +118,13 @@ where
     }
 }
 
-impl<Namespace> TryFrom<ComponentConstraintRecord> for ComponentConstraints<Namespace>
+impl<Namespace> TryFrom<ComponentConstraintsRecord> for ComponentConstraints<Namespace>
 where
     Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
     <Namespace as TryFrom<String>>::Error: Display + Send + Sync + 'static,
 {
     type Error = String;
-    fn try_from(value: ComponentConstraintRecord) -> Result<Self, Self::Error> {
+    fn try_from(value: ComponentConstraintsRecord) -> Result<Self, Self::Error> {
         let function_constraints: FunctionConstraintCollection =
             constraint_serde::deserialize(&value.constraints)?;
         let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
@@ -169,7 +169,7 @@ pub trait ComponentRepo {
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint_record: &ComponentConstraintRecord,
+        component_constraint_record: &ComponentConstraintsRecord,
     ) -> Result<(), RepoError>;
 
     async fn get_constraint(
@@ -282,7 +282,7 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint_record: &ComponentConstraintRecord,
+        component_constraint_record: &ComponentConstraintsRecord,
     ) -> Result<(), RepoError> {
         let result = self
             .repo
@@ -646,12 +646,12 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint_record: &ComponentConstraintRecord,
+        component_constraint_record: &ComponentConstraintsRecord,
     ) -> Result<(), RepoError> {
         let component_constraint_record = component_constraint_record.clone();
         let mut transaction = self.db_pool.begin().await?;
 
-        let existing_record = sqlx::query_as::<_, ComponentConstraintRecord>(
+        let existing_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
             r#"
                 SELECT
                     namespace,
@@ -726,7 +726,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         &self,
         component_id: &ComponentId,
     ) -> Result<Option<FunctionConstraintCollection>, RepoError> {
-        let existing_record = sqlx::query_as::<_, ComponentConstraintRecord>(
+        let existing_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
             r#"
                 SELECT
                     namespace,
