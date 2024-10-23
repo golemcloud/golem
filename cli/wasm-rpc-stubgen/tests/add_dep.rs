@@ -218,7 +218,7 @@ fn direct_circular() {
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
 
-    assert_has_wasm_rpc_wit_deps(&dest_a.path());
+    assert_has_wasm_rpc_wit_deps(dest_a.path());
 
     assert_has_same_wit_package(
         &PackageName::new("test", "b-stub", None),
