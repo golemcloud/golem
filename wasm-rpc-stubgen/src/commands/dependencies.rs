@@ -117,10 +117,8 @@ pub fn add_stub_dependency(
                 *package_id,
                 &dest_stub_package_import_prefix,
             )?;
-            stub_transformer.remove_imports_from_package_all_worlds(
-                *package_id,
-                &dest_package_import_prefix,
-            )?;
+            stub_transformer
+                .remove_imports_from_package_all_worlds(*package_id, &dest_package_import_prefix)?;
             let content = stub_transformer.render_package(*package_id)?;
             let first_source = package_sources.iter().next().ok_or_else(|| {
                 anyhow!(
