@@ -16,14 +16,14 @@ use golem_component_service_base::service::component_compilation::{
 };
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::component_object_store;
-use std::sync::Arc;
 use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32};
 use golem_wasm_ast::analysis::NameTypePair;
+use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
+use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
-use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
 
 test_r::enable!();
 
@@ -498,7 +498,6 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo + Sync
     assert!(result4.unwrap().is_empty());
 }
 
-
 async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     let namespace1 = Uuid::new_v4().to_string();
 
@@ -507,7 +506,6 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
     // It has a function golem:it/api.{initialize-cart}(user-id: string)
     let data = get_component_data("shopping-cart");
 
-
     let component1 = create_new_component(
         &ComponentId::new_v4(),
         &component_name1,
@@ -515,40 +513,42 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
         &data,
         &namespace1,
     )
-        .unwrap();
+    .unwrap();
 
     let worker_functions_in_rib_initial = WorkerFunctionsInRib {
         function_calls: vec![WorkerFunctionInRibMetadata {
             function_key: RegistryKey::FunctionNameWithInterface {
                 interface_name: "golem:it/api".to_string(),
-                function_name: "initialize-cart".to_string()
+                function_name: "initialize-cart".to_string(),
             },
             parameter_types: vec![str()],
-            return_types: vec![]
-        }]
+            return_types: vec![],
+        }],
     };
 
     // Adding constraints
     let component_constraint_initial = ComponentConstraint {
         namespace: namespace1.clone(),
         component_id: component1.clone().versioned_component_id.component_id,
-        constraints: worker_functions_in_rib_initial.clone()
+        constraints: worker_functions_in_rib_initial.clone(),
     };
 
-    let component_constraint_initial_db_record =
-        component_constraint_initial.try_into().unwrap();
+    let component_constraint_initial_db_record = component_constraint_initial.try_into().unwrap();
 
     let component_create_result = component_repo
         .create(&component1.clone().try_into().unwrap())
         .await;
 
-    let component_constraint_create_result =
-        component_repo.create_or_update_constraint(
-            &component_constraint_initial_db_record
-        ).await;
+    // Create constraint
+    let component_constraint_create_result = component_repo
+        .create_or_update_constraint(&component_constraint_initial_db_record)
+        .await;
 
-    let result_constraint_get =
-        component_repo.get_constraint(&component1.versioned_component_id.component_id).await.unwrap();
+    // Get constraint
+    let result_constraint_get = component_repo
+        .get_constraint(&component1.versioned_component_id.component_id)
+        .await
+        .unwrap();
 
     let expected_initial_constraint = Some(worker_functions_in_rib_initial.clone());
 
@@ -556,50 +556,60 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
         function_calls: vec![WorkerFunctionInRibMetadata {
             function_key: RegistryKey::FunctionNameWithInterface {
                 interface_name: "golem:it/api".to_string(),
-                function_name: "get-cart-contents".to_string()
+                function_name: "get-cart-contents".to_string(),
             },
             parameter_types: vec![],
-            return_types: vec![list(record(vec![NameTypePair{
-                name: "product_id".to_string(),
-                typ: str()
-            }, NameTypePair{
-                name: "name".to_string(),
-                typ: str(),
-            }, NameTypePair {
-                name :"price".to_string(),
-                typ: f32()
-            }, NameTypePair {
-                name: "quantity".to_string(),
-                typ: u32()
-            }]))]
-        }]
+            return_types: vec![list(record(vec![
+                NameTypePair {
+                    name: "product_id".to_string(),
+                    typ: str(),
+                },
+                NameTypePair {
+                    name: "name".to_string(),
+                    typ: str(),
+                },
+                NameTypePair {
+                    name: "price".to_string(),
+                    typ: f32(),
+                },
+                NameTypePair {
+                    name: "quantity".to_string(),
+                    typ: u32(),
+                },
+            ]))],
+        }],
     };
 
     let component_constraint_later = ComponentConstraint {
         namespace: namespace1.clone(),
         component_id: component1.clone().versioned_component_id.component_id,
-        constraints: worker_functions_in_rib_later.clone()
+        constraints: worker_functions_in_rib_later.clone(),
     };
 
     let component_constraint_later_db_record = component_constraint_later.try_into().unwrap();
 
-    let component_constraint_update_result =
-        component_repo.create_or_update_constraint(
-            &component_constraint_later_db_record
-        ).await;
+    // Update constraint
+    let component_constraint_update_result = component_repo
+        .create_or_update_constraint(&component_constraint_later_db_record)
+        .await;
 
-    let result_constraint_get_updated =
-        component_repo.get_constraint(&component1.versioned_component_id.component_id).await.unwrap();
+    // Get updated constraint
+    let result_constraint_get_updated = component_repo
+        .get_constraint(&component1.versioned_component_id.component_id)
+        .await
+        .unwrap();
 
-    let expected_updated_constraint =
-        Some(WorkerFunctionsInRib::try_merge(
-            vec![worker_functions_in_rib_later, worker_functions_in_rib_initial]
-        ).unwrap());
+    let expected_updated_constraint = Some(
+        WorkerFunctionsInRib::try_merge(vec![
+            worker_functions_in_rib_later,
+            worker_functions_in_rib_initial,
+        ])
+        .unwrap(),
+    );
 
     assert!(component_create_result.is_ok());
     assert!(component_constraint_create_result.is_ok());
     assert_eq!(result_constraint_get, expected_initial_constraint);
     assert!(component_constraint_update_result.is_ok());
     assert_eq!(result_constraint_get_updated, expected_updated_constraint);
-
 }
