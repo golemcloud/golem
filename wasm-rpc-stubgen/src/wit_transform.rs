@@ -449,23 +449,3 @@ pub fn add_import_to_world(package: &mut Package, world_name: Ident, import_name
         },
     );
 }
-
-// TODO: add test for this in upstream
-#[cfg(test)]
-mod test {
-    use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
-    use test_r::test;
-    use wit_encoder::packages_from_parsed;
-    use wit_parser::Resolve;
-
-    #[test]
-    pub fn round_trip() {
-        std::env::set_var("WIT_REQUIRE_F32_F64", "0");
-        let mut resolve = Resolve::new();
-        resolve.push_str("poll.wit", WASI_POLL_WIT).unwrap();
-        resolve.push_str("wasm_rpc.wit", WASM_RPC_WIT).unwrap();
-
-        let packages = packages_from_parsed(&resolve);
-        println!("{}", packages[1]);
-    }
-}
