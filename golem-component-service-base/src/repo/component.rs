@@ -99,7 +99,7 @@ where
 pub struct ComponentConstraintRecord {
     pub namespace: String,
     pub component_id: Uuid,
-    pub constraint_data: Vec<u8>,
+    pub constraints: Vec<u8>,
 }
 
 impl<Namespace> TryFrom<ComponentConstraint<Namespace>> for ComponentConstraintRecord
@@ -113,7 +113,7 @@ where
         Ok(Self {
             namespace: value.namespace.to_string(),
             component_id: value.component_id.0,
-            constraint_data: metadata.into(),
+            constraints: metadata.into(),
         })
     }
 }
@@ -126,7 +126,7 @@ where
     type Error = String;
     fn try_from(value: ComponentConstraintRecord) -> Result<Self, Self::Error> {
         let function_constraints: WorkerFunctionsInRib =
-            constraint_serde::deserialize(&value.constraint_data)?;
+            constraint_serde::deserialize(&value.constraints)?;
         let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
         Ok(ComponentConstraint {
             namespace,
@@ -667,10 +667,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 
         if let Some(existing_record) = existing_record {
             let existing_worker_calls_used =
-                constraint_serde::deserialize(&existing_record.constraint_data)
+                constraint_serde::deserialize(&existing_record.constraints)
                     .map_err(|err| RepoError::Internal(err))?;
             let new_worker_calls_used =
-                constraint_serde::deserialize(&component_constraint_record.constraint_data)
+                constraint_serde::deserialize(&component_constraint_record.constraints)
                     .map_err(|err| RepoError::Internal(err))?;
 
             // This shouldn't happen as it is validated in service layers.
@@ -712,7 +712,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             )
             .bind(component_constraint_record.namespace)
             .bind(component_constraint_record.component_id)
-            .bind(component_constraint_record.constraint_data)
+            .bind(component_constraint_record.constraints)
             .execute(&mut *transaction)
             .await?;
         }
@@ -742,7 +742,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 
         if let Some(existing_record) = existing_record {
             let existing_worker_calls_used =
-                constraint_serde::deserialize(&existing_record.constraint_data)
+                constraint_serde::deserialize(&existing_record.constraints)
                     .map_err(|err| RepoError::Internal(err))?;
             Ok(Some(existing_worker_calls_used))
         } else {
@@ -805,6 +805,7 @@ pub mod constraint_serde {
             SERIALIZATION_VERSION_V1 => {
                 let proto_value: WorkerFunctionsInRibProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
+
                 let value = WorkerFunctionsInRib::try_from(proto_value)?;
                 Ok(value)
             }

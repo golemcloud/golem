@@ -277,7 +277,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::RegistryKey> for RegistryKey {
             KeyType::FunctionName(string) => RegistryKey::FunctionName(string.name),
             KeyType::FunctionNameWithInterface(function_with_interface) => {
                 let interface_name = function_with_interface.interface_name.clone();
-                let function_name = function_with_interface.interface_name;
+                let function_name = function_with_interface.function_name;
 
                 RegistryKey::FunctionNameWithInterface {
                     interface_name,

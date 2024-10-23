@@ -516,20 +516,22 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
     )
         .unwrap();
 
+    let worker_functions_in_rib = WorkerFunctionsInRib {
+        function_calls: vec![WorkerFunctionInRibMetadata {
+            function_key: RegistryKey::FunctionNameWithInterface {
+                interface_name: "golem:it/api".to_string(),
+                function_name: "initialize-cart".to_string()
+            },
+            parameter_types: vec![str()],
+            return_types: vec![]
+        }]
+    };
+
     // Adding constraints
     let constraint_record = ComponentConstraint {
         namespace: namespace1.clone(),
         component_id: component1.clone().versioned_component_id.component_id,
-        constraints: WorkerFunctionsInRib {
-            function_calls: vec![WorkerFunctionInRibMetadata {
-                function_key: RegistryKey::FunctionNameWithInterface {
-                    interface_name: "golem:it/api".to_string(),
-                    function_name: "initialize-cart".to_string()
-                },
-                parameter_types: vec![str()],
-                return_types: vec![]
-            }]
-        }
+        constraints: worker_functions_in_rib.clone()
     };
 
     let record = constraint_record.try_into().unwrap();
@@ -543,6 +545,12 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
             &record
         ).await;
 
+    let result_constraint_get =
+        component_repo.get_constraint(&component1.versioned_component_id.component_id).await.unwrap();
+
+    let expected = Some(worker_functions_in_rib);
+
     assert!(result1.is_ok());
     assert!(result_constraint_creation.is_ok());
+    assert_eq!(result_constraint_get, expected);
 }
