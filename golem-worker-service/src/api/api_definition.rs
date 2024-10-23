@@ -367,7 +367,7 @@ mod test {
         async fn create_or_update_constraints(
             &self,
             _component_id: &ComponentId,
-            _constraints: rib::WorkerFunctionsInRib,
+            _constraints: FunctionUsageCollection,
             _auth_ctx: &EmptyAuthCtx,
         ) -> ComponentResult<FunctionUsageCollection> {
             unimplemented!()

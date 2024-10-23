@@ -20,7 +20,7 @@ use golem_component_service_base::service::component_compilation::{
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::component_object_store;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
-use rib::{RegistryKey, WorkerFunctionsInRib};
+use rib::{RegistryKey};
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
