@@ -3907,9 +3907,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc"
-version = "1.0.6"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "886e833ca2e13f2fe0909ae1f5f7cae6af7e6f4db0f02f771d5c696741f6f8f2"
+checksum = "d3f6224b6c5298d83a9a75964f797fdc9f82238ee4aa2e7a32b8b26d345ce672"
 dependencies = [
  "arbitrary",
  "async-recursion",
@@ -3933,9 +3933,9 @@ dependencies = [
 
 [[package]]
 name = "golem-wasm-rpc-stubgen"
-version = "1.0.6"
+version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "518bb1314e17f363d00c3344201397957c15ffcbb2b2a50888c59b6c3b030fd3"
+checksum = "61335ffb8869ef69f4a3f8960e13df76c62587be478a55ec3c19b2f1ca9be09d"
 dependencies = [
  "anyhow",
  "assert2",
@@ -3968,7 +3968,7 @@ dependencies = [
  "wac-graph",
  "walkdir",
  "wit-bindgen-rust 0.26.0",
- "wit-parser 0.207.0",
+ "wit-parser 0.219.0",
 ]
 
 [[package]]
@@ -10261,8 +10261,11 @@ version = "0.219.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c771866898879073c53b565a6c7b49953795159836714ac56a5befb581227c5"
 dependencies = [
+ "ahash",
  "bitflags 2.6.0",
+ "hashbrown 0.14.5",
  "indexmap 2.6.0",
+ "semver",
 ]
 
 [[package]]
@@ -11153,6 +11156,24 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser 0.209.1",
+]
+
+[[package]]
+name = "wit-parser"
+version = "0.219.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23102e180c0c464f36e293d31a27b524e3ece930d7b5527d2f33f9d2c963de64"
+dependencies = [
+ "anyhow",
+ "id-arena",
+ "indexmap 2.6.0",
+ "log",
+ "semver",
+ "serde 1.0.210",
+ "serde_derive",
+ "serde_json",
+ "unicode-xid",
+ "wasmparser 0.219.1",
 ]
 
 [[package]]

@@ -15,7 +15,9 @@
 use crate::durable_host::golem::GetWorkersEntry;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
-use crate::model::public_oplog::{find_component_version_at, get_public_oplog_chunk};
+use crate::model::public_oplog::{
+    find_component_version_at, get_public_oplog_chunk, search_public_oplog,
+};
 use crate::preview2::golem;
 use crate::preview2::golem::api0_2_0::host::GetWorkers;
 use crate::preview2::golem::api1_1_0_rc1::host::{
@@ -252,28 +254,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     }
 }
 
-#[async_trait]
-impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
-    async fn new(
-        &mut self,
-        worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
-        text: String,
-    ) -> anyhow::Result<Resource<SearchOplog>> {
-        todo!()
-    }
-
-    async fn get_next(
-        &mut self,
-        self_: Resource<SearchOplog>,
-    ) -> anyhow::Result<Option<Vec<(golem::api1_1_0_rc1::oplog::OplogIndex, OplogEntry)>>> {
-        todo!()
-    }
-
-    fn drop(&mut self, rep: Resource<SearchOplog>) -> anyhow::Result<()> {
-        todo!()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct GetOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
@@ -282,7 +262,7 @@ pub struct GetOplogEntry {
     pub page_size: usize,
 }
 
-impl GetOplogEntry {
+impl crate::durable_host::golem::v11::GetOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: golem_common::model::oplog::OplogIndex,
@@ -294,6 +274,118 @@ impl GetOplogEntry {
             next_oplog_index: initial_oplog_index,
             current_component_version: initial_component_version,
             page_size,
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        next_oplog_index: golem_common::model::oplog::OplogIndex,
+        current_component_version: ComponentVersion,
+    ) {
+        self.next_oplog_index = next_oplog_index;
+        self.current_component_version = current_component_version;
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
+    async fn new(
+        &mut self,
+        worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
+        text: String,
+    ) -> anyhow::Result<Resource<SearchOplog>> {
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("golem::api::search-oplog", "new");
+
+        let account_id = self.owned_worker_id.account_id();
+        let worker_id: golem_common::model::WorkerId = worker_id.into();
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        let start = golem_common::model::oplog::OplogIndex::INITIAL;
+        let initial_component_version =
+            find_component_version_at(self.state.oplog_service(), &owned_worker_id, start).await?;
+
+        let entry =
+            SearchOplogEntry::new(owned_worker_id, start, initial_component_version, 100, text);
+        let resource = self.as_wasi_view().table().push(entry)?;
+        Ok(resource)
+    }
+
+    async fn get_next(
+        &mut self,
+        self_: Resource<SearchOplog>,
+    ) -> anyhow::Result<Option<Vec<(golem::api1_1_0_rc1::oplog::OplogIndex, OplogEntry)>>> {
+        let _permit = self.begin_async_host_function().await?;
+        record_host_function_call("golem::api::search-oplog", "get-next");
+
+        let component_service = self.state.component_service.clone();
+        let oplog_service = self.state.oplog_service();
+
+        let entry = self.as_wasi_view().table().get(&self_)?.clone();
+
+        let chunk = search_public_oplog(
+            component_service,
+            oplog_service,
+            &entry.owned_worker_id,
+            entry.current_component_version,
+            entry.next_oplog_index,
+            entry.page_size,
+            &entry.query,
+        )
+        .await
+        .map_err(|msg| anyhow!(msg))?;
+
+        if chunk.next_oplog_index != entry.next_oplog_index {
+            self.as_wasi_view()
+                .table()
+                .get_mut(&self_)?
+                .update(chunk.next_oplog_index, chunk.current_component_version);
+            Ok(Some(
+                chunk
+                    .entries
+                    .into_iter()
+                    .map(|(idx, entry)| {
+                        let idx: golem::api1_1_0_rc1::oplog::OplogIndex = idx.into();
+                        let entry: OplogEntry = entry.into();
+                        (idx, entry)
+                    })
+                    .collect(),
+            ))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn drop(&mut self, rep: Resource<SearchOplog>) -> anyhow::Result<()> {
+        record_host_function_call("golem::api::search-oplog", "drop");
+        self.as_wasi_view().table().delete(rep)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchOplogEntry {
+    pub owned_worker_id: OwnedWorkerId,
+    pub next_oplog_index: golem_common::model::oplog::OplogIndex,
+    pub current_component_version: ComponentVersion,
+    pub page_size: usize,
+    pub query: String,
+}
+
+impl SearchOplogEntry {
+    pub fn new(
+        owned_worker_id: OwnedWorkerId,
+        initial_oplog_index: golem_common::model::oplog::OplogIndex,
+        initial_component_version: ComponentVersion,
+        page_size: usize,
+        query: String,
+    ) -> Self {
+        Self {
+            owned_worker_id,
+            next_oplog_index: initial_oplog_index,
+            current_component_version: initial_component_version,
+            page_size,
+            query,
         }
     }
 
