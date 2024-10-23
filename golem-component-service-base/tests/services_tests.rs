@@ -5,10 +5,10 @@ use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::config::ComponentStoreLocalConfig;
 use golem_service_base::db;
 
+use golem_common::model::component_constraint::FunctionUsageCollection;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
-use golem_component_service_base::model::{Component};
-use golem_common::model::component_constraint::FunctionUsageCollection;
+use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
 use golem_component_service_base::service::component::{
     create_new_component, ComponentError, ComponentService, ComponentServiceDefault,
@@ -20,7 +20,7 @@ use golem_component_service_base::service::component_compilation::{
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::component_object_store;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
-use rib::{RegistryKey};
+use rib::RegistryKey;
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};

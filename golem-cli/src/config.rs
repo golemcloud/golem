@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
 use crate::cloud::CloudAuthenticationConfig;
 use crate::init::CliKind;
 use crate::model::{Format, GolemError, HasFormatConfig};
 use derive_more::FromStr;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufReader, BufWriter};

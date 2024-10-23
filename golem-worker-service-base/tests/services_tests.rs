@@ -29,7 +29,7 @@ use golem_worker_service_base::service::http::http_api_definition_validator::{
 };
 
 use chrono::Utc;
-use golem_common::model::component_constraint::{FunctionUsageCollection};
+use golem_common::model::component_constraint::FunctionUsageCollection;
 use golem_wasm_ast::analysis::analysed_type::str;
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
@@ -195,8 +195,8 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
         _constraints: FunctionUsageCollection,
         _auth_ctx: &AuthCtx,
     ) -> ComponentResult<FunctionUsageCollection> {
-        Ok(FunctionUsageCollection{
-            function_usages: vec![]
+        Ok(FunctionUsageCollection {
+            function_usages: vec![],
         })
     }
 }

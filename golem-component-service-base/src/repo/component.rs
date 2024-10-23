@@ -15,8 +15,8 @@
 use crate::model::{Component, ComponentConstraints};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::component_constraint::FunctionUsageCollection;
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
