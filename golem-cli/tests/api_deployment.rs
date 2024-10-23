@@ -130,7 +130,7 @@ fn api_deployment_deploy(
     let component_urn = format!("urn:component:{}", component_id_in_def);
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
-    let result = cli.run_trimmed(&[
+    let result: Result<ComponentView, _> = cli.run_trimmed(&[
         "component",
         "update",
         &cfg.arg('C', "component"),
