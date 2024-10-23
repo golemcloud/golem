@@ -132,6 +132,7 @@ fn api_deployment_deploy(
         .component_id
         .component_id;
 
+    // Updating the component after a deployment with incompatible changes should fail
     let component_urn = format!("urn:component:{}", component_id_in_def);
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -142,6 +143,7 @@ fn api_deployment_deploy(
         &component_urn,
         env_service.to_str().unwrap(),
     ]);
+
     assert!(
         result.is_err(),
         "api deployment disallows incompatible component updates"

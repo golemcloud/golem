@@ -171,6 +171,15 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             _ => return Err("Missing idempotency key".to_string()),
         };
 
+        let worker_calls = if let Some(worker_functions_in_rib) = value.worker_functions_in_response
+        {
+            Some(rib::WorkerFunctionsInRib::try_from(
+                worker_functions_in_rib,
+            )?)
+        } else {
+            None
+        };
+
         let response_compiled = ResponseMappingCompiled {
             response_rib_expr: value
                 .response
@@ -178,7 +187,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
                 .and_then(Expr::try_from)?,
             compiled_response: response_compiled,
             rib_input: response_input,
-            worker_calls: None, // TODO
+            worker_calls,
         };
 
         Ok(CompiledGolemWorkerBinding {
@@ -214,6 +223,7 @@ impl TryFrom<CompiledGolemWorkerBinding>
         let response = Some(value.response_compiled.response_rib_expr.into());
         let compiled_response_expr = Some(value.response_compiled.compiled_response.into());
         let response_rib_input = Some(value.response_compiled.rib_input.into());
+        let worker_functions_in_response = value.response_compiled.worker_calls.map(|x| x.into());
 
         Ok(
             golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding {
@@ -227,6 +237,7 @@ impl TryFrom<CompiledGolemWorkerBinding>
                 response,
                 compiled_response_expr,
                 response_rib_input,
+                worker_functions_in_response,
             },
         )
     }

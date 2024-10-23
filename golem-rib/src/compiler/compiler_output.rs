@@ -32,14 +32,14 @@ impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
         let proto_byte_code = value.byte_code.ok_or("Missing byte_code")?;
         let rib_input = RibInputTypeInfo::try_from(proto_rib_input)?;
         let byte_code = RibByteCode::try_from(proto_byte_code)?;
-        let worker_invoke_calls = if let Some(value) = value.worker_invoke_calls {
+        let worker_invoke_callsxxxxxxxxx = if let Some(value) = value.worker_invoke_calls {
             Some(WorkerFunctionsInRib::try_from(value)?)
         } else {
             None
         };
 
         Ok(CompilerOutput {
-            worker_invoke_calls,
+            worker_invoke_calls: worker_invoke_callsxxxxxxxxx,
             byte_code,
             global_input_type_info: rib_input,
         })

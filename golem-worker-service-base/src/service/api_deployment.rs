@@ -389,7 +389,8 @@ where
                     .await?;
             }
 
-            let constraints = Self::get_worker_functions_in_api_definitions(new_definitions)?;
+            let constraints =
+                Self::get_worker_functions_in_api_definitions(new_definitions.clone())?;
 
             for (component_id, constraints) in constraints {
                 self.component_service

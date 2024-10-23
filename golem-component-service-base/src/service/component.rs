@@ -50,7 +50,7 @@ pub enum ComponentError {
     InternalConversionError { what: String, error: String },
     #[error("Internal component store error: {message}: {error}")]
     ComponentStoreError { message: String, error: String },
-    #[error("Component Constraint Conflict Error: {0}")]
+    #[error("Component Constraint Error. Make sure the component is backward compatible as the functions are already in use:\n{0}")]
     ComponentConstraintConflictError(ConflictReport),
     #[error("Component Constraint Create Error: {0}")]
     ComponentConstraintCreateError(String),
@@ -340,7 +340,7 @@ impl Display for ConflictReport {
         }
 
         // Handling conflicting functions
-        writeln!(f, "\nConflicting Functions:")?;
+        writeln!(f, "\nFunctions with conflicting types:")?;
         if self.conflicting_functions.is_empty() {
             writeln!(f, "  None")?;
         } else {
