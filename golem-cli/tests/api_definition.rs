@@ -162,7 +162,7 @@ pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinitionRequest {
     golem_def_with_response(
         id,
         component_id,
-        "let x = golem:it/api.{checkout}(); let status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
+        "let x = golem:it/api.{checkout}();\nlet status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
             .to_string(),
     )
 }
