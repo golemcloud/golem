@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::num::TryFromIntError;
 use std::sync::Arc;
 
@@ -50,8 +50,10 @@ pub enum ComponentError {
     InternalConversionError { what: String, error: String },
     #[error("Internal component store error: {message}: {error}")]
     ComponentStoreError { message: String, error: String },
-    #[error("Component Constraint Error: {0}")]
-    ComponentConstraintError(String),
+    #[error("Component Constraint Conflict Error: {0}")]
+    ComponentConstraintConflictError(ConflictReport),
+    #[error("Component Constraint Create Error: {0}")]
+    ComponentConstraintCreateError(String),
 }
 
 impl ComponentError {
@@ -80,7 +82,8 @@ impl SafeDisplay for ComponentError {
             ComponentError::InternalRepoError(inner) => inner.to_safe_string(),
             ComponentError::InternalConversionError { .. } => self.to_string(),
             ComponentError::ComponentStoreError { .. } => self.to_string(),
-            ComponentError::ComponentConstraintError(_) => self.to_string(),
+            ComponentError::ComponentConstraintConflictError(_) => self.to_string(),
+            ComponentError::ComponentConstraintCreateError(_) => self.to_string(),
         }
     }
 }
@@ -285,10 +288,67 @@ pub struct ConflictingFunction {
     pub new_result_types: Vec<AnalysedType>,
 }
 
+impl Display for ConflictingFunction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Function: {}", self.function)?;
+        writeln!(f, "  Parameter Type Conflict:")?;
+        writeln!(
+            f,
+            "    Existing: {}",
+            internal::convert_to_pretty_types(&self.existing_parameter_types)
+        )?;
+        writeln!(
+            f,
+            "    New:      {}",
+            internal::convert_to_pretty_types(&self.new_parameter_types)
+        )?;
+
+        writeln!(f, "  Result Type Conflict:")?;
+        writeln!(
+            f,
+            "    Existing: {}",
+            internal::convert_to_pretty_types(&self.existing_result_types)
+        )?;
+        writeln!(
+            f,
+            "    New:      {}",
+            internal::convert_to_pretty_types(&self.new_result_types)
+        )?;
+
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct ConflictReport {
     pub missing_functions: Vec<RegistryKey>,
     pub conflicting_functions: Vec<ConflictingFunction>,
+}
+
+impl Display for ConflictReport {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Handling missing functions
+        writeln!(f, "Missing Functions:")?;
+        if self.missing_functions.is_empty() {
+            writeln!(f, "  None")?;
+        } else {
+            for missing_function in &self.missing_functions {
+                writeln!(f, "  - {}", missing_function)?;
+            }
+        }
+
+        // Handling conflicting functions
+        writeln!(f, "\nConflicting Functions:")?;
+        if self.conflicting_functions.is_empty() {
+            writeln!(f, "  None")?;
+        } else {
+            for conflict in &self.conflicting_functions {
+                writeln!(f, "{}", conflict)?;
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl ConflictReport {
@@ -371,7 +431,7 @@ where
             let conflicts =
                 Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
             if !conflicts.is_empty() {
-                return Err(ComponentError::ComponentConstraintError(format!("The updated component has conflicting types to the previous version of component that's already in use. {:?}", conflicts)));
+                return Err(ComponentError::ComponentConstraintConflictError(conflicts));
             }
         }
 
@@ -670,7 +730,7 @@ where
             .component_repo
             .get_constraint(&component_constraint.component_id)
             .await?
-            .ok_or(ComponentError::ComponentConstraintError(format!(
+            .ok_or(ComponentError::ComponentConstraintCreateError(format!(
                 "Failed to create constraints for {}",
                 component_id
             )))?;
@@ -758,6 +818,20 @@ impl ComponentServiceDefault {
             }
             _ => Ok(None),
         }
+    }
+}
+
+mod internal {
+    use golem_wasm_ast::analysis::AnalysedType;
+    pub(crate) fn convert_to_pretty_types(analysed_types: &Vec<AnalysedType>) -> String {
+        let type_names = analysed_types
+            .iter()
+            .map(|x| {
+                rib::TypeName::try_from(x.clone()).map_or("unknwon".to_string(), |x| x.to_string())
+            })
+            .collect::<Vec<_>>();
+
+        type_names.join(", ")
     }
 }
 

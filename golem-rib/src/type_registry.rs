@@ -20,6 +20,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fmt::{Display, Formatter};
 
 // A type-registry is a mapping from a function name (global or part of an interface in WIT)
 // to the registry value that represents the type of the name.
@@ -184,6 +185,22 @@ pub enum RegistryKey {
     },
 }
 
+impl Display for RegistryKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RegistryKey::FunctionName(name) => write!(f, "Function Name: {}", name),
+            RegistryKey::FunctionNameWithInterface {
+                interface_name,
+                function_name,
+            } => write!(
+                f,
+                "Interface: {}, Function: {}",
+                interface_name, function_name
+            ),
+        }
+    }
+}
+
 impl RegistryKey {
     // Get the function name without the interface
     // Note that this function name can be the name of the resource constructor,
@@ -196,6 +213,13 @@ impl RegistryKey {
         match self {
             Self::FunctionName(str) => str.clone(),
             Self::FunctionNameWithInterface { function_name, .. } => function_name.clone(),
+        }
+    }
+
+    pub fn get_interface_name(&self) -> Option<String> {
+        match self {
+            Self::FunctionName(_) => None,
+            Self::FunctionNameWithInterface { interface_name, .. } => Some(interface_name.clone()),
         }
     }
 
