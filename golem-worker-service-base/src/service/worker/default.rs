@@ -923,7 +923,7 @@ where
         count: u64,
         query: String,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
+        _auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -931,10 +931,11 @@ where
             move |worker_executor_client| {
                 info!("Search oplog");
                 let worker_id = worker_id.clone();
+                let query_clone = query.clone();
                 Box::pin(
                     worker_executor_client.search_oplog(workerexecutor::v1::SearchOplogRequest {
                         worker_id: Some(worker_id.into()),
-                        query,
+                        query: query_clone,
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
                         account_id: metadata.account_id.clone().map(|id| id.into()),
@@ -948,12 +949,11 @@ where
                              workerexecutor::v1::SearchOplogSuccessResponse {
                                  entries,
                                  next,
-                                 first_index_in_chunk,
                                  last_index,
                              },
                          )),
                 } => {
-                    let entries: Vec<PublicOplogEntry> = entries
+                    let entries: Vec<PublicOplogEntryWithIndex> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
@@ -962,26 +962,18 @@ where
                                 details: format!("Unexpected oplog entries in error: {err}"),
                             })
                         })?;
+                    let first_index_in_chunk =  entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
                     Ok(GetOplogResponse {
-                        entries: entries
-                            .into_iter()
-                            .enumerate()
-                            .map(|(idx, entry)| PublicOplogEntryWithIndex {
-                                oplog_index: OplogIndex::from_u64(
-                                    (first_index_in_chunk) + idx as u64,
-                                ),
-                                entry,
-                            })
-                            .collect(),
+                        entries,
                         next: next.map(|c| c.into()),
                         first_index_in_chunk,
                         last_index,
                     })
                 }
-                workerexecutor::v1::SearchOplogResponse {
+                SearchOplogResponse {
                     result: Some(workerexecutor::v1::search_oplog_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::v1::SearchOplogResponse { .. } => Err("Empty response".into()),
+                SearchOplogResponse { .. } => Err("Empty response".into()),
             },
             WorkerServiceError::InternalCallError,
         )

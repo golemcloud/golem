@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bincode::{Decode, Encode};
+use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
@@ -995,6 +996,32 @@ pub struct GetOplogResponse {
 pub struct PublicOplogEntryWithIndex {
     pub oplog_index: OplogIndex,
     pub entry: PublicOplogEntry,
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntryWithIndex>
+    for PublicOplogEntryWithIndex
+{
+    type Error = String;
+
+    fn try_from(value: OplogEntryWithIndex) -> Result<Self, Self::Error> {
+        Ok(Self {
+            oplog_index: OplogIndex::from_u64(value.oplog_index),
+            entry: value.entry.ok_or("Missing field: entry")?.try_into()?,
+        })
+    }
+}
+
+impl TryFrom<PublicOplogEntryWithIndex>
+    for golem_api_grpc::proto::golem::worker::OplogEntryWithIndex
+{
+    type Error = String;
+
+    fn try_from(value: PublicOplogEntryWithIndex) -> Result<Self, Self::Error> {
+        Ok(Self {
+            oplog_index: value.oplog_index.into(),
+            entry: Some(value.entry.try_into()?),
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]

@@ -620,31 +620,75 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
-        from: Query<u64>,
+        from: Query<Option<u64>>,
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
         query: Query<Option<String>>,
     ) -> Result<Json<GetOplogResponse>> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-
         let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
 
-        let response = self
-            .worker_service
-            .get_oplog(
-                &worker_id,
-                OplogIndex::from_u64(from.0),
-                cursor.0,
-                count.0,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+        match (from.0, query.0) {
+            (Some(_), Some(_)) => Err(WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec![
+                    "Cannot specify both the 'from' and the 'query' parameters".to_string()
+                ],
+            }))),
+            (Some(from), None) => {
+                let response = self
+                    .worker_service
+                    .get_oplog(
+                        &worker_id,
+                        OplogIndex::from_u64(from),
+                        cursor.0,
+                        count.0,
+                        empty_worker_metadata(),
+                        &EmptyAuthCtx::default(),
+                    )
+                    .instrument(record.span.clone())
+                    .await
+                    .map_err(|e| e.into())
+                    .map(Json);
 
-        record.result(response)
+                record.result(response)
+            }
+            (None, Some(query)) => {
+                let response = self
+                    .worker_service
+                    .search_oplog(
+                        &worker_id,
+                        cursor.0,
+                        count.0,
+                        query,
+                        empty_worker_metadata(),
+                        &EmptyAuthCtx::default(),
+                    )
+                    .instrument(record.span.clone())
+                    .await
+                    .map_err(|e| e.into())
+                    .map(Json);
+
+                record.result(response)
+            }
+            (None, None) => {
+                let response = self
+                    .worker_service
+                    .get_oplog(
+                        &worker_id,
+                        OplogIndex::INITIAL,
+                        cursor.0,
+                        count.0,
+                        empty_worker_metadata(),
+                        &EmptyAuthCtx::default(),
+                    )
+                    .instrument(record.span.clone())
+                    .await
+                    .map_err(|e| e.into())
+                    .map(Json);
+
+                record.result(response)
+            }
+        }
     }
 }
 
