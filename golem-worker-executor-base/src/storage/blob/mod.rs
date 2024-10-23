@@ -107,13 +107,14 @@ pub trait BlobStorage: Debug {
         path: &Path,
     ) -> Result<Vec<PathBuf>, String>;
 
+    /// Returns true if the directory was deleted; false if it did not exist
     async fn delete_dir(
         &self,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String>;
+    ) -> Result<bool, String>;
 
     async fn exists(
         &self,
@@ -265,7 +266,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         &self,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         self.storage
             .delete_dir(self.svc_name, self.api_name, namespace, path)
             .await

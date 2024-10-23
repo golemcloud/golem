@@ -28,6 +28,7 @@ skip_core_tasks = true       # we are not using the predefined cargo-make flows,
 
 [env]
 JUNIT_OPTS = ""
+AWS_EC2_METADATA_DISABLED = "true"
 
 [env.ci]
 CARGO_INCREMENTAL = "false"
@@ -184,8 +185,9 @@ dependencies = [
 
 [tasks.unit-tests]
 description = "Runs unit tests only"
-command = "cargo"
-args = ["test", "--lib", "--all-features"]
+script = '''
+cargo test --lib --all-features -- --nocapture --report-time $JUNIT_OPTS
+'''
 
 [tasks.worker-executor-tests]
 description = "Runs worker executor tests only"
@@ -264,7 +266,7 @@ description = "Runs integration tests only"
 dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package integration-tests --test integration -- --nocapture --report-time
 '''
 
 [tasks.sharding-tests]

@@ -3550,6 +3550,7 @@ dependencies = [
  "reqwest",
  "serde 1.0.210",
  "serde_json",
+ "test-r",
  "tracing",
  "uuid",
 ]
@@ -8739,9 +8740,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "0.0.11"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f503de241983649990311e28573ce1e98f62ed65f2b6fb7bdf2496d2ba1c978"
+checksum = "ccfab3e4a671af27fa4256a0985d6c1bd20c33a1a911463f169f741c2432cae4"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -8751,9 +8752,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "0.0.10"
+version = "0.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf42476bec5da760737467562f6169dc126d3716b74ca072f08246fbcb332000"
+checksum = "a993c784a726372c869e24f569eb027b0037eb95977bc0ed413686bc668937af"
 dependencies = [
  "anstream",
  "anstyle",
@@ -8772,9 +8773,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "0.0.11"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "198b6d8536c41236c3bc5dec066dd4d63ff01fab76596a9738d8bf60b050afdb"
+checksum = "8d8397a821d4c7f5e9fbb4bd0716400e99e74519791039609c479c0b9bae062c"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",

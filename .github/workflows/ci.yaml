@@ -363,7 +363,7 @@ jobs:
           auto-start: false
       - name: Integration tests
         env:
-          QUIET: 1
+          QUIET: true
         run: cargo make --profile ci integration-tests
         timeout-minutes: 30
       - name: Publish Test Report
@@ -402,7 +402,7 @@ jobs:
           auto-start: false
       - name: CLI tests
         env:
-          QUIET: 1
+          QUIET: true
         run: cargo make --profile ci cli-tests
         timeout-minutes: 35
       - name: Publish Test Report
@@ -441,7 +441,7 @@ jobs:
           auto-start: false
       - name: Sharding tests
         env:
-          QUIET: 1
+          QUIET: true
         run: cargo make --profile ci sharding-tests
         timeout-minutes: 30
       - name: Publish Test Report

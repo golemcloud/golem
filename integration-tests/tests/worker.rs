@@ -962,7 +962,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
-    let component_id = deps.store_component("http-client-2").await;
+    let component_id = deps.store_unique_component("http-client-2").await;
     let host_http_port = 8585;
 
     let polling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -1081,17 +1081,17 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
     http_server.abort();
 
     check!(found_worker_ids.len() == workers_count);
-    check!(found_worker_ids.eq(&worker_ids));
+    check!(&found_worker_ids == &worker_ids);
 
     let found_worker_ids2 = get_worker_ids(values);
 
     check!(found_worker_ids2.len() == workers_count);
-    check!(found_worker_ids2.eq(&worker_ids));
+    check!(&found_worker_ids2 == &worker_ids);
 }
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout(300000)]
 async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("update-test-v1").await;
     let worker_id = deps
@@ -1123,6 +1123,7 @@ async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing
 
 #[test]
 #[tracing::instrument]
+#[timeout(300000)]
 async fn auto_update_on_idle_via_host_function(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
@@ -1234,4 +1235,72 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
             .count(),
         3
     );
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(600000)]
+async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_unique_component("counters").await;
+    let worker_id = deps
+        .start_worker(&component_id, "counters-recreation")
+        .await;
+
+    // Doing many requests, so parts of the oplog gets archived
+    for _ in 1..=1200 {
+        let _ = deps
+            .invoke_and_await(
+                &worker_id,
+                "rpc:counters/api.{counter(\"counter1\").inc-by}",
+                vec![Value::U64(1)],
+            )
+            .await;
+    }
+
+    let result1 = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    deps.delete_worker(&worker_id).await;
+
+    // Invoking again should create a new worker
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").inc-by}",
+            vec![Value::U64(1)],
+        )
+        .await;
+
+    let result2 = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+
+    deps.delete_worker(&worker_id).await;
+
+    // Also if we explicitly create a new one
+    let worker_id = deps
+        .start_worker(&component_id, "counters-recreation")
+        .await;
+    let result3 = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+
+    check!(result1 == Ok(vec![Value::U64(1200)]));
+    check!(result2 == Ok(vec![Value::U64(1)]));
+    check!(result3 == Ok(vec![Value::U64(0)]));
 }

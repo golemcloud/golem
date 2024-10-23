@@ -213,12 +213,13 @@ impl BlobStorage for InMemoryBlobStorage {
         _op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &Path,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let dir = path.to_string_lossy().to_string();
-        self.data
+        let result = self
+            .data
             .get(&namespace)
             .and_then(|namespace_data| namespace_data.remove(&dir));
-        Ok(())
+        Ok(result.is_some())
     }
 
     async fn exists(
@@ -234,7 +235,13 @@ impl BlobStorage for InMemoryBlobStorage {
             .map(|namespace_data| namespace_data.contains_key(path.to_string_lossy().as_ref()))
             .unwrap_or_default()
         {
-            return Ok(ExistsResult::Directory);
+            Ok(ExistsResult::Directory)
+        } else if path == Path::new("") {
+            if self.data.get(&namespace).is_some() {
+                Ok(ExistsResult::Directory)
+            } else {
+                Ok(ExistsResult::DoesNotExist)
+            }
         } else {
             let dir = path
                 .parent()
