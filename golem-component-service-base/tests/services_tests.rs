@@ -769,8 +769,8 @@ mod constraint_data {
     }
 
     pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraintCollection {
-        FunctionUsageCollection {
-            function_usages: vec![FunctionUsage {
+        FunctionConstraintCollection {
+            function_usages: vec![FunctionConstraint {
                 usage_count: 1,
                 function_key: RegistryKey::FunctionName("foo".to_string()),
                 parameter_types: vec![],
