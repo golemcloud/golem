@@ -825,7 +825,7 @@ impl ComponentServiceDefault {
 
 mod internal {
     use golem_wasm_ast::analysis::AnalysedType;
-    pub(crate) fn convert_to_pretty_types(analysed_types: &Vec<AnalysedType>) -> String {
+    pub(crate) fn convert_to_pretty_types(analysed_types: &[AnalysedType]) -> String {
         let type_names = analysed_types
             .iter()
             .map(|x| {

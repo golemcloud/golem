@@ -110,6 +110,11 @@ impl From<ComponentServiceError> for ComponentError {
                     errors: vec![error.to_safe_string()],
                 }))
             }
+            ComponentServiceError::ComponentConstraintCreateError(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
         }
     }
 }
