@@ -417,35 +417,35 @@ impl<'a> WitTransformer<'a> {
 
         Ok(())
     }
-}
 
-pub fn add_import_to_world(package: &mut Package, world_name: Ident, import_name: Ident) {
-    struct AddImportToWorld {
-        world_name: Ident,
-        import_name: Ident,
-    }
-    impl VisitPackage for AddImportToWorld {
-        fn package_world(&mut self, _package_name: &PackageName, world: &mut World) {
-            if *world.name() == self.world_name {
+    pub fn add_import_to_all_world(
+        &mut self,
+        package_id: wit_parser::PackageId,
+        import_name: &str,
+    ) -> anyhow::Result<()> {
+        struct AddImportToWorld<'a> {
+            import_name: &'a str,
+        }
+        impl<'a> VisitPackage for AddImportToWorld<'a> {
+            fn package_world(&mut self, _package_name: &PackageName, world: &mut World) {
                 let is_already_imported = world.items_mut().iter().any(|item| {
                     if let WorldItem::NamedInterfaceImport(import) = item {
-                        *import.name() == self.import_name
+                        import.name().raw_name() == self.import_name
                     } else {
                         false
                     }
                 });
                 if !is_already_imported {
-                    world.named_interface_import(self.import_name.clone());
+                    world.named_interface_import(self.import_name.to_string());
                 }
             }
         }
-    }
 
-    visit_package(
-        package,
-        &mut AddImportToWorld {
-            world_name,
-            import_name,
-        },
-    );
+        visit_package(
+            self.encoded_package(package_id)?,
+            &mut AddImportToWorld { import_name },
+        );
+
+        Ok(())
+    }
 }
