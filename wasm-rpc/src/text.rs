@@ -499,13 +499,13 @@ impl WasmValue for TypeAnnotatedValuePrintable {
                         Some(ok_value) => {
                             Ok(Some(Cow::Owned(TypeAnnotatedValuePrintable(ok_value))))
                         }
-                        None => panic!("Expected ok, found None"),
+                        None => Ok(None),
                     },
                     ResultValue::ErrorValue(error) => match error.type_annotated_value {
                         Some(error_value) => {
                             Err(Some(Cow::Owned(TypeAnnotatedValuePrintable(error_value))))
                         }
-                        None => panic!("Expected error, found None"),
+                        None => Ok(None),
                     },
                 },
                 None => panic!("Expected ok, found None"),
