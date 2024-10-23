@@ -1927,6 +1927,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "regex",
+ "semver",
  "serde 1.0.210",
  "serde_json",
  "serde_yaml",
@@ -4412,9 +4413,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "0.0.11"
+version = "0.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f503de241983649990311e28573ce1e98f62ed65f2b6fb7bdf2496d2ba1c978"
+checksum = "5f81c856ebb383e7edb390dd642458f8bc91356760c88df9aab258d8a8d01ecd"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -4424,9 +4425,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "0.0.10"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf42476bec5da760737467562f6169dc126d3716b74ca072f08246fbcb332000"
+checksum = "3cc908dda80def66445eef3560ea54df65cb26b557d43fc1d7fdc3ae5675f31f"
 dependencies = [
  "anstream",
  "anstyle",
@@ -4445,9 +4446,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "0.0.11"
+version = "0.0.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "198b6d8536c41236c3bc5dec066dd4d63ff01fab76596a9738d8bf60b050afdb"
+checksum = "34e97f6324519d7b08bf4a3cf529f5a14fdce61587771717b7571c6f9af0f458"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -5375,22 +5376,23 @@ dependencies = [
 [[package]]
 name = "wasmparser"
 version = "0.219.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c771866898879073c53b565a6c7b49953795159836714ac56a5befb581227c5"
+dependencies = [
+ "bitflags 2.6.0",
+ "indexmap 2.6.0",
+]
+
+[[package]]
+name = "wasmparser"
+version = "0.219.1"
+source = "git+https://github.com/golemcloud/wasm-tools.git?rev=46b168c169dc28d169d60e60ddbe4eed20f905b3#46b168c169dc28d169d60e60ddbe4eed20f905b3"
 dependencies = [
  "ahash",
  "bitflags 2.6.0",
  "hashbrown 0.14.5",
  "indexmap 2.6.0",
  "semver",
-]
-
-[[package]]
-name = "wasmparser"
-version = "0.219.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c771866898879073c53b565a6c7b49953795159836714ac56a5befb581227c5"
-dependencies = [
- "bitflags 2.6.0",
- "indexmap 2.6.0",
 ]
 
 [[package]]
@@ -6173,6 +6175,7 @@ dependencies = [
 [[package]]
 name = "wit-encoder"
 version = "0.219.1"
+source = "git+https://github.com/golemcloud/wasm-tools.git?rev=46b168c169dc28d169d60e60ddbe4eed20f905b3#46b168c169dc28d169d60e60ddbe4eed20f905b3"
 dependencies = [
  "id-arena",
  "pretty_assertions",
@@ -6238,6 +6241,7 @@ dependencies = [
 [[package]]
 name = "wit-parser"
 version = "0.219.1"
+source = "git+https://github.com/golemcloud/wasm-tools.git?rev=46b168c169dc28d169d60e60ddbe4eed20f905b3#46b168c169dc28d169d60e60ddbe4eed20f905b3"
 dependencies = [
  "anyhow",
  "id-arena",
@@ -6248,7 +6252,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "unicode-xid",
- "wasmparser 0.219.1",
+ "wasmparser 0.219.1 (git+https://github.com/golemcloud/wasm-tools.git?rev=46b168c169dc28d169d60e60ddbe4eed20f905b3)",
 ]
 
 [[package]]

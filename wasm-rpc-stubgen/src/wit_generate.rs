@@ -22,10 +22,14 @@ use crate::wit_transform::import_remover;
 use crate::{naming, WasmRpcOverride};
 use anyhow::{anyhow, bail};
 use indexmap::IndexMap;
+use semver::Version;
+use std::collections::HashSet;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
-use wit_parser::{Enum, Field, Flags, Handle, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant};
+use wit_parser::{
+    Enum, Field, Flags, Handle, PackageName, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant,
+};
 
 pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
@@ -57,23 +61,35 @@ pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<S
     let world = def.source_world();
 
     let mut out = String::new();
+    let mut exported_packages = HashSet::<PackageName>::new();
 
     writeln!(out, "package {}-stub;", def.source_package_name)?;
     writeln!(out)?;
     writeln!(out, "interface stub-{} {{", world.name)?;
 
     let all_imports = def
-        .source_interfaces()
+        .stub_exported_interfaces()
         .iter()
         .flat_map(|i| i.imports.iter().map(|i| (InterfaceStubImport::from(i), i)))
         .collect::<IndexMap<_, _>>();
 
     // Renaming the mandatory imports to avoid collisions with types coming from the stubbed package
     writeln!(out, "  use golem:rpc/types@0.1.0.{{uri as golem-rpc-uri}};")?;
+    exported_packages.insert(PackageName {
+        namespace: "golem".to_string(),
+        name: "rpc".to_string(),
+        version: Some(Version::new(0, 1, 0)),
+    });
+
     writeln!(
         out,
         "  use wasi:io/poll@0.2.0.{{pollable as wasi-io-pollable}};"
     )?;
+    exported_packages.insert(PackageName {
+        namespace: "wasi".to_string(),
+        name: "io".to_string(),
+        version: Some(Version::new(0, 2, 0)),
+    });
 
     if def.always_inline_types {
         let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
@@ -100,7 +116,7 @@ pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<S
     }
 
     // Generating async return types
-    for interface in def.source_interfaces() {
+    for interface in def.stub_exported_interfaces() {
         for function in &interface.functions {
             if !function.results.is_empty() {
                 write_async_return_type(&mut out, function, interface, def)?;
@@ -114,7 +130,7 @@ pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<S
     }
 
     // Generating function definitions
-    for interface in def.source_interfaces() {
+    for interface in def.stub_exported_interfaces() {
         writeln!(out, "  resource {} {{", &interface.name)?;
         match &interface.constructor_params {
             None => {
