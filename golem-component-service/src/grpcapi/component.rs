@@ -36,9 +36,9 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_api_grpc::proto::golem::component::Component;
 use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
-use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
+use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::grpc::proto_component_id_string;
-use golem_common::model::component_constraint::FunctionUsageCollection;
+use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
@@ -208,7 +208,7 @@ impl ComponentGrpcApi {
             .await
             .map(|v| ComponentConstraintsProto {
                 component_id: Some(v.component_id.into()),
-                constraints: Some(FunctionUsageCollectionProto::from(v.constraints)),
+                constraints: Some(FunctionConstraintCollectionProto::from(v.constraints)),
             })?;
 
         Ok(response)
@@ -503,33 +503,34 @@ impl ComponentService for ComponentGrpcApi {
                     }
                 };
 
-                let constraints =
-                    if let Some(worker_functions_in_rib) = proto_constraints.constraints {
-                        let result = FunctionUsageCollection::try_from(worker_functions_in_rib)
-                            .map_err(|err| bad_request_error(err.as_str()));
+                let constraints = if let Some(worker_functions_in_rib) =
+                    proto_constraints.constraints
+                {
+                    let result = FunctionConstraintCollection::try_from(worker_functions_in_rib)
+                        .map_err(|err| bad_request_error(err.as_str()));
 
-                        match result {
-                            Ok(worker_functions_in_rib) => worker_functions_in_rib,
-                            Err(fail) => {
-                                return Ok(Response::new(CreateComponentConstraintsResponse {
-                                    result: Some(record.fail(
-                                        create_component_constraints_response::Result::Error(
-                                            fail.clone(),
-                                        ),
-                                        &ComponentTraceErrorKind(&fail),
-                                    )),
-                                }))
-                            }
+                    match result {
+                        Ok(worker_functions_in_rib) => worker_functions_in_rib,
+                        Err(fail) => {
+                            return Ok(Response::new(CreateComponentConstraintsResponse {
+                                result: Some(record.fail(
+                                    create_component_constraints_response::Result::Error(
+                                        fail.clone(),
+                                    ),
+                                    &ComponentTraceErrorKind(&fail),
+                                )),
+                            }))
                         }
-                    } else {
-                        let error = internal_error("Failed to create constraints");
-                        return Ok(Response::new(CreateComponentConstraintsResponse {
-                            result: Some(record.fail(
-                                create_component_constraints_response::Result::Error(error.clone()),
-                                &ComponentTraceErrorKind(&error),
-                            )),
-                        }));
-                    };
+                    }
+                } else {
+                    let error = internal_error("Failed to create constraints");
+                    return Ok(Response::new(CreateComponentConstraintsResponse {
+                        result: Some(record.fail(
+                            create_component_constraints_response::Result::Error(error.clone()),
+                            &ComponentTraceErrorKind(&error),
+                        )),
+                    }));
+                };
 
                 let component_constraint = ComponentConstraints {
                     namespace: DefaultNamespace::default(),

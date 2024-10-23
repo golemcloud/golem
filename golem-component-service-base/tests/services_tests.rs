@@ -5,7 +5,7 @@ use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::config::ComponentStoreLocalConfig;
 use golem_service_base::db;
 
-use golem_common::model::component_constraint::FunctionUsageCollection;
+use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
 use golem_component_service_base::model::Component;
@@ -688,7 +688,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
         function_usages.extend(
             constraint_data::get_shopping_cart_worker_functions_constraint1().function_usages,
         );
-        Some(FunctionUsageCollection { function_usages })
+        Some(FunctionConstraintCollection { function_usages })
     };
 
     assert!(component_create_result.is_ok());
@@ -699,17 +699,17 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 }
 
 mod constraint_data {
-    use golem_common::model::component_constraint::FunctionUsage;
-    use golem_common::model::component_constraint::FunctionUsageCollection;
+    use golem_common::model::component_constraint::FunctionConstraint;
+    use golem_common::model::component_constraint::FunctionConstraintCollection;
     use golem_common::model::ComponentId;
     use golem_component_service_base::model::ComponentConstraints;
     use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
     use golem_wasm_ast::analysis::NameTypePair;
     use rib::RegistryKey;
 
-    pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionUsageCollection {
-        FunctionUsageCollection {
-            function_usages: vec![FunctionUsage {
+    pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionConstraintCollection {
+        FunctionConstraintCollection {
+            function_usages: vec![FunctionConstraint {
                 function_key: RegistryKey::FunctionNameWithInterface {
                     interface_name: "golem:it/api".to_string(),
                     function_name: "initialize-cart".to_string(),
@@ -721,9 +721,9 @@ mod constraint_data {
         }
     }
 
-    pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionUsageCollection {
-        FunctionUsageCollection {
-            function_usages: vec![FunctionUsage {
+    pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionConstraintCollection {
+        FunctionConstraintCollection {
+            function_usages: vec![FunctionConstraint {
                 function_key: RegistryKey::FunctionNameWithInterface {
                     interface_name: "golem:it/api".to_string(),
                     function_name: "get-cart-contents".to_string(),
@@ -754,9 +754,9 @@ mod constraint_data {
     }
 
     pub(crate) fn get_shopping_cart_worker_functions_constraint_incompatible(
-    ) -> FunctionUsageCollection {
-        FunctionUsageCollection {
-            function_usages: vec![FunctionUsage {
+    ) -> FunctionConstraintCollection {
+        FunctionConstraintCollection {
+            function_usages: vec![FunctionConstraint {
                 function_key: RegistryKey::FunctionNameWithInterface {
                     interface_name: "golem:it/api".to_string(),
                     function_name: "initialize-cart".to_string(),
@@ -768,7 +768,7 @@ mod constraint_data {
         }
     }
 
-    pub(crate) fn get_random_worker_functions_constraint() -> FunctionUsageCollection {
+    pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraintCollection {
         FunctionUsageCollection {
             function_usages: vec![FunctionUsage {
                 usage_count: 1,

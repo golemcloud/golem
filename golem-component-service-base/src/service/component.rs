@@ -22,7 +22,7 @@ use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
 use chrono::Utc;
-use golem_common::model::component_constraint::FunctionUsageCollection;
+use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
@@ -212,7 +212,7 @@ pub trait ComponentService<Namespace> {
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<FunctionUsageCollection>, ComponentError>;
+    ) -> Result<Option<FunctionConstraintCollection>, ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
@@ -235,7 +235,7 @@ impl ComponentServiceDefault {
     }
 
     pub fn find_component_metadata_conflicts(
-        worker_function_usages: &FunctionUsageCollection,
+        worker_function_usages: &FunctionConstraintCollection,
         new_type_registry: &FunctionTypeRegistry,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
@@ -750,7 +750,7 @@ where
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<FunctionUsageCollection>, ComponentError> {
+    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
         let result = self.component_repo.get_constraint(component_id).await?;
         Ok(result)
     }

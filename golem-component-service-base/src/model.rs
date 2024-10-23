@@ -1,4 +1,4 @@
-use golem_common::model::component_constraint::{FunctionUsage, FunctionUsageCollection};
+use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
@@ -21,7 +21,7 @@ pub struct Component<Namespace> {
 pub struct ComponentConstraints<Namespace> {
     pub namespace: Namespace,
     pub component_id: ComponentId,
-    pub constraints: FunctionUsageCollection,
+    pub constraints: FunctionConstraintCollection,
 }
 
 impl<Namespace: Clone> ComponentConstraints<Namespace> {
@@ -33,11 +33,11 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
         ComponentConstraints {
             namespace: namespace.clone(),
             component_id: component_id.clone(),
-            constraints: FunctionUsageCollection {
+            constraints: FunctionConstraintCollection {
                 function_usages: worker_functions_in_rib
                     .function_calls
                     .iter()
-                    .map(FunctionUsage::from_worker_function_in_rib)
+                    .map(FunctionConstraint::from_worker_function_in_rib)
                     .collect(),
             },
         }
@@ -45,9 +45,9 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
 
     pub fn update_with(
         &self,
-        function_usages: &FunctionUsageCollection,
+        function_usages: &FunctionConstraintCollection,
     ) -> Result<ComponentConstraints<Namespace>, String> {
-        let function_usage_collection = FunctionUsageCollection::try_merge(vec![
+        let function_usage_collection = FunctionConstraintCollection::try_merge(vec![
             self.constraints.clone(),
             function_usages.clone(),
         ])?;

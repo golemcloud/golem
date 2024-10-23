@@ -34,7 +34,7 @@ use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use crate::service::component::ComponentService;
 use chrono::Utc;
-use golem_common::model::component_constraint::FunctionUsageCollection;
+use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
@@ -216,7 +216,8 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
 
     fn get_worker_functions_in_api_definitions<Namespace>(
         definitions: Vec<CompiledHttpApiDefinition>,
-    ) -> Result<HashMap<ComponentId, FunctionUsageCollection>, ApiDeploymentError<Namespace>> {
+    ) -> Result<HashMap<ComponentId, FunctionConstraintCollection>, ApiDeploymentError<Namespace>>
+    {
         let mut worker_functions_in_rib = HashMap::new();
 
         for definition in definitions {
@@ -237,17 +238,18 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
 
     fn merge_worker_functions_in_rib<Namespace>(
         worker_functions: HashMap<ComponentId, Vec<WorkerFunctionsInRib>>,
-    ) -> Result<HashMap<ComponentId, FunctionUsageCollection>, ApiDeploymentError<Namespace>> {
-        let mut merged_worker_functions: HashMap<ComponentId, FunctionUsageCollection> =
+    ) -> Result<HashMap<ComponentId, FunctionConstraintCollection>, ApiDeploymentError<Namespace>>
+    {
+        let mut merged_worker_functions: HashMap<ComponentId, FunctionConstraintCollection> =
             HashMap::new();
 
         for (component_id, worker_calls_vec) in worker_functions {
             let function_usage_collection = worker_calls_vec
                 .iter()
-                .map(FunctionUsageCollection::from_worker_functions_in_rib)
+                .map(FunctionConstraintCollection::from_worker_functions_in_rib)
                 .collect::<Vec<_>>();
 
-            let merged_calls = FunctionUsageCollection::try_merge(function_usage_collection)
+            let merged_calls = FunctionConstraintCollection::try_merge(function_usage_collection)
                 .map_err(|err| ApiDeploymentError::ApiDefinitionsConflict(err))?;
 
             merged_worker_functions.insert(component_id, merged_calls);

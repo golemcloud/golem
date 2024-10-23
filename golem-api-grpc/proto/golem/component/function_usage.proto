@@ -4,7 +4,7 @@ package golem.component;
 import "wasm/ast/type.proto";
 import "golem/rib/worker_invoke_calls_in_rib.proto";
 
-message FunctionUsage {
+message FunctionConstraint {
     golem.rib.RegistryKey function_key = 1;
     repeated wasm.ast.Type parameter_types = 2;
     repeated wasm.ast.Type return_types = 3;

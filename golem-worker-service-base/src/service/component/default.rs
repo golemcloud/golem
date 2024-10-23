@@ -9,10 +9,10 @@ use golem_api_grpc::proto::golem::component::v1::{
     GetComponentMetadataResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
-use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
+use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
-use golem_common::model::component_constraint::FunctionUsageCollection;
+use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
@@ -40,9 +40,9 @@ pub trait ComponentService<AuthCtx> {
     async fn create_or_update_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: FunctionUsageCollection,
+        constraints: FunctionConstraintCollection,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<FunctionUsageCollection>;
+    ) -> ComponentResult<FunctionConstraintCollection>;
 }
 
 #[derive(Clone)]
@@ -102,7 +102,7 @@ impl RemoteComponentService {
 
     fn process_create_component_metadata_response(
         response: CreateComponentConstraintsResponse,
-    ) -> Result<FunctionUsageCollection, ComponentServiceError> {
+    ) -> Result<FunctionConstraintCollection, ComponentServiceError> {
         match response.result {
             None => Err(ComponentServiceError::Internal(
                 "Failed to create component constraints. Empty results".to_string(),
@@ -111,12 +111,12 @@ impl RemoteComponentService {
                 match response.components {
                     Some(constraints) => {
                         if let Some(constraints) = constraints.constraints {
-                            let constraints = FunctionUsageCollection::try_from(constraints)
+                            let constraints = FunctionConstraintCollection::try_from(constraints)
                                 .map_err(|err| {
-                                    ComponentServiceError::Internal(format!(
-                                        "Response conversion error: {err}"
-                                    ))
-                                })?;
+                                ComponentServiceError::Internal(format!(
+                                    "Response conversion error: {err}"
+                                ))
+                            })?;
 
                             Ok(constraints)
                         } else {
@@ -223,10 +223,10 @@ where
     async fn create_or_update_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: FunctionUsageCollection,
+        constraints: FunctionConstraintCollection,
         metadata: &AuthCtx,
-    ) -> ComponentResult<FunctionUsageCollection> {
-        let function_usages = FunctionUsageCollectionProto::from(constraints);
+    ) -> ComponentResult<FunctionConstraintCollection> {
+        let function_usages = FunctionConstraintCollectionProto::from(constraints);
 
         let value = with_retries(
             "component",

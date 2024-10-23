@@ -15,7 +15,7 @@
 use crate::model::{Component, ComponentConstraints};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use golem_common::model::component_constraint::FunctionUsageCollection;
+use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
@@ -125,7 +125,7 @@ where
 {
     type Error = String;
     fn try_from(value: ComponentConstraintRecord) -> Result<Self, Self::Error> {
-        let function_constraints: FunctionUsageCollection =
+        let function_constraints: FunctionConstraintCollection =
             constraint_serde::deserialize(&value.constraints)?;
         let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
         Ok(ComponentConstraints {
@@ -175,7 +175,7 @@ pub trait ComponentRepo {
     async fn get_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<FunctionUsageCollection>, RepoError>;
+    ) -> Result<Option<FunctionConstraintCollection>, RepoError>;
 }
 
 pub struct DbComponentRepo<DB: Database> {
@@ -294,7 +294,7 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
     async fn get_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<FunctionUsageCollection>, RepoError> {
+    ) -> Result<Option<FunctionConstraintCollection>, RepoError> {
         let result = self.repo.get_constraint(component_id).await;
 
         Self::logged("get_component_constraint", result)
@@ -675,7 +675,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 
             // This shouldn't happen as it is validated in service layers.
             // However, repo gives us more transactional guarantee.
-            let merged_worker_calls = FunctionUsageCollection::try_merge(vec![
+            let merged_worker_calls = FunctionConstraintCollection::try_merge(vec![
                 existing_worker_calls_used,
                 new_worker_calls_used,
             ])
@@ -725,7 +725,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
     async fn get_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<FunctionUsageCollection>, RepoError> {
+    ) -> Result<Option<FunctionConstraintCollection>, RepoError> {
         let existing_record = sqlx::query_as::<_, ComponentConstraintRecord>(
             r#"
                 SELECT
@@ -784,15 +784,15 @@ pub mod record_metadata_serde {
 
 pub mod constraint_serde {
     use bytes::{BufMut, Bytes, BytesMut};
-    use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
-    use golem_common::model::component_constraint::FunctionUsageCollection;
+    use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
+    use golem_common::model::component_constraint::FunctionConstraintCollection;
     use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize(value: &FunctionUsageCollection) -> Result<Bytes, String> {
-        let proto_value: FunctionUsageCollectionProto =
-            FunctionUsageCollectionProto::from(value.clone());
+    pub fn serialize(value: &FunctionConstraintCollection) -> Result<Bytes, String> {
+        let proto_value: FunctionConstraintCollectionProto =
+            FunctionConstraintCollectionProto::from(value.clone());
 
         let mut bytes = BytesMut::new();
         bytes.put_u8(SERIALIZATION_VERSION_V1);
@@ -800,15 +800,15 @@ pub mod constraint_serde {
         Ok(bytes.freeze())
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<FunctionUsageCollection, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<FunctionConstraintCollection, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let proto_value: FunctionUsageCollectionProto = Message::decode(data)
+                let proto_value: FunctionConstraintCollectionProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
-                let value = FunctionUsageCollection::try_from(proto_value.clone())?;
+                let value = FunctionConstraintCollection::try_from(proto_value.clone())?;
 
                 Ok(value)
             }

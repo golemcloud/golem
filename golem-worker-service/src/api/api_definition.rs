@@ -308,7 +308,7 @@ mod test {
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
     use golem_common::config::DbSqliteConfig;
-    use golem_common::model::component_constraint::FunctionUsageCollection;
+    use golem_common::model::component_constraint::FunctionConstraintCollection;
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
@@ -367,9 +367,9 @@ mod test {
         async fn create_or_update_constraints(
             &self,
             _component_id: &ComponentId,
-            _constraints: FunctionUsageCollection,
+            _constraints: FunctionConstraintCollection,
             _auth_ctx: &EmptyAuthCtx,
-        ) -> ComponentResult<FunctionUsageCollection> {
+        ) -> ComponentResult<FunctionConstraintCollection> {
             unimplemented!()
         }
     }

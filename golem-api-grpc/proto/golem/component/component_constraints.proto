@@ -7,10 +7,10 @@ import "golem/component/function_usage.proto";
 
 message ComponentConstraints {
   ComponentId component_id = 1;
-  FunctionUsageCollection constraints = 2;
+  FunctionConstraintCollection constraints = 2;
 }
 
 
-message FunctionUsageCollection {
-    repeated FunctionUsage constraints = 2;
+message FunctionConstraintCollection {
+    repeated FunctionConstraint constraints = 2;
 }
