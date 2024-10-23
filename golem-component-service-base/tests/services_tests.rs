@@ -6,7 +6,7 @@ use golem_service_base::config::ComponentStoreLocalConfig;
 use golem_service_base::db;
 
 use golem_common::model::{ComponentId, ComponentType};
-use golem_component_service_base::model::{Component, ComponentConstraint};
+use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
 use golem_component_service_base::service::component::{
     create_new_component, ComponentService, ComponentServiceDefault,
@@ -16,9 +16,7 @@ use golem_component_service_base::service::component_compilation::{
 };
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::component_object_store;
-use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32};
-use golem_wasm_ast::analysis::NameTypePair;
-use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
+use rib::WorkerFunctionsInRib;
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -188,14 +186,14 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     assert!(component1_result.is_some());
     assert_eq!(component1_result.unwrap(), component1);
 
-    // let component1_result = component_service
-    //     .get(
-    //         &component1.versioned_component_id.component_id,
-    //         &DefaultNamespace::default(),
-    //     )
-    //     .await
-    //     .unwrap();
-    // assert_eq!(component1_result.len(), 1);
+    let component1_result = component_service
+        .get(
+            &component1.versioned_component_id.component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(component1_result.len(), 1);
 
     let component1v2 = component_service
         .update(
@@ -515,31 +513,19 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
     )
     .unwrap();
 
-    let worker_functions_in_rib_initial = WorkerFunctionsInRib {
-        function_calls: vec![WorkerFunctionInRibMetadata {
-            function_key: RegistryKey::FunctionNameWithInterface {
-                interface_name: "golem:it/api".to_string(),
-                function_name: "initialize-cart".to_string(),
-            },
-            parameter_types: vec![str()],
-            return_types: vec![],
-        }],
-    };
-
-    // Adding constraints
-    let component_constraint_initial = ComponentConstraint {
-        namespace: namespace1.clone(),
-        component_id: component1.clone().versioned_component_id.component_id,
-        constraints: worker_functions_in_rib_initial.clone(),
-    };
+    let component_constraint_initial = constraint_data::get_shopping_cart_component_constraint1(
+        &namespace1,
+        &component1.versioned_component_id.component_id,
+    );
 
     let component_constraint_initial_db_record = component_constraint_initial.try_into().unwrap();
 
+    // Create Component
     let component_create_result = component_repo
         .create(&component1.clone().try_into().unwrap())
         .await;
 
-    // Create constraint
+    // Create Constraint
     let component_constraint_create_result = component_repo
         .create_or_update_constraint(&component_constraint_initial_db_record)
         .await;
@@ -550,41 +536,13 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
         .await
         .unwrap();
 
-    let expected_initial_constraint = Some(worker_functions_in_rib_initial.clone());
+    let expected_initial_constraint =
+        Some(constraint_data::get_shopping_cart_worker_functions_in_rib1());
 
-    let worker_functions_in_rib_later = WorkerFunctionsInRib {
-        function_calls: vec![WorkerFunctionInRibMetadata {
-            function_key: RegistryKey::FunctionNameWithInterface {
-                interface_name: "golem:it/api".to_string(),
-                function_name: "get-cart-contents".to_string(),
-            },
-            parameter_types: vec![],
-            return_types: vec![list(record(vec![
-                NameTypePair {
-                    name: "product_id".to_string(),
-                    typ: str(),
-                },
-                NameTypePair {
-                    name: "name".to_string(),
-                    typ: str(),
-                },
-                NameTypePair {
-                    name: "price".to_string(),
-                    typ: f32(),
-                },
-                NameTypePair {
-                    name: "quantity".to_string(),
-                    typ: u32(),
-                },
-            ]))],
-        }],
-    };
-
-    let component_constraint_later = ComponentConstraint {
-        namespace: namespace1.clone(),
-        component_id: component1.clone().versioned_component_id.component_id,
-        constraints: worker_functions_in_rib_later.clone(),
-    };
+    let component_constraint_later = constraint_data::get_shopping_cart_component_constraint2(
+        &namespace1,
+        &component1.versioned_component_id.component_id,
+    );
 
     let component_constraint_later_db_record = component_constraint_later.try_into().unwrap();
 
@@ -599,17 +557,90 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
         .await
         .unwrap();
 
-    let expected_updated_constraint = Some(
-        WorkerFunctionsInRib::try_merge(vec![
-            worker_functions_in_rib_later,
-            worker_functions_in_rib_initial,
-        ])
-        .unwrap(),
-    );
+    let expected_updated_constraint = {
+        let mut function_calls =
+            constraint_data::get_shopping_cart_worker_functions_in_rib2().function_calls;
+        function_calls
+            .extend(constraint_data::get_shopping_cart_worker_functions_in_rib1().function_calls);
+        Some(WorkerFunctionsInRib { function_calls })
+    };
 
     assert!(component_create_result.is_ok());
     assert!(component_constraint_create_result.is_ok());
     assert_eq!(result_constraint_get, expected_initial_constraint);
     assert!(component_constraint_update_result.is_ok());
     assert_eq!(result_constraint_get_updated, expected_updated_constraint);
+}
+
+mod constraint_data {
+    use golem_common::model::ComponentId;
+    use golem_component_service_base::model::ComponentConstraint;
+    use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32};
+    use golem_wasm_ast::analysis::NameTypePair;
+    use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
+
+    pub(crate) fn get_shopping_cart_worker_functions_in_rib1() -> WorkerFunctionsInRib {
+        WorkerFunctionsInRib {
+            function_calls: vec![WorkerFunctionInRibMetadata {
+                function_key: RegistryKey::FunctionNameWithInterface {
+                    interface_name: "golem:it/api".to_string(),
+                    function_name: "initialize-cart".to_string(),
+                },
+                parameter_types: vec![str()],
+                return_types: vec![],
+            }],
+        }
+    }
+
+    pub(crate) fn get_shopping_cart_worker_functions_in_rib2() -> WorkerFunctionsInRib {
+        WorkerFunctionsInRib {
+            function_calls: vec![WorkerFunctionInRibMetadata {
+                function_key: RegistryKey::FunctionNameWithInterface {
+                    interface_name: "golem:it/api".to_string(),
+                    function_name: "get-cart-contents".to_string(),
+                },
+                parameter_types: vec![],
+                return_types: vec![list(record(vec![
+                    NameTypePair {
+                        name: "product_id".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "name".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "price".to_string(),
+                        typ: f32(),
+                    },
+                    NameTypePair {
+                        name: "quantity".to_string(),
+                        typ: u32(),
+                    },
+                ]))],
+            }],
+        }
+    }
+
+    pub(crate) fn get_shopping_cart_component_constraint1(
+        namespace: &str,
+        component_id: &ComponentId,
+    ) -> ComponentConstraint<String> {
+        ComponentConstraint {
+            namespace: namespace.to_string(),
+            component_id: component_id.clone(),
+            constraints: get_shopping_cart_worker_functions_in_rib1(),
+        }
+    }
+
+    pub(crate) fn get_shopping_cart_component_constraint2(
+        namespace: &str,
+        component_id: &ComponentId,
+    ) -> ComponentConstraint<String> {
+        ComponentConstraint {
+            namespace: namespace.to_string(),
+            component_id: component_id.clone(),
+            constraints: get_shopping_cart_worker_functions_in_rib2(),
+        }
+    }
 }

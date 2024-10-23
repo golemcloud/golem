@@ -173,7 +173,7 @@ impl FunctionTypeRegistry {
     }
 }
 
-#[derive(Hash, Eq, PartialEq, Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(Hash, Eq, PartialEq, PartialOrd, Ord, Clone, Debug, Serialize, Deserialize, Encode, Decode)]
 pub enum RegistryKey {
     FunctionName(String),
     FunctionNameWithInterface {

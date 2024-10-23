@@ -66,8 +66,12 @@ impl WorkerFunctionsInRib {
             }
         }
 
-        let merged_function_calls_vec =
+        let mut merged_function_calls_vec: Vec<WorkerFunctionInRibMetadata> =
             merged_function_calls.into_values().collect();
+
+        merged_function_calls_vec
+            .sort_by(|a, b| a.function_key.cmp(&b.function_key));
+
 
         Ok(WorkerFunctionsInRib {
             function_calls: merged_function_calls_vec,
