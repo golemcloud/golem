@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use bincode::{Decode, Encode};
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
+use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::WorkerFunctionInRibMetadata as WorkerFunctionInRibMetadataProto;
 use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // An easier data type that focus just the function calls,
 // return types and parameter types, corresponding to a function
@@ -35,8 +35,11 @@ pub struct WorkerFunctionsInRib {
 }
 
 impl WorkerFunctionsInRib {
-    pub fn try_merge(worker_functions: Vec<WorkerFunctionsInRib>) -> Result<WorkerFunctionsInRib, String> {
-        let mut merged_function_calls: HashMap<RegistryKey, WorkerFunctionInRibMetadata> = HashMap::new();
+    pub fn try_merge(
+        worker_functions: Vec<WorkerFunctionsInRib>,
+    ) -> Result<WorkerFunctionsInRib, String> {
+        let mut merged_function_calls: HashMap<RegistryKey, WorkerFunctionInRibMetadata> =
+            HashMap::new();
 
         for wf in worker_functions {
             for call in wf.function_calls {
@@ -46,7 +49,9 @@ impl WorkerFunctionsInRib {
                         if existing_call.parameter_types != call.parameter_types {
                             return Err(format!(
                                 "Parameter type conflict for function key {:?}: {:?} vs {:?}",
-                                call.function_key, existing_call.parameter_types, call.parameter_types
+                                call.function_key,
+                                existing_call.parameter_types,
+                                call.parameter_types
                             ));
                         }
 
@@ -69,9 +74,7 @@ impl WorkerFunctionsInRib {
         let mut merged_function_calls_vec: Vec<WorkerFunctionInRibMetadata> =
             merged_function_calls.into_values().collect();
 
-        merged_function_calls_vec
-            .sort_by(|a, b| a.function_key.cmp(&b.function_key));
-
+        merged_function_calls_vec.sort_by(|a, b| a.function_key.cmp(&b.function_key));
 
         Ok(WorkerFunctionsInRib {
             function_calls: merged_function_calls_vec,

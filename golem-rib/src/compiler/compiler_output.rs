@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::convert::TryFrom;
 use crate::compiler::worker_functions_in_rib::WorkerFunctionsInRib;
 use crate::{RibByteCode, RibInputTypeInfo};
 use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
+use std::convert::TryFrom;
 
 #[derive(Debug, Clone)]
 pub struct CompilerOutput {

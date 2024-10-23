@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::{DynamicParsedFunctionName};
+use crate::DynamicParsedFunctionName;
+use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
-use std::collections::{HashMap, HashSet};
-use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 // A type-registry is a mapping from a function name (global or part of an interface in WIT)
 // to the registry value that represents the type of the name.
@@ -173,7 +173,9 @@ impl FunctionTypeRegistry {
     }
 }
 
-#[derive(Hash, Eq, PartialEq, PartialOrd, Ord, Clone, Debug, Serialize, Deserialize, Encode, Decode)]
+#[derive(
+    Hash, Eq, PartialEq, PartialOrd, Ord, Clone, Debug, Serialize, Deserialize, Encode, Decode,
+)]
 pub enum RegistryKey {
     FunctionName(String),
     FunctionNameWithInterface {

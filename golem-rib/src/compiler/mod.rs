@@ -13,21 +13,21 @@
 // limitations under the License.
 
 pub use byte_code::*;
+pub use compiler_output::*;
 use golem_wasm_ast::analysis::AnalysedExport;
 pub use ir::*;
 pub use type_with_unit::*;
-pub use compiler_output::*;
 pub use worker_functions_in_rib::*;
 
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{Expr, InferredExpr, RibInputTypeInfo};
 
 mod byte_code;
+mod compiler_output;
 mod desugar;
-mod worker_functions_in_rib;
 mod ir;
 mod type_with_unit;
-mod compiler_output;
+mod worker_functions_in_rib;
 
 pub fn compile(
     expr: &Expr,
