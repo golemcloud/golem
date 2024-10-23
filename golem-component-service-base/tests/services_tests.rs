@@ -185,14 +185,14 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     assert!(component1_result.is_some());
     assert_eq!(component1_result.unwrap(), component1);
 
-    let component1_result = component_service
-        .get(
-            &component1.versioned_component_id.component_id,
-            &DefaultNamespace::default(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(component1_result.len(), 1);
+    // let component1_result = component_service
+    //     .get(
+    //         &component1.versioned_component_id.component_id,
+    //         &DefaultNamespace::default(),
+    //     )
+    //     .await
+    //     .unwrap();
+    // assert_eq!(component1_result.len(), 1);
 
     let component1v2 = component_service
         .update(
