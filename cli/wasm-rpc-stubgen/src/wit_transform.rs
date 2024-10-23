@@ -1,4 +1,3 @@
-use crate::wit_resolve::ResolvedWitDir;
 use anyhow::anyhow;
 use indexmap::IndexMap;
 use regex::Regex;
@@ -347,23 +346,33 @@ pub fn import_remover(
     }
 }
 
-pub struct WitDirTransformer<'a> {
-    resolved_wit_dir: &'a ResolvedWitDir,
+pub struct WitTransformer<'a> {
+    resolve: &'a wit_parser::Resolve,
     encoded_packages_by_parser_id: IndexMap<wit_parser::PackageId, Package>,
 }
 
-impl<'a> WitDirTransformer<'a> {
-    pub fn new(resolved_wit_dir: &'a ResolvedWitDir) -> anyhow::Result<Self> {
+impl<'a> WitTransformer<'a> {
+    pub fn new(resolve: &'a wit_parser::Resolve) -> anyhow::Result<Self> {
         let mut encoded_packages_by_parser_id = IndexMap::<wit_parser::PackageId, Package>::new();
-        for package in packages_from_parsed(&resolved_wit_dir.resolve) {
-            let package_id = resolved_wit_dir
-                .package_id_by_encoder_name(package.name())
+
+        for package in packages_from_parsed(&resolve) {
+            let package_name = package.name();
+            let package_name = wit_parser::PackageName {
+                namespace: package_name.namespace().to_string(),
+                name: package_name.name().to_string(),
+                version: package_name.version().cloned(),
+            };
+
+            let package_id = resolve
+                .package_names
+                .get(&package_name)
+                .cloned()
                 .ok_or_else(|| anyhow!("Failed to get package by name: {}", package.name()))?;
             encoded_packages_by_parser_id.insert(package_id, package);
         }
 
         Ok(Self {
-            resolved_wit_dir,
+            resolve,
             encoded_packages_by_parser_id,
         })
     }
@@ -393,12 +402,6 @@ impl<'a> WitDirTransformer<'a> {
             fn package_world(&mut self, _package_name: &PackageName, world: &mut World) {
                 world.items_mut().retain(|item| {
                     if let WorldItem::NamedInterfaceImport(import) = &item {
-                        println!(
-                            "@@@ {} starts with {}? {}",
-                            import.name(),
-                            self.import_prefix,
-                            import.name().raw_name().starts_with(self.import_prefix)
-                        );
                         !import.name().raw_name().starts_with(self.import_prefix)
                     } else {
                         true

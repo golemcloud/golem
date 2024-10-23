@@ -28,7 +28,7 @@ pub struct StubDefinition {
     resolve: Resolve,
     source_world_id: WorldId,
     sources: IndexMap<PackageId, (PathBuf, Vec<PathBuf>)>,
-    source_interfaces: OnceCell<Vec<InterfaceStub>>,
+    stub_exported_interfaces: OnceCell<Vec<InterfaceStub>>,
 
     pub source_package_name: PackageName,
     pub source_wit_root: PathBuf,
@@ -70,7 +70,7 @@ impl StubDefinition {
             resolve: resolved_source.resolve,
             source_world_id,
             sources: resolved_source.sources,
-            source_interfaces: OnceCell::new(),
+            stub_exported_interfaces: OnceCell::new(),
             source_package_name,
             source_wit_root: source_wit_root.to_path_buf(),
             target_root: target_root.to_path_buf(),
@@ -168,7 +168,7 @@ impl StubDefinition {
                         self.resolve.interfaces.get(*interface_id)
                     {
                         if let Some(name) = resolved_owner_interface.name.as_ref() {
-                            self.source_interfaces()
+                            self.stub_exported_interfaces()
                                 .iter()
                                 .any(|interface| &interface.name == name)
                         } else {
@@ -186,8 +186,8 @@ impl StubDefinition {
         }
     }
 
-    pub fn source_interfaces(&self) -> &Vec<InterfaceStub> {
-        self.source_interfaces.get_or_init(|| {
+    pub fn stub_exported_interfaces(&self) -> &Vec<InterfaceStub> {
+        self.stub_exported_interfaces.get_or_init(|| {
             let WorldItemsByType {
                 types,
                 functions,

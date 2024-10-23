@@ -44,7 +44,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let mut exports = Vec::new();
     let mut resource_type_aliases = Vec::new();
 
-    for interface in def.source_interfaces() {
+    for interface in def.stub_exported_interfaces() {
         let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
 
@@ -116,7 +116,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     }
 
     let mut interface_impls = Vec::new();
-    for interface in def.source_interfaces() {
+    for interface in def.stub_exported_interfaces() {
         let interface_ident = to_rust_ident(&interface.name).to_upper_camel_case();
         let interface_name = Ident::new(&interface_ident, Span::call_site());
         let guest_interface_name =

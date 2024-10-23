@@ -17,7 +17,7 @@ use crate::fs::{get_file_name, strip_path_prefix, OverwriteSafeAction, Overwrite
 use crate::naming::wit::package_merged_wit_name;
 use crate::wit_generate::generate_stub_wit_from_wit_dir;
 use crate::wit_resolve::ResolvedWitDir;
-use crate::wit_transform::WitDirTransformer;
+use crate::wit_transform::WitTransformer;
 use crate::{cargo, naming};
 use anyhow::{anyhow, Context};
 use std::collections::BTreeMap;
@@ -38,7 +38,7 @@ pub fn add_stub_dependency(
     update_cargo_toml: UpdateCargoToml,
 ) -> anyhow::Result<()> {
     let stub_resolved_wit_root = ResolvedWitDir::new(stub_wit_root)?;
-    let mut stub_transformer = WitDirTransformer::new(&stub_resolved_wit_root)?;
+    let mut stub_transformer = WitTransformer::new(&stub_resolved_wit_root.resolve)?;
     let stub_package = stub_resolved_wit_root.main_package()?;
     let stub_wit = stub_wit_root.join(naming::wit::STUB_WIT_FILE_NAME);
 

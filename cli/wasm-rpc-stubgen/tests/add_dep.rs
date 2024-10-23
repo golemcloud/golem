@@ -16,6 +16,7 @@
 
 use test_r::test;
 
+use assert2::assert;
 use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
@@ -23,8 +24,11 @@ use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
 use golem_wasm_rpc_stubgen::stub::StubDefinition;
 use golem_wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
-use std::path::Path;
+use semver::Version;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+use wit_encoder::{packages_from_parsed, Package, PackageName};
+use wit_parser::Resolve;
 
 test_r::enable!();
 
@@ -46,15 +50,19 @@ fn all_wit_types_no_collision() {
 
     assert_valid_wit_root(&dest_wit_root);
 
-    assert_has_wit_dep(&dest_wit_root, "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_wit_root, "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(&dest_wit_root);
 
-    let stub_wit = std::fs::read_to_string(stub_wit_root.join("_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_wit_root, "test_main-stub/_stub.wit", &stub_wit);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main-stub", None),
+        &dest_wit_root,
+        &stub_wit_root,
+    );
 
-    let original_wit =
-        std::fs::read_to_string(Path::new("test-data").join("all-wit-types/main.wit")).unwrap();
-    assert_has_wit_dep(&dest_wit_root, "test_main/main.wit", &original_wit);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main", None),
+        &dest_wit_root,
+        &Path::new("test-data").join("all-wit-types/main.wit"),
+    );
 }
 
 #[test]
@@ -84,15 +92,19 @@ fn all_wit_types_overwrite_protection() {
 
     assert_valid_wit_root(&dest_wit_root);
 
-    assert_has_wit_dep(&dest_wit_root, "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_wit_root, "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(&dest_wit_root);
 
-    let stub_wit = std::fs::read_to_string(stub_wit_root.join("_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_wit_root, "test_main-stub/_stub.wit", &stub_wit);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main-stub", None),
+        &dest_wit_root,
+        &stub_wit_root,
+    );
 
-    let original_wit =
-        std::fs::read_to_string(Path::new("test-data").join("all-wit-types/main.wit")).unwrap();
-    assert_has_wit_dep(&dest_wit_root, "test_main/main.wit", &original_wit);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main", None),
+        &dest_wit_root,
+        &Path::new("test-data").join("all-wit-types/main.wit"),
+    );
 }
 
 #[test]
@@ -122,16 +134,19 @@ fn all_wit_types_overwrite_protection_disabled() {
 
     assert_valid_wit_root(&dest_wit_root);
 
-    assert_has_wit_dep(&dest_wit_root, "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_wit_root, "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(&dest_wit_root);
 
-    let stub_wit = std::fs::read_to_string(alternative_stub_wit_root.join("_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_wit_root, "test_main-stub/_stub.wit", &stub_wit);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main-stub", None),
+        &dest_wit_root,
+        &alternative_stub_wit_root,
+    );
 
-    let original_wit =
-        std::fs::read_to_string(Path::new("test-data").join("all-wit-types-alternative/main.wit"))
-            .unwrap();
-    assert_has_wit_dep(&dest_wit_root, "test_main/main.wit", &original_wit);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main", None),
+        &dest_wit_root,
+        &Path::new("test-data").join("all-wit-types-alternative/main.wit"),
+    );
 }
 
 #[test]
@@ -152,22 +167,25 @@ fn many_ways_to_export_no_collision() {
 
     assert_valid_wit_root(&dest_wit_root);
 
-    assert_has_wit_dep(&dest_wit_root, "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(&dest_wit_root, "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(&dest_wit_root);
 
-    let stub_wit = std::fs::read_to_string(stub_wit_root.join("_stub.wit")).unwrap();
-    assert_has_wit_dep(&dest_wit_root, "test_exports-stub/_stub.wit", &stub_wit);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "exports-stub", None),
+        &dest_wit_root,
+        &stub_wit_root,
+    );
 
-    let original_wit =
-        std::fs::read_to_string(Path::new("test-data").join("many-ways-to-export/main.wit"))
-            .unwrap();
-    assert_has_wit_dep(&dest_wit_root, "test_exports/main.wit", &original_wit);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "exports", None),
+        &dest_wit_root,
+        &Path::new("test-data").join("many-ways-to-export"),
+    );
 
-    let original_sub_wit = std::fs::read_to_string(
-        Path::new("test-data").join("many-ways-to-export/deps/sub/sub.wit"),
-    )
-    .unwrap();
-    assert_has_wit_dep(&dest_wit_root, "sub/sub.wit", &original_sub_wit);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "sub", None),
+        &dest_wit_root,
+        &Path::new("test-data").join("many-ways-to-export/deps/sub/sub.wit"),
+    );
 }
 
 #[test]
@@ -200,25 +218,33 @@ fn direct_circular() {
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
 
-    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(&dest_a.path());
 
-    let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b-stub", None),
+        dest_a.path(),
+        &stub_b_dir.path().join("wit"),
+    );
 
-    let original_b =
-        std::fs::read_to_string(Path::new("test-data").join("direct-circular-b/b.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b", None),
+        dest_a.path(),
+        &Path::new("test-data").join("direct-circular-b/b.wit"),
+    );
 
-    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_b.path());
 
-    let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_b.path(), "test_a-stub/_stub.wit", &stub_wit_a);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a-stub", None),
+        dest_b.path(),
+        &stub_a_dir.path().join("wit"),
+    );
 
-    let original_a =
-        std::fs::read_to_string(Path::new("test-data").join("direct-circular-a/a.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_b.path(), "test_a/a.wit", &original_a);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a", None),
+        dest_b.path(),
+        &Path::new("test-data").join("direct-circular-a/a.wit"),
+    );
 }
 
 #[test]
@@ -276,25 +302,33 @@ fn direct_circular_readd() {
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
 
-    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_a.path());
 
-    let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b-stub", None),
+        dest_a.path(),
+        &stub_b_dir.path().join("wit"),
+    );
 
-    let original_b =
-        std::fs::read_to_string(Path::new("test-data").join("direct-circular-b/b.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b", None),
+        dest_a.path(),
+        &Path::new("test-data").join("direct-circular-b/b.wit"),
+    );
 
-    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_b.path());
 
-    let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_b.path(), "test_a-stub/_stub.wit", &stub_wit_a);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a-stub", None),
+        dest_b.path(),
+        &stub_a_dir.path().join("wit"),
+    );
 
-    let original_a =
-        std::fs::read_to_string(Path::new("test-data").join("direct-circular-a/a.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_b.path(), "test_a/a.wit", &original_a);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a", None),
+        dest_b.path(),
+        &Path::new("test-data").join("direct-circular-a/a.wit"),
+    );
 }
 
 #[test]
@@ -327,29 +361,33 @@ fn direct_circular_same_world_name() {
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
 
-    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_a.path());
 
-    let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b-stub", None),
+        dest_a.path(),
+        &stub_b_dir.path().join("wit"),
+    );
 
-    let original_b = std::fs::read_to_string(
-        Path::new("test-data").join("direct-circular-b-same-world-name/b.wit"),
-    )
-    .unwrap();
-    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b", None),
+        dest_a.path(),
+        &Path::new("test-data").join("direct-circular-b-same-world-name/b.wit"),
+    );
 
-    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_b.path());
 
-    let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_b.path(), "test_a-stub/_stub.wit", &stub_wit_a);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a-stub", None),
+        dest_b.path(),
+        &stub_a_dir.path().join("wit"),
+    );
 
-    let original_a = std::fs::read_to_string(
-        Path::new("test-data").join("direct-circular-a-same-world-name/a.wit"),
-    )
-    .unwrap();
-    assert_has_wit_dep_similar(dest_b.path(), "test_a/a.wit", &original_a);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a", None),
+        dest_b.path(),
+        &Path::new("test-data").join("direct-circular-a-same-world-name/a.wit"),
+    );
 }
 
 #[test]
@@ -393,34 +431,47 @@ fn indirect_circular() {
     assert_valid_wit_root(dest_b.path());
     assert_valid_wit_root(dest_c.path());
 
-    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_a.path());
 
-    let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b-stub", None),
+        dest_a.path(),
+        &stub_b_dir.path().join("wit"),
+    );
 
-    let original_b =
-        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-b/b.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b", None),
+        dest_a.path(),
+        &Path::new("test-data").join("indirect-circular-b/b.wit"),
+    );
 
-    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_b.path());
 
-    let stub_wit_c = std::fs::read_to_string(stub_c_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_b.path(), "test_c-stub/_stub.wit", &stub_wit_c);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "c-stub", None),
+        dest_b.path(),
+        &stub_c_dir.path().join("wit"),
+    );
 
-    let original_c =
-        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-c/c.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_b.path(), "test_c/c.wit", &original_c);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "c", None),
+        dest_b.path(),
+        &Path::new("test-data").join("indirect-circular-c/c.wit"),
+    );
 
-    assert_has_wit_dep(dest_c.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_c.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_c.path());
 
-    let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_c.path(), "test_a-stub/_stub.wit", &stub_wit_a);
-    let original_a =
-        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-a/a.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_c.path(), "test_a/a.wit", &original_a);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a-stub", None),
+        dest_c.path(),
+        &stub_a_dir.path().join("wit"),
+    );
+
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a", None),
+        dest_c.path(),
+        &Path::new("test-data").join("indirect-circular-a/a.wit"),
+    );
 }
 
 #[test]
@@ -502,34 +553,47 @@ fn indirect_circular_readd() {
     assert_valid_wit_root(dest_b.path());
     assert_valid_wit_root(dest_c.path());
 
-    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_a.path());
 
-    let stub_wit_b = std::fs::read_to_string(stub_b_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_a.path(), "test_b-stub/_stub.wit", &stub_wit_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b-stub", None),
+        dest_a.path(),
+        &stub_b_dir.path().join("wit"),
+    );
 
-    let original_b =
-        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-b/b.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_a.path(), "test_b/b.wit", &original_b);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "b", None),
+        dest_a.path(),
+        &Path::new("test-data").join("indirect-circular-b/b.wit"),
+    );
 
-    assert_has_wit_dep(dest_b.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_b.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_b.path());
 
-    let stub_wit_c = std::fs::read_to_string(stub_c_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_b.path(), "test_c-stub/_stub.wit", &stub_wit_c);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "c-stub", None),
+        dest_b.path(),
+        &stub_c_dir.path().join("wit"),
+    );
 
-    let original_c =
-        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-c/c.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_b.path(), "test_c/c.wit", &original_c);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "c", None),
+        dest_b.path(),
+        &Path::new("test-data").join("indirect-circular-c/c.wit"),
+    );
 
-    assert_has_wit_dep(dest_c.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_c.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_c.path());
 
-    let stub_wit_a = std::fs::read_to_string(stub_a_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_c.path(), "test_a-stub/_stub.wit", &stub_wit_a);
-    let original_a =
-        std::fs::read_to_string(Path::new("test-data").join("indirect-circular-a/a.wit")).unwrap();
-    assert_has_wit_dep_similar(dest_c.path(), "test_a/a.wit", &original_a);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a-stub", None),
+        dest_c.path(),
+        &stub_a_dir.path().join("wit"),
+    );
+
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a", None),
+        dest_c.path(),
+        &Path::new("test-data").join("indirect-circular-a/a.wit"),
+    );
 }
 
 #[test]
@@ -552,12 +616,13 @@ fn self_circular() {
 
     assert_valid_wit_root(dest_a.path());
 
-    assert_has_wit_dep(dest_a.path(), "io/poll.wit", WASI_POLL_WIT);
-    assert_has_wit_dep(dest_a.path(), "wasm-rpc/wasm-rpc.wit", WASM_RPC_WIT);
+    assert_has_wasm_rpc_wit_deps(dest_a.path());
 
-    let inlined_stub_wit_a =
-        std::fs::read_to_string(inlined_stub_a_dir.path().join("wit/_stub.wit")).unwrap();
-    assert_has_wit_dep(dest_a.path(), "test_a-stub/_stub.wit", &inlined_stub_wit_a);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "a-stub", None),
+        dest_a.path(),
+        &inlined_stub_a_dir.path().join("wit"),
+    );
 }
 
 fn init_stub(name: &str) -> TempDir {
@@ -614,33 +679,86 @@ fn init_caller(name: &str) -> TempDir {
 }
 
 fn assert_valid_wit_root(wit_root: &Path) {
-    ResolvedWitDir::new(wit_root).unwrap();
+    ResolvedWitDir::new(wit_root)
+        .map_err(|err| {
+            println!("{:?}", err);
+            err
+        })
+        .unwrap();
 }
 
-/// Asserts that the destination WIT root has a dependency with the given name and contents.
-fn assert_has_wit_dep(wit_dir: &Path, name: &str, expected_contents: &str) {
-    let wit_file = wit_dir.join("deps").join(name);
-    let contents = std::fs::read_to_string(&wit_file)
-        .unwrap_or_else(|_| panic!("Could not find {wit_file:?}"));
-    assert_eq!(contents, expected_contents, "checking {wit_file:?}");
-}
+trait WitSource {
+    fn resolve(&self) -> anyhow::Result<Resolve>;
 
-/// Asserts that the destination WIT root has a dependency with the given name and it's contents are
-/// similar to the expected one - meaning each non-comment line can be found in the expected contents
-/// but missing lines are allowed.
-fn assert_has_wit_dep_similar(wit_dir: &Path, name: &str, expected_contents: &str) {
-    let wit_file = wit_dir.join("deps").join(name);
-    let contents = std::fs::read_to_string(&wit_file)
-        .unwrap_or_else(|_| panic!("Could not find {wit_file:?}"));
-
-    for line in contents.lines() {
-        if !line.starts_with("//") {
-            assert!(
-                expected_contents.contains(line.trim()),
-                "checking {wit_file:?}, line {line}"
-            );
-        }
+    fn encoded_packages(&self) -> anyhow::Result<Vec<Package>> {
+        Ok(packages_from_parsed(&self.resolve()?))
     }
+
+    fn encoded_package(&self, package_name: &PackageName) -> anyhow::Result<Package> {
+        self.encoded_packages()?
+            .into_iter()
+            .find(|package| package.name() == package_name)
+            .ok_or_else(|| anyhow::anyhow!("package {} not found", package_name))
+    }
+
+    fn encoded_package_wit(&self, package_name: &PackageName) -> anyhow::Result<String> {
+        self.encoded_package(package_name)
+            .map(|package| package.to_string())
+    }
+}
+
+impl WitSource for &Path {
+    fn resolve(&self) -> anyhow::Result<Resolve> {
+        let mut resolve = Resolve::new();
+        let _ = resolve.push_path(self)?;
+        Ok(resolve)
+    }
+}
+
+impl WitSource for &PathBuf {
+    fn resolve(&self) -> anyhow::Result<Resolve> {
+        let mut resolve = Resolve::new();
+        let _ = resolve.push_path(self)?;
+        Ok(resolve)
+    }
+}
+
+impl WitSource for &[(&str, &str)] {
+    fn resolve(&self) -> anyhow::Result<Resolve> {
+        let mut resolve = Resolve::new();
+        for (name, source) in *self {
+            let _ = resolve.push_str(name, source)?;
+        }
+        Ok(resolve)
+    }
+}
+
+/// Asserts that both wit sources contains the same effective (encoded) wit package.
+fn assert_has_same_wit_package(
+    package_name: &PackageName,
+    actual_wit_source: impl WitSource,
+    expected_wit_source: impl WitSource,
+) {
+    let actual_wit = actual_wit_source.encoded_package_wit(package_name).unwrap();
+    let expected_wit = expected_wit_source
+        .encoded_package_wit(package_name)
+        .unwrap();
+    assert!(actual_wit == expected_wit)
+}
+
+fn assert_has_wasm_rpc_wit_deps(wit_dir: &Path) {
+    let deps = vec![("poll", WASI_POLL_WIT), ("wasm-rpc", WASM_RPC_WIT)];
+
+    assert_has_same_wit_package(
+        &PackageName::new("wasi", "io", Some(Version::new(0, 2, 0))),
+        wit_dir,
+        deps.as_slice(),
+    );
+    assert_has_same_wit_package(
+        &PackageName::new("golem", "rpc", Some(Version::new(0, 1, 0))),
+        wit_dir,
+        deps.as_slice(),
+    );
 }
 
 fn uncomment_imports(path: &Path) {
