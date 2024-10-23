@@ -6,17 +6,20 @@ use golem_service_base::config::ComponentStoreLocalConfig;
 use golem_service_base::db;
 
 use golem_common::model::{ComponentId, ComponentType};
+use golem_common::SafeDisplay;
 use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
 use golem_component_service_base::service::component::{
-    create_new_component, ComponentService, ComponentServiceDefault,
+    create_new_component, ComponentError, ComponentService, ComponentServiceDefault,
+    ConflictReport, ConflictingFunction,
 };
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
 };
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::component_object_store;
-use rib::WorkerFunctionsInRib;
+use golem_wasm_ast::analysis::analysed_type::{str, u64};
+use rib::{RegistryKey, WorkerFunctionsInRib};
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -84,6 +87,7 @@ pub async fn test_with_postgres_db() {
 
     test_repo(component_repo.clone()).await;
     test_services(component_repo.clone()).await;
+    test_component_constraint_incompatible_updates(component_repo.clone()).await;
 }
 
 #[test]
@@ -105,11 +109,98 @@ pub async fn test_with_sqlite_db() {
 
     test_repo(component_repo.clone()).await;
     test_services(component_repo.clone()).await;
+    test_component_constraint_incompatible_updates(component_repo.clone()).await;
 }
 
 fn get_component_data(name: &str) -> Vec<u8> {
     let path = format!("../test-components/{}.wasm", name);
     std::fs::read(path).unwrap()
+}
+
+async fn test_component_constraint_incompatible_updates(
+    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+) {
+    let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
+        Arc::new(
+            component_object_store::FsComponentObjectStore::new(&ComponentStoreLocalConfig {
+                root_path: "/tmp/component".to_string(),
+                object_prefix: Uuid::new_v4().to_string(),
+            })
+            .unwrap(),
+        );
+
+    let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
+        Arc::new(ComponentCompilationServiceDisabled);
+
+    let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
+        Arc::new(ComponentServiceDefault::new(
+            component_repo.clone(),
+            object_store.clone(),
+            compilation_service.clone(),
+        ));
+
+    let component_name = ComponentName("shopping-cart".to_string());
+
+    // Create a shopping cart
+    component_service
+        .create(
+            &ComponentId::new_v4(),
+            &component_name,
+            ComponentType::Durable,
+            get_component_data("shopping-cart"),
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+
+    let component_id = ComponentId::new_v4();
+
+    let missing_function_constraint =
+        constraint_data::get_random_constraint(&DefaultNamespace::default(), &component_id);
+
+    let incompatible_constraint =
+        constraint_data::get_incompatible_constraint(&DefaultNamespace::default(), &component_id);
+
+    // Create a constraint with an unknown function (for the purpose of test), and this will act as a existing constraint of component
+    component_service
+        .create_or_update_constraint(&missing_function_constraint)
+        .await
+        .unwrap();
+
+    // Create a constraint with an unknown function (for the purpose of test), and this will get added to the existing constraints of component
+    component_service
+        .create_or_update_constraint(&incompatible_constraint)
+        .await
+        .unwrap();
+
+    // Update the component of shopping cart that has functions that are incompatible with the existing constraints
+    let component_update_error = component_service
+        .update(
+            &component_id,
+            get_component_data("shopping-cart"),
+            None,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap_err()
+        .to_safe_string();
+
+    let expected_error = ComponentError::ComponentConstraintConflictError(ConflictReport {
+        missing_functions: vec![RegistryKey::FunctionName("foo".to_string())],
+        conflicting_functions: vec![ConflictingFunction {
+            function: RegistryKey::FunctionNameWithInterface {
+                interface_name: "golem:it/api".to_string(),
+                function_name: "initialize-cart".to_string(),
+            },
+            existing_parameter_types: vec![u64()],
+            new_parameter_types: vec![str()],
+            existing_result_types: vec![],
+            new_result_types: vec![],
+        }],
+    })
+    .to_safe_string();
+
+    assert_eq!(component_update_error, expected_error)
 }
 
 async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
@@ -570,7 +661,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
         .unwrap();
 
     let expected_initial_constraint =
-        Some(constraint_data::get_shopping_cart_worker_functions_in_rib1());
+        Some(constraint_data::get_shopping_cart_worker_functions_constraint1());
 
     let component_constraint_later = constraint_data::get_shopping_cart_component_constraint2(
         &namespace1,
@@ -592,9 +683,10 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 
     let expected_updated_constraint = {
         let mut function_calls =
-            constraint_data::get_shopping_cart_worker_functions_in_rib2().function_calls;
-        function_calls
-            .extend(constraint_data::get_shopping_cart_worker_functions_in_rib1().function_calls);
+            constraint_data::get_shopping_cart_worker_functions_constraint2().function_calls;
+        function_calls.extend(
+            constraint_data::get_shopping_cart_worker_functions_constraint1().function_calls,
+        );
         Some(WorkerFunctionsInRib { function_calls })
     };
 
@@ -608,11 +700,11 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 mod constraint_data {
     use golem_common::model::ComponentId;
     use golem_component_service_base::model::ComponentConstraint;
-    use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32};
+    use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
     use golem_wasm_ast::analysis::NameTypePair;
     use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
 
-    pub(crate) fn get_shopping_cart_worker_functions_in_rib1() -> WorkerFunctionsInRib {
+    pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> WorkerFunctionsInRib {
         WorkerFunctionsInRib {
             function_calls: vec![WorkerFunctionInRibMetadata {
                 function_key: RegistryKey::FunctionNameWithInterface {
@@ -625,7 +717,7 @@ mod constraint_data {
         }
     }
 
-    pub(crate) fn get_shopping_cart_worker_functions_in_rib2() -> WorkerFunctionsInRib {
+    pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> WorkerFunctionsInRib {
         WorkerFunctionsInRib {
             function_calls: vec![WorkerFunctionInRibMetadata {
                 function_key: RegistryKey::FunctionNameWithInterface {
@@ -655,6 +747,39 @@ mod constraint_data {
         }
     }
 
+    pub(crate) fn get_shopping_cart_worker_functions_constraint_incompatible(
+    ) -> WorkerFunctionsInRib {
+        WorkerFunctionsInRib {
+            function_calls: vec![WorkerFunctionInRibMetadata {
+                function_key: RegistryKey::FunctionNameWithInterface {
+                    interface_name: "golem:it/api".to_string(),
+                    function_name: "initialize-cart".to_string(),
+                },
+                parameter_types: vec![u64()],
+                return_types: vec![],
+            }],
+        }
+    }
+
+    pub(crate) fn get_random_worker_functions_constraint() -> WorkerFunctionsInRib {
+        WorkerFunctionsInRib {
+            function_calls: vec![WorkerFunctionInRibMetadata {
+                function_key: RegistryKey::FunctionName("foo".to_string()),
+                parameter_types: vec![],
+                return_types: vec![list(record(vec![
+                    NameTypePair {
+                        name: "bar".to_string(),
+                        typ: str(),
+                    },
+                    NameTypePair {
+                        name: "baz".to_string(),
+                        typ: str(),
+                    },
+                ]))],
+            }],
+        }
+    }
+
     pub(crate) fn get_shopping_cart_component_constraint1<Namespace: Clone>(
         namespace: &Namespace,
         component_id: &ComponentId,
@@ -662,7 +787,7 @@ mod constraint_data {
         ComponentConstraint {
             namespace: namespace.clone(),
             component_id: component_id.clone(),
-            constraints: get_shopping_cart_worker_functions_in_rib1(),
+            constraints: get_shopping_cart_worker_functions_constraint1(),
         }
     }
 
@@ -673,7 +798,29 @@ mod constraint_data {
         ComponentConstraint {
             namespace: namespace.clone(),
             component_id: component_id.clone(),
-            constraints: get_shopping_cart_worker_functions_in_rib2(),
+            constraints: get_shopping_cart_worker_functions_constraint2(),
+        }
+    }
+
+    pub(crate) fn get_random_constraint<Namespace: Clone>(
+        namespace: &Namespace,
+        component_id: &ComponentId,
+    ) -> ComponentConstraint<Namespace> {
+        ComponentConstraint {
+            namespace: namespace.clone(),
+            component_id: component_id.clone(),
+            constraints: get_random_worker_functions_constraint(),
+        }
+    }
+
+    pub(crate) fn get_incompatible_constraint<Namespace: Clone>(
+        namespace: &Namespace,
+        component_id: &ComponentId,
+    ) -> ComponentConstraint<Namespace> {
+        ComponentConstraint {
+            namespace: namespace.clone(),
+            component_id: component_id.clone(),
+            constraints: get_shopping_cart_worker_functions_constraint_incompatible(),
         }
     }
 }

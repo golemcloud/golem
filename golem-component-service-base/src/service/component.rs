@@ -235,40 +235,42 @@ impl ComponentServiceDefault {
 
     pub fn find_component_metadata_conflicts(
         worker_functions_in_rib: &WorkerFunctionsInRib,
-        function_type_registry: &FunctionTypeRegistry,
+        new_type_registry: &FunctionTypeRegistry,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
-        for call in &worker_functions_in_rib.function_calls {
-            if let Some(new_value) = function_type_registry.lookup(&call.function_key) {
+        for existing_function_call in &worker_functions_in_rib.function_calls {
+            if let Some(new_registry_value) =
+                new_type_registry.lookup(&existing_function_call.function_key)
+            {
                 let mut parameter_conflict = false;
                 let mut return_conflict = false;
 
-                if call.parameter_types != new_value.argument_types() {
+                if existing_function_call.parameter_types != new_registry_value.argument_types() {
                     parameter_conflict = true;
                 }
 
-                let return_types = match new_value.clone() {
+                let new_return_types = match new_registry_value.clone() {
                     RegistryValue::Function { return_types, .. } => return_types,
                     _ => vec![],
                 };
 
-                if call.return_types != return_types {
+                if existing_function_call.return_types != new_return_types {
                     return_conflict = true;
                 }
 
                 if parameter_conflict || return_conflict {
                     conflicting_functions.push(ConflictingFunction {
-                        function: call.function_key.clone(),
-                        existing_parameter_types: call.parameter_types.clone(),
-                        new_parameter_types: new_value.clone().argument_types().clone(),
-                        existing_result_types: call.return_types.clone(),
-                        new_result_types: return_types,
+                        function: existing_function_call.function_key.clone(),
+                        existing_parameter_types: existing_function_call.parameter_types.clone(),
+                        new_parameter_types: new_registry_value.clone().argument_types().clone(),
+                        existing_result_types: existing_function_call.return_types.clone(),
+                        new_result_types: new_return_types,
                     });
                 }
             } else {
-                missing_functions.push(call.function_key.clone());
+                missing_functions.push(existing_function_call.function_key.clone());
             }
         }
 
