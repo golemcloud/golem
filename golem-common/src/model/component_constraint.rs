@@ -65,7 +65,7 @@ impl FunctionUsageCollection {
         let functions = worker_functions_in_rib
             .function_calls
             .iter()
-            .map(|x| FunctionUsage::from_worker_function_in_rib(x))
+            .map(FunctionUsage::from_worker_function_in_rib)
             .collect::<Vec<_>>();
 
         FunctionUsageCollection {

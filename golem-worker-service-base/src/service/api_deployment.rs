@@ -244,7 +244,7 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
         for (component_id, worker_calls_vec) in worker_functions {
             let function_usage_collection = worker_calls_vec
                 .iter()
-                .map(|x| FunctionUsageCollection::from_worker_functions_in_rib(x))
+                .map(FunctionUsageCollection::from_worker_functions_in_rib)
                 .collect::<Vec<_>>();
 
             let merged_calls = FunctionUsageCollection::try_merge(function_usage_collection)
