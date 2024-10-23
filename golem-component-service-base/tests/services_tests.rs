@@ -195,6 +195,39 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
         .unwrap();
     assert_eq!(component1_result.len(), 1);
 
+    // Create constraints
+    let component_constraints = constraint_data::get_shopping_cart_component_constraint1(
+        &DefaultNamespace::default(),
+        &component1.versioned_component_id.component_id,
+    );
+
+    let component1_constrained = component_service
+        .create_or_update_constraint(&component_constraints)
+        .await;
+
+    assert!(component1_constrained.is_ok());
+
+    // Get Constraint
+    let component1_constrained = component_service
+        .get_component_constraint(&component1.versioned_component_id.component_id)
+        .await
+        .unwrap();
+
+    assert!(component1_constrained.is_some());
+
+    // Update Constraint
+    let component_constraints = constraint_data::get_shopping_cart_component_constraint2(
+        &DefaultNamespace::default(),
+        &component1.versioned_component_id.component_id,
+    );
+
+    let component1_constrained = component_service
+        .create_or_update_constraint(&component_constraints)
+        .await
+        .unwrap();
+
+    assert_eq!(component1_constrained.constraints.function_calls.len(), 2);
+
     let component1v2 = component_service
         .update(
             &component1.versioned_component_id.component_id,
@@ -602,7 +635,7 @@ mod constraint_data {
                 parameter_types: vec![],
                 return_types: vec![list(record(vec![
                     NameTypePair {
-                        name: "product_id".to_string(),
+                        name: "product-id".to_string(),
                         typ: str(),
                     },
                     NameTypePair {
@@ -622,23 +655,23 @@ mod constraint_data {
         }
     }
 
-    pub(crate) fn get_shopping_cart_component_constraint1(
-        namespace: &str,
+    pub(crate) fn get_shopping_cart_component_constraint1<Namespace: Clone>(
+        namespace: &Namespace,
         component_id: &ComponentId,
-    ) -> ComponentConstraint<String> {
+    ) -> ComponentConstraint<Namespace> {
         ComponentConstraint {
-            namespace: namespace.to_string(),
+            namespace: namespace.clone(),
             component_id: component_id.clone(),
             constraints: get_shopping_cart_worker_functions_in_rib1(),
         }
     }
 
-    pub(crate) fn get_shopping_cart_component_constraint2(
-        namespace: &str,
+    pub(crate) fn get_shopping_cart_component_constraint2<Namespace: Clone>(
+        namespace: &Namespace,
         component_id: &ComponentId,
-    ) -> ComponentConstraint<String> {
+    ) -> ComponentConstraint<Namespace> {
         ComponentConstraint {
-            namespace: namespace.to_string(),
+            namespace: namespace.clone(),
             component_id: component_id.clone(),
             constraints: get_shopping_cart_worker_functions_in_rib2(),
         }

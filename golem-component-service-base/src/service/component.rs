@@ -659,13 +659,29 @@ where
         component_constraint: &ComponentConstraint<Namespace>,
     ) -> Result<ComponentConstraint<Namespace>, ComponentError> {
         info!(namespace = %component_constraint.namespace, "Create Component Constraint");
+        let component_id = &component_constraint.component_id;
         let record = ComponentConstraintRecord::try_from(component_constraint.clone())
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         self.component_repo
             .create_or_update_constraint(&record)
             .await?;
-        Ok(component_constraint.clone())
+        let result = self
+            .component_repo
+            .get_constraint(&component_constraint.component_id)
+            .await?
+            .ok_or(ComponentError::ComponentConstraintError(format!(
+                "Failed to create constraints for {}",
+                component_id
+            )))?;
+
+        let component_constraints = ComponentConstraint {
+            namespace: component_constraint.namespace.clone(),
+            component_id: component_id.clone(),
+            constraints: result,
+        };
+
+        Ok(component_constraints)
     }
 
     async fn get_component_constraint(
