@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use crate::cloud::CloudAuthenticationConfig;
 use crate::init::CliKind;
 use crate::model::{Format, GolemError, HasFormatConfig};

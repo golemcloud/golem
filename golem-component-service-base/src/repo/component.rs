@@ -16,7 +16,7 @@ use crate::model::{Component, ComponentConstraints};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::constraint::FunctionUsageCollection;
+use golem_common::model::component_constraint::FunctionUsageCollection;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
@@ -785,7 +785,7 @@ pub mod record_metadata_serde {
 pub mod constraint_serde {
     use bytes::{BufMut, Bytes, BytesMut};
     use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
-    use golem_common::model::constraint::FunctionUsageCollection;
+    use golem_common::model::component_constraint::FunctionUsageCollection;
     use prost::Message;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;

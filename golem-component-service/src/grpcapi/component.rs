@@ -38,7 +38,7 @@ use golem_api_grpc::proto::golem::component::Component;
 use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
 use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
 use golem_common::grpc::proto_component_id_string;
-use golem_common::model::constraint::FunctionUsageCollection;
+use golem_common::model::component_constraint::FunctionUsageCollection;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;

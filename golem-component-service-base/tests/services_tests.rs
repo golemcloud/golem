@@ -7,7 +7,8 @@ use golem_service_base::db;
 
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
-use golem_component_service_base::model::{Component, FunctionUsageCollection};
+use golem_component_service_base::model::{Component};
+use golem_common::model::component_constraint::FunctionUsageCollection;
 use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
 use golem_component_service_base::service::component::{
     create_new_component, ComponentError, ComponentService, ComponentServiceDefault,
@@ -698,8 +699,8 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 }
 
 mod constraint_data {
-    use golem_common::model::constraint::FunctionUsage;
-    use golem_common::model::constraint::FunctionUsageCollection;
+    use golem_common::model::component_constraint::FunctionUsage;
+    use golem_common::model::component_constraint::FunctionUsageCollection;
     use golem_common::model::ComponentId;
     use golem_component_service_base::model::ComponentConstraints;
     use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};

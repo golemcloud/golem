@@ -48,7 +48,7 @@ use serde_json::Value;
 use uuid::{uuid, Uuid};
 
 pub mod component_metadata;
-pub mod constraint;
+pub mod component_constraint;
 pub mod exports;
 pub mod oplog;
 pub mod public_oplog;

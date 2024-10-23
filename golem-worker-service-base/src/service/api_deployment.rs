@@ -34,7 +34,7 @@ use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use crate::service::component::ComponentService;
 use chrono::Utc;
-use golem_common::model::constraint::FunctionUsageCollection;
+use golem_common::model::component_constraint::FunctionUsageCollection;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
