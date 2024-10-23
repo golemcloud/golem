@@ -347,7 +347,7 @@ pub fn import_remover(
 }
 
 pub struct WitTransformer<'a> {
-    resolve: &'a wit_parser::Resolve,
+    _resolve: &'a wit_parser::Resolve, // TODO
     encoded_packages_by_parser_id: IndexMap<wit_parser::PackageId, Package>,
 }
 
@@ -355,7 +355,7 @@ impl<'a> WitTransformer<'a> {
     pub fn new(resolve: &'a wit_parser::Resolve) -> anyhow::Result<Self> {
         let mut encoded_packages_by_parser_id = IndexMap::<wit_parser::PackageId, Package>::new();
 
-        for package in packages_from_parsed(&resolve) {
+        for package in packages_from_parsed(resolve) {
             let package_name = package.name();
             let package_name = wit_parser::PackageName {
                 namespace: package_name.namespace().to_string(),
@@ -372,7 +372,7 @@ impl<'a> WitTransformer<'a> {
         }
 
         Ok(Self {
-            resolve,
+            _resolve: resolve,
             encoded_packages_by_parser_id,
         })
     }
