@@ -18,7 +18,6 @@ use golem_api_grpc::proto::golem::rib::WorkerFunctionInRibMetadata as WorkerFunc
 use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use golem_wasm_ast::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 // An easier data type that focus just the function calls,
 // return types and parameter types, corresponding to a function
@@ -35,52 +34,6 @@ pub struct WorkerFunctionsInRib {
 }
 
 impl WorkerFunctionsInRib {
-    pub fn try_merge(
-        worker_functions: Vec<WorkerFunctionsInRib>,
-    ) -> Result<WorkerFunctionsInRib, String> {
-        let mut merged_function_calls: HashMap<RegistryKey, WorkerFunctionInRibMetadata> =
-            HashMap::new();
-
-        for wf in worker_functions {
-            for call in wf.function_calls {
-                match merged_function_calls.get(&call.function_key) {
-                    Some(existing_call) => {
-                        // Check for parameter type conflicts
-                        if existing_call.parameter_types != call.parameter_types {
-                            return Err(format!(
-                                "Parameter type conflict for function key {:?}: {:?} vs {:?}",
-                                call.function_key,
-                                existing_call.parameter_types,
-                                call.parameter_types
-                            ));
-                        }
-
-                        // Check for return type conflicts
-                        if existing_call.return_types != call.return_types {
-                            return Err(format!(
-                                "Return type conflict for function key {:?}: {:?} vs {:?}",
-                                call.function_key, existing_call.return_types, call.return_types
-                            ));
-                        }
-                    }
-                    None => {
-                        // Insert if no conflict is found
-                        merged_function_calls.insert(call.function_key.clone(), call);
-                    }
-                }
-            }
-        }
-
-        let mut merged_function_calls_vec: Vec<WorkerFunctionInRibMetadata> =
-            merged_function_calls.into_values().collect();
-
-        merged_function_calls_vec.sort_by(|a, b| a.function_key.cmp(&b.function_key));
-
-        Ok(WorkerFunctionsInRib {
-            function_calls: merged_function_calls_vec,
-        })
-    }
-
     pub fn from_inferred_expr(
         inferred_expr: &InferredExpr,
         original_type_registry: &FunctionTypeRegistry,

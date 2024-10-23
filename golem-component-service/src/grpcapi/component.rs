@@ -36,8 +36,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_api_grpc::proto::golem::component::{Component};
 use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
-use golem_api_grpc::proto::golem::component::FunctionUsage as FunctionUsageProto;
-use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
+use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
 use golem_common::grpc::proto_component_id_string;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
@@ -47,7 +46,6 @@ use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::stream::ByteStream;
 use tonic::{Request, Response, Status, Streaming};
-use golem_common::model::constraint::FunctionUsage;
 
 fn bad_request_error(error: &str) -> ComponentError {
     ComponentError {
@@ -209,7 +207,7 @@ impl ComponentGrpcApi {
             .await
             .map(|v| ComponentConstraintsProto {
                 component_id: Some(v.component_id.into()),
-                constraints: v.constraints.function_usages.iter().map(|x| FunctionUsageProto::from(x.clone())).collect()
+                constraints: Some(FunctionUsageCollectionProto::from(v.constraints))
             })?;
 
         Ok(response)
@@ -503,29 +501,34 @@ impl ComponentService for ComponentGrpcApi {
                         }))
                     }
                 };
-                let constraints =
-                    proto_constraints.constraints.iter().map(|x| golem_common::model::constraint::FunctionUsage::try_from(x.clone())).collect::<Result<Vec<FunctionUsage>, _>>();
 
-                let constraint_vec =
-                        match constraints {
+                let constraints =
+                    if let Some(worker_functions_in_rib) = proto_constraints.constraints {
+                        let result = FunctionUsageCollection::try_from(worker_functions_in_rib)
+                            .map_err(|err| bad_request_error(err.as_str()));
+
+                        match result {
                             Ok(worker_functions_in_rib) => worker_functions_in_rib,
                             Err(fail) => {
-                                let error = internal_error("Failed to create constraints");
-
                                 return Ok(Response::new(CreateComponentConstraintsResponse {
                                     result: Some(record.fail(
                                         create_component_constraints_response::Result::Error(
-                                            error.clone(),
+                                            fail.clone(),
                                         ),
-                                        &ComponentTraceErrorKind(&error),
+                                        &ComponentTraceErrorKind(&fail),
                                     )),
                                 }))
                             }
-                        };
-
-                let constraints = FunctionUsageCollection {
-                    function_usages: constraint_vec
-                };
+                        }
+                    } else {
+                        let error = internal_error("Failed to create constraints");
+                        return Ok(Response::new(CreateComponentConstraintsResponse {
+                            result: Some(record.fail(
+                                create_component_constraints_response::Result::Error(error.clone()),
+                                &ComponentTraceErrorKind(&error),
+                            )),
+                        }));
+                    };
 
                 let component_constraint = ComponentConstraints {
                     namespace: DefaultNamespace::default(),
