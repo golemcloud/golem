@@ -1,6 +1,7 @@
 pub mod wit {
+    use anyhow::bail;
     use std::path::{Path, PathBuf};
-    use wit_parser::PackageName;
+    use wit_parser::{Package, PackageName};
 
     pub static DEPS_DIR: &str = "deps";
     pub static WIT_DIR: &str = "wit";
@@ -25,6 +26,31 @@ pub mod wit {
                 .to_string(),
             version: stub_package_name.version.clone(),
         }
+    }
+
+    pub fn stub_import_name(stub_package: &Package) -> anyhow::Result<String> {
+        let package_name = &stub_package.name;
+
+        if stub_package.interfaces.len() != 1 {
+            bail!(
+                "Expected exactly one interface in stub package, package name: {}",
+                package_name
+            );
+        }
+
+        let interface_name = stub_package.interfaces.first().unwrap().0;
+
+        Ok(format!(
+            "{}:{}/{}{}",
+            package_name.namespace,
+            package_name.name,
+            interface_name,
+            package_name
+                .version
+                .as_ref()
+                .map(|version| format!("@{}", version))
+                .unwrap_or_default()
+        ))
     }
 
     pub fn package_dep_dir_name(package_name: &PackageName) -> String {

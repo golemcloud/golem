@@ -39,13 +39,10 @@ async fn compose_with_single_stub() {
     add_stub_dependency(
         &stub_dir.path().join("wit"),
         &caller_dir.path().join("wit"),
-        false,
+        true,
         UpdateCargoToml::Update,
     )
     .unwrap();
-
-    // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
-    uncomment_imports(&caller_dir.path().join("wit/caller.wit"));
 
     println!(
         "{}",
