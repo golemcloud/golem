@@ -46,8 +46,10 @@ pub fn add_stub_dependency(
     let dest_resolved_wit_root = ResolvedWitDir::new(dest_wit_root)?;
     let dest_package = dest_resolved_wit_root.main_package()?;
     let dest_stub_package_name = naming::wit::stub_package_name(&dest_package.name);
+
     // TODO: have a better matcher which also considers / and @
     let dest_stub_package_import_prefix = dest_stub_package_name.to_string();
+    let dest_package_import_prefix = dest_package.name.to_string();
 
     {
         let is_self_stub_by_name =
@@ -108,12 +110,16 @@ pub fn add_stub_dependency(
                     });
                 }
             }
-        // Handle other package by copying while removing imports
+        // Handle other package by copying while removing cyclic imports
         } else {
             package_names_to_package_path.insert(package_name.clone(), package_path);
             stub_transformer.remove_imports_from_package_all_worlds(
                 *package_id,
                 &dest_stub_package_import_prefix,
+            )?;
+            stub_transformer.remove_imports_from_package_all_worlds(
+                *package_id,
+                &dest_package_import_prefix,
             )?;
             let content = stub_transformer.render_package(*package_id)?;
             let first_source = package_sources.iter().next().ok_or_else(|| {
