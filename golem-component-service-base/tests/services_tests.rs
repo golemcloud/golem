@@ -7,7 +7,7 @@ use golem_service_base::db;
 
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
-use golem_component_service_base::model::Component;
+use golem_component_service_base::model::{Component, FunctionUsageCollection};
 use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
 use golem_component_service_base::service::component::{
     create_new_component, ComponentError, ComponentService, ComponentServiceDefault,
@@ -317,7 +317,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
         .await
         .unwrap();
 
-    assert_eq!(component1_constrained.constraints.function_calls.len(), 2);
+    assert_eq!(component1_constrained.constraints.function_usages.len(), 2);
 
     let component1v2 = component_service
         .update(
@@ -682,12 +682,12 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
         .unwrap();
 
     let expected_updated_constraint = {
-        let mut function_calls =
-            constraint_data::get_shopping_cart_worker_functions_constraint2().function_calls;
-        function_calls.extend(
-            constraint_data::get_shopping_cart_worker_functions_constraint1().function_calls,
+        let mut function_usages =
+            constraint_data::get_shopping_cart_worker_functions_constraint2().function_usages;
+        function_usages.extend(
+            constraint_data::get_shopping_cart_worker_functions_constraint1().function_usages,
         );
-        Some(WorkerFunctionsInRib { function_calls })
+        Some(FunctionUsageCollection { function_usages })
     };
 
     assert!(component_create_result.is_ok());
@@ -699,32 +699,36 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 
 mod constraint_data {
     use golem_common::model::ComponentId;
-    use golem_component_service_base::model::ComponentConstraints;
+    use golem_component_service_base::model::{ComponentConstraints, FunctionUsageCollection};
     use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
     use golem_wasm_ast::analysis::NameTypePair;
+    use golem_common::model::constraint::FunctionUsage;
     use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
 
-    pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> WorkerFunctionsInRib {
-        WorkerFunctionsInRib {
-            function_calls: vec![WorkerFunctionInRibMetadata {
+    pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionUsageCollection {
+        FunctionUsageCollection {
+            function_usages: vec![FunctionUsage {
                 function_key: RegistryKey::FunctionNameWithInterface {
                     interface_name: "golem:it/api".to_string(),
                     function_name: "initialize-cart".to_string(),
                 },
                 parameter_types: vec![str()],
                 return_types: vec![],
+                usage_count: 1
             }],
         }
     }
 
-    pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> WorkerFunctionsInRib {
-        WorkerFunctionsInRib {
-            function_calls: vec![WorkerFunctionInRibMetadata {
+    pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionUsageCollection {
+        FunctionUsageCollection {
+            function_usages: vec![FunctionUsage {
                 function_key: RegistryKey::FunctionNameWithInterface {
                     interface_name: "golem:it/api".to_string(),
                     function_name: "get-cart-contents".to_string(),
                 },
+                usage_count: 1,
                 parameter_types: vec![],
+
                 return_types: vec![list(record(vec![
                     NameTypePair {
                         name: "product-id".to_string(),
@@ -748,22 +752,24 @@ mod constraint_data {
     }
 
     pub(crate) fn get_shopping_cart_worker_functions_constraint_incompatible(
-    ) -> WorkerFunctionsInRib {
-        WorkerFunctionsInRib {
-            function_calls: vec![WorkerFunctionInRibMetadata {
+    ) -> FunctionUsageCollection {
+        FunctionUsageCollection {
+            function_usages: vec![FunctionUsage {
                 function_key: RegistryKey::FunctionNameWithInterface {
                     interface_name: "golem:it/api".to_string(),
                     function_name: "initialize-cart".to_string(),
                 },
                 parameter_types: vec![u64()],
                 return_types: vec![str()],
+                usage_count: 1
             }],
         }
     }
 
-    pub(crate) fn get_random_worker_functions_constraint() -> WorkerFunctionsInRib {
-        WorkerFunctionsInRib {
-            function_calls: vec![WorkerFunctionInRibMetadata {
+    pub(crate) fn get_random_worker_functions_constraint() -> FunctionUsageCollection {
+        FunctionUsageCollection {
+            function_usages: vec![FunctionUsage {
+                usage_count: 1,
                 function_key: RegistryKey::FunctionName("foo".to_string()),
                 parameter_types: vec![],
                 return_types: vec![list(record(vec![
