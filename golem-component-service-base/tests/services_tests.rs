@@ -194,7 +194,7 @@ async fn test_component_constraint_incompatible_updates(
             },
             existing_parameter_types: vec![u64()],
             new_parameter_types: vec![str()],
-            existing_result_types: vec![],
+            existing_result_types: vec![str()],
             new_result_types: vec![],
         }],
     })
@@ -756,7 +756,7 @@ mod constraint_data {
                     function_name: "initialize-cart".to_string(),
                 },
                 parameter_types: vec![u64()],
-                return_types: vec![],
+                return_types: vec![str()],
             }],
         }
     }
