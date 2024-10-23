@@ -193,7 +193,7 @@ pub fn make_open_api_file(
                 "worker-name": "\"foo\"",
                 "component-id": component_id,
                 "component-version": component_version,
-                "response" : "let status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
+                "response" : "let x = golem:it/api.{checkout}();\nlet status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
               },
               "get": {
                 "summary": "Get Cart Contents",
