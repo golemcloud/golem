@@ -363,7 +363,7 @@ where
         let metadata =
             process_component(&data).map_err(ComponentError::ComponentProcessingError)?;
 
-        let constraints = self.component_repo.get_constraint(&component_id).await?;
+        let constraints = self.component_repo.get_constraint(component_id).await?;
 
         let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
 
@@ -688,7 +688,7 @@ where
         &self,
         component_id: &ComponentId,
     ) -> Result<Option<WorkerFunctionsInRib>, ComponentError> {
-        let result = self.component_repo.get_constraint(&component_id).await?;
+        let result = self.component_repo.get_constraint(component_id).await?;
         Ok(result)
     }
 }

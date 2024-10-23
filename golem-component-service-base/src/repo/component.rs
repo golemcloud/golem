@@ -668,10 +668,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         if let Some(existing_record) = existing_record {
             let existing_worker_calls_used =
                 constraint_serde::deserialize(&existing_record.constraints)
-                    .map_err(|err| RepoError::Internal(err))?;
+                    .map_err(RepoError::Internal)?;
             let new_worker_calls_used =
                 constraint_serde::deserialize(&component_constraint_record.constraints)
-                    .map_err(|err| RepoError::Internal(err))?;
+                    .map_err(RepoError::Internal)?;
 
             // This shouldn't happen as it is validated in service layers.
             // However, repo gives us more transactional guarantee.
@@ -679,11 +679,11 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                 existing_worker_calls_used,
                 new_worker_calls_used,
             ])
-            .map_err(|err| RepoError::Internal(err))?;
+            .map_err(RepoError::Internal)?;
 
             // Serialize the merged result back to store in the database
             let merged_constraint_data: Vec<u8> = constraint_serde::serialize(&merged_worker_calls)
-                .map_err(|err| RepoError::Internal(err))?
+                .map_err(RepoError::Internal)?
                 .into();
 
             // Update the existing record in the database
@@ -700,7 +700,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             .bind(component_constraint_record.component_id)
             .execute(&mut *transaction)
             .await
-            .map_err(|e| RepoError::from(e))?;
+            .map_err(RepoError::from)?;
         } else {
             sqlx::query(
                 r#"
@@ -743,7 +743,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         if let Some(existing_record) = existing_record {
             let existing_worker_calls_used =
                 constraint_serde::deserialize(&existing_record.constraints)
-                    .map_err(|err| RepoError::Internal(err))?;
+                    .map_err(RepoError::Internal)?;
             Ok(Some(existing_worker_calls_used))
         } else {
             Ok(None)
