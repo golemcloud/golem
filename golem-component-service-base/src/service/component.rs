@@ -22,7 +22,6 @@ use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
 use chrono::Utc;
-use golem_wasm_ast::analysis::AnalysedType;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
@@ -30,6 +29,7 @@ use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
+use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue, WorkerFunctionsInRib};
 use tap::TapFallible;
 use tracing::{error, info};
@@ -52,7 +52,6 @@ pub enum ComponentError {
     ComponentStoreError { message: String, error: String },
     #[error("Component Constraint Error: {0}")]
     ComponentConstraintError(String),
-
 }
 
 impl ComponentError {
@@ -81,7 +80,7 @@ impl SafeDisplay for ComponentError {
             ComponentError::InternalRepoError(inner) => inner.to_safe_string(),
             ComponentError::InternalConversionError { .. } => self.to_string(),
             ComponentError::ComponentStoreError { .. } => self.to_string(),
-            ComponentError::ComponentConstraintError(_) => self.to_string()
+            ComponentError::ComponentConstraintError(_) => self.to_string(),
         }
     }
 }
@@ -231,7 +230,10 @@ impl ComponentServiceDefault {
         }
     }
 
-    pub fn find_component_metadata_conflicts(worker_functions_in_rib: &WorkerFunctionsInRib, function_type_registry: &FunctionTypeRegistry) -> ConflictReport {
+    pub fn find_component_metadata_conflicts(
+        worker_functions_in_rib: &WorkerFunctionsInRib,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> ConflictReport {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
@@ -245,10 +247,7 @@ impl ComponentServiceDefault {
                 }
 
                 let return_types = match new_value.clone() {
-                    RegistryValue::Function {
-                        return_types,
-                        ..
-                    } => return_types,
+                    RegistryValue::Function { return_types, .. } => return_types,
                     _ => vec![],
                 };
 
@@ -262,7 +261,7 @@ impl ComponentServiceDefault {
                         existing_parameter_types: call.parameter_types.clone(),
                         new_parameter_types: new_value.clone().argument_types().clone(),
                         existing_result_types: call.return_types.clone(),
-                        new_result_types: return_types
+                        new_result_types: return_types,
                     });
                 }
             } else {
@@ -289,7 +288,7 @@ pub struct ConflictingFunction {
 #[derive(Debug)]
 pub struct ConflictReport {
     pub missing_functions: Vec<RegistryKey>,
-    pub conflicting_functions: Vec<ConflictingFunction>
+    pub conflicting_functions: Vec<ConflictingFunction>,
 }
 
 impl ConflictReport {
@@ -364,16 +363,15 @@ where
         let metadata =
             process_component(&data).map_err(ComponentError::ComponentProcessingError)?;
 
-        let constraints =
-            self.component_repo.get_constraint(&component_id).await?;
+        let constraints = self.component_repo.get_constraint(&component_id).await?;
 
-        let new_type_registry =
-            FunctionTypeRegistry::from_export_metadata(&metadata.exports);
+        let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
 
-        if let Some(constraints) =constraints {
-            let conflicts = Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
+        if let Some(constraints) = constraints {
+            let conflicts =
+                Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
             if !conflicts.is_empty() {
-                return Err(ComponentError::ComponentConstraintError(format!("The updated component has conflicting types to the previous version of component that's already in use. {:?}", conflicts)))
+                return Err(ComponentError::ComponentConstraintError(format!("The updated component has conflicting types to the previous version of component that's already in use. {:?}", conflicts)));
             }
         }
 

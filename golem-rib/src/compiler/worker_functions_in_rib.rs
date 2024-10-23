@@ -67,7 +67,7 @@ impl WorkerFunctionsInRib {
         }
 
         let merged_function_calls_vec =
-            merged_function_calls.into_iter().map(|(_, call)| call).collect();
+            merged_function_calls.into_values().collect();
 
         Ok(WorkerFunctionsInRib {
             function_calls: merged_function_calls_vec,
