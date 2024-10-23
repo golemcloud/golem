@@ -258,7 +258,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         &mut self,
         worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
         text: String,
-        older_than: Option<golem::api1_1_0_rc1::oplog::OplogIndex>,
     ) -> anyhow::Result<Resource<SearchOplog>> {
         todo!()
     }
@@ -458,9 +457,8 @@ impl<Ctx: WorkerCtx> HostSearchOplog for &mut DurableWorkerCtx<Ctx> {
         &mut self,
         worker_id: golem::api1_1_0_rc1::oplog::WorkerId,
         text: String,
-        older_than: Option<golem::api1_1_0_rc1::oplog::OplogIndex>,
     ) -> anyhow::Result<Resource<SearchOplog>> {
-        HostSearchOplog::new(*self, worker_id, text, older_than).await
+        HostSearchOplog::new(*self, worker_id, text).await
     }
 
     async fn get_next(

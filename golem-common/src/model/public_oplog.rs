@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use crate::config::RetryConfig;
+use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
 use crate::model::regions::OplogRegion;
 use crate::model::{AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId};
 use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
+use golem_wasm_rpc::{Value, ValueAndType};
 use poem_openapi::types::{ParseFromParameter, ParseResult};
 use poem_openapi::{Object, Union};
 use serde::{Deserialize, Serialize};
@@ -326,6 +328,348 @@ pub enum PublicOplogEntry {
     Log(LogParameters),
     /// Marks the point where the worker was restarted from clean initial state
     Restart(TimestampParameter),
+}
+
+impl PublicOplogEntry {
+    pub fn matches(&self, query: &Query) -> bool {
+        fn matches_impl(entry: &PublicOplogEntry, query: &Query, field_stack: &[String]) -> bool {
+            match query {
+                Query::Or { queries } => queries
+                    .iter()
+                    .any(|query| matches_impl(entry, query, field_stack)),
+                Query::And { queries } => queries
+                    .iter()
+                    .all(|query| matches_impl(entry, query, field_stack)),
+                Query::Not { query } => !matches_impl(entry, query, field_stack),
+                Query::Regex { .. } => {
+                    entry.matches_leaf_query(field_stack, &query.clone().try_into().unwrap())
+                }
+                Query::Term { .. } => {
+                    entry.matches_leaf_query(field_stack, &query.clone().try_into().unwrap())
+                }
+                Query::Phrase { .. } => {
+                    entry.matches_leaf_query(field_stack, &query.clone().try_into().unwrap())
+                }
+                Query::Field { field, query } => {
+                    let mut new_stack: Vec<String> = field_stack.to_vec();
+                    let parts: Vec<String> = field.split(".").map(|s| s.to_string()).collect();
+                    new_stack.extend(parts);
+                    matches_impl(entry, query, &new_stack)
+                }
+            }
+        }
+
+        matches_impl(self, query, &[])
+    }
+
+    fn string_match(s: &str, path: &[String], query_path: &[String], query: &LeafQuery) -> bool {
+        let lowercase_path = path
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect::<Vec<String>>();
+        let lowercase_query_path = query_path
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect::<Vec<String>>();
+        if lowercase_path == lowercase_query_path || query_path.is_empty() {
+            query.matches(s)
+        } else {
+            false
+        }
+    }
+
+    fn matches_leaf_query(&self, query_path: &[String], query: &LeafQuery) -> bool {
+        match self {
+            PublicOplogEntry::Create(_params) => {
+                Self::string_match("create", &[], query_path, query)
+            }
+            PublicOplogEntry::ImportedFunctionInvoked(params) => {
+                Self::string_match("importedfunctioninvoked", &[], query_path, query)
+                    || Self::string_match("imported-function-invoked", &[], query_path, query)
+                    || Self::string_match("imported-function", &[], query_path, query)
+                    || Self::string_match(&params.function_name, &[], query_path, query)
+                    || Self::match_value(&params.request, &[], query_path, query)
+                    || Self::match_value(&params.response, &[], query_path, query)
+            }
+            PublicOplogEntry::ExportedFunctionInvoked(params) => {
+                Self::string_match("exportedfunctioninvoked", &[], query_path, query)
+                    || Self::string_match("exported-function-invoked", &[], query_path, query)
+                    || Self::string_match("exported-function", &[], query_path, query)
+                    || Self::string_match(&params.function_name, &[], query_path, query)
+                    || params
+                        .request
+                        .iter()
+                        .any(|v| Self::match_value(v, &[], query_path, query))
+                    || Self::string_match(&params.idempotency_key.value, &[], query_path, query)
+            }
+            PublicOplogEntry::ExportedFunctionCompleted(params) => {
+                Self::string_match("exportedfunctioncompleted", &[], query_path, query)
+                    || Self::string_match("exported-function-completed", &[], query_path, query)
+                    || Self::string_match("exported-function", &[], query_path, query)
+                    || Self::match_value(&params.response, &[], query_path, query)
+                // TODO: should we store function name and idempotency key in ExportedFunctionCompleted?
+            }
+            PublicOplogEntry::Suspend(_params) => {
+                Self::string_match("suspend", &[], query_path, query)
+            }
+            PublicOplogEntry::Error(params) => {
+                Self::string_match("error", &[], query_path, query)
+                    || Self::string_match(&params.error, &[], query_path, query)
+            }
+            PublicOplogEntry::NoOp(_params) => Self::string_match("noop", &[], query_path, query),
+            PublicOplogEntry::Jump(_params) => Self::string_match("jump", &[], query_path, query),
+            PublicOplogEntry::Interrupted(_params) => {
+                Self::string_match("interrupted", &[], query_path, query)
+            }
+            PublicOplogEntry::Exited(_params) => {
+                Self::string_match("exited", &[], query_path, query)
+            }
+            PublicOplogEntry::ChangeRetryPolicy(_params) => {
+                Self::string_match("changeretrypolicy", &[], query_path, query)
+                    || Self::string_match("change-retry-policy", &[], query_path, query)
+            }
+            PublicOplogEntry::BeginAtomicRegion(_params) => {
+                Self::string_match("beginatomicregion", &[], query_path, query)
+                    || Self::string_match("begin-atomic-region", &[], query_path, query)
+            }
+            PublicOplogEntry::EndAtomicRegion(_params) => {
+                Self::string_match("endatomicregion", &[], query_path, query)
+                    || Self::string_match("end-atomic-region", &[], query_path, query)
+            }
+            PublicOplogEntry::BeginRemoteWrite(_params) => {
+                Self::string_match("beginremotewrite", &[], query_path, query)
+                    || Self::string_match("begin-remote-write", &[], query_path, query)
+            }
+            PublicOplogEntry::EndRemoteWrite(_params) => {
+                Self::string_match("endremotewrite", &[], query_path, query)
+                    || Self::string_match("end-remote-write", &[], query_path, query)
+            }
+            PublicOplogEntry::PendingWorkerInvocation(params) => {
+                Self::string_match("pendingworkerinvocation", &[], query_path, query)
+                    || Self::string_match("pending-worker-invocation", &[], query_path, query)
+                    || match &params.invocation {
+                        PublicWorkerInvocation::ExportedFunction(params) => {
+                            Self::string_match(&params.full_function_name, &[], query_path, query)
+                                || Self::string_match(
+                                    &params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                                || params
+                                    .function_input
+                                    .as_ref()
+                                    .map(|params| {
+                                        params
+                                            .iter()
+                                            .any(|v| Self::match_value(v, &[], query_path, query))
+                                    })
+                                    .unwrap_or(false)
+                        }
+                        PublicWorkerInvocation::ManualUpdate(params) => Self::string_match(
+                            &params.target_version.to_string(),
+                            &[],
+                            query_path,
+                            query,
+                        ),
+                    }
+            }
+            PublicOplogEntry::PendingUpdate(params) => {
+                Self::string_match("pendingupdate", &[], query_path, query)
+                    || Self::string_match("pending-update", &[], query_path, query)
+                    || Self::string_match("update", &[], query_path, query)
+                    || Self::string_match(
+                        &params.target_version.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+            }
+            PublicOplogEntry::SuccessfulUpdate(params) => {
+                Self::string_match("successfulupdate", &[], query_path, query)
+                    || Self::string_match("successful-update", &[], query_path, query)
+                    || Self::string_match("update", &[], query_path, query)
+                    || Self::string_match(
+                        &params.target_version.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+            }
+            PublicOplogEntry::FailedUpdate(params) => {
+                Self::string_match("failedupdate", &[], query_path, query)
+                    || Self::string_match("failed-update", &[], query_path, query)
+                    || Self::string_match("update", &[], query_path, query)
+                    || Self::string_match(
+                        &params.target_version.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+                    || params
+                        .details
+                        .as_ref()
+                        .map(|details| Self::string_match(details, &[], query_path, query))
+                        .unwrap_or(false)
+            }
+            PublicOplogEntry::GrowMemory(_params) => {
+                Self::string_match("growmemory", &[], query_path, query)
+                    || Self::string_match("grow-memory", &[], query_path, query)
+            }
+            PublicOplogEntry::CreateResource(_params) => {
+                Self::string_match("createresource", &[], query_path, query)
+                    || Self::string_match("create-resource", &[], query_path, query)
+            }
+            PublicOplogEntry::DropResource(_params) => {
+                Self::string_match("dropresource", &[], query_path, query)
+                    || Self::string_match("drop-resource", &[], query_path, query)
+            }
+            PublicOplogEntry::DescribeResource(params) => {
+                Self::string_match("describeresource", &[], query_path, query)
+                    || Self::string_match("describe-resource", &[], query_path, query)
+                    || Self::string_match(&params.resource_name, &[], query_path, query)
+                    || params
+                        .resource_params
+                        .iter()
+                        .any(|v| Self::match_value(v, &[], query_path, query))
+            }
+            PublicOplogEntry::Log(params) => {
+                Self::string_match("log", &[], query_path, query)
+                    || Self::string_match(&params.context, &[], query_path, query)
+                    || Self::string_match(&params.message, &[], query_path, query)
+            }
+            PublicOplogEntry::Restart(_params) => {
+                Self::string_match("restart", &[], query_path, query)
+            }
+        }
+    }
+
+    fn match_value(
+        value: &ValueAndType,
+        path_stack: &[String],
+        query_path: &[String],
+        query: &LeafQuery,
+    ) -> bool {
+        match (&value.value, &value.typ) {
+            (Value::Bool(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::U8(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::U16(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::U32(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::U64(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::S8(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::S16(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::S32(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::S64(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::F32(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::F64(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::Char(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::String(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::List(elems), AnalysedType::List(list)) => elems.iter().any(|v| {
+                Self::match_value(
+                    &ValueAndType::new(v.clone(), (*list.inner).clone()),
+                    path_stack,
+                    query_path,
+                    query,
+                )
+            }),
+            (Value::Tuple(elems), AnalysedType::Tuple(tuple)) => {
+                if elems.len() != tuple.items.len() {
+                    false
+                } else {
+                    elems
+                        .iter()
+                        .zip(tuple.items.iter())
+                        .enumerate()
+                        .any(|(idx, (v, t))| {
+                            let mut new_path: Vec<String> = path_stack.to_vec();
+                            new_path.push(idx.to_string());
+                            Self::match_value(
+                                &ValueAndType::new(v.clone(), t.clone()),
+                                &new_path,
+                                query_path,
+                                query,
+                            )
+                        })
+                }
+            }
+            (Value::Record(fields), AnalysedType::Record(record)) => {
+                if fields.len() != record.fields.len() {
+                    false
+                } else {
+                    fields.iter().zip(record.fields.iter()).any(|(v, t)| {
+                        let mut new_path: Vec<String> = path_stack.to_vec();
+                        new_path.push(t.name.clone());
+                        Self::match_value(
+                            &ValueAndType::new(v.clone(), t.typ.clone()),
+                            &new_path,
+                            path_stack,
+                            query,
+                        )
+                    })
+                }
+            }
+            (
+                Value::Variant {
+                    case_value,
+                    case_idx,
+                },
+                AnalysedType::Variant(variant),
+            ) => {
+                let case = variant.cases.get(*case_idx as usize);
+                match (case_value, case) {
+                    (
+                        Some(value),
+                        Some(NameOptionTypePair {
+                            typ: Some(typ),
+                            name,
+                        }),
+                    ) => {
+                        let mut new_path: Vec<String> = path_stack.to_vec();
+                        new_path.push(name.clone());
+                        Self::match_value(
+                            &ValueAndType::new((**value).clone(), typ.clone()),
+                            &new_path,
+                            query_path,
+                            query,
+                        )
+                    }
+                    _ => false,
+                }
+            }
+            (Value::Enum(_), _) => todo!(),
+            (Value::Flags(_), _) => todo!(),
+            (Value::Option(_), _) => todo!(),
+            (Value::Result(_), _) => todo!(),
+            (Value::Handle { .. }, _) => todo!(),
+            _ => false,
+        }
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEntry {
