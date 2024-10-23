@@ -211,7 +211,6 @@ fn direct_circular() {
     )
     .unwrap();
 
-
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
 
@@ -266,9 +265,6 @@ fn direct_circular_readd() {
         UpdateCargoToml::NoUpdate,
     )
     .unwrap();
-
-    uncomment_imports(&dest_a.path().join("a.wit"));
-    uncomment_imports(&dest_b.path().join("b.wit"));
 
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
@@ -399,29 +395,24 @@ fn indirect_circular() {
     add_stub_dependency(
         &stub_a_dir.path().join("wit"),
         dest_c.path(),
-        false,
+        true,
         UpdateCargoToml::NoUpdate,
     )
     .unwrap();
     add_stub_dependency(
         &stub_b_dir.path().join("wit"),
         dest_a.path(),
-        false,
+        true,
         UpdateCargoToml::NoUpdate,
     )
     .unwrap();
     add_stub_dependency(
         &stub_c_dir.path().join("wit"),
         dest_b.path(),
-        false,
+        true,
         UpdateCargoToml::NoUpdate,
     )
     .unwrap();
-
-    // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
-    uncomment_imports(&dest_a.path().join("a.wit"));
-    uncomment_imports(&dest_b.path().join("b.wit"));
-    uncomment_imports(&dest_c.path().join("c.wit"));
 
     assert_valid_wit_root(dest_a.path());
     assert_valid_wit_root(dest_b.path());
@@ -597,13 +588,10 @@ fn self_circular() {
     add_stub_dependency(
         &stub_a_dir.path().join("wit"),
         dest_a.path(),
-        false,
+        true,
         UpdateCargoToml::NoUpdate,
     )
     .unwrap();
-
-    // TODO: these won't be necessary after implementing https://github.com/golemcloud/wasm-rpc/issues/66
-    uncomment_imports(&dest_a.path().join("a.wit"));
 
     assert_valid_wit_root(dest_a.path());
 
@@ -745,10 +733,4 @@ fn assert_has_wasm_rpc_wit_deps(wit_dir: &Path) {
         wit_dir,
         deps.as_slice(),
     );
-}
-
-fn uncomment_imports(path: &Path) {
-    let contents = std::fs::read_to_string(path).unwrap();
-    let uncommented = contents.replace("//!!", "");
-    std::fs::write(path, uncommented).unwrap();
 }
