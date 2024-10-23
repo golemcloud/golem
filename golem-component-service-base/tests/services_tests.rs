@@ -6,7 +6,7 @@ use golem_service_base::config::ComponentStoreLocalConfig;
 use golem_service_base::db;
 
 use golem_common::model::{ComponentId, ComponentType};
-use golem_component_service_base::model::Component;
+use golem_component_service_base::model::{Component, ComponentConstraint};
 use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
 use golem_component_service_base::service::component::{
     create_new_component, ComponentService, ComponentServiceDefault,
@@ -17,10 +17,12 @@ use golem_component_service_base::service::component_compilation::{
 use golem_service_base::model::ComponentName;
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;
+use golem_wasm_ast::analysis::analysed_type::str;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
+use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
 
 test_r::enable!();
 
@@ -364,6 +366,7 @@ async fn test_repo(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     test_repo_component_id_unique(component_repo.clone()).await;
     test_repo_component_name_unique_in_namespace(component_repo.clone()).await;
     test_repo_component_delete(component_repo.clone()).await;
+    test_repo_component_constraints(component_repo.clone()).await;
 }
 
 async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
@@ -492,4 +495,54 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo + Sync
     assert!(result3.is_ok());
     assert!(result4.is_ok());
     assert!(result4.unwrap().is_empty());
+}
+
+
+async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+    let namespace1 = Uuid::new_v4().to_string();
+
+    let component_name1 = ComponentName("shopping-cart1".to_string());
+
+    // It has a function golem:it/api.{initialize-cart}(user-id: string)
+    let data = get_component_data("shopping-cart");
+
+
+    let component1 = create_new_component(
+        &ComponentId::new_v4(),
+        &component_name1,
+        ComponentType::Durable,
+        &data,
+        &namespace1,
+    )
+        .unwrap();
+
+    // Adding constraints
+    let constraint_record = ComponentConstraint {
+        namespace: namespace1.clone(),
+        component_id: component1.clone().versioned_component_id.component_id,
+        constraints: WorkerFunctionsInRib {
+            function_calls: vec![WorkerFunctionInRibMetadata {
+                function_key: RegistryKey::FunctionNameWithInterface {
+                    interface_name: "golem:it/api".to_string(),
+                    function_name: "initialize-cart".to_string()
+                },
+                parameter_types: vec![str()],
+                return_types: vec![]
+            }]
+        }
+    };
+
+    let record = constraint_record.try_into().unwrap();
+
+    let result1 = component_repo
+        .create(&component1.clone().try_into().unwrap())
+        .await;
+
+    let result_constraint_creation =
+        component_repo.create_or_update_constraint(
+            &record
+        ).await;
+
+    assert!(result1.is_ok());
+    assert!(result_constraint_creation.is_ok());
 }
