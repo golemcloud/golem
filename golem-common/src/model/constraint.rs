@@ -1,10 +1,9 @@
-use std::collections::HashMap;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::component::FunctionUsage as FunctionUsageProto;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
 use serde::{Deserialize, Serialize};
-
+use std::collections::HashMap;
 
 // This is very similar to WorkerFunctionsInRib data structure, however
 // it adds the total number of usages for each function in that component
@@ -14,7 +13,7 @@ pub struct FunctionUsageCollection {
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::FunctionUsageCollection>
-for FunctionUsageCollection
+    for FunctionUsageCollection
 {
     type Error = String;
 
@@ -34,7 +33,7 @@ for FunctionUsageCollection
 }
 
 impl From<FunctionUsageCollection>
-for golem_api_grpc::proto::golem::component::FunctionUsageCollection
+    for golem_api_grpc::proto::golem::component::FunctionUsageCollection
 {
     fn from(value: FunctionUsageCollection) -> Self {
         golem_api_grpc::proto::golem::component::FunctionUsageCollection {
@@ -59,14 +58,18 @@ impl From<FunctionUsageCollection> for WorkerFunctionsInRib {
     }
 }
 
-
 impl FunctionUsageCollection {
-    pub fn from_worker_functions_in_rib(worker_functions_in_rib: &WorkerFunctionsInRib) -> FunctionUsageCollection {
-        let functions =
-            worker_functions_in_rib.function_calls.iter().map(|x| FunctionUsage::from_worker_function_in_rib(x)).collect::<Vec<_>>();
+    pub fn from_worker_functions_in_rib(
+        worker_functions_in_rib: &WorkerFunctionsInRib,
+    ) -> FunctionUsageCollection {
+        let functions = worker_functions_in_rib
+            .function_calls
+            .iter()
+            .map(|x| FunctionUsage::from_worker_function_in_rib(x))
+            .collect::<Vec<_>>();
 
         FunctionUsageCollection {
-            function_usages: functions
+            function_usages: functions,
         }
     }
     pub fn try_merge(

@@ -2,7 +2,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::constraint::{FunctionUsage, FunctionUsageCollection};
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
-use rib::{WorkerFunctionsInRib};
+use rib::WorkerFunctionsInRib;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 

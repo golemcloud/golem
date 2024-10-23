@@ -699,12 +699,12 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 
 mod constraint_data {
     use golem_common::model::constraint::FunctionUsage;
-    use golem_common::model::ComponentId;
-    use golem_component_service_base::model::{ComponentConstraints};
     use golem_common::model::constraint::FunctionUsageCollection;
+    use golem_common::model::ComponentId;
+    use golem_component_service_base::model::ComponentConstraints;
     use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
     use golem_wasm_ast::analysis::NameTypePair;
-    use rib::{RegistryKey};
+    use rib::RegistryKey;
 
     pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionUsageCollection {
         FunctionUsageCollection {
