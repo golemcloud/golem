@@ -16,12 +16,12 @@ use crate::api_definition::{golem_def, make_golem_file, make_shopping_cart_compo
 use crate::cli::{Cli, CliLive};
 use crate::Tracing;
 use assert2::assert;
+use golem_cli::model::component::ComponentView;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::sync::Arc;
 use test_r::core::{DynamicTestRegistration, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
-use golem_cli::model::component::ComponentView;
 
 inherit_test_dep!(EnvBasedTestDependencies);
 inherit_test_dep!(Tracing);
@@ -124,8 +124,13 @@ fn api_deployment_deploy(
 
     // We try an update the same component urn with a wrong wasm other than shopping-cart
     // to make it incompatible, and this shouldn't succeed!
-    let component_id_in_def =
-        definition.routes.first().unwrap().binding.component_id.component_id;
+    let component_id_in_def = definition
+        .routes
+        .first()
+        .unwrap()
+        .binding
+        .component_id
+        .component_id;
 
     let component_urn = format!("urn:component:{}", component_id_in_def);
     let env_service = deps.component_directory().join("environment-service.wasm");
@@ -137,7 +142,10 @@ fn api_deployment_deploy(
         &component_urn,
         env_service.to_str().unwrap(),
     ]);
-    assert!(result.is_err(), "api deployment disallows incompatible component updates");
+    assert!(
+        result.is_err(),
+        "api deployment disallows incompatible component updates"
+    );
     Ok(())
 }
 
