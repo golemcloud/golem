@@ -32,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/component/producer_field.proto",
                 "proto/golem/component/producers.proto",
                 "proto/golem/component/export.proto",
+                "proto/golem/component/function_usage.proto",
                 "proto/golem/component/export_function.proto",
                 "proto/golem/component/export_instance.proto",
                 "proto/golem/component/function_parameter.proto",

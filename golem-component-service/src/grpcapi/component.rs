@@ -34,17 +34,20 @@ use golem_api_grpc::proto::golem::component::v1::{
     GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
     UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
 };
-use golem_api_grpc::proto::golem::component::{Component, ComponentConstraints};
+use golem_api_grpc::proto::golem::component::{Component};
+use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
+use golem_api_grpc::proto::golem::component::FunctionUsage as FunctionUsageProto;
 use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use golem_common::grpc::proto_component_id_string;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
-use golem_component_service_base::model::ComponentConstraint;
+use golem_component_service_base::model::{ComponentConstraints, FunctionUsageCollection};
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::stream::ByteStream;
 use tonic::{Request, Response, Status, Streaming};
+use golem_common::model::constraint::FunctionUsage;
 
 fn bad_request_error(error: &str) -> ComponentError {
     ComponentError {
@@ -198,15 +201,15 @@ impl ComponentGrpcApi {
 
     async fn create_component_constraints(
         &self,
-        component_constraint: &ComponentConstraint<DefaultNamespace>,
-    ) -> Result<ComponentConstraints, ComponentError> {
+        component_constraint: &ComponentConstraints<DefaultNamespace>,
+    ) -> Result<ComponentConstraintsProto, ComponentError> {
         let response = self
             .component_service
             .create_or_update_constraint(component_constraint)
             .await
-            .map(|v| ComponentConstraints {
+            .map(|v| ComponentConstraintsProto {
                 component_id: Some(v.component_id.into()),
-                constraints: Some(WorkerFunctionsInRibProto::from(v.constraints)),
+                constraints: v.constraints.function_usages.iter().map(|x| FunctionUsageProto::from(x.clone())).collect()
             })?;
 
         Ok(response)
@@ -500,36 +503,31 @@ impl ComponentService for ComponentGrpcApi {
                         }))
                     }
                 };
-
                 let constraints =
-                    if let Some(worker_functions_in_rib) = proto_constraints.constraints {
-                        let result = rib::WorkerFunctionsInRib::try_from(worker_functions_in_rib)
-                            .map_err(|err| bad_request_error(err.as_str()));
+                    proto_constraints.constraints.iter().map(|x| golem_common::model::constraint::FunctionUsage::try_from(x.clone())).collect::<Result<Vec<FunctionUsage>, _>>();
 
-                        match result {
+                let constraint_vec =
+                        match constraints {
                             Ok(worker_functions_in_rib) => worker_functions_in_rib,
                             Err(fail) => {
+                                let error = internal_error("Failed to create constraints");
+
                                 return Ok(Response::new(CreateComponentConstraintsResponse {
                                     result: Some(record.fail(
                                         create_component_constraints_response::Result::Error(
-                                            fail.clone(),
+                                            error.clone(),
                                         ),
-                                        &ComponentTraceErrorKind(&fail),
+                                        &ComponentTraceErrorKind(&error),
                                     )),
                                 }))
                             }
-                        }
-                    } else {
-                        let error = internal_error("Failed to create constraints");
-                        return Ok(Response::new(CreateComponentConstraintsResponse {
-                            result: Some(record.fail(
-                                create_component_constraints_response::Result::Error(error.clone()),
-                                &ComponentTraceErrorKind(&error),
-                            )),
-                        }));
-                    };
+                        };
 
-                let component_constraint = ComponentConstraint {
+                let constraints = FunctionUsageCollection {
+                    function_usages: constraint_vec
+                };
+
+                let component_constraint = ComponentConstraints {
                     namespace: DefaultNamespace::default(),
                     component_id,
                     constraints,

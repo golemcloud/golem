@@ -699,7 +699,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 
 mod constraint_data {
     use golem_common::model::ComponentId;
-    use golem_component_service_base::model::ComponentConstraint;
+    use golem_component_service_base::model::ComponentConstraints;
     use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
     use golem_wasm_ast::analysis::NameTypePair;
     use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
@@ -783,8 +783,8 @@ mod constraint_data {
     pub(crate) fn get_shopping_cart_component_constraint1<Namespace: Clone>(
         namespace: &Namespace,
         component_id: &ComponentId,
-    ) -> ComponentConstraint<Namespace> {
-        ComponentConstraint {
+    ) -> ComponentConstraints<Namespace> {
+        ComponentConstraints {
             namespace: namespace.clone(),
             component_id: component_id.clone(),
             constraints: get_shopping_cart_worker_functions_constraint1(),
@@ -794,8 +794,8 @@ mod constraint_data {
     pub(crate) fn get_shopping_cart_component_constraint2<Namespace: Clone>(
         namespace: &Namespace,
         component_id: &ComponentId,
-    ) -> ComponentConstraint<Namespace> {
-        ComponentConstraint {
+    ) -> ComponentConstraints<Namespace> {
+        ComponentConstraints {
             namespace: namespace.clone(),
             component_id: component_id.clone(),
             constraints: get_shopping_cart_worker_functions_constraint2(),
@@ -805,8 +805,8 @@ mod constraint_data {
     pub(crate) fn get_random_constraint<Namespace: Clone>(
         namespace: &Namespace,
         component_id: &ComponentId,
-    ) -> ComponentConstraint<Namespace> {
-        ComponentConstraint {
+    ) -> ComponentConstraints<Namespace> {
+        ComponentConstraints {
             namespace: namespace.clone(),
             component_id: component_id.clone(),
             constraints: get_random_worker_functions_constraint(),
@@ -816,8 +816,8 @@ mod constraint_data {
     pub(crate) fn get_incompatible_constraint<Namespace: Clone>(
         namespace: &Namespace,
         component_id: &ComponentId,
-    ) -> ComponentConstraint<Namespace> {
-        ComponentConstraint {
+    ) -> ComponentConstraints<Namespace> {
+        ComponentConstraints {
             namespace: namespace.clone(),
             component_id: component_id.clone(),
             constraints: get_shopping_cart_worker_functions_constraint_incompatible(),

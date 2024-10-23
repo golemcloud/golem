@@ -319,6 +319,7 @@ mod test {
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
+    use golem_common::model::constraint::FunctionUsage;
 
     struct SqliteDb<'c> {
         db_path: String,
@@ -368,7 +369,7 @@ mod test {
             _component_id: &ComponentId,
             _constraints: rib::WorkerFunctionsInRib,
             _auth_ctx: &EmptyAuthCtx,
-        ) -> ComponentResult<rib::WorkerFunctionsInRib> {
+        ) -> ComponentResult<Vec<FunctionUsage>> {
             unimplemented!()
         }
     }

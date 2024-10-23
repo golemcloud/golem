@@ -9,7 +9,7 @@ use golem_api_grpc::proto::golem::component::v1::{
     GetComponentMetadataResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
-use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
+use golem_api_grpc::proto::golem::component::FunctionUsage as FunctionUsageProto;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::model::ComponentId;
@@ -19,6 +19,7 @@ use http::Uri;
 use rib::WorkerFunctionsInRib;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use golem_common::model::constraint::FunctionUsage;
 
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
@@ -42,7 +43,7 @@ pub trait ComponentService<AuthCtx> {
         component_id: &ComponentId,
         constraints: WorkerFunctionsInRib,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<WorkerFunctionsInRib>;
+    ) -> ComponentResult<Vec<FunctionUsage>>;
 }
 
 #[derive(Clone)]
@@ -102,7 +103,7 @@ impl RemoteComponentService {
 
     fn process_create_component_metadata_response(
         response: CreateComponentConstraintsResponse,
-    ) -> Result<rib::WorkerFunctionsInRib, ComponentServiceError> {
+    ) -> Result<Vec<FunctionUsage>, ComponentServiceError> {
         match response.result {
             None => Err(ComponentServiceError::Internal(
                 "Failed to create component constraints. Empty results".to_string(),
@@ -110,24 +111,14 @@ impl RemoteComponentService {
             Some(create_component_constraints_response::Result::Success(response)) => {
                 match response.components {
                     Some(constraints) => {
-                        let constraints_optional = constraints.constraints;
-
-                        if let Some(constraints) = constraints_optional {
-                            let worker_invoke_calls_in_rib = rib::WorkerFunctionsInRib::try_from(
-                                constraints,
-                            )
-                            .map_err(|err| {
-                                ComponentServiceError::Internal(format!(
+                        let constraints  =
+                            constraints.constraints.iter().map(|x|
+                                FunctionUsage::try_from(x.clone())).collect::<Result<Vec<FunctionUsage>, _>>()
+                                .map_err(|err| ComponentServiceError::Internal(format!(
                                     "Response conversion error: {err}"
-                                ))
-                            })?;
+                                )))?;
 
-                            Ok(worker_invoke_calls_in_rib)
-                        } else {
-                            Err(ComponentServiceError::Internal(
-                                "Failed to create component constraints".to_string(),
-                            ))
-                        }
+                        Ok(constraints)
                     }
                     None => Err(ComponentServiceError::Internal(
                         "Empty component response".to_string(),
@@ -229,7 +220,11 @@ where
         component_id: &ComponentId,
         constraints: WorkerFunctionsInRib,
         metadata: &AuthCtx,
-    ) -> ComponentResult<WorkerFunctionsInRib> {
+    ) -> ComponentResult<Vec<FunctionUsage>> {
+
+        let function_usages =
+            constraints.function_calls.iter().map(|x| FunctionUsageProto::from(FunctionUsage::from_worker_function_in_rib(x))).collect::<Vec<_>>();
+
         let value = with_retries(
             "component",
             "create_component_constraints",
@@ -239,9 +234,9 @@ where
                 self.client.clone(),
                 component_id.clone(),
                 metadata.clone(),
-                constraints.clone(),
+                function_usages.clone(),
             ),
-            |(client, id, metadata, constraints)| {
+            |(client, id, metadata, function_usages)| {
                 Box::pin(async move {
                     let response = client
                         .call(move |client| {
@@ -253,9 +248,7 @@ where
                                             id.clone(),
                                         ),
                                     ),
-                                    constraints: Some(WorkerFunctionsInRibProto::from(
-                                        constraints.clone(),
-                                    )),
+                                    constraints: function_usages.clone(),
                                 }),
                             };
                             let request = with_metadata(request, metadata.clone());

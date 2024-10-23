@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{Component, ComponentConstraint};
+use crate::model::{Component, ComponentConstraints, FunctionUsageCollection};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
-use rib::WorkerFunctionsInRib;
 use sqlx::{Database, Pool, Row};
 use std::fmt::Display;
 use std::ops::Deref;
@@ -102,13 +101,13 @@ pub struct ComponentConstraintRecord {
     pub constraints: Vec<u8>,
 }
 
-impl<Namespace> TryFrom<ComponentConstraint<Namespace>> for ComponentConstraintRecord
+impl<Namespace> TryFrom<ComponentConstraints<Namespace>> for ComponentConstraintRecord
 where
     Namespace: Display,
 {
     type Error = String;
 
-    fn try_from(value: ComponentConstraint<Namespace>) -> Result<Self, Self::Error> {
+    fn try_from(value: ComponentConstraints<Namespace>) -> Result<Self, Self::Error> {
         let metadata = constraint_serde::serialize(&value.constraints)?;
         Ok(Self {
             namespace: value.namespace.to_string(),
@@ -118,17 +117,17 @@ where
     }
 }
 
-impl<Namespace> TryFrom<ComponentConstraintRecord> for ComponentConstraint<Namespace>
+impl<Namespace> TryFrom<ComponentConstraintRecord> for ComponentConstraints<Namespace>
 where
     Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
     <Namespace as TryFrom<String>>::Error: Display + Send + Sync + 'static,
 {
     type Error = String;
     fn try_from(value: ComponentConstraintRecord) -> Result<Self, Self::Error> {
-        let function_constraints: WorkerFunctionsInRib =
+        let function_constraints: FunctionUsageCollection =
             constraint_serde::deserialize(&value.constraints)?;
         let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
-        Ok(ComponentConstraint {
+        Ok(ComponentConstraints {
             namespace,
             component_id: ComponentId(value.component_id),
             constraints: function_constraints,
@@ -175,7 +174,7 @@ pub trait ComponentRepo {
     async fn get_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<WorkerFunctionsInRib>, RepoError>;
+    ) -> Result<Option<FunctionUsageCollection>, RepoError>;
 }
 
 pub struct DbComponentRepo<DB: Database> {
@@ -294,7 +293,7 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
     async fn get_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<WorkerFunctionsInRib>, RepoError> {
+    ) -> Result<Option<FunctionUsageCollection>, RepoError> {
         let result = self.repo.get_constraint(component_id).await;
 
         Self::logged("get_component_constraint", result)
@@ -675,7 +674,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
 
             // This shouldn't happen as it is validated in service layers.
             // However, repo gives us more transactional guarantee.
-            let merged_worker_calls = WorkerFunctionsInRib::try_merge(vec![
+            let merged_worker_calls = FunctionUsageCollection::try_merge(vec![
                 existing_worker_calls_used,
                 new_worker_calls_used,
             ])
@@ -725,7 +724,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
     async fn get_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<WorkerFunctionsInRib>, RepoError> {
+    ) -> Result<Option<FunctionUsageCollection>, RepoError> {
         let existing_record = sqlx::query_as::<_, ComponentConstraintRecord>(
             r#"
                 SELECT
@@ -784,29 +783,33 @@ pub mod record_metadata_serde {
 
 pub mod constraint_serde {
     use bytes::{BufMut, Bytes, BytesMut};
-    use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
+    use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
     use prost::Message;
-    use rib::WorkerFunctionsInRib;
+    use crate::model::FunctionUsageCollection;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
-    pub fn serialize(value: &WorkerFunctionsInRib) -> Result<Bytes, String> {
-        let proto_value: WorkerFunctionsInRibProto = WorkerFunctionsInRibProto::from(value.clone());
+    pub fn serialize(value: &FunctionUsageCollection) -> Result<Bytes, String> {
+        let proto_value: FunctionUsageCollectionProto =
+            FunctionUsageCollectionProto::from(value.clone());
+
         let mut bytes = BytesMut::new();
         bytes.put_u8(SERIALIZATION_VERSION_V1);
         bytes.extend_from_slice(&proto_value.encode_to_vec());
         Ok(bytes.freeze())
     }
 
-    pub fn deserialize(bytes: &[u8]) -> Result<WorkerFunctionsInRib, String> {
+    pub fn deserialize(bytes: &[u8]) -> Result<FunctionUsageCollection, String> {
         let (version, data) = bytes.split_at(1);
 
         match version[0] {
             SERIALIZATION_VERSION_V1 => {
-                let proto_value: WorkerFunctionsInRibProto = Message::decode(data)
+                let proto_value: FunctionUsageCollectionProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
-                let value = WorkerFunctionsInRib::try_from(proto_value)?;
+                let value =
+                    FunctionUsageCollection::try_from(proto_value.clone())?;
+
                 Ok(value)
             }
             _ => Err("Unsupported serialization version".to_string()),

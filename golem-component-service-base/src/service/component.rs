@@ -16,7 +16,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::TryFromIntError;
 use std::sync::Arc;
 
-use crate::model::{Component, ComponentConstraint};
+use crate::model::{Component, ComponentConstraints, FunctionUsageCollection};
 use crate::repo::component::{ComponentConstraintRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
@@ -30,7 +30,7 @@ use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue, WorkerFunctionsInRib};
+use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use tap::TapFallible;
 use tracing::{error, info};
 
@@ -205,13 +205,13 @@ pub trait ComponentService<Namespace> {
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint: &ComponentConstraint<Namespace>,
-    ) -> Result<ComponentConstraint<Namespace>, ComponentError>;
+        component_constraint: &ComponentConstraints<Namespace>,
+    ) -> Result<ComponentConstraints<Namespace>, ComponentError>;
 
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<WorkerFunctionsInRib>, ComponentError>;
+    ) -> Result<Option<FunctionUsageCollection>, ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
@@ -234,13 +234,13 @@ impl ComponentServiceDefault {
     }
 
     pub fn find_component_metadata_conflicts(
-        worker_functions_in_rib: &WorkerFunctionsInRib,
+        worker_function_usages: &FunctionUsageCollection,
         new_type_registry: &FunctionTypeRegistry,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
-        for existing_function_call in &worker_functions_in_rib.function_calls {
+        for existing_function_call in &worker_function_usages.function_usages {
             if let Some(new_registry_value) =
                 new_type_registry.lookup(&existing_function_call.function_key)
             {
@@ -718,8 +718,8 @@ where
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint: &ComponentConstraint<Namespace>,
-    ) -> Result<ComponentConstraint<Namespace>, ComponentError> {
+        component_constraint: &ComponentConstraints<Namespace>,
+    ) -> Result<ComponentConstraints<Namespace>, ComponentError> {
         info!(namespace = %component_constraint.namespace, "Create Component Constraint");
         let component_id = &component_constraint.component_id;
         let record = ComponentConstraintRecord::try_from(component_constraint.clone())
@@ -737,7 +737,7 @@ where
                 component_id
             )))?;
 
-        let component_constraints = ComponentConstraint {
+        let component_constraints = ComponentConstraints {
             namespace: component_constraint.namespace.clone(),
             component_id: component_id.clone(),
             constraints: result,
@@ -749,7 +749,7 @@ where
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
-    ) -> Result<Option<WorkerFunctionsInRib>, ComponentError> {
+    ) -> Result<Option<FunctionUsageCollection>, ComponentError> {
         let result = self.component_repo.get_constraint(component_id).await?;
         Ok(result)
     }

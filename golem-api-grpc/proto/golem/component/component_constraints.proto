@@ -3,9 +3,14 @@ syntax = "proto3";
 package golem.component;
 
 import "golem/component/component_id.proto";
-import "golem/rib/worker_invoke_calls_in_rib.proto";
+import "golem/component/function_usage.proto";
 
 message ComponentConstraints {
   ComponentId component_id = 1;
-  golem.rib.WorkerFunctionsInRib constraints = 2;
+  FunctionUsageCollection constraints = 2;
+}
+
+
+message FunctionUsageCollection {
+    repeated FunctionUsage constraints = 2;
 }

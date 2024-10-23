@@ -36,6 +36,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
+use golem_common::model::constraint::FunctionUsage;
 
 test_r::enable!();
 
@@ -194,10 +195,8 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
         _component_id: &ComponentId,
         _constraints: WorkerFunctionsInRib,
         _auth_ctx: &AuthCtx,
-    ) -> ComponentResult<WorkerFunctionsInRib> {
-        Ok(WorkerFunctionsInRib {
-            function_calls: vec![],
-        })
+    ) -> ComponentResult<Vec<FunctionUsage>> {
+        Ok(vec![])
     }
 }
 
