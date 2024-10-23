@@ -159,9 +159,3 @@ fn assert_not_importing(wasm_path: &Path, import_name: &str) {
         name != import_name
     });
 }
-
-fn uncomment_imports(path: &Path) {
-    let contents = std::fs::read_to_string(path).unwrap();
-    let uncommented = contents.replace("//!!", "");
-    std::fs::write(path, uncommented).unwrap();
-}
