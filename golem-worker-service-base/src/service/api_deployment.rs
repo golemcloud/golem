@@ -34,6 +34,7 @@ use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use crate::service::component::ComponentService;
 use chrono::Utc;
+use golem_common::model::constraint::FunctionUsageCollection;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
@@ -215,7 +216,7 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
 
     fn get_worker_functions_in_api_definitions<Namespace>(
         definitions: Vec<CompiledHttpApiDefinition>,
-    ) -> Result<HashMap<ComponentId, WorkerFunctionsInRib>, ApiDeploymentError<Namespace>> {
+    ) -> Result<HashMap<ComponentId, FunctionUsageCollection>, ApiDeploymentError<Namespace>> {
         let mut worker_functions_in_rib = HashMap::new();
 
         for definition in definitions {
@@ -236,12 +237,17 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
 
     fn merge_worker_functions_in_rib<Namespace>(
         worker_functions: HashMap<ComponentId, Vec<WorkerFunctionsInRib>>,
-    ) -> Result<HashMap<ComponentId, WorkerFunctionsInRib>, ApiDeploymentError<Namespace>> {
-        let mut merged_worker_functions: HashMap<ComponentId, WorkerFunctionsInRib> =
+    ) -> Result<HashMap<ComponentId, FunctionUsageCollection>, ApiDeploymentError<Namespace>> {
+        let mut merged_worker_functions: HashMap<ComponentId, FunctionUsageCollection> =
             HashMap::new();
 
         for (component_id, worker_calls_vec) in worker_functions {
-            let merged_calls = WorkerFunctionsInRib::try_merge(worker_calls_vec)
+            let function_usage_collection = worker_calls_vec
+                .iter()
+                .map(|x| FunctionUsageCollection::from_worker_functions_in_rib(x))
+                .collect::<Vec<_>>();
+
+            let merged_calls = FunctionUsageCollection::try_merge(function_usage_collection)
                 .map_err(|err| ApiDeploymentError::ApiDefinitionsConflict(err))?;
 
             merged_worker_functions.insert(component_id, merged_calls);

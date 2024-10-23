@@ -308,6 +308,7 @@ mod test {
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
     use golem_common::config::DbSqliteConfig;
+    use golem_common::model::constraint::{FunctionUsageCollection};
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
@@ -319,7 +320,6 @@ mod test {
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
-    use golem_common::model::constraint::FunctionUsage;
 
     struct SqliteDb<'c> {
         db_path: String,
@@ -369,7 +369,7 @@ mod test {
             _component_id: &ComponentId,
             _constraints: rib::WorkerFunctionsInRib,
             _auth_ctx: &EmptyAuthCtx,
-        ) -> ComponentResult<Vec<FunctionUsage>> {
+        ) -> ComponentResult<FunctionUsageCollection> {
             unimplemented!()
         }
     }

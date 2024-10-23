@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{Component, ComponentConstraints, FunctionUsageCollection};
+use crate::model::{Component, ComponentConstraints};
+use golem_common::model::constraint::FunctionUsageCollection;
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -782,10 +783,10 @@ pub mod record_metadata_serde {
 }
 
 pub mod constraint_serde {
+    use golem_common::model::constraint::FunctionUsageCollection;
     use bytes::{BufMut, Bytes, BytesMut};
     use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
     use prost::Message;
-    use crate::model::FunctionUsageCollection;
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
@@ -807,8 +808,7 @@ pub mod constraint_serde {
                 let proto_value: FunctionUsageCollectionProto = Message::decode(data)
                     .map_err(|e| format!("Failed to deserialize value: {e}"))?;
 
-                let value =
-                    FunctionUsageCollection::try_from(proto_value.clone())?;
+                let value = FunctionUsageCollection::try_from(proto_value.clone())?;
 
                 Ok(value)
             }

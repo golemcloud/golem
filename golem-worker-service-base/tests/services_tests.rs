@@ -29,6 +29,7 @@ use golem_worker_service_base::service::http::http_api_definition_validator::{
 };
 
 use chrono::Utc;
+use golem_common::model::constraint::{FunctionUsage, FunctionUsageCollection};
 use golem_wasm_ast::analysis::analysed_type::str;
 use rib::WorkerFunctionsInRib;
 use std::sync::Arc;
@@ -36,7 +37,6 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
-use golem_common::model::constraint::FunctionUsage;
 
 test_r::enable!();
 
@@ -195,7 +195,7 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
         _component_id: &ComponentId,
         _constraints: WorkerFunctionsInRib,
         _auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Vec<FunctionUsage>> {
+    ) -> ComponentResult<FunctionUsageCollection> {
         Ok(vec![])
     }
 }

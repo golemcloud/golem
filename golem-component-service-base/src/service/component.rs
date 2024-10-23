@@ -16,13 +16,14 @@ use std::fmt::{Debug, Display, Formatter};
 use std::num::TryFromIntError;
 use std::sync::Arc;
 
-use crate::model::{Component, ComponentConstraints, FunctionUsageCollection};
+use crate::model::{Component, ComponentConstraints};
 use crate::repo::component::{ComponentConstraintRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::component_metadata::ComponentProcessingError;
+use golem_common::model::constraint::FunctionUsageCollection;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};

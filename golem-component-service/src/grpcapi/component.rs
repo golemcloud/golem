@@ -34,14 +34,15 @@ use golem_api_grpc::proto::golem::component::v1::{
     GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
     UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
 };
-use golem_api_grpc::proto::golem::component::{Component};
+use golem_api_grpc::proto::golem::component::Component;
 use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
 use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
 use golem_common::grpc::proto_component_id_string;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
-use golem_component_service_base::model::{ComponentConstraints, FunctionUsageCollection};
+use golem_component_service_base::model::{ComponentConstraints};
+use golem_common::model::constraint::FunctionUsageCollection;
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::stream::ByteStream;
@@ -207,7 +208,7 @@ impl ComponentGrpcApi {
             .await
             .map(|v| ComponentConstraintsProto {
                 component_id: Some(v.component_id.into()),
-                constraints: Some(FunctionUsageCollectionProto::from(v.constraints))
+                constraints: Some(FunctionUsageCollectionProto::from(v.constraints)),
             })?;
 
         Ok(response)

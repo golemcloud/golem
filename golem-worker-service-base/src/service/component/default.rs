@@ -9,17 +9,16 @@ use golem_api_grpc::proto::golem::component::v1::{
     GetComponentMetadataResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
-use golem_api_grpc::proto::golem::component::FunctionUsage as FunctionUsageProto;
+use golem_api_grpc::proto::golem::component::FunctionUsageCollection as FunctionUsageCollectionProto;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
+use golem_common::model::constraint::FunctionUsageCollection;
 use golem_common::model::ComponentId;
 use golem_common::retries::with_retries;
 use golem_service_base::model::Component;
 use http::Uri;
-use rib::WorkerFunctionsInRib;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use golem_common::model::constraint::FunctionUsage;
 
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
@@ -41,9 +40,9 @@ pub trait ComponentService<AuthCtx> {
     async fn create_or_update_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: WorkerFunctionsInRib,
+        constraints: FunctionUsageCollection,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Vec<FunctionUsage>>;
+    ) -> ComponentResult<FunctionUsageCollection>;
 }
 
 #[derive(Clone)]
@@ -103,7 +102,7 @@ impl RemoteComponentService {
 
     fn process_create_component_metadata_response(
         response: CreateComponentConstraintsResponse,
-    ) -> Result<Vec<FunctionUsage>, ComponentServiceError> {
+    ) -> Result<FunctionUsageCollection, ComponentServiceError> {
         match response.result {
             None => Err(ComponentServiceError::Internal(
                 "Failed to create component constraints. Empty results".to_string(),
@@ -111,14 +110,20 @@ impl RemoteComponentService {
             Some(create_component_constraints_response::Result::Success(response)) => {
                 match response.components {
                     Some(constraints) => {
-                        let constraints  =
-                            constraints.constraints.iter().map(|x|
-                                FunctionUsage::try_from(x.clone())).collect::<Result<Vec<FunctionUsage>, _>>()
-                                .map_err(|err| ComponentServiceError::Internal(format!(
-                                    "Response conversion error: {err}"
-                                )))?;
+                        if let Some(constraints) = constraints.constraints {
+                            let constraints = FunctionUsageCollection::try_from(constraints)
+                                .map_err(|err| {
+                                    ComponentServiceError::Internal(format!(
+                                        "Response conversion error: {err}"
+                                    ))
+                                })?;
 
-                        Ok(constraints)
+                            Ok(constraints)
+                        } else {
+                            Err(ComponentServiceError::Internal(
+                                "Failed component constraint creation".to_string(),
+                            ))
+                        }
                     }
                     None => Err(ComponentServiceError::Internal(
                         "Empty component response".to_string(),
@@ -218,12 +223,10 @@ where
     async fn create_or_update_constraints(
         &self,
         component_id: &ComponentId,
-        constraints: WorkerFunctionsInRib,
+        constraints: FunctionUsageCollection,
         metadata: &AuthCtx,
-    ) -> ComponentResult<Vec<FunctionUsage>> {
-
-        let function_usages =
-            constraints.function_calls.iter().map(|x| FunctionUsageProto::from(FunctionUsage::from_worker_function_in_rib(x))).collect::<Vec<_>>();
+    ) -> ComponentResult<FunctionUsageCollection> {
+        let function_usages = FunctionUsageCollectionProto::from(constraints);
 
         let value = with_retries(
             "component",
@@ -248,7 +251,7 @@ where
                                             id.clone(),
                                         ),
                                     ),
-                                    constraints: function_usages.clone(),
+                                    constraints: Some(function_usages.clone()),
                                 }),
                             };
                             let request = with_metadata(request, metadata.clone());
