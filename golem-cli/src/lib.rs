@@ -38,6 +38,7 @@ pub mod connect_output;
 pub mod diagnose;
 pub mod examples;
 pub mod factory;
+pub mod file_system;
 pub mod init;
 pub mod model;
 pub mod oss;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::durable_host::DurableWorkerCtx;
@@ -88,6 +88,7 @@ pub fn create_context(
     args: &[impl AsRef<str>],
     env: &[(impl AsRef<str>, impl AsRef<str>)],
     root_dir: PathBuf,
+    read_only_dir: Option<&Path>,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
     stderr: impl StdoutStream + Sized + 'static,
@@ -95,18 +96,25 @@ pub fn create_context(
     suspend_threshold: Duration,
 ) -> Result<(WasiCtx, ResourceTable), anyhow::Error> {
     let table = ResourceTable::new();
-    let wasi = WasiCtxBuilder::new()
+    let mut wasi_builder = WasiCtxBuilder::new();
+    wasi_builder
         .args(args)
         .envs(env)
         .stdin(stdin)
         .stdout(stdout)
         .stderr(stderr)
         .monotonic_clock(helpers::clocks::monotonic_clock())
-        .preopened_dir(root_dir.clone(), "/", DirPerms::all(), FilePerms::all())?
-        .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(&root_dir, "/", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(&root_dir, ".", DirPerms::all(), FilePerms::all())?
         .set_suspend(suspend_threshold, suspend_signal)
-        .allow_ip_name_lookup(true)
-        .build();
+        .allow_ip_name_lookup(true);
+
+    if let Some(read_only_dir) = read_only_dir {
+        wasi_builder.preopened_dir(&read_only_dir, "/", DirPerms::all(), FilePerms::READ)?;
+        wasi_builder.preopened_dir(&read_only_dir, ".", DirPerms::all(), FilePerms::READ)?;
+    }
+
+    let wasi = wasi_builder.build();
 
     Ok((wasi, table))
 }

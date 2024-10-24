@@ -1,12 +1,18 @@
+use crate::api::WorkerBindingType;
 use crate::api_definition::http::{CompiledHttpApiDefinition, VarInfo};
+use crate::getter::GetterExt;
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
+use crate::path::Path;
 use crate::worker_service_rib_interpreter::EvaluationError;
 use crate::worker_service_rib_interpreter::WorkerServiceRibInterpreter;
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
 use golem_service_base::model::VersionedComponentId;
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions as _;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 use rib::RibInterpreterResult;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -48,6 +54,7 @@ pub struct ResolvedWorkerBindingFromRequest {
     pub worker_detail: WorkerDetail,
     pub request_details: RequestDetails,
     pub compiled_response_mapping: ResponseMappingCompiled,
+    pub binding_type: WorkerBindingType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +94,7 @@ impl ResolvedWorkerBindingFromRequest {
         RibInterpreterResult: ToResponse<R>,
         EvaluationError: ToResponse<R>,
         RibInputTypeMismatch: ToResponse<R>,
+        FileServerResult: ToResponse<R>,
     {
         let request_rib_input = self
             .request_details
@@ -110,12 +118,89 @@ impl ResolvedWorkerBindingFromRequest {
                     .await;
 
                 match result {
-                    Ok(worker_response) => worker_response.to_response(&self.request_details),
+                    Ok(worker_response) => {
+                        if self.binding_type == WorkerBindingType::FileServer {
+                            Self::get_file_server_result(worker_response)
+                                .get_file()
+                                .await
+                                .to_response(&self.request_details)
+                        } else {
+                            worker_response.to_response(&self.request_details)
+                        }
+                    }
                     Err(err) => err.to_response(&self.request_details),
                 }
             }
             (Err(err), _) => err.to_response(&self.request_details),
             (_, Err(err)) => err.to_response(&self.request_details),
+        }
+    }
+
+    fn get_file_server_result(worker_response: RibInterpreterResult) -> FileServerResult<String> {
+        Self::get_file_server_result_internal(worker_response)
+            .unwrap_or_else(FileServerResult::SimpleErr)
+    }
+
+    fn get_file_server_result_internal(worker_response: RibInterpreterResult) -> Result<FileServerResult<String>, String> {
+        let RibInterpreterResult::Val(value) = worker_response else {
+            return Err(format!("Response value expected"));
+        };
+
+        let (path_value, response_details) = match value {
+            // Allow evaluating to a single string as a shortcut...
+            path @ TypeAnnotatedValue::Str(_) => (path, None),
+            // ...Or a Result<String, String>
+            TypeAnnotatedValue::Result(res) =>
+                match res.result_value.ok_or("result not set")? {
+                    ResultValue::OkValue(ok) => (ok.type_annotated_value.ok_or("ok unset")?, None),
+                    ResultValue::ErrorValue(err) => {
+                        let err = err.type_annotated_value.ok_or("err unset")?;
+                        let TypeAnnotatedValue::Str(err) = err else { Err("'file-server' result error must be a string")? };
+                        return Err(err);
+                    }
+                },
+            // Otherwise use 'file-path'
+            rec @ TypeAnnotatedValue::Record(_) => {
+                let Some(path) = rec.get_optional(&Path::from_key("file-path")) else {
+                    // If there is no 'file-path', assume this is a standard error response
+                    return Ok(FileServerResult::Err(rec));
+                };
+
+                (path, Some(rec))
+            }
+            _ => Err("Response value expected")?,
+        };
+
+        let TypeAnnotatedValue::Str(content) = path_value else {
+            return Err(format!("'file-server' must provide a string path, but evaluated to '{}'", path_value.to_json_value()));
+        };
+
+        Ok(FileServerResult::Ok { content, response_details })
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum FileServerResult<Content = Vec<u8>> {
+    Ok { content: Content, response_details: Option<TypeAnnotatedValue> },
+    SimpleErr(String),
+    // TypedRecord of status, etc.
+    Err(TypeAnnotatedValue),
+}
+
+impl FileServerResult<String> {
+    pub async fn get_file(self) -> FileServerResult<Vec<u8>> {
+        match self {
+            Self::Ok { content: _path, response_details } => {
+                // TODO actually get file
+                let content = std::io::Result::Ok(vec![0u8; 0]);
+
+                match content {
+                    Ok(content) => FileServerResult::Ok { content, response_details },
+                    Err(_) => FileServerResult::SimpleErr(format!("File could not be read")),
+                }
+            },
+            Self::SimpleErr(err) => FileServerResult::SimpleErr(err),
+            Self::Err(type_annotated_value) => FileServerResult::Err(type_annotated_value),
         }
     }
 }
@@ -216,8 +301,68 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
             worker_detail,
             request_details: http_request_details,
             compiled_response_mapping: binding.response_compiled.clone(),
+            binding_type: binding.binding_type.clone(),
         };
 
         Ok(resolved_binding)
+    }
+}
+
+#[cfg(test)]
+mod file_server_result_test {
+    use super::*;
+
+    async fn into_result(interpreter: &mut rib::Interpreter, s: &str) -> FileServerResult<String> {
+        let value = interpreter.run(
+            rib::compile(
+                &rib::from_string(
+                    s.to_string()
+                ).unwrap(),
+            &vec![]).unwrap().byte_code
+        ).await.unwrap();
+        ResolvedWorkerBindingFromRequest::get_file_server_result(value)
+    }
+
+    #[tokio::test]
+    async fn file_server_result() {
+        let mut interpreter = rib::Interpreter::pure(Default::default());
+
+        let res0 = into_result(&mut interpreter, r#"
+            "./my_file.txt"
+        "#).await;
+        assert_eq!(res0, FileServerResult::Ok { content: format!("./my_file.txt"), response_details: None });
+
+        let res1 = into_result(&mut interpreter, r#"
+            ok("./my_file.txt")
+        "#).await;
+        assert_eq!(res1, FileServerResult::Ok { content: format!("./my_file.txt"), response_details: None });
+
+        let res2 = into_result(&mut interpreter, r#"
+            err("no file for you")
+        "#).await;
+        assert_eq!(res2, FileServerResult::SimpleErr("no file for you".to_string()));
+
+        let res3 = into_result(&mut interpreter, r#"
+            {
+                file-path: "./my_file.txt",
+                status: 418u32
+            }
+        "#).await;
+
+        let FileServerResult::Ok { content, response_details } = res3 else {
+            unreachable!("Expected Ok")
+        };
+        assert_eq!(&content, "./my_file.txt");
+        assert!(response_details.is_some());
+        
+        let res4 = into_result(&mut interpreter, r#"
+            {
+                status: 418u32
+            }
+        "#).await;
+
+        let FileServerResult::Err(_response_details) = res4 else {
+            unreachable!("Expected Err")
+        };
     }
 }

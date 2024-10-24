@@ -1,6 +1,6 @@
 #!/bin/bash
 
-rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service" 
+rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-initial" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service" 
 "option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
 "update-test-v1" "update-test-v2" "update-test-v3" "update-test-v4" "rust-echo" "golem-rust-tests" "durability-overhead" "logging")
 zig_test_components=("zig-3")

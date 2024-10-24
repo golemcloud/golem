@@ -1,0 +1,18 @@
+apiVersion: core.oam.dev/v1alpha1
+kind: ApplicationConfiguration
+metadata:
+  name: test-app
+spec:
+  components:
+  - name: instance0
+    type: wasm
+    properties:
+      files:
+      - sourcePath: "tests/resources/subfolder"
+        targetPath: "/static/"
+        permission: readOnly
+      - sourcePath: "tests/resources/blank.txt"
+        targetPath: "/my_data.txt"
+        permission: readWrite
+      - sourcePath: "https://raw.githubusercontent.com/golemcloud/golem/refs/heads/main/golem-logo-black.jpg"
+        targetPath: "/static/logo.jpg"

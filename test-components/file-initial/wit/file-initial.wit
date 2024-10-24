@@ -1,0 +1,5 @@
+package golem:it;
+
+world file-initial {
+  export run: func() -> tuple<result<string, string>, result<string, string>, string>;
+}

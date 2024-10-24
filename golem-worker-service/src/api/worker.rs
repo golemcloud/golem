@@ -645,6 +645,69 @@ impl WorkerApi {
 
         record.result(response)
     }
+
+    /// Lists the contents of the worker's root directory
+    #[oai(
+        path = "/:component_id/workers/:worker_name/files",
+        method = "get",
+        operation_id = "get_files"
+    )]
+    async fn get_files(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+    ) -> Result<Json<GetFilesResponse>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!("get_files", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_files(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
+    }
+
+    /// Lists the contents of the worker's root directory
+    #[oai(
+        path = "/:component_id/workers/:worker_name/files/:path",
+        method = "get",
+        operation_id = "get_file"
+    )]
+    async fn get_file(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        path: Path<String>,
+    ) -> Result<GetFileApiResponse> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!("get_file", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_file(
+                &worker_id,
+                &path.0,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into());
+
+        record.result(response)
+            .map(GetFileResponseContent::from)
+            .map(GetFileApiResponse::Ok)
+    }
 }
 
 fn make_worker_id(

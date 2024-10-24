@@ -13,10 +13,12 @@ golem-wasm-ast = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+async_zip = { workspace = true, features = ["tokio", "deflate"] }
 bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
+futures-util = { workspace = true }
 http_02 = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }

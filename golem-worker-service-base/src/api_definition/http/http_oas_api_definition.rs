@@ -75,10 +75,12 @@ impl ParseFromJSON for JsonOpenApiDefinition {
 }
 
 mod internal {
+    use crate::api::WorkerBindingType;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
+    use poem_openapi::types::ParseFromJSON as _;
     use rib::Expr;
     use serde_json::Value;
 
@@ -158,6 +160,7 @@ mod internal {
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
+            binding_type: get_binding_type(worker_bridge_info)?,
         };
 
         Ok(Route {
@@ -236,11 +239,25 @@ mod internal {
     pub(crate) fn get_path_pattern(path: &str) -> Result<AllPathPatterns, String> {
         AllPathPatterns::parse(path).map_err(|err| err.to_string())
     }
+
+    pub(crate) fn get_binding_type(worker_bridge_info: &Value) -> Result<WorkerBindingType, String> {
+        let binding_type = worker_bridge_info
+            .get("binding-type")
+            .cloned()
+            .map(Option::Some)
+            .map(WorkerBindingType::parse_from_json)
+            .transpose()
+            .map_err(poem_openapi::types::ParseError::into_message)?
+            .unwrap_or_default();
+
+        Ok(binding_type)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::WorkerBindingType;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
@@ -306,7 +323,8 @@ mod tests {
                         ]
                         .into_iter()
                         .collect()
-                    ))
+                    )),
+                    binding_type: WorkerBindingType::default(),
                 }
             })
         );

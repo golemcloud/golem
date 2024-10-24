@@ -15,7 +15,7 @@
 use crate::components::component_service::{AddComponentError, ComponentService};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::{file_system::PackagedFileSet, model::{ComponentId, ComponentType}};
 use std::path::{Path, PathBuf};
 use tonic::transport::Channel;
 use tracing::{debug, info};
@@ -44,8 +44,9 @@ impl ComponentService for FileSystemComponentService {
         &self,
         local_path: &Path,
         component_type: ComponentType,
+        initial_files: PackagedFileSet,
     ) -> ComponentId {
-        self.add_component(local_path, component_type)
+        self.add_component(local_path, component_type, initial_files)
             .await
             .expect("Failed to add component")
     }
@@ -54,6 +55,7 @@ impl ComponentService for FileSystemComponentService {
         &self,
         local_path: &Path,
         component_type: ComponentType,
+        initial_files: PackagedFileSet,
     ) -> Result<ComponentId, AddComponentError> {
         let uuid = Uuid::new_v4();
 
@@ -87,6 +89,19 @@ impl ComponentService for FileSystemComponentService {
             ))
         });
 
+        let (files_ro, files_rw) = initial_files.split_vec();
+        for (files, permission_postfix) in [
+            (files_ro, "ro"),
+            (files_rw, "rw"),
+        ] {
+            if let Some(files) = files {
+                std::fs::write(
+                    target_dir.join(format!("{uuid}-0{postfix}-{permission_postfix}.zip")),
+                    files
+                ).expect("Failed to copy initial files to the local component store");
+            }
+        }
+
         Ok(ComponentId(uuid))
     }
 
@@ -95,8 +110,9 @@ impl ComponentService for FileSystemComponentService {
         local_path: &Path,
         _name: &str,
         component_type: ComponentType,
+        initial_files: PackagedFileSet,
     ) -> Result<ComponentId, AddComponentError> {
-        self.add_component(local_path, component_type).await
+        self.add_component(local_path, component_type, initial_files).await
     }
 
     async fn update_component(
@@ -104,6 +120,7 @@ impl ComponentService for FileSystemComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
+        initial_files: PackagedFileSet,
     ) -> u64 {
         let target_dir = &self.root;
 
@@ -127,6 +144,21 @@ impl ComponentService for FileSystemComponentService {
 
         let _ = std::fs::copy(local_path, target)
             .expect("Failed to copy WASM to the local component store");
+
+        let (files_ro, files_rw) = initial_files.split_vec();
+        for (files, permission_postfix) in [
+            (files_ro, "ro"),
+            (files_rw, "rw"),
+        ] {
+            if let Some(files) = files {
+                let path = target_dir.join(format!("{component_id}-{new_version}{postfix}-{permission_postfix}.zip"));
+                debug!("Storing packaged initial files at {}", path.canonicalize().unwrap().display());
+                std::fs::write(
+                    path,
+                    files
+                ).expect("Failed to copy initial files to the local component store");
+            }
+        }
 
         new_version
     }

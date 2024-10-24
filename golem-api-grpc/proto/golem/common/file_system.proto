@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package golem.common;
+
+enum FileSystemNodeType {
+  FILE = 0;
+  DIRECTORY = 1;
+}
+
+enum FileSystemPermission {
+  READ_ONLY = 0;
+  READ_WRITE = 1;
+}
+
+message FileSystemNode {
+  string name = 1;
+  FileSystemNodeType node_type = 2;
+  FileSystemPermission permissions = 3;
+  // Unix timestamp
+  int64 last_modified = 4;
+  // Size in bytes, file nodes only
+  optional uint64 size = 5;
+}

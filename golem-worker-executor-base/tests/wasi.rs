@@ -12,15 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use crate::common::{start, TestContext};
 use assert2::{assert, check};
-use golem_common::model::{IdempotencyKey, WorkerStatus};
+use async_zip::tokio::write::ZipFileWriter;
+use async_zip::{Compression, ZipEntryBuilder};
+use futures::AsyncWriteExt as _;
+use golem_common::file_system::{InitialFile, InitialFileSet, PackagedFileSet};
+use golem_common::model::{FileSystemPermission, IdempotencyKey, WorkerStatus};
 use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe,
 };
@@ -28,8 +34,11 @@ use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
 use tokio::spawn;
 use tokio::time::Instant;
+use tokio_stream::StreamExt as _;
 use tonic::transport::Body;
 use tracing::info;
+use url::Url;
+use walkdir::WalkDir;
 use warp::Filter;
 
 #[tokio::test]
@@ -166,6 +175,211 @@ async fn file_write_read_delete() {
                 Value::Option(None)
             ])]
     );
+}
+
+
+#[tokio::test]
+#[tracing::instrument]
+async fn file_initial() {
+    let context = TestContext::new();
+    let executor = start(&context).await.unwrap();
+
+    let files = InitialFileSet {
+        files: vec![
+            InitialFile {
+                source_path: "../test-components/file-initial/resources/readonly/".into(),
+                target_path: "./static/".into(),
+                permission: FileSystemPermission::ReadOnly,
+            },
+            InitialFile {
+                source_path: "../test-components/file-initial/resources/readwrite/".into(),
+                target_path: "./".into(),
+                permission: FileSystemPermission::ReadWrite,
+            },
+            InitialFile {
+                source_path: "https://raw.githubusercontent.com/golemcloud/golem/refs/heads/main/golem-logo-black.jpg".into(),
+                target_path: "./static/logo.jpg".into(),
+                permission: FileSystemPermission::ReadOnly,
+            },
+        ]
+    };
+    let files = package_initial_files(files).await.unwrap();
+
+    let component_id = executor.store_component_with_files("file-initial", files).await;
+    let mut env = HashMap::new();
+    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let worker_id = executor
+        .start_worker_with(&component_id, "file-initial-1", vec![], env)
+        .await;
+
+    let mut result = executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    let view = result.pop().unwrap();
+
+    tracing::debug!("{:?}", view);
+
+    check!(
+        result
+            == vec![Value::Tuple(vec![
+                Value::Result(Ok(Some(Box::new(Value::String("".to_string()))))),
+                Value::Result(Err(Some(Box::new(Value::String("".to_string()))))),
+            ])]
+    );
+
+    // Copied from golem-cli for now
+    pub async fn package_initial_files(initial_file_set: InitialFileSet) -> Result<PackagedFileSet, String> {
+        let mut targets = HashSet::new();
+    
+        let mut files_ro = vec![];
+        let mut files_ro_writer = ZipFileWriter::with_tokio(&mut files_ro);
+        let mut files_rw = vec![];
+        let mut files_rw_writer = ZipFileWriter::with_tokio(&mut files_rw);
+        
+        let mut client = None;
+    
+        for file in initial_file_set.files {
+            let InitialFile {
+                source_path,
+                target_path,
+                permission,
+            } = file;
+    
+            // async_zip needs a relative path
+            let target_path = match target_path.strip_prefix(Path::new("/")) {
+                Ok(target_path) => target_path.to_owned(),
+                Err(_) => target_path,
+            };
+    
+            let files_writer = match permission {
+                FileSystemPermission::ReadOnly => &mut files_ro_writer,
+                FileSystemPermission::ReadWrite => &mut files_rw_writer,
+            };
+    
+            struct ErrorContext<C>(C);
+            impl<C: Display> ErrorContext<C> {
+                fn golem_error<E: Display>(&self) -> impl '_ + Fn(E) -> String {
+                    |err| format!("Failed to package '{}': {err}", self.0)
+                }
+            }
+    
+            match PathOrUrl::new(source_path) {
+                PathOrUrl::Path(source_path) => {
+                    let context = ErrorContext(source_path.display());
+    
+                    let walk = WalkDir::new(&source_path);
+    
+                    for entry in walk {
+                        let entry = entry.map_err(context.golem_error())?;
+                        let context = ErrorContext(entry.path().display());
+                        let metadata = entry.metadata()
+                            .map_err(context.golem_error())?;
+                        if metadata.file_type().is_file() {
+                            let target_suffix = entry.path()
+                                .strip_prefix(&source_path)
+                                .map_err(context.golem_error())?;
+                            
+                            let target_path = if target_suffix == Path::new("") {
+                                target_path.clone()
+                            } else { 
+                                target_path.join(target_suffix)
+                            };
+    
+                            if let Some(conflict) = targets.replace(target_path.clone()) {
+                                return Err(context.golem_error()(format!("Multiple files provided for target path '{}'", conflict.display())));
+                            }
+    
+                            let zip_entry = ZipEntryBuilder::new(target_path.to_string_lossy().to_string().into(), Compression::Deflate)
+                                .build();
+        
+                            let mut entry_writer = files_writer.write_entry_stream(zip_entry)
+                                .await
+                                .map_err(context.golem_error())?;
+                            
+                            let file_contents = tokio::fs::read(entry.path())
+                                .await
+                                .map_err(context.golem_error())?;
+    
+                            entry_writer.write_all(&*file_contents)
+                                .await
+                                .map_err(context.golem_error())?;
+    
+                            entry_writer.close()
+                                .await
+                                .map_err(context.golem_error())?;
+                        }
+                    }
+                }
+                PathOrUrl::Url(source_url) => {
+                    let context = ErrorContext(&source_url);
+    
+                    if let Some(conflict) = targets.replace(target_path.clone()) {
+                        return Err(context.golem_error()(format!("Multiple files provided for target path '{}'", conflict.display())));
+                    }
+    
+                    let entry = ZipEntryBuilder::new(target_path.to_string_lossy().to_string().into(), Compression::Deflate)
+                        .build();
+    
+                    let mut entry_writer = files_writer.write_entry_stream(entry)
+                        .await
+                        .map_err(context.golem_error())?;
+    
+                    let client = client.get_or_insert_with(reqwest::Client::new);
+                    
+                    let response = client.get(source_url.clone())
+                        .send()
+                        .await
+                        .map_err(context.golem_error())?
+                        .error_for_status()
+                        .map_err(context.golem_error())?;
+    
+                    let mut response_stream = response.bytes_stream();
+                    while let Some(chunk) = response_stream.next().await {
+                        let chunk = chunk
+                            .map_err(context.golem_error())?;
+                        entry_writer.write_all(chunk.as_ref())
+                            .await
+                            .map_err(context.golem_error())?;
+                    }
+    
+                    entry_writer.close()
+                        .await
+                        .map_err(context.golem_error())?;
+                }
+            }
+        }
+    
+        files_ro_writer.close().await
+            .map_err(|e| format!("Failed to archive read-only files: {e}"))?;
+    
+        files_rw_writer.close().await
+            .map_err(|e| format!("Failed to archive read-write files: {e}"))?;
+    
+        Ok(PackagedFileSet::from_vecs(files_ro, files_rw))
+    }
+    
+    #[derive(Debug)]
+    enum PathOrUrl {
+        Path(PathBuf),
+        Url(Url),
+    }
+
+    impl PathOrUrl {
+        pub fn new(path_or_url: PathBuf) -> Self {
+            match Url::parse(path_or_url.to_string_lossy().as_ref()) {
+                Ok(url) => if url.scheme() == "file" {
+                        Self::Path(path_or_url)
+                    } else {
+                        Self::Url(url)
+                    },
+                Err(_) => Self::Path(path_or_url),
+            }
+        }
+    }
 }
 
 #[tokio::test]

@@ -1030,6 +1030,9 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
                 worker_execution_error::Error::ShardingNotReady(_) => {
                     "Sharding Not Ready".to_string()
                 }
+                worker_execution_error::Error::FileNotFound(err) => {
+                    format!("File Not Found: {}", err.path)
+                }
             };
             Status::internal(message)
         }

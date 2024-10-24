@@ -15,6 +15,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
+use futures::TryStreamExt;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
@@ -39,7 +40,7 @@ use golem_common::model::{
     ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::model::{
-    GetOplogResponse, GolemErrorUnknown, ResourceLimits, WorkerMetadata,
+    GetFileResponse, GetFilesResponse, GetOplogResponse, GolemErrorUnknown, ResourceLimits, WorkerMetadata
 };
 use golem_service_base::routing_table::HasRoutingTableService;
 use golem_service_base::{
@@ -236,6 +237,21 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
+
+    async fn get_files(
+        &self,
+        worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> Result<GetFilesResponse, WorkerServiceError>;
+
+    async fn get_file(
+        &self,
+        worker_id: &WorkerId,
+        path: &str,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> Result<GetFileResponse, WorkerServiceError>;
 }
 
 pub struct TypedResult {
@@ -892,6 +908,94 @@ where
             WorkerServiceError::InternalCallError,
         )
         .await
+    }
+
+    async fn get_files(
+        &self,
+        worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<GetFilesResponse, WorkerServiceError> {
+        let worker_id = worker_id.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                info!("Get files");
+                let worker_id = worker_id.clone();
+                Box::pin(
+                    worker_executor_client.get_files(workerexecutor::v1::GetFilesRequest {
+                        worker_id: Some(worker_id.into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::GetFilesResponse {
+                    result: Some(workerexecutor::v1::get_files_response::Result::Success(response)),
+                } => Ok(response.into()),
+                workerexecutor::v1::GetFilesResponse {
+                    result: Some(workerexecutor::v1::get_files_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::GetFilesResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn get_file(
+        &self,
+        worker_id: &WorkerId,
+        path: &str,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<GetFileResponse, WorkerServiceError> {
+        let worker_id = worker_id.clone();
+        let path = path.to_string();
+        let streaming = self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                info!("Get file");
+                let worker_id = worker_id.clone();
+                let path = path.clone();
+                Box::pin(
+                    worker_executor_client.get_file(workerexecutor::v1::GetFileRequest {
+                        worker_id: Some(worker_id.into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        path,
+                    }),
+                )
+            },
+            |response| Ok(response.into_inner()),
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
+        
+        fn try_into_model(response: golem_api_grpc::proto::golem::workerexecutor::v1::GetFileResponse) -> Result<GetFileResponse, WorkerServiceError> {
+            match response.result {
+                Some(golem_api_grpc::proto::golem::workerexecutor::v1::get_file_response::Result::Success(success)) =>
+                    GetFileResponse::try_from(success)
+                        .map_err(WorkerServiceError::Internal),
+                Some(golem_api_grpc::proto::golem::workerexecutor::v1::get_file_response::Result::Failure(failure)) => 
+                    Err(GolemError::try_from(failure)
+                        .map(WorkerServiceError::Golem)
+                        .map_err(WorkerServiceError::Internal)
+                        .map_or_else(std::convert::identity, std::convert::identity)),
+                None => Err(WorkerServiceError::Internal("Empty response".to_string())),
+            }
+        }
+
+        // Fold the grpc stream into a single model response
+        streaming
+            .map_err(CallWorkerExecutorError::FailedToConnectToPod)
+            .map_err(WorkerServiceError::InternalCallError)
+            .try_fold(None, |acc, response| async {
+                let response = try_into_model(response)?;
+                GetFileResponse::try_fold(acc, response)
+                    .map_err(WorkerServiceError::Internal)
+            })
+            .await?
+            .ok_or(WorkerServiceError::Internal("Empty response stream".to_string()))
     }
 }
 

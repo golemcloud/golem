@@ -15,8 +15,10 @@
 pub mod component;
 pub mod deploy;
 pub mod invoke_result_view;
+pub mod oam;
 pub mod text;
 pub mod wave;
+pub mod validation;
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
@@ -136,6 +138,12 @@ where
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct GolemError(pub String);
+
+impl GolemError {
+    pub fn from_error<E: ToString>(err: E) -> Self {
+        Self(err.to_string())
+    }
+}
 
 impl From<reqwest::Error> for GolemError {
     fn from(error: reqwest::Error) -> Self {

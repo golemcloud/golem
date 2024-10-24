@@ -1,7 +1,7 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::worker_binding::CompiledGolemWorkerBinding;
+use crate::{api::WorkerBindingType, worker_binding::CompiledGolemWorkerBinding};
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 
@@ -12,6 +12,8 @@ pub struct GolemWorkerBinding {
     pub worker_name: Expr,
     pub idempotency_key: Option<Expr>,
     pub response: ResponseMapping,
+    #[serde(default)]
+    pub binding_type: WorkerBindingType,
 }
 
 // ResponseMapping will consist of actual logic such as invoking worker functions
@@ -29,6 +31,7 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBinding {
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.idempotency_key),
             response: ResponseMapping(worker_binding.response_compiled.response_rib_expr),
+            binding_type: worker_binding.binding_type,
         }
     }
 }

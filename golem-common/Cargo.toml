@@ -18,6 +18,7 @@ golem-wasm-rpc = { workspace = true }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
 
 async-trait = { workspace = true }
+async_zip = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }

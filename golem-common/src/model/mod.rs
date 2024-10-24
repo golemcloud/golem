@@ -2468,6 +2468,24 @@ impl FromStr for ComponentType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, Enum)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub enum FileSystemPermission {
+    #[default]
+    ReadOnly,
+    ReadWrite,
+}
+
+impl From<golem_api_grpc::proto::golem::common::FileSystemPermission> for FileSystemPermission {
+    fn from(value: golem_api_grpc::proto::golem::common::FileSystemPermission) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::common::FileSystemPermission::ReadOnly => Self::ReadOnly,
+            golem_api_grpc::proto::golem::common::FileSystemPermission::ReadWrite => Self::ReadWrite,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
 use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
@@ -68,7 +69,7 @@ pub trait WorkerCtx:
     /// PublicState is a subset of the worker context which is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
-    type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
+    type PublicState: PublicWorkerIo + PublicFileSystem + HasWorker<Self> + HasOplog + Clone + Send + Sync;
 
     /// Creates a new worker context
     ///
@@ -370,4 +371,13 @@ pub trait PublicWorkerIo {
     /// Gets the event service created for the worker, which can be used to
     /// subscribe to worker events.
     fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync>;
+}
+
+/// A required interface to be implemented by the worker context's public state.
+///
+/// It is used to read from the worker's filesystem
+#[async_trait]
+pub trait PublicFileSystem {
+    /// Reads a file or directory at the given path in the worker's filesystem.
+    async fn read_at(&self, path: &Path) -> std::io::Result<()>;
 }

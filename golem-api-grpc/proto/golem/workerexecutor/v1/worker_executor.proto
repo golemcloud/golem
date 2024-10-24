@@ -2,6 +2,7 @@ syntax = "proto3";
 
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
+import public "golem/common/file_system.proto";
 import public "golem/worker/idempotency_key.proto";
 import public "golem/worker/invocation_context.proto";
 import public "golem/worker/log_event.proto";
@@ -42,6 +43,8 @@ service WorkerExecutor {
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
+  rpc GetFiles(GetFilesRequest) returns (GetFilesResponse) {}
+  rpc GetFile(GetFileRequest) returns (stream GetFileResponse) {}
 }
 
 message InvokeWorkerResponse {
@@ -278,4 +281,44 @@ message GetOplogSuccessResponse {
   optional golem.worker.OplogCursor next = 2;
   uint64 first_index_in_chunk = 3;
   uint64 last_index = 5;
+}
+
+message GetFilesRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+}
+
+message GetFilesResponse {
+  oneof result {
+    GetFilesSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetFilesSuccessResponse {
+  repeated golem.common.FileSystemNode nodes = 1;
+}
+
+message GetFileRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  string path = 3;
+}
+
+message GetFileResponse {
+  oneof result {
+    GetFileSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetFileSuccessResponse {
+  oneof nodeType {
+    GetFilesSuccessResponse directory = 1;
+    FileChunk file = 2;
+  }
+}
+
+message FileChunk {
+  bytes content = 1;
 }

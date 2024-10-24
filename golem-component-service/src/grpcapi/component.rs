@@ -13,6 +13,14 @@
 // limitations under the License.
 
 use std::sync::Arc;
+use golem_api_grpc::proto::golem::component::v1::create_component_request_chunk;
+use golem_api_grpc::proto::golem::component::v1::download_initial_files_response;
+use golem_api_grpc::proto::golem::component::v1::update_component_request_chunk;
+use golem_api_grpc::proto::golem::component::v1::CreateComponentRequestChunk;
+use golem_api_grpc::proto::golem::component::v1::DownloadInitialFilesRequest;
+use golem_api_grpc::proto::golem::component::v1::DownloadInitialFilesResponse;
+use golem_api_grpc::proto::golem::component::v1::UpdateComponentRequestChunk;
+use golem_common::file_system::PackagedFiles;
 use tracing::Instrument;
 
 use futures_util::stream::BoxStream;
@@ -150,20 +158,44 @@ impl ComponentGrpcApi {
         Ok(result)
     }
 
+    async fn download_initial_files(
+        &self,
+        request: DownloadInitialFilesRequest,
+    ) -> Result<ByteStream, ComponentError> {
+        let permission_type = request.permission_type().into();
+
+        let id: ComponentId = request
+            .component_id
+            .and_then(|id| id.try_into().ok())
+            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let version = request.version;
+        let result = self
+            .component_service
+            .download_initial_files_stream(&id, version, &DefaultNamespace::default(), &permission_type)
+            .await?;
+        Ok(result)
+    }
+
     async fn create(
         &self,
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
+        files_ro: Option<PackagedFiles>,
+        files_rw: Option<PackagedFiles>,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
+        let component_type = request.component_type().into();
+
         let result = self
             .component_service
             .create(
                 &ComponentId::new_v4(),
                 &name,
-                request.component_type().into(),
+                component_type,
                 data,
                 &DefaultNamespace::default(),
+                files_ro,
+                files_rw,
             )
             .await?;
         Ok(result.into())
@@ -173,6 +205,8 @@ impl ComponentGrpcApi {
         &self,
         request: UpdateComponentRequestHeader,
         data: Vec<u8>,
+        files_ro: Option<PackagedFiles>,
+        files_rw: Option<PackagedFiles>,
     ) -> Result<Component, ComponentError> {
         let id: ComponentId = request
             .component_id
@@ -185,10 +219,17 @@ impl ComponentGrpcApi {
             ),
             None => None,
         };
+
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultNamespace::default())
-            .await?;
+            .update(
+                &id, 
+                data, 
+                component_type, 
+                &DefaultNamespace::default(),
+                files_ro,
+                files_rw,
+            ).await?;
         Ok(result.into())
     }
 }
@@ -237,19 +278,30 @@ impl ComponentService for ComponentGrpcApi {
 
         let result = match header {
             Some(request) => {
-                let data: Vec<u8> = chunks
+                let (data, files_ro, files_rw) = chunks
                     .iter()
-                    .flat_map(|c| {
-                        c.clone()
-                            .data
-                            .map(|d| match d {
-                                create_component_request::Data::Chunk(d) => d.component_chunk,
-                                _ => vec![],
-                            })
-                            .unwrap_or_default()
-                    })
-                    .collect();
-                self.create(request, data)
+                    .fold(
+                        (vec![], vec![], vec![]),
+                        |(mut d, mut fro, mut frw), c| {
+                            match &c.data {
+                                Some(create_component_request::Data::Chunk(CreateComponentRequestChunk { chunk_type: Some(create_component_request_chunk::ChunkType::ComponentChunk(component_chunk)) })) => 
+                                    d.extend_from_slice(component_chunk),
+                                Some(create_component_request::Data::Chunk(CreateComponentRequestChunk { chunk_type: Some(create_component_request_chunk::ChunkType::InitialFilesRoChunk(initial_files_ro_chunk)) })) => 
+                                    fro.extend_from_slice(initial_files_ro_chunk),
+                                Some(create_component_request::Data::Chunk(CreateComponentRequestChunk { chunk_type: Some(create_component_request_chunk::ChunkType::InitialFilesRwChunk(initial_files_rw_chunk)) })) => 
+                                    frw.extend_from_slice(initial_files_rw_chunk),
+                                _ => { }
+                            }
+                            (d, fro, frw)
+                        }
+                    );
+
+                tracing::debug!("Received initial files: {} ro bytes, {} rw bytes", files_ro.len(), files_rw.len());
+
+                let files_ro = PackagedFiles::from_vec(files_ro);
+                let files_rw = PackagedFiles::from_vec(files_rw);
+
+                self.create(request, data, files_ro, files_rw)
                     .instrument(record.span.clone())
                     .await
             }
@@ -307,6 +359,52 @@ impl ComponentService for ComponentGrpcApi {
                     };
 
                     let stream: Self::DownloadComponentStream =
+                        Box::pin(tokio_stream::iter([Ok(res)]));
+                    record.fail(stream, &ComponentTraceErrorKind(&err))
+                }
+            };
+
+        Ok(Response::new(stream))
+    }
+
+    type DownloadInitialFilesStream = BoxStream<'static, Result<DownloadInitialFilesResponse, Status>>;
+
+    async fn download_initial_files(
+        &self,
+        request: Request<DownloadInitialFilesRequest>,
+    ) -> Result<Response<Self::DownloadInitialFilesStream>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "download_initial_files",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+        let stream: Self::DownloadInitialFilesStream =
+            match self.download_initial_files(request).instrument(record.span.clone()).await {
+                Ok(response) => {
+                    let stream = response.map(|content| {
+                        let res = match content {
+                            Ok(content) => DownloadInitialFilesResponse {
+                                result: Some(download_initial_files_response::Result::SuccessChunk(
+                                    content,
+                                )),
+                            },
+                            Err(_) => DownloadInitialFilesResponse {
+                                result: Some(download_initial_files_response::Result::Error(
+                                    internal_error("Internal error"),
+                                )),
+                            },
+                        };
+                        Ok(res)
+                    });
+                    let stream: Self::DownloadInitialFilesStream = Box::pin(stream);
+                    record.succeed(stream)
+                }
+                Err(err) => {
+                    let res = DownloadInitialFilesResponse {
+                        result: Some(download_initial_files_response::Result::Error(err.clone())),
+                    };
+
+                    let stream: Self::DownloadInitialFilesStream =
                         Box::pin(tokio_stream::iter([Ok(res)]));
                     record.fail(stream, &ComponentTraceErrorKind(&err))
                 }
@@ -395,21 +493,35 @@ impl ComponentService for ComponentGrpcApi {
 
         let result = match header {
             Some(request) => {
-                let data: Vec<u8> = chunks
+                let (data, files_ro, files_rw) = chunks
                     .iter()
-                    .flat_map(|c| {
-                        c.clone()
-                            .data
-                            .map(|d| match d {
-                                update_component_request::Data::Chunk(d) => d.component_chunk,
-                                _ => vec![],
-                            })
-                            .unwrap_or_default()
-                    })
-                    .collect();
-                self.update(request, data)
-                    .instrument(record.span.clone())
-                    .await
+                    .fold(
+                        (vec![], vec![], vec![]),
+                        |(mut d, mut fro, mut frw), c| {
+                            match &c.data {
+                                Some(update_component_request::Data::Chunk(UpdateComponentRequestChunk { chunk_type: Some(update_component_request_chunk::ChunkType::ComponentChunk(component_chunk)) })) => 
+                                    d.extend_from_slice(component_chunk),
+                                Some(update_component_request::Data::Chunk(UpdateComponentRequestChunk { chunk_type: Some(update_component_request_chunk::ChunkType::InitialFilesRoChunk(initial_files_ro_chunk)) })) => 
+                                    fro.extend_from_slice(initial_files_ro_chunk),
+                                Some(update_component_request::Data::Chunk(UpdateComponentRequestChunk { chunk_type: Some(update_component_request_chunk::ChunkType::InitialFilesRwChunk(initial_files_rw_chunk)) })) => 
+                                    frw.extend_from_slice(initial_files_rw_chunk),
+                                _ => { }
+                            }
+                            (d, fro, frw)
+                        }
+                    );
+
+                let files_ro = PackagedFiles::from_vec(files_ro);
+                let files_rw = PackagedFiles::from_vec(files_rw);
+
+                self.update(
+                    request, 
+                    data,
+                    files_ro,
+                    files_rw,
+                )
+                .instrument(record.span.clone())
+                .await
             }
             None => Err(bad_request_error("Missing request")),
         };

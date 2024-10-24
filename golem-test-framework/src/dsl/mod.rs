@@ -32,6 +32,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_api_grpc::proto::golem::worker::{
     log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
 };
+use golem_common::file_system::PackagedFileSet;
 use golem_common::model::oplog::{
     OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
@@ -53,11 +54,17 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait TestDsl {
-    async fn store_component(&self, name: &str) -> ComponentId;
+    async fn store_component(&self, name: &str) -> ComponentId {
+        self.store_component_with_files(name, PackagedFileSet::empty()).await
+    }
+    async fn store_component_with_files(&self, name: &str, initial_files: PackagedFileSet) -> ComponentId;
     async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
+    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
+        self.update_component_with_files(component_id, name, PackagedFileSet::empty()).await
+    }
+    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, initial_files: PackagedFileSet) -> ComponentVersion;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
         -> crate::Result<WorkerId>;
@@ -174,12 +181,12 @@ pub trait TestDsl {
 
 #[async_trait]
 impl<T: TestDependencies + Send + Sync> TestDsl for T {
-    async fn store_component(&self, name: &str) -> ComponentId {
+    async fn store_component_with_files(&self, name: &str, initial_files: PackagedFileSet) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
 
         let component_id = self
             .component_service()
-            .get_or_add_component(&source_path, ComponentType::Durable)
+            .get_or_add_component(&source_path, ComponentType::Durable, initial_files)
             .await;
 
         let _ = log_and_save_component_metadata(&source_path).await;
@@ -192,7 +199,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         let component_id = self
             .component_service()
-            .get_or_add_component(&source_path, ComponentType::Ephemeral)
+            .get_or_add_component(&source_path, ComponentType::Ephemeral, PackagedFileSet::empty())
             .await;
 
         let _ = log_and_save_component_metadata(&source_path).await;
@@ -206,7 +213,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let uuid = Uuid::new_v4();
         let unique_name = format!("{name}-{uuid}");
         self.component_service()
-            .add_component_with_name(&source_path, &unique_name, ComponentType::Durable)
+            .add_component_with_name(&source_path, &unique_name, ComponentType::Durable, PackagedFileSet::empty())
             .await
             .expect("Failed to store unique component")
     }
@@ -214,15 +221,15 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_component_unverified(&self, name: &str) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
-            .get_or_add_component(&source_path, ComponentType::Durable)
+            .get_or_add_component(&source_path, ComponentType::Durable, PackagedFileSet::empty())
             .await
     }
 
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
+    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, initial_files: PackagedFileSet) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         let _ = dump_component_info(&source_path);
         self.component_service()
-            .update_component(component_id, &source_path, ComponentType::Durable)
+            .update_component(component_id, &source_path, ComponentType::Durable, initial_files)
             .await
     }
 
@@ -994,6 +1001,9 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::ShardingNotReady(_error) => {
                     "Sharing not ready".to_string()
                 }
+                worker_execution_error::Error::FileNotFound(error) => {
+                    format!("File not found: {}", error.path)
+                }
             },
         },
     }
@@ -1154,11 +1164,17 @@ async fn log_and_save_component_metadata(path: &Path) {
 
 #[async_trait]
 pub trait TestDslUnsafe {
-    async fn store_component(&self, name: &str) -> ComponentId;
+    async fn store_component(&self, name: &str) -> ComponentId {
+        self.store_component_with_files(name, PackagedFileSet::empty()).await
+    }
+    async fn store_component_with_files(&self, name: &str, initial_files: PackagedFileSet) -> ComponentId;
     async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
+    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
+        self.update_component_with_files(component_id, name, PackagedFileSet::empty()).await
+    }
+    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, initial_files: PackagedFileSet) -> ComponentVersion;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
     async fn try_start_worker(
@@ -1249,8 +1265,8 @@ pub trait TestDslUnsafe {
 
 #[async_trait]
 impl<T: TestDsl + Sync> TestDslUnsafe for T {
-    async fn store_component(&self, name: &str) -> ComponentId {
-        <T as TestDsl>::store_component(self, name).await
+    async fn store_component_with_files(&self, name: &str, initial_files: PackagedFileSet) -> ComponentId {
+        <T as TestDsl>::store_component_with_files(self, name, initial_files).await
     }
 
     async fn store_ephemeral_component(&self, name: &str) -> ComponentId {
@@ -1265,8 +1281,8 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::store_component_unverified(self, name).await
     }
 
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
-        <T as TestDsl>::update_component(self, component_id, name).await
+    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, initial_files: PackagedFileSet) -> ComponentVersion {
+        <T as TestDsl>::update_component_with_files(self, component_id, name, initial_files).await
     }
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {

@@ -14,7 +14,7 @@
 
 use crate::cli::{Cli, CliLive};
 use assert2::assert;
-use golem_cli::model::component::ComponentView;
+use golem_cli::model::{component::ComponentView, oam::Application};
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
@@ -52,6 +52,11 @@ fn make(
             format!("component_add_and_get_url{suffix}"),
             ctx.clone(),
             component_add_and_get_url,
+        ),
+        Trial::test_in_context(
+            format!("component_add_with_manifest{suffix}"),
+            ctx.clone(),
+            component_add_with_manifest,
         ),
         Trial::test_in_context(
             format!("component_update{suffix}"),
@@ -140,6 +145,46 @@ fn component_add_and_find_by_name(
         "add",
         &cfg.arg('c', "component-name"),
         &component_name,
+        env_service.to_str().unwrap(),
+    ])?;
+    let res: Vec<ComponentView> = cli.run_trimmed(&[
+        "component",
+        "list",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+    ])?;
+    assert!(res.contains(&component), "{res:?}.contains({component:?})");
+    assert_eq!(res.len(), 1, "{res:?}.len() == 1");
+    Ok(())
+}
+
+fn component_add_with_manifest(
+    (deps, name, cli): (
+        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        String,
+        CliLive,
+    ),
+) -> Result<(), Failed> {
+    const MANIFEST_TEMPLATE: &str = "tests/manifest/initial_files.yaml";
+    let mut app = Application::from_yaml_file(MANIFEST_TEMPLATE).unwrap();
+    let component_name = format!("{name} component add with manifest");
+    app.spec.components
+        .first_mut()
+        .unwrap()
+        .name = component_name.clone();
+    
+    let manifest_path = std::env::temp_dir().join(format!("{}.yaml", component_name));
+    app.to_yaml_file(&manifest_path).unwrap();
+    
+    let env_service = deps.component_directory().join("environment-service.wasm");
+    let cfg = &cli.config;
+    let component: ComponentView = cli.run_trimmed(&[
+        "component",
+        "add",
+        &cfg.arg('c', "component-name"),
+        &component_name,
+        &cfg.arg('m', "manifest"),
+        manifest_path.to_string_lossy().as_ref(),
         env_service.to_str().unwrap(),
     ])?;
     let res: Vec<ComponentView> = cli.run_trimmed(&[

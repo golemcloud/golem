@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Add;
+use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -36,8 +37,7 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::workerctx::{
-    ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement,
-    PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement, PublicFileSystem, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -49,10 +49,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
-    OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -116,6 +113,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     _temp_dir: Arc<TempDir>,
+    _temp_dir_ro: Option<Arc<TempDir>>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
@@ -150,6 +148,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             temp_dir.path()
         );
 
+        let temp_dir_ro = component_service
+            .get_initial_files_ro(&owned_worker_id.component_id(), component_metadata.version)
+            .await?; 
+        
+        if let Some(files_rw) = component_service
+            .get_initial_files_rw(&owned_worker_id.component_id(), component_metadata.version)
+            .await? 
+        {
+            files_rw.extract(temp_dir.path()).await?;
+            debug!(
+                "Worker {} created initial writable files",
+                owned_worker_id.worker_id,
+            );
+        }
+
         debug!(
             "Worker {} initialized with deleted regions {}",
             owned_worker_id.worker_id, worker_config.deleted_regions
@@ -165,6 +178,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             &worker_config.args,
             &worker_config.env,
             temp_dir.path().to_path_buf(),
+            temp_dir_ro.as_ref().map(|dir| dir.path()),
             stdin,
             stdout,
             stderr,
@@ -205,6 +219,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await,
             _temp_dir: temp_dir,
+            _temp_dir_ro: temp_dir_ro,
             execution_status,
         })
     }
@@ -1886,6 +1901,8 @@ pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
     invocation_queue: Weak<Worker<Ctx>>,
     oplog: Arc<dyn Oplog + Send + Sync>,
+    // temp_dir: Arc<TempDir>,
+    // temp_dir_ro: Option<Arc<TempDir>>,
 }
 
 impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
@@ -1895,6 +1912,8 @@ impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
             event_service: self.event_service.clone(),
             invocation_queue: self.invocation_queue.clone(),
             oplog: self.oplog.clone(),
+            // temp_dir: self.temp_dir.clone(),
+            // temp_dir_ro: self.temp_dir_ro.clone(),
         }
     }
 }
@@ -1903,6 +1922,13 @@ impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
 impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
     fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync> {
         self.event_service.clone()
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> PublicFileSystem for PublicDurableWorkerState<Ctx> {
+    async fn read_at(&self, path: &Path) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::NotFound.into())
     }
 }
 

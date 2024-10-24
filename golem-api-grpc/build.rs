@@ -26,6 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/common/project_id.proto",
                 "proto/golem/common/empty.proto",
                 "proto/golem/common/error_body.proto",
+                "proto/golem/common/file_system.proto",
                 "proto/golem/common/resource_limits.proto",
                 "proto/golem/common/uuid.proto",
                 "proto/golem/component/producer_field.proto",

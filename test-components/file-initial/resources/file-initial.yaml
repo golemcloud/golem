@@ -1,0 +1,18 @@
+apiVersion: core.oam.dev/v1alpha1
+kind: ApplicationConfiguration
+metadata:
+  name: file-initial
+spec:
+  components:
+  - name: file-initial-1
+    type: wasm
+    properties:
+      files:
+      - sourcePath: "test-components/file-initial/resources/readonly"
+        targetPath: "/static/"
+        permission: readOnly
+      - sourcePath: "test-components/file-initial/resources/readwrite"
+        targetPath: "/"
+        permission: readWrite
+      - sourcePath: "https://raw.githubusercontent.com/golemcloud/golem/refs/heads/main/golem-logo-black.jpg"
+        targetPath: "/static/logo.jpg"

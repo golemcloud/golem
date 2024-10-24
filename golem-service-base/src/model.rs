@@ -16,12 +16,12 @@ use bincode::{Decode, Encode};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
-    WorkerFilter, WorkerId, WorkerStatus,
+    ComponentId, ComponentType, ComponentVersion, FileSystemPermission, PromiseId, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerId, WorkerStatus
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use poem_openapi::{Enum, NewType, Object, Union};
+use poem_openapi::payload::{Binary, Json};
+use poem_openapi::{ApiResponse, Enum, NewType, Object, ResponseContent, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
@@ -958,6 +958,34 @@ impl From<crate::model::GolemErrorShardingNotReady>
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("File not found: '{path}'")]
+pub struct GolemErrorFileNotFound {
+    pub path: String,
+}
+
+impl SafeDisplay for GolemErrorFileNotFound {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::v1::FileNotFound> for GolemErrorFileNotFound {
+    fn from(value: golem_api_grpc::proto::golem::worker::v1::FileNotFound) -> Self {
+        Self {
+            path: value.path,
+        }
+    }
+}
+
+impl From<GolemErrorFileNotFound> for golem_api_grpc::proto::golem::worker::v1::FileNotFound {
+    fn from(value: GolemErrorFileNotFound) -> Self {
+        Self {
+            path: value.path,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeParameters {
     pub params: Vec<TypeAnnotatedValue>,
@@ -985,6 +1013,127 @@ pub struct GetOplogResponse {
     pub first_index_in_chunk: u64,
     pub last_index: u64,
 }
+
+#[derive(Debug, Clone, ApiResponse)]
+pub enum GetFileApiResponse {
+    #[oai(status = 200)]
+    Ok(GetFileResponseContent),
+}
+
+#[derive(Debug, Clone, ResponseContent)]
+pub enum GetFileResponseContent {
+    Directory(Json<GetFilesResponse>),
+    File(Binary<Vec<u8>>),
+}
+
+impl From<GetFileResponse> for GetFileResponseContent {
+    fn from(value: GetFileResponse) -> Self {
+        match value {
+            GetFileResponse::Directory(directory) => Self::Directory(Json(directory)),
+            GetFileResponse::File(file) => Self::File(Binary(file)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Union)]
+pub enum GetFileResponse {
+    Directory(GetFilesResponse),
+    File(Vec<u8>),
+}
+
+impl GetFileResponse {
+    pub fn try_fold(a: Option<Self>, b: Self) -> Result<Option<Self>, String> {
+        if let Some(a) = a {
+            if let (GetFileResponse::File(mut a), GetFileResponse::File(mut b)) = (a, b) {
+                a.append(&mut b);
+                Ok(Some(GetFileResponse::File(a)))
+            } else {
+                Err(format!("Mismatched response types"))
+            }
+        } else {
+            Ok(Some(b))
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSuccessResponse> for GetFileResponse {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSuccessResponse) -> Result<Self, Self::Error> {
+        let ty = value.node_type
+            .ok_or("Missing node_type")?;
+
+        match ty {
+            golem_api_grpc::proto::golem::workerexecutor::v1::get_file_success_response::NodeType::Directory(get_files_response) => Ok(Self::Directory(get_files_response.into())),
+            golem_api_grpc::proto::golem::workerexecutor::v1::get_file_success_response::NodeType::File(file_chunk) => Ok(Self::File(file_chunk.content)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct GetFilesResponse {
+    pub contents: Vec<FileSystemNode>,
+}
+
+impl From<golem_api_grpc::proto::golem::workerexecutor::v1::GetFilesSuccessResponse> for GetFilesResponse {
+    fn from(value: golem_api_grpc::proto::golem::workerexecutor::v1::GetFilesSuccessResponse) -> Self {
+        let contents = value.nodes
+            .into_iter()
+            .map(FileSystemNode::from)
+            .collect();
+
+        Self {
+            contents,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct FileSystemNode {
+    pub node_type: FileSystemNodeType,
+    pub name: String,
+    pub permissions: FileSystemPermission,
+    pub last_modified: i64,
+    pub size: Option<u64>,
+}
+
+impl From<golem_api_grpc::proto::golem::common::FileSystemNode> for FileSystemNode {
+    fn from(value: golem_api_grpc::proto::golem::common::FileSystemNode) -> Self {
+        let node_type = value.node_type().into();
+        let permissions = value.permissions().into();
+        let name = value.name;
+        let last_modified = value.last_modified;
+        let size = value.size;
+
+        Self {
+            node_type,
+            name,
+            permissions,
+            last_modified,
+            size,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Enum)]
+pub enum FileSystemNodeType {
+    Directory,
+    File,
+}
+
+impl From<golem_api_grpc::proto::golem::common::FileSystemNodeType> for FileSystemNodeType {
+    fn from(value: golem_api_grpc::proto::golem::common::FileSystemNodeType) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::common::FileSystemNodeType::Directory => Self::Directory,
+            golem_api_grpc::proto::golem::common::FileSystemNodeType::File => Self::File,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
 pub enum WorkerUpdateMode {
@@ -1333,6 +1482,8 @@ pub enum GolemError {
     InvalidAccount(GolemErrorInvalidAccount),
     #[error(transparent)]
     ShardingNotReady(GolemErrorShardingNotReady),
+    #[error(transparent)]
+    FileNotFound(GolemErrorFileNotFound),
 }
 
 impl SafeDisplay for GolemError {
@@ -1361,6 +1512,7 @@ impl SafeDisplay for GolemError {
             GolemError::Unknown(inner) => inner.to_safe_string(),
             GolemError::InvalidAccount(inner) => inner.to_safe_string(),
             GolemError::ShardingNotReady(inner) => inner.to_safe_string(),
+            GolemError::FileNotFound(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -1444,6 +1596,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError> for
             }
             Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err)) => {
                 Ok(GolemError::ShardingNotReady(err.into()))
+            }
+            Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::FileNotFound(err)) => {
+                Ok(GolemError::FileNotFound(err.into()))
             }
             None => Err("Missing field: error".to_string()),
         }
@@ -1529,6 +1684,9 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::v1::worker_execu
             }
             GolemError::ShardingNotReady(err) => {
                 golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err.into())
+            }
+            GolemError::FileNotFound(err) => {
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::FileNotFound(err.into())
             }
         }
     }

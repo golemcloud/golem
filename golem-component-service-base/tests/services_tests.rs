@@ -134,6 +134,8 @@ mod tests {
                 ComponentType::Durable,
                 get_component_data("shopping-cart"),
                 &DefaultNamespace::default(),
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -145,6 +147,8 @@ mod tests {
                 ComponentType::Durable,
                 get_component_data("rust-echo"),
                 &DefaultNamespace::default(),
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -193,6 +197,8 @@ mod tests {
                 get_component_data("shopping-cart"),
                 None,
                 &DefaultNamespace::default(),
+                None,
+                None,
             )
             .await
             .unwrap();

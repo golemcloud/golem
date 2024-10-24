@@ -29,20 +29,21 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
-    download_component_response, get_component_metadata_response, ComponentError,
-    DownloadComponentRequest, GetLatestComponentRequest, GetVersionedComponentRequest,
+    download_component_response, download_initial_files_response, get_component_metadata_response, ComponentError, DownloadComponentRequest, DownloadInitialFilesRequest, GetLatestComponentRequest, GetVersionedComponentRequest
 };
 use golem_api_grpc::proto::golem::component::LinearMemory;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
+use golem_common::file_system::PackagedFiles;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::{ComponentId, ComponentType, ComponentVersion};
+use golem_common::model::{ComponentId, ComponentType, ComponentVersion, FileSystemPermission};
 use golem_common::retries::with_retries;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use prost::Message;
+use tempfile::TempDir;
 use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -75,6 +76,18 @@ pub trait ComponentService {
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
     ) -> Result<ComponentMetadata, GolemError>;
+
+    async fn get_initial_files_ro(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Option<Arc<TempDir>>, GolemError>;
+
+    async fn get_initial_files_rw(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Option<PackagedFiles>, GolemError>;
 }
 
 pub async fn configured(
@@ -95,6 +108,7 @@ pub async fn configured(
                     .expect("Access token must be an UUID"),
                 cache_config.max_capacity,
                 cache_config.max_metadata_capacity,
+                cache_config.max_initial_files_capacity,
                 cache_config.time_to_idle,
                 config.retries.clone(),
                 compiled_component_service,
@@ -105,6 +119,7 @@ pub async fn configured(
             &config.root,
             cache_config.max_capacity,
             cache_config.max_metadata_capacity,
+            cache_config.max_initial_files_capacity,
             cache_config.time_to_idle,
             compiled_component_service,
         )),
@@ -120,6 +135,8 @@ struct ComponentKey {
 pub struct ComponentServiceGrpc {
     component_cache: Cache<ComponentKey, (), Component, GolemError>,
     component_metadata_cache: Cache<ComponentKey, (), ComponentMetadata, GolemError>,
+    initial_files_ro_cache: Cache<ComponentKey, (), Option<Arc<TempDir>>, GolemError>,
+    initial_files_rw_cache: Cache<ComponentKey, (), Option<PackagedFiles>, GolemError>,
     access_token: Uuid,
     retry_config: RetryConfig,
     compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
@@ -132,6 +149,7 @@ impl ComponentServiceGrpc {
         access_token: Uuid,
         max_capacity: usize,
         max_metadata_capacity: usize,
+        max_initial_files_capacity: usize,
         time_to_idle: Duration,
         retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
@@ -141,6 +159,14 @@ impl ComponentServiceGrpc {
             component_cache: create_component_cache(max_capacity, time_to_idle),
             component_metadata_cache: create_component_metadata_cache(
                 max_metadata_capacity,
+                time_to_idle,
+            ),
+            initial_files_ro_cache: create_initial_files_cache_ro(
+                max_initial_files_capacity,
+                time_to_idle,
+            ),
+            initial_files_rw_cache: create_initial_files_cache_rw(
+                max_initial_files_capacity,
                 time_to_idle,
             ),
             access_token,
@@ -312,6 +338,79 @@ impl ComponentService for ComponentServiceGrpc {
             }
         }
     }
+
+    async fn get_initial_files_ro(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Option<Arc<TempDir>>, GolemError> {
+        let key = ComponentKey {
+            component_id: component_id.clone(),
+            component_version,
+        };
+        let client = self.client.clone();
+        let access_token = self.access_token;
+        let retry_config = self.retry_config.clone();
+        let component_id = component_id.clone();
+
+        self.initial_files_ro_cache.get_or_insert_simple(&key, || {
+            Box::pin(async move {
+                if let Some(files) = download_initial_files_via_grpc(
+                    &client,
+                    &access_token,
+                    &retry_config,
+                    &component_id,
+                    component_version,
+                    &FileSystemPermission::ReadOnly)
+                    .await? 
+                {
+                    let temp_dir = tempfile::Builder::new().prefix("golem").tempdir()?;
+                    files.extract(temp_dir.path())
+                        .await?;
+
+                    debug!(
+                        "Component {} created initial readonly files at {}",
+                        component_id,
+                        temp_dir.path().display(),
+                    );
+
+                    Ok(Some(Arc::new(temp_dir)))
+                } else {
+                    Ok(None)
+                }
+            })
+        }).await
+    }
+
+    async fn get_initial_files_rw(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Option<PackagedFiles>, GolemError> {
+        let key = ComponentKey {
+            component_id: component_id.clone(),
+            component_version,
+        };
+        let client = self.client.clone();
+        let access_token = self.access_token;
+        let retry_config = self.retry_config.clone();
+        let component_id = component_id.clone();
+        
+        self.initial_files_rw_cache.get_or_insert_simple(&key, || {
+            Box::pin(async move {
+                let files = download_initial_files_via_grpc(
+                    &client,
+                    &access_token,
+                    &retry_config,
+                    &component_id,
+                    component_version,
+                    &FileSystemPermission::ReadWrite)
+                    .await?;
+
+                Ok(files)
+            })
+        }).await
+    }
 }
 
 async fn download_via_grpc(
@@ -473,6 +572,67 @@ async fn get_metadata_via_grpc(
     .map_err(|error| grpc_get_latest_version_error(error, component_id))
 }
 
+async fn download_initial_files_via_grpc(
+    client: &GrpcClient<ComponentServiceClient<Channel>>,
+    access_token: &Uuid,
+    retry_config: &RetryConfig,
+    component_id: &ComponentId,
+    component_version: ComponentVersion,
+    permission_type: &FileSystemPermission,
+) -> Result<Option<PackagedFiles>, GolemError> {
+    with_retries(
+        "components",
+        "download_initial_files",
+        Some(component_id.to_string()),
+        retry_config,
+        &(
+            client.clone(),
+            component_id.clone(),
+            access_token.to_owned(),
+        ),
+        |(client, component_id, access_token)| {
+            let permission_type = permission_type.clone() as i32;
+            Box::pin(async move {
+                let response = client
+                    .call(move |client| {
+                        let request = authorised_grpc_request(
+                            DownloadInitialFilesRequest {
+                                component_id: Some(component_id.clone().into()),
+                                version: Some(component_version),
+                                permission_type,
+                            },
+                            access_token,
+                        );
+                        Box::pin(client.download_initial_files(request))
+                    })
+                    .await?
+                    .into_inner();
+
+                let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
+                let bytes = chunks
+                    .into_iter()
+                    .map(|chunk| match chunk.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(download_initial_files_response::Result::SuccessChunk(chunk)) => Ok(chunk),
+                        Some(download_initial_files_response::Result::Error(error)) => {
+                            Err(GrpcError::Domain(error))
+                        }
+                    })
+                    .collect::<Result<Vec<Vec<u8>>, GrpcError<ComponentError>>>()?;
+
+                let bytes: Vec<u8> = bytes.into_iter().flatten().collect();
+
+                record_external_call_response_size_bytes("components", "download_initial_files", bytes.len());
+
+                Ok(PackagedFiles::from_vec(bytes))
+            })
+        },
+        is_grpc_retriable::<ComponentError>,
+    )
+    .await
+    .map_err(|error| grpc_component_download_error(error, component_id, component_version))
+}
+
 fn grpc_component_download_error(
     error: GrpcError<ComponentError>,
     component_id: &ComponentId,
@@ -525,6 +685,36 @@ fn create_component_metadata_cache(
     )
 }
 
+fn create_initial_files_cache_ro(
+    max_capacity: usize,
+    time_to_idle: Duration,
+) -> Cache<ComponentKey, (), Option<Arc<TempDir>>, GolemError> {
+    Cache::new(
+        Some(max_capacity),
+        FullCacheEvictionMode::LeastRecentlyUsed(1),
+        BackgroundEvictionMode::OlderThan {
+            ttl: time_to_idle,
+            period: Duration::from_secs(60),
+        },
+        "initial_files_ro",
+    )
+}
+
+fn create_initial_files_cache_rw(
+    max_capacity: usize,
+    time_to_idle: Duration,
+) -> Cache<ComponentKey, (), Option<PackagedFiles>, GolemError> {
+    Cache::new(
+        Some(max_capacity),
+        FullCacheEvictionMode::LeastRecentlyUsed(1),
+        BackgroundEvictionMode::OlderThan {
+            ttl: time_to_idle,
+            period: Duration::from_secs(60),
+        },
+        "initial_files_rw",
+    )
+}
+
 impl From<std::io::Error> for GolemError {
     fn from(value: std::io::Error) -> Self {
         GolemError::Unknown {
@@ -537,6 +727,8 @@ pub struct ComponentServiceLocalFileSystem {
     root: PathBuf,
     component_cache: Cache<ComponentKey, (), Component, GolemError>,
     component_metadata_cache: Cache<ComponentKey, (), ComponentMetadata, GolemError>,
+    initial_files_ro_cache: Cache<ComponentKey, (), Option<Arc<TempDir>>, GolemError>,
+    initial_files_rw_cache: Cache<ComponentKey, (), Option<PackagedFiles>, GolemError>,
     compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
 }
 
@@ -545,6 +737,7 @@ impl ComponentServiceLocalFileSystem {
         root: &Path,
         max_capacity: usize,
         max_metadata_capacity: usize,
+        max_initial_files_capacity: usize,
         time_to_idle: Duration,
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
     ) -> Self {
@@ -556,6 +749,14 @@ impl ComponentServiceLocalFileSystem {
             component_cache: create_component_cache(max_capacity, time_to_idle),
             component_metadata_cache: create_component_metadata_cache(
                 max_metadata_capacity,
+                time_to_idle,
+            ),
+            initial_files_ro_cache: create_initial_files_cache_ro(
+                max_initial_files_capacity,
+                time_to_idle,
+            ),
+            initial_files_rw_cache: create_initial_files_cache_rw(
+                max_initial_files_capacity,
                 time_to_idle,
             ),
             compiled_component_service,
@@ -837,5 +1038,96 @@ impl ComponentService for ComponentServiceLocalFileSystem {
                 Ok(metadata)
             }
         }
+    }
+
+    async fn get_initial_files_ro(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Option<Arc<TempDir>>, GolemError> {
+        let metadata = self
+            .get_metadata(component_id, Some(component_version))
+            .await?;
+
+        let postfix = match metadata.component_type {
+            ComponentType::Ephemeral => "-ephemeral",
+            ComponentType::Durable => "",
+        };
+
+        let path = self.root.join(
+            format!("{component_id}-{component_version}{postfix}-ro.zip")
+        );
+
+        let key = ComponentKey {
+            component_id: component_id.clone(),
+            component_version,
+        };
+        
+        let path = path.to_path_buf();
+        debug!("Loading file from {}", path.canonicalize().unwrap().display());
+        let files = self.initial_files_ro_cache.get_or_insert_simple(&key, || Box::pin(async move { 
+            match tokio::fs::read(path).await {
+                Ok(data) => {
+                    if let Some(files) = PackagedFiles::from_vec(data) {
+                        let temp_dir = tempfile::Builder::new().prefix("golem").tempdir()?;
+                        files.extract(temp_dir.path())
+                            .await?;
+
+                        Ok(Some(Arc::new(temp_dir)))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                Err(e) => {
+                    debug!("fs::read: {e}");
+                    match e.kind() {
+                    std::io::ErrorKind::NotFound => Ok(None),
+                    _ => Err(GolemError::runtime(e.to_string())),
+                }
+                }
+            }
+        })).await?;
+
+        debug!("we made it");
+
+        Ok(files)
+    }
+
+    async fn get_initial_files_rw(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Option<PackagedFiles>, GolemError> {
+        let metadata = self
+            .get_metadata(component_id, Some(component_version))
+            .await?;
+
+        let postfix = match metadata.component_type {
+            ComponentType::Ephemeral => "-ephemeral",
+            ComponentType::Durable => "",
+        };
+
+        let path = self.root.join(
+            format!("{component_id}-{component_version}{postfix}-rw.zip")
+        );
+
+        let key = ComponentKey {
+            component_id: component_id.clone(),
+            component_version,
+        };
+        
+        let path = path.to_path_buf();
+        debug!("Loading file from {}", path.canonicalize().unwrap().display());
+        let files = self.initial_files_rw_cache.get_or_insert_simple(&key, || Box::pin(async move { 
+            match tokio::fs::read(path).await {
+                Ok(data) => Ok(PackagedFiles::from_vec(data)),
+                Err(e) => match e.kind() {
+                    std::io::ErrorKind::NotFound => Ok(None),
+                    _ => Err(GolemError::runtime(e.to_string())),
+                }
+            }
+        })).await?;
+
+        Ok(files)
     }
 }

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use futures::stream::BoxStream;
 use futures_util::Stream;
 use gethostname::gethostname;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -20,6 +21,7 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -36,10 +38,7 @@ use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, GetOplogRequest, GetOplogResponse,
-    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped,
-    InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest, UpdateWorkerResponse,
+    get_file_response, get_file_success_response, ConnectWorkerRequest, DeleteWorkerRequest, GetFileRequest, GetFileResponse, GetFilesRequest, GetFilesResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest, UpdateWorkerResponse
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -60,9 +59,7 @@ use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -1118,6 +1115,100 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         })
     }
 
+    async fn get_files_internal(
+        &self,
+        request: GetFilesRequest,
+    ) -> Result<GetFilesResponse, GolemError> {
+        let GetFilesRequest {
+            worker_id,
+            account_id,
+        } = request;
+
+        let worker_id = worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+
+        let account_id = account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+
+        let metadata = self.worker_service().get(&owned_worker_id).await;
+        self.validate_worker_status(&owned_worker_id, &metadata)
+            .await?;
+
+        let metadata = metadata.unwrap();
+
+        let worker = Worker::get_or_create_suspended(
+            self,
+            &owned_worker_id,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
+
+        todo!();
+
+        Ok(GetFilesResponse {
+            result: None,
+        })
+    }
+
+    async fn get_file_internal(
+        &self,
+        request: GetFileRequest,
+    ) -> Result<<Self as WorkerExecutor>::GetFileStream, GolemError> {
+        let GetFileRequest {
+            worker_id,
+            account_id,
+            path,
+        } = request;
+
+        let worker_id = worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+
+        let account_id = account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+
+        let path = PathBuf::from(path);
+
+        // self.get_or_create_pending(request)
+
+        // match tokio::fs::read_dir(path).await {
+        //     Ok(read_dir) => ,
+        //     Err(err) => match err.kind() {
+        //         io::ErrorKind::N
+        //     }
+        // }
+        // let file = tokio::fs::File::open(path)
+
+        // golem::workerexecutor::v1::GetFileContentsRequest
+
+        unimplemented!();
+
+        // Ok(GetFileResponse {
+        //     // result: Some(
+        //     //     golem::workerexecutor::v1::get_files_response::Result::Success(
+        //     //         golem::workerexecutor::v1::GetFilesSuccessResponse {
+                        
+        //     //         },
+        //     //     ),
+        //     // ),
+        //     result: None,
+        // })
+    }
+
     fn create_proto_metadata(
         metadata: WorkerMetadata,
         latest_status: WorkerStatusRecord,
@@ -1826,6 +1917,69 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &err,
             ),
         }
+    }
+
+    async fn get_files(
+        &self,
+        request: Request<GetFilesRequest>,
+    ) -> Result<Response<GetFilesResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_files",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let result = self
+            .get_files_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(response) => record.succeed(Ok(Response::new(response))),
+            Err(err) => record.fail(
+                Ok(Response::new(GetFilesResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::get_files_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
+        }
+    }
+
+    type GetFileStream = BoxStream<'static, Result<GetFileResponse, Status>>;
+
+    async fn get_file(
+        &self,
+        request: Request<GetFileRequest>,
+    ) -> ResponseResult<Self::GetFileStream> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_file",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let result = self
+            .get_file_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(response) => record.succeed(Ok(Response::new(response))),
+            Err(err) => {
+                record.fail((), &err);
+                Ok(Response::new(Box::pin(futures::stream::once(async move {
+                    Ok(GetFileResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::get_file_response::Result::Failure(
+                                err.into(),
+                            ),
+                        ),
+                    })
+                }))))
+            }
+        }   
     }
 }
 

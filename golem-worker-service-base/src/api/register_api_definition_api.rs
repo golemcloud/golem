@@ -1,3 +1,4 @@
+use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::VersionedComponentId;
 use poem_openapi::*;
@@ -128,6 +129,8 @@ pub struct GolemWorkerBinding {
     pub worker_name: String,
     pub idempotency_key: Option<String>,
     pub response: String,
+    #[serde(default)]
+    pub binding_type: WorkerBindingType,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -274,11 +277,14 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             None
         };
 
+        let binding_type = value.binding_type.into();
+
         Ok(Self {
             component_id: value.component_id,
             worker_name: worker_id,
             idempotency_key,
             response,
+            binding_type,
         })
     }
 }
@@ -301,11 +307,14 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             None
         };
 
+        let binding_type = self.binding_type.into();
+
         Ok(crate::worker_binding::GolemWorkerBinding {
             component_id: self.component_id,
             worker_name,
             idempotency_key,
             response,
+            binding_type,
         })
     }
 }
@@ -495,11 +504,15 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
 
         let idempotency_key = value.idempotency_key.map(|key| key.into());
 
+        let binding_type: golem_api_grpc::proto::golem::apidefinition::WorkerBindingType = value.binding_type.into();
+        let binding_type = Some(binding_type as i32);
+
         let result = grpc_apidefinition::WorkerBinding {
             component: Some(value.component_id.into()),
             worker_name,
             idempotency_key,
             response,
+            binding_type,
         };
 
         Ok(result)
@@ -510,15 +523,21 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::WorkerBinding) -> Result<Self, Self::Error> {
+        let binding_type = value.binding_type().into();
+
         let response: crate::worker_binding::ResponseMapping = {
             let r: Expr = value.response.ok_or("response is missing")?.try_into()?;
             crate::worker_binding::ResponseMapping(r)
         };
-
-        let worker_name = value
-            .worker_name
-            .ok_or("worker name is missing")?
-            .try_into()?;
+        
+        let worker_name: Expr = match value.worker_name {
+            Some(worker_name) => worker_name.try_into()?,
+            None => match binding_type {
+                WorkerBindingType::Default => Err("worker name is missing")?,
+                // file-server bindings are allowed to be anonymous
+                WorkerBindingType::FileServer => Expr::empty_expr(),
+            }
+        };
 
         let component_id = value.component.ok_or("component is missing")?.try_into()?;
 
@@ -533,9 +552,35 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             worker_name,
             idempotency_key,
             response,
+            binding_type,
         };
 
         Ok(result)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, Encode, Decode, Enum)]
+pub enum WorkerBindingType {
+    #[default]
+    Default,
+    FileServer,
+}
+
+impl From<golem_api_grpc::proto::golem::apidefinition::WorkerBindingType> for WorkerBindingType {
+    fn from(value: golem_api_grpc::proto::golem::apidefinition::WorkerBindingType) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::Default => Self::Default,
+            golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::FileServer => Self::FileServer,
+        }
+    }
+}
+
+impl From<WorkerBindingType> for golem_api_grpc::proto::golem::apidefinition::WorkerBindingType {
+    fn from(value: WorkerBindingType) -> Self {
+        match value {
+            WorkerBindingType::Default => Self::Default,
+            WorkerBindingType::FileServer => Self::FileServer,
+        }
     }
 }
 

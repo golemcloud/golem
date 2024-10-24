@@ -1,4 +1,4 @@
-use crate::worker_binding::{RequestDetails, RibInputTypeMismatch};
+use crate::worker_binding::{FileServerResult, RequestDetails, RibInputTypeMismatch};
 use crate::worker_service_rib_interpreter::EvaluationError;
 
 use http::StatusCode;
@@ -47,8 +47,24 @@ impl ToResponse<poem::Response> for String {
     }
 }
 
+impl ToResponse<poem::Response> for FileServerResult {
+    fn to_response(&self, _request_details: &RequestDetails) -> poem::Response {
+        let status = self.status();
+        let headers = self.headers();
+        let body = self.body();
+        let mut response = poem::Response::builder()
+            .status(status)
+            .body(body);
+
+        response.headers_mut()
+            .extend(headers);
+        
+        response
+    }
+}
+
 mod internal {
-    use crate::worker_binding::RequestDetails;
+    use crate::worker_binding::{FileServerResult, HttpRequestDetails, RequestDetails};
     use crate::worker_bridge_execution::content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
@@ -238,6 +254,82 @@ mod internal {
                     "Header expression is not a record. It is resolved to {}",
                     header_map.to_json_value()
                 )),
+            }
+        }
+    }
+
+    
+    impl FileServerResult<Vec<u8>> {
+        const EMPTY_RESPONSE_DETAILS: TypeAnnotatedValue = TypeAnnotatedValue::Bool(false);
+
+        fn response_details(&self) -> &TypeAnnotatedValue {
+            match self {
+                FileServerResult::Ok { response_details, .. } => response_details.as_ref(),
+                FileServerResult::SimpleErr(_) => None,
+                FileServerResult::Err(type_annotated_value) => Some(type_annotated_value),
+            }.unwrap_or(&Self::EMPTY_RESPONSE_DETAILS)
+        }
+
+        fn default_status(&self) -> http::StatusCode {
+            match self {
+                FileServerResult::Ok { .. } => http::StatusCode::OK,
+                FileServerResult::SimpleErr(_) => http::StatusCode::INTERNAL_SERVER_ERROR,
+                FileServerResult::Err(_) => http::StatusCode::BAD_REQUEST,
+            }
+        }
+
+        pub fn status(&self) -> http::StatusCode {
+            self.response_details()
+                .get_optional(&Path::from_key("status"))
+                .as_ref()
+                .map(get_status_code)
+                .transpose()
+                .unwrap_or_default()
+                .unwrap_or_else(|| self.default_status())
+        }
+
+        pub fn headers(&self) -> http::HeaderMap {
+            let response_details = self.response_details();
+            let headers = response_details.get_optional(&Path::from_key("headers"))
+                .as_ref()
+                .map(ResolvedResponseHeaders::from_typed_value)
+                .and_then(Result::ok)
+                .unwrap_or_default();
+
+            let mut headers: http::HeaderMap = (&headers.headers).try_into()
+                .unwrap_or_default();
+
+            if let http::header::Entry::Vacant(ev) = headers.entry("content-type") {
+                if let Some(inferred_content_type) = self.inferred_content_type() {
+                    ev.insert(http::HeaderValue::from_str(&inferred_content_type).expect("inferred mime type"));
+                }
+            }
+
+            headers
+        }
+
+        fn inferred_content_type(&self) -> Option<String> {
+            if let Self::Ok { content, .. } = self {
+                infer::get(content)
+                    .as_ref()
+                    .map(infer::Type::to_string)
+            } else {
+                None
+            }
+        }
+
+        pub fn body(&self) -> poem::Body {
+            match self {
+                Self::Ok { content, .. } => poem::Body::from_bytes(bytes::Bytes::from(content.clone())),
+                Self::SimpleErr(err) => poem::Body::from_string(err.clone()),
+                Self::Err(err) => {
+                    match IntermediateHttpResponse::from(&RibInterpreterResult::Val(err.clone())) {
+                        Ok(intermediate) => intermediate
+                            .to_http_response(&RequestDetails::Http(HttpRequestDetails::empty()))
+                            .into_body(),
+                        Err(err) => poem::Body::from_string(err.to_string()),
+                    }
+                }
             }
         }
     }

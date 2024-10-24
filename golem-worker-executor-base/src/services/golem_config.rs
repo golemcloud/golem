@@ -73,7 +73,11 @@ pub struct ComponentCacheConfig {
     pub max_metadata_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
+    #[serde(default = "max_initial_files_capacity_default")]
+    pub max_initial_files_capacity: usize,
 }
+
+fn max_initial_files_capacity_default() -> usize { 32 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -395,6 +399,7 @@ impl Default for ComponentCacheConfig {
         Self {
             max_capacity: 32,
             max_metadata_capacity: 16384,
+            max_initial_files_capacity: 32,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }

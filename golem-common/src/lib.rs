@@ -18,7 +18,7 @@ use std::fmt::{Display, Formatter};
 pub mod cache;
 pub mod client;
 pub mod config;
-
+pub mod file_system;
 pub mod golem_version;
 pub mod grpc;
 pub mod metrics;

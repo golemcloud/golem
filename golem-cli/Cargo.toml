@@ -27,6 +27,7 @@ golem-rib = { path = "../golem-rib", version = "0.0.0" }
 anyhow.workspace = true
 assert2 = { workspace = true }
 async-trait = { workspace = true }
+async_zip = { workspace = true }
 base64 = "0.22.1"
 chrono = { workspace = true }
 clap = { workspace = true }

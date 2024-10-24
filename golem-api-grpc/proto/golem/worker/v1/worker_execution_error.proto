@@ -33,6 +33,7 @@ message WorkerExecutionError {
     InvalidAccount invalid_account = 21;
     WorkerNotFound worker_not_found = 22;
     ShardingNotReady sharding_not_ready = 23;
+    FileNotFound file_not_found = 24;
   }
 }
 
@@ -128,3 +129,7 @@ message WorkerNotFound {
 }
 
 message ShardingNotReady {}
+
+message FileNotFound {
+  string path = 1;
+}

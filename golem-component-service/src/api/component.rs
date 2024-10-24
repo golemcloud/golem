@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use futures_util::TryStreamExt;
+use golem_common::file_system::PackagedFiles;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_component_service_base::service::component::{
     ComponentError as ComponentServiceError, ComponentService,
@@ -67,6 +68,21 @@ pub struct UploadPayload {
     name: ComponentName,
     component_type: Option<ComponentType>,
     component: Upload,
+    files_ro: Option<Upload>,
+    files_rw: Option<Upload>,
+}
+
+#[derive(ApiRequest)]
+pub enum UpdateRequest {
+    WasmOnly(Binary<Body>),
+    Multipart(UpdatePayload),
+}
+
+#[derive(Multipart)]
+pub struct UpdatePayload {
+    component: Upload,
+    files_ro: Option<Upload>,
+    files_rw: Option<Upload>,
 }
 
 type Result<T> = std::result::Result<T, ComponentError>;
@@ -103,6 +119,11 @@ impl From<ComponentServiceError> for ComponentError {
             ComponentServiceError::ComponentStoreError { .. } => {
                 ComponentError::InternalError(Json(ErrorBody {
                     error: error.to_safe_string(),
+                }))
+            }
+            ComponentServiceError::InitialFileError { .. } => {
+                ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
                 }))
             }
         }
@@ -142,6 +163,16 @@ impl ComponentApi {
         let response = {
             let data = payload.component.into_vec().await?;
             let component_name = payload.name;
+
+            let files_ro = match payload.files_ro {
+                Some(files_ro) => PackagedFiles::from_vec(files_ro.into_vec().await?),
+                None => None,
+            };
+            let files_rw = match payload.files_rw {
+                Some(files_rw) => PackagedFiles::from_vec(files_rw.into_vec().await?),
+                None => None,
+            };
+
             self.component_service
                 .create(
                     &ComponentId::new_v4(),
@@ -149,6 +180,8 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     &DefaultNamespace::default(),
+                    files_ro,
+                    files_rw,
                 )
                 .instrument(record.span.clone())
                 .await
@@ -167,7 +200,7 @@ impl ComponentApi {
     async fn update_component(
         &self,
         component_id: Path<ComponentId>,
-        wasm: Binary<Body>,
+        request_body: UpdateRequest,
 
         /// Type of the new version of the component - if not specified, the type of the previous version
         /// is used.
@@ -177,14 +210,36 @@ impl ComponentApi {
             "update_component",
             component_id = component_id.0.to_string()
         );
+        
         let response = {
-            let data = wasm.0.into_vec().await?;
+            let mut files_ro = None;
+            let mut files_rw = None;
+            let data;
+            
+            match request_body {
+                UpdateRequest::WasmOnly(body) => {
+                    data = body.0.into_vec().await?;
+                }
+                UpdateRequest::Multipart(multipart) => {
+                    if let Some(f_ro) = multipart.files_ro {
+                        files_ro = PackagedFiles::from_vec(f_ro.into_vec().await?);
+                    }
+                    if let Some(f_rw) = multipart.files_rw {
+                        files_rw = PackagedFiles::from_vec(f_rw.into_vec().await?);
+                    }
+                    
+                    data = multipart.component.into_vec().await?;
+                }
+            }
+
             self.component_service
                 .update(
                     &component_id.0,
                     data,
                     component_type.0,
                     &DefaultNamespace::default(),
+                    files_ro,
+                    files_rw,
                 )
                 .instrument(record.span.clone())
                 .await

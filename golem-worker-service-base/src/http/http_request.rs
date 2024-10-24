@@ -110,7 +110,7 @@ mod tests {
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::path::Path;
     use crate::worker_binding::{
-        RequestDetails, RequestToWorkerBindingResolver, RibInputTypeMismatch,
+        FileServerResult, RequestDetails, RequestToWorkerBindingResolver, RibInputTypeMismatch
     };
     use crate::worker_bridge_execution::to_response::ToResponse;
     use crate::worker_bridge_execution::{
@@ -304,6 +304,12 @@ mod tests {
                 function_name,
                 function_params,
             }
+        }
+    }
+
+    impl ToResponse<TestResponse> for FileServerResult {
+        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+            panic!("{self:?}")
         }
     }
 

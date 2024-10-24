@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use crate::command::ComponentRefSplit;
+use crate::file_system::{lookup_initial_files, package_initial_files};
+use crate::model::oam::Application;
 use crate::model::{
     ComponentName, Format, GolemError, GolemResult, PathBufOrStdin, WorkerUpdateMode,
 };
@@ -21,6 +23,9 @@ use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 use golem_client::model::ComponentType;
+use golem_common::file_system::PackagedFileSet;
+use golem_common::uri::oss::uri::ComponentUri;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Subcommand, Debug)]
@@ -44,6 +49,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// The component type. If none specified, the command creates a Durable component.
         #[command(flatten)]
         component_type: ComponentTypeArg,
+
+        /// Path to a golem manifest file.
+        #[arg(short, long)]
+        manifest: Option<PathBuf>,
 
         /// Do not ask for confirmation for performing an update in case the component already exists
         #[arg(short = 'y', long)]
@@ -72,6 +81,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// Update mode - auto or manual
         #[arg(long, default_value = "auto", requires = "try_update_workers")]
         update_mode: WorkerUpdateMode,
+
+        /// Path to a golem manifest file.
+        #[arg(short, long)]
+        manifest: Option<PathBuf>,
 
         /// Do not ask for confirmation for creating a new component in case it does not exist
         #[arg(short = 'y', long)]
@@ -189,8 +202,13 @@ impl<
                 component_file,
                 component_type,
                 non_interactive,
+                manifest,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
+                let manifest = manifest.as_ref().map(Application::from_yaml_file).transpose()?;
+                let files = lookup_initial_files(manifest.as_ref(), &component_name)?;
+                let files = package_initial_files(files)
+                    .await?;
                 service
                     .add(
                         component_name,
@@ -199,6 +217,7 @@ impl<
                         Some(project_id),
                         non_interactive,
                         format,
+                        files,
                     )
                     .await
             }
@@ -208,10 +227,22 @@ impl<
                 component_type,
                 try_update_workers,
                 update_mode,
+                manifest,
                 non_interactive,
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                let manifest = manifest.as_ref().map(Application::from_yaml_file).transpose()?;
+                
+                let initial_files = if let ComponentUri::URL(component_url) = &component_name_or_uri {
+                    let component_name = ComponentName(component_url.name.clone());
+                    let files = lookup_initial_files(manifest.as_ref(), &component_name)?;
+                    package_initial_files(files)
+                        .await?
+                } else {
+                    PackagedFileSet::empty()
+                };
+
                 let mut result = service
                     .update(
                         component_name_or_uri.clone(),
@@ -220,6 +251,7 @@ impl<
                         project_id.clone(),
                         non_interactive,
                         format,
+                        initial_files,
                     )
                     .await?;
 

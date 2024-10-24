@@ -20,7 +20,7 @@ use golem_cli::model::component::ComponentView;
 use golem_client::model::{
     GolemWorkerBinding, GolemWorkerBindingWithTypeInfo, HttpApiDefinitionRequest,
     HttpApiDefinitionWithTypeInfo, MethodPattern, RibInputTypeInfo, Route, RouteWithTypeInfo,
-    VersionedComponentId,
+    VersionedComponentId, WorkerBindingType,
 };
 use golem_test_framework::config::TestDependencies;
 use libtest_mimic::{Failed, Trial};
@@ -144,6 +144,7 @@ fn golem_def_with_response(
                 worker_name: "\"foo\"".to_string(),
                 idempotency_key: None,
                 response,
+                binding_type: WorkerBindingType::Default,
             },
         }],
     }

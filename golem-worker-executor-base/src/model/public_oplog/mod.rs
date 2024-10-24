@@ -1762,6 +1762,10 @@ impl IntoValue for GolemError {
                     case_idx: 22,
                     case_value: None,
                 },
+                GolemError::FileNotFound { path } => Value::Variant {
+                    case_idx: 23,
+                    case_value: Some(Box::new(Value::Record(vec![path.into_value()]))),
+                },
             }
         }
         into_value(self, true)
@@ -1855,6 +1859,10 @@ impl IntoValue for GolemError {
                 unit_case("PreviousInvocationExited"),
                 case("Unknown", record(vec![field("details", str())])),
                 unit_case("ShardingNotReady"),
+                case(
+                    "FileNotFound",
+                    record(vec![field("path", str())]),
+                ),
             ])
         }
         get_type(true)

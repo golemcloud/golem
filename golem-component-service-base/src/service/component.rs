@@ -22,8 +22,9 @@ use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
 use async_trait::async_trait;
 use chrono::Utc;
+use golem_common::file_system::PackagedFiles;
 use golem_common::model::component_metadata::ComponentProcessingError;
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::{ComponentId, ComponentType, FileSystemPermission};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
@@ -48,6 +49,8 @@ pub enum ComponentError {
     InternalConversionError { what: String, error: String },
     #[error("Internal component store error: {message}: {error}")]
     ComponentStoreError { message: String, error: String },
+    #[error("Invalid or conflicting file path: {file_path}")]
+    InitialFileError { file_path: String },
 }
 
 impl ComponentError {
@@ -76,6 +79,7 @@ impl SafeDisplay for ComponentError {
             ComponentError::InternalRepoError(inner) => inner.to_safe_string(),
             ComponentError::InternalConversionError { .. } => self.to_string(),
             ComponentError::ComponentStoreError { .. } => self.to_string(),
+            ComponentError::InitialFileError { .. } => self.to_string(),
         }
     }
 }
@@ -123,6 +127,8 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
+        files_ro: Option<PackagedFiles>,
+        files_rw: Option<PackagedFiles>,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
@@ -131,6 +137,8 @@ pub trait ComponentService<Namespace> {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
+        files_ro: Option<PackagedFiles>,
+        files_rw: Option<PackagedFiles>,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
@@ -145,6 +153,22 @@ pub trait ComponentService<Namespace> {
         component_id: &ComponentId,
         version: Option<u64>,
         namespace: &Namespace,
+    ) -> Result<ByteStream, ComponentError>;
+
+    async fn download_initial_files(
+        &self,
+        component_id: &ComponentId,
+        version: Option<u64>,
+        namespace: &Namespace,
+        permission_type: &FileSystemPermission,
+    ) -> Result<Option<PackagedFiles>, ComponentError>;
+
+    async fn download_initial_files_stream(
+        &self,
+        component_id: &ComponentId,
+        version: Option<u64>,
+        namespace: &Namespace,
+        permission_type: &FileSystemPermission,
     ) -> Result<ByteStream, ComponentError>;
 
     async fn get_protected_data(
@@ -229,6 +253,8 @@ where
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
+        files_ro: Option<PackagedFiles>,
+        files_rw: Option<PackagedFiles>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Create component");
 
@@ -248,7 +274,9 @@ where
         );
         tokio::try_join!(
             self.upload_user_component(&component.versioned_component_id, data.clone()),
-            self.upload_protected_component(&component.versioned_component_id, data)
+            self.upload_protected_component(&component.versioned_component_id, data),
+            self.upload_initial_files(&component.versioned_component_id, files_ro, &FileSystemPermission::ReadOnly),
+            self.upload_initial_files(&component.versioned_component_id, files_rw, &FileSystemPermission::ReadWrite),
         )?;
 
         let record = component
@@ -274,6 +302,8 @@ where
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
+        files_ro: Option<PackagedFiles>,
+        files_rw: Option<PackagedFiles>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
         let created_at = Utc::now();
@@ -300,7 +330,9 @@ where
 
         tokio::try_join!(
             self.upload_user_component(&next_component.versioned_component_id, data.clone()),
-            self.upload_protected_component(&next_component.versioned_component_id, data)
+            self.upload_protected_component(&next_component.versioned_component_id, data),
+            self.upload_initial_files(&next_component.versioned_component_id, files_ro, &FileSystemPermission::ReadOnly),
+            self.upload_initial_files(&next_component.versioned_component_id, files_rw, &FileSystemPermission::ReadWrite),
         )?;
 
         let component = Component {
@@ -362,6 +394,52 @@ where
         let stream = self
             .object_store
             .get_stream(&self.get_protected_object_store_key(&versioned_component_id))
+            .await;
+
+        Ok(stream)
+    }
+
+    async fn download_initial_files(
+        &self,
+        component_id: &ComponentId,
+        version: Option<u64>,
+        namespace: &Namespace,
+        permission_type: &FileSystemPermission,
+    ) -> Result<Option<PackagedFiles>, ComponentError> {
+        let versioned_component_id = self
+            .get_versioned_component_id(component_id, version, namespace)
+            .await?
+            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
+
+        info!(namespace = %namespace, "Download initial files");
+
+        self.object_store
+            .get(&self.get_object_store_initial_files_key(&versioned_component_id, true, permission_type))
+            .await
+            .map(PackagedFiles::from_vec)
+            .tap_err(
+                |e| error!(namespace = %namespace, "Error downloading initial files - error: {}", e),
+            )
+            .map_err(|e| ComponentError::component_store_error("Error downloading initial files", e))
+    }
+
+    async fn download_initial_files_stream(
+        &self,
+        component_id: &ComponentId,
+        version: Option<u64>,
+        namespace: &Namespace,
+        permission_type: &FileSystemPermission,
+    ) -> Result<ByteStream, ComponentError> {
+        let versioned_component_id = self
+            .get_versioned_component_id(component_id, version, namespace)
+            .await?
+            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
+
+        info!(namespace = %namespace, "Download initial files as stream");
+
+        let stream = self
+            .object_store
+            .get_stream(&self.get_object_store_initial_files_key(&versioned_component_id, true, permission_type))
             .await;
 
         Ok(stream)
@@ -537,18 +615,21 @@ where
 
         if !versioned_component_ids.is_empty() {
             for versioned_component_id in versioned_component_ids {
-                self.object_store
-                    .delete(&self.get_protected_object_store_key(&versioned_component_id))
-                    .await
-                    .map_err(|e| {
-                        ComponentError::component_store_error("Failed to delete component", e)
-                    })?;
-                self.object_store
-                    .delete(&self.get_user_object_store_key(&versioned_component_id))
-                    .await
-                    .map_err(|e| {
-                        ComponentError::component_store_error("Failed to delete component", e)
-                    })?;
+                for key in [
+                    self.get_protected_object_store_key(&versioned_component_id),
+                    self.get_user_object_store_key(&versioned_component_id),
+                    self.get_object_store_initial_files_key(&versioned_component_id, false, &FileSystemPermission::ReadOnly),
+                    self.get_object_store_initial_files_key(&versioned_component_id, true, &FileSystemPermission::ReadOnly),
+                    self.get_object_store_initial_files_key(&versioned_component_id, false, &FileSystemPermission::ReadWrite),
+                    self.get_object_store_initial_files_key(&versioned_component_id, true, &FileSystemPermission::ReadWrite),
+                ] {
+                    self.object_store
+                        .delete(&key)
+                        .await
+                        .map_err(|e| {
+                            ComponentError::component_store_error("Failed to delete component", e)
+                        })?;
+                }
             }
             self.component_repo
                 .delete(namespace.to_string().as_str(), &component_id.0)
@@ -567,6 +648,17 @@ impl ComponentServiceDefault {
 
     fn get_protected_object_store_key(&self, id: &VersionedComponentId) -> String {
         format!("{id}:protected")
+    }
+
+    fn get_object_store_initial_files_key(&self, id: &VersionedComponentId, is_protected: bool, permission_type: &FileSystemPermission) -> String {
+        let file_system_permission_key = match permission_type {
+            FileSystemPermission::ReadOnly => "files_ro",
+            FileSystemPermission::ReadWrite => "files_rw",
+        };
+
+        let protected_key = if is_protected { "protected" } else { "user" };
+
+        format!("{id}:{file_system_permission_key}:{protected_key}")
     }
 
     async fn upload_user_component(
@@ -625,6 +717,25 @@ impl ComponentServiceDefault {
             }
             _ => Ok(None),
         }
+    }
+
+
+    async fn upload_initial_files(&self, user_component_id: &VersionedComponentId, files: Option<PackagedFiles>, permission_type: &FileSystemPermission) -> Result<(), ComponentError> {
+        if let Some(files) = files {
+            for (key, files) in [
+                (self.get_object_store_initial_files_key(user_component_id, false, permission_type), files.clone()),
+                (self.get_object_store_initial_files_key(user_component_id, true, permission_type), files),
+            ] {
+                self.object_store
+                    .put(&key, files.into_vec())
+                    .await
+                    .map_err(|e| {
+                        ComponentError::component_store_error("Failed to upload initial files", e)
+                    })?;
+            }
+        }
+        
+        Ok(())
     }
 }
 

@@ -22,12 +22,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use create_component_request::Data;
 use golem_api_grpc::proto::golem::component::v1::{
-    component_error, create_component_request, create_component_response,
-    get_component_metadata_response, get_components_response, update_component_request,
-    update_component_response, CreateComponentRequest, CreateComponentRequestChunk,
-    CreateComponentRequestHeader, GetComponentsRequest, GetLatestComponentRequest,
-    UpdateComponentRequest, UpdateComponentRequestChunk, UpdateComponentRequestHeader,
+    component_error, create_component_request, create_component_request_chunk, create_component_response, get_component_metadata_response, get_components_response, update_component_request, update_component_request_chunk, update_component_response, CreateComponentRequest, CreateComponentRequestChunk, CreateComponentRequestHeader, GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest, UpdateComponentRequestChunk, UpdateComponentRequestHeader
 };
+use golem_common::file_system::PackagedFileSet;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
@@ -55,6 +52,7 @@ pub trait ComponentService {
         &self,
         local_path: &Path,
         component_type: ComponentType,
+        initial_files: PackagedFileSet,
     ) -> ComponentId {
         let mut retries = 5;
         loop {
@@ -102,7 +100,7 @@ pub trait ComponentService {
                         }
                         _ => {
                             match self
-                                .add_component_with_name(local_path, &file_name, component_type)
+                                .add_component_with_name(local_path, &file_name, component_type, initial_files.clone())
                                 .await
                             {
                                 Ok(component_id) => break component_id,
@@ -136,9 +134,10 @@ pub trait ComponentService {
         &self,
         local_path: &Path,
         component_type: ComponentType,
+        initial_files: PackagedFileSet,
     ) -> Result<ComponentId, AddComponentError> {
         let file_name = local_path.file_name().unwrap().to_string_lossy();
-        self.add_component_with_name(local_path, &file_name, component_type)
+        self.add_component_with_name(local_path, &file_name, component_type, initial_files)
             .await
     }
 
@@ -147,6 +146,7 @@ pub trait ComponentService {
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
+        initial_files: PackagedFileSet,
     ) -> Result<ComponentId, AddComponentError> {
         let mut client = self.client().await;
         let mut file = File::open(local_path).await.map_err(|_| {
@@ -175,11 +175,36 @@ pub trait ComponentService {
             } else {
                 chunks.push(CreateComponentRequest {
                     data: Some(Data::Chunk(CreateComponentRequestChunk {
-                        component_chunk: buffer[0..n].to_vec(),
+                        chunk_type: Some(create_component_request_chunk::ChunkType::ComponentChunk(
+                            buffer[0..n].to_vec()
+                        ))
                     })),
                 });
             }
         }
+
+        let (initial_files_ro, initial_files_rw) = initial_files.split_vec();
+        
+        debug!("Streaming initial files: {} ro bytes, {} rw bytes", initial_files_ro.as_ref().map(|v| v.len()).unwrap_or_default(), initial_files_rw.as_ref().map(|v| v.len()).unwrap_or_default());
+
+        type ChunkFn = fn(Vec<u8>) -> create_component_request_chunk::ChunkType;
+        for (initial_files, chunk_type) in [
+            (initial_files_ro, create_component_request_chunk::ChunkType::InitialFilesRoChunk as ChunkFn),
+            (initial_files_rw, create_component_request_chunk::ChunkType::InitialFilesRwChunk as ChunkFn),
+        ] {
+            if let Some(initial_files) = initial_files {
+                for c in initial_files.chunks(4096) {
+                    let c = c.to_vec();
+                    
+                    chunks.push(CreateComponentRequest {
+                        data: Some(Data::Chunk(CreateComponentRequestChunk {
+                            chunk_type: Some(chunk_type(c))
+                        })),
+                    });
+                }
+            }
+        }
+
         let response = client
             .create_component(tokio_stream::iter(chunks))
             .await
@@ -225,6 +250,7 @@ pub trait ComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
+        initial_files: PackagedFileSet,
     ) -> u64 {
         let mut client = self.client().await;
         let mut file = File::open(local_path)
@@ -256,12 +282,35 @@ pub trait ComponentService {
                 chunks.push(UpdateComponentRequest {
                     data: Some(update_component_request::Data::Chunk(
                         UpdateComponentRequestChunk {
-                            component_chunk: buffer[0..n].to_vec(),
+                            chunk_type: Some(update_component_request_chunk::ChunkType::ComponentChunk(
+                                buffer[0..n].to_vec()
+                            ))
                         },
                     )),
                 });
             }
         }
+
+        let (initial_files_ro, initial_files_rw) = initial_files.split_vec();
+        
+        type ChunkFn = fn(Vec<u8>) -> update_component_request_chunk::ChunkType;
+        for (initial_files, chunk_type) in [
+            (initial_files_ro, update_component_request_chunk::ChunkType::InitialFilesRoChunk as ChunkFn),
+            (initial_files_rw, update_component_request_chunk::ChunkType::InitialFilesRwChunk as ChunkFn),
+        ] {
+            if let Some(initial_files) = initial_files {
+                for c in initial_files.chunks(4096) {
+                    let c = c.to_vec();
+                    
+                    chunks.push(UpdateComponentRequest {
+                        data: Some(update_component_request::Data::Chunk(UpdateComponentRequestChunk {
+                            chunk_type: Some(chunk_type(c))
+                        })),
+                    });
+                }
+            }
+        }
+
         let response = client
             .update_component(tokio_stream::iter(chunks))
             .await
