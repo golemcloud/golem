@@ -74,7 +74,7 @@ impl TryFrom<WorkerFunctionsInRibProto> for WorkerFunctionsInRib {
         let function_calls_proto = value.function_calls;
         let function_calls = function_calls_proto
             .iter()
-            .map(|x| WorkerFunctionType::try_from(x.clone()))
+            .map(|worker_function_type_proto| WorkerFunctionType::try_from(worker_function_type_proto.clone()))
             .collect::<Result<_, _>>()?;
         Ok(Self { function_calls })
     }
@@ -132,8 +132,8 @@ impl From<WorkerFunctionType> for WorkerFunctionTypeProto {
 
         WorkerFunctionTypeProto {
             function_key: Some(registry_key),
-            parameter_types: value.parameter_types.iter().map(|x| x.into()).collect(),
-            return_types: value.return_types.iter().map(|x| x.into()).collect(),
+            parameter_types: value.parameter_types.iter().map(|analysed_type| analysed_type.into()).collect(),
+            return_types: value.return_types.iter().map(|analysed_type| analysed_type.into()).collect(),
         }
     }
 }

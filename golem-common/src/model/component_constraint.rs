@@ -1,4 +1,5 @@
 use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
+use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
@@ -24,7 +25,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollecti
             function_constraints: value
                 .constraints
                 .iter()
-                .map(|x| FunctionConstraint::try_from(x.clone()))
+                .map(|constraint_proto| FunctionConstraint::try_from(constraint_proto.clone()))
                 .collect::<Result<_, _>>()?,
         };
 
@@ -33,15 +34,15 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollecti
 }
 
 impl From<FunctionConstraintCollection>
-    for golem_api_grpc::proto::golem::component::FunctionConstraintCollection
+    for FunctionConstraintCollectionProto
 {
     fn from(value: FunctionConstraintCollection) -> Self {
-        golem_api_grpc::proto::golem::component::FunctionConstraintCollection {
+        FunctionConstraintCollectionProto {
             constraints: value
                 .function_constraints
                 .iter()
-                .map(|x| {
-                    golem_api_grpc::proto::golem::component::FunctionConstraint::from(x.clone())
+                .map(|function_constraint| {
+                   FunctionConstraintProto::from(function_constraint.clone())
                 })
                 .collect(),
         }
@@ -54,7 +55,7 @@ impl From<FunctionConstraintCollection> for WorkerFunctionsInRib {
             function_calls: value
                 .function_constraints
                 .iter()
-                .map(|x| rib::WorkerFunctionType::from(x.clone()))
+                .map(|function_constraint| rib::WorkerFunctionType::from(function_constraint.clone()))
                 .collect(),
         }
     }
@@ -199,8 +200,8 @@ impl From<FunctionConstraint> for FunctionConstraintProto {
 
         FunctionConstraintProto {
             function_key: Some(registry_key),
-            parameter_types: value.parameter_types.iter().map(|x| x.into()).collect(),
-            return_types: value.return_types.iter().map(|x| x.into()).collect(),
+            parameter_types: value.parameter_types.iter().map(|analysed_type| analysed_type.into()).collect(),
+            return_types: value.return_types.iter().map(|analysed_type| analysed_type.into()).collect(),
             usage_count: value.usage_count,
         }
     }
