@@ -63,7 +63,6 @@ impl InferredExpr {
     }
 }
 
-
 impl From<InferredExpr> for Expr {
     fn from(value: InferredExpr) -> Self {
         value.0

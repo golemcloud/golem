@@ -612,7 +612,6 @@ mod compiler_tests {
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
 
-
         let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let type_annotated_value1 = TypeAnnotatedValue::F32(1.0);
@@ -920,8 +919,7 @@ mod compiler_tests {
             ]),
         );
 
-        let expr =
-            Expr::SelectField(Box::new(record), "bar_key".to_string(), InferredType::Str);
+        let expr = Expr::SelectField(Box::new(record), "bar_key".to_string(), InferredType::Str);
 
         let empty_registry = FunctionTypeRegistry::empty();
         let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
