@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package golem.component;
 import "wasm/ast/type.proto";
-import "golem/rib/worker_invoke_calls_in_rib.proto";
+import "golem/rib/registry_key.proto";
 
 message FunctionConstraint {
     golem.rib.RegistryKey function_key = 1;

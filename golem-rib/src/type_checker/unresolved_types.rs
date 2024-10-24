@@ -82,7 +82,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                     return Err(UnResolvedTypesError::new(expr));
                 }
             }
-            Expr::Multiple(exprs, _) => {
+            Expr::ExprBlock(exprs, _) => {
                 for expr in exprs {
                     queue.push_back(expr);
                 }

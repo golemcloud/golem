@@ -163,7 +163,7 @@ impl<W: Write> Writer<W> {
                 internal::write_concatenated_exprs(self, concatenated)?;
                 self.write_display("\"")
             }
-            Expr::Multiple(expr, _) => {
+            Expr::ExprBlock(expr, _) => {
                 for (idx, expr) in expr.iter().enumerate() {
                     if idx != 0 {
                         self.write_display(";")?;

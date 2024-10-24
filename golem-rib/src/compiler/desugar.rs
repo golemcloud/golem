@@ -591,7 +591,7 @@ mod desugar_tests {
 
         pub(crate) fn last_expr(expr: &Expr) -> Expr {
             match expr {
-                Expr::Multiple(exprs, _) => exprs.last().unwrap().clone(),
+                Expr::ExprBlock(exprs, _) => exprs.last().unwrap().clone(),
                 _ => expr.clone(),
             }
         }
@@ -611,7 +611,7 @@ mod desugar_tests {
                     Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
                     InferredType::Bool,
                 )),
-                Box::new(Expr::Multiple(
+                Box::new(Expr::ExprBlock(
                     vec![
                         Expr::Let(
                             VariableId::match_identifier("x".to_string(), 1),

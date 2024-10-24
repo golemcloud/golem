@@ -243,13 +243,13 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
         let mut merged_worker_functions: HashMap<ComponentId, FunctionConstraintCollection> =
             HashMap::new();
 
-        for (component_id, worker_calls_vec) in worker_functions {
-            let function_usage_collection = worker_calls_vec
+        for (component_id, worker_functions_in_rib) in worker_functions {
+            let function_constraints = worker_functions_in_rib
                 .iter()
                 .map(FunctionConstraintCollection::from_worker_functions_in_rib)
                 .collect::<Vec<_>>();
 
-            let merged_calls = FunctionConstraintCollection::try_merge(function_usage_collection)
+            let merged_calls = FunctionConstraintCollection::try_merge(function_constraints)
                 .map_err(|err| ApiDeploymentError::ApiDefinitionsConflict(err))?;
 
             merged_worker_functions.insert(component_id, merged_calls);

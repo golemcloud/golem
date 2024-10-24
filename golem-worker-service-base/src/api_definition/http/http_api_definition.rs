@@ -352,7 +352,7 @@ pub struct Route {
     pub binding: GolemWorkerBinding,
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompiledRoute {
     pub method: MethodPattern,
     pub path: AllPathPatterns,

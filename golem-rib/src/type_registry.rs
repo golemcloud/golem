@@ -14,11 +14,9 @@
 
 use crate::call_type::CallType;
 use crate::DynamicParsedFunctionName;
-use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::registry_key::KeyType;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
@@ -174,9 +172,7 @@ impl FunctionTypeRegistry {
     }
 }
 
-#[derive(
-    Hash, Eq, PartialEq, PartialOrd, Ord, Clone, Debug, Serialize, Deserialize, Encode, Decode,
-)]
+#[derive(Hash, Eq, PartialEq, PartialOrd, Ord, Clone, Debug)]
 pub enum RegistryKey {
     FunctionName(String),
     FunctionNameWithInterface {

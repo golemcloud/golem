@@ -233,7 +233,7 @@ mod pattern_match_bindings {
         let first_expr = expected_match(1);
         let second_expr = expected_match(3); // 3 because first block has 2 arms
 
-        let block = Expr::Multiple(vec![first_expr, second_expr], InferredType::Unknown);
+        let block = Expr::ExprBlock(vec![first_expr, second_expr], InferredType::Unknown);
 
         assert_eq!(expr, block);
     }
@@ -302,7 +302,7 @@ mod pattern_match_bindings {
             let let_binding = Expr::let_binding("x", Expr::number(1f64));
             let identifier_expr =
                 Expr::Identifier(VariableId::Global("x".to_string()), InferredType::Unknown);
-            let block = Expr::Multiple(vec![let_binding, identifier_expr], InferredType::Unknown);
+            let block = Expr::ExprBlock(vec![let_binding, identifier_expr], InferredType::Unknown);
 
             Expr::PatternMatch(
                 Box::new(Expr::option(Some(Expr::identifier("x")))), // x is still global

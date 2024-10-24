@@ -100,7 +100,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 internal::handle_concat(exprs, &mut inferred_type_stack);
             }
 
-            Expr::Multiple(exprs, current_inferred_type) => {
+            Expr::ExprBlock(exprs, current_inferred_type) => {
                 internal::handle_multiple(exprs, current_inferred_type, &mut inferred_type_stack);
             }
 
@@ -509,7 +509,7 @@ mod internal {
         };
 
         let new_multiple =
-            Expr::Multiple(new_exprs, current_inferred_type.merge(new_inferred_type));
+            Expr::ExprBlock(new_exprs, current_inferred_type.merge(new_inferred_type));
         inferred_type_stack.push_front(new_multiple);
     }
 
@@ -1058,7 +1058,7 @@ mod type_pull_up_tests {
         expr.infer_all_identifiers().unwrap();
         let new_expr = expr.pull_types_up().unwrap();
 
-        let expected = Expr::Multiple(
+        let expected = Expr::ExprBlock(
             vec![
                 Expr::Let(
                     VariableId::local("input", 0),

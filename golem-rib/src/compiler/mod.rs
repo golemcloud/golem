@@ -50,7 +50,7 @@ pub fn compile_with_limited_globals(
         WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
 
     let global_input_type_info =
-        RibInputTypeInfo::from_expr(&inferred_expr.0).map_err(|e| format!("Error: {}", e))?;
+        RibInputTypeInfo::from_expr(&inferred_expr).map_err(|e| format!("Error: {}", e))?;
 
     if let Some(allowed_global_variables) = &allowed_global_variables {
         let mut un_allowed_variables = vec![];
@@ -70,7 +70,7 @@ pub fn compile_with_limited_globals(
         }
     }
 
-    let byte_code = RibByteCode::from_expr(inferred_expr.0.clone())?;
+    let byte_code = RibByteCode::from_expr(&inferred_expr)?;
 
     Ok(CompilerOutput {
         worker_invoke_calls: function_calls_identified,

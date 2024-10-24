@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Expr;
+use crate::{Expr, InferredExpr};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::RibInputType as ProtoRibInputType;
 use golem_wasm_ast::analysis::AnalysedType;
@@ -33,13 +33,13 @@ impl RibInputTypeInfo {
         }
     }
 
-    // TODO; Convert this to immtutable
-    pub fn from_expr(expr: &Expr) -> Result<RibInputTypeInfo, String> {
+    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibInputTypeInfo, String> {
+        let expr: Expr = Expr::from(inferred_expr.clone());
         let mut queue = VecDeque::new();
 
         let mut global_variables = HashMap::new();
 
-        queue.push_back(expr);
+        queue.push_back(&expr);
 
         while let Some(expr) = queue.pop_back() {
             match expr {
