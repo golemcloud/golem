@@ -33,16 +33,14 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollecti
     }
 }
 
-impl From<FunctionConstraintCollection>
-    for FunctionConstraintCollectionProto
-{
+impl From<FunctionConstraintCollection> for FunctionConstraintCollectionProto {
     fn from(value: FunctionConstraintCollection) -> Self {
         FunctionConstraintCollectionProto {
             constraints: value
                 .function_constraints
                 .iter()
                 .map(|function_constraint| {
-                   FunctionConstraintProto::from(function_constraint.clone())
+                    FunctionConstraintProto::from(function_constraint.clone())
                 })
                 .collect(),
         }
@@ -55,7 +53,9 @@ impl From<FunctionConstraintCollection> for WorkerFunctionsInRib {
             function_calls: value
                 .function_constraints
                 .iter()
-                .map(|function_constraint| rib::WorkerFunctionType::from(function_constraint.clone()))
+                .map(|function_constraint| {
+                    rib::WorkerFunctionType::from(function_constraint.clone())
+                })
                 .collect(),
         }
     }
@@ -200,8 +200,16 @@ impl From<FunctionConstraint> for FunctionConstraintProto {
 
         FunctionConstraintProto {
             function_key: Some(registry_key),
-            parameter_types: value.parameter_types.iter().map(|analysed_type| analysed_type.into()).collect(),
-            return_types: value.return_types.iter().map(|analysed_type| analysed_type.into()).collect(),
+            parameter_types: value
+                .parameter_types
+                .iter()
+                .map(|analysed_type| analysed_type.into())
+                .collect(),
+            return_types: value
+                .return_types
+                .iter()
+                .map(|analysed_type| analysed_type.into())
+                .collect(),
             usage_count: value.usage_count,
         }
     }
