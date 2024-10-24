@@ -1239,6 +1239,95 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 #[test]
 #[tracing::instrument]
+#[timeout(120000)]
+async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let worker_id = WorkerId {
+        component_id,
+        worker_name: "searchoplog1".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec![Value::String("test-user-1".to_string())],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::F32(999999.0),
+                Value::U32(1),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(10),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{update-item-quantity}",
+            vec![Value::String("G1002".to_string()), Value::U32(20)],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
+        .await;
+
+    let _ = deps
+        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
+        .await;
+
+    let _oplog = deps.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+
+    let result1 = deps.search_oplog(&worker_id, "G1002").await;
+
+    let result2 = deps.search_oplog(&worker_id, "imported-function").await;
+
+    let result3 = deps
+        .search_oplog(&worker_id, "product-id:G1001 OR product-id:G1000")
+        .await;
+
+    assert_eq!(result1.len(), 4); // two invocations and two log messages
+    assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
+    assert_eq!(result3.len(), 2); // two invocations
+}
+
+#[test]
+#[tracing::instrument]
 #[timeout(600000)]
 async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let component_id = deps.store_unique_component("counters").await;

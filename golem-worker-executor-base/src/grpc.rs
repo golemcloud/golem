@@ -39,7 +39,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     ConnectWorkerRequest, DeleteWorkerRequest, GetOplogRequest, GetOplogResponse,
     GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
     GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped,
-    InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAndAwaitWorkerSuccess, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse,
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -54,7 +55,9 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 
-use crate::model::public_oplog::{find_component_version_at, get_public_oplog_chunk};
+use crate::model::public_oplog::{
+    find_component_version_at, get_public_oplog_chunk, search_public_oplog,
+};
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
@@ -1121,6 +1124,91 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         })
     }
 
+    async fn search_oplog_internal(
+        &self,
+        request: SearchOplogRequest,
+    ) -> Result<SearchOplogResponse, GolemError> {
+        let worker_id = request
+            .worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+
+        let account_id = request
+            .account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+
+        let chunk = match request.cursor {
+            Some(cursor) => {
+                search_public_oplog(
+                    self.component_service(),
+                    self.oplog_service(),
+                    &owned_worker_id,
+                    cursor.current_component_version,
+                    OplogIndex::from_u64(cursor.next_oplog_index),
+                    min(request.count as usize, 100), // TODO: configurable maximum,
+                    &request.query,
+                )
+                .await
+                .map_err(GolemError::unknown)?
+            }
+            None => {
+                let start = OplogIndex::INITIAL;
+                let initial_component_version =
+                    find_component_version_at(self.oplog_service(), &owned_worker_id, start)
+                        .await?;
+                search_public_oplog(
+                    self.component_service(),
+                    self.oplog_service(),
+                    &owned_worker_id,
+                    initial_component_version,
+                    start,
+                    min(request.count as usize, 100), // TODO: configurable maximum,
+                    &request.query,
+                )
+                .await
+                .map_err(GolemError::unknown)?
+            }
+        };
+
+        let next = if chunk.entries.is_empty() {
+            None
+        } else {
+            Some(golem::worker::OplogCursor {
+                next_oplog_index: chunk.next_oplog_index.into(),
+                current_component_version: chunk.current_component_version,
+            })
+        };
+
+        Ok(SearchOplogResponse {
+            result: Some(
+                golem::workerexecutor::v1::search_oplog_response::Result::Success(
+                    golem::workerexecutor::v1::SearchOplogSuccessResponse {
+                        entries: chunk
+                            .entries
+                            .into_iter()
+                            .map(|(idx, entry)| {
+                                entry.try_into().map(|entry: golem::worker::OplogEntry| {
+                                    golem::worker::OplogEntryWithIndex {
+                                        oplog_index: idx.into(),
+                                        entry: Some(entry),
+                                    }
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(GolemError::unknown)?,
+                        next,
+                        last_index: chunk.last_index.into(),
+                    },
+                ),
+            ),
+        })
+    }
+
     fn create_proto_metadata(
         metadata: WorkerMetadata,
         latest_status: WorkerStatusRecord,
@@ -1822,6 +1910,35 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(Response::new(GetOplogResponse {
                     result: Some(
                         golem::workerexecutor::v1::get_oplog_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
+        }
+    }
+
+    async fn search_oplog(
+        &self,
+        request: Request<SearchOplogRequest>,
+    ) -> Result<Response<SearchOplogResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "search_oplog",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let result = self
+            .search_oplog_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(response) => record.succeed(Ok(Response::new(response))),
+            Err(err) => record.fail(
+                Ok(Response::new(SearchOplogResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::search_oplog_response::Result::Failure(
                             err.clone().into(),
                         ),
                     ),

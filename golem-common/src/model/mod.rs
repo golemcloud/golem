@@ -50,6 +50,7 @@ use uuid::{uuid, Uuid};
 pub mod component_constraint;
 pub mod component_metadata;
 pub mod exports;
+pub mod lucene;
 pub mod oplog;
 pub mod public_oplog;
 pub mod regions;

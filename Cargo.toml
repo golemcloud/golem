@@ -79,6 +79,7 @@ clap = { version = "4.5.4", features = [
     "help",
 ] }
 cli-table = "0.4.7"
+combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.3.0"
 ctor = "0.2.6"
@@ -95,7 +96,7 @@ futures-core = "0.3.29"
 futures-util = "0.3.29"
 git-version = "0.3.9"
 golem-wasm-ast = "1.0.1"
-golem-wasm-rpc = { version = "1.0.6", default-features = false, features = [
+golem-wasm-rpc = { version = "1.0.7", default-features = false, features = [
     "host",
 ] }
 
@@ -164,7 +165,7 @@ testcontainers-modules = { version = "0.11.2", features = [
     "redis",
     "minio",
 ] }
-test-r = "0.0.13"
+test-r = "0.0.14"
 thiserror = "1.0.56"
 tokio = { version = "1.0", features = [
     "macros",

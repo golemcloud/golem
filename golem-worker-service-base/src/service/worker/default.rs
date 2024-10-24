@@ -28,18 +28,18 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, InterruptWorkerRequest,
-    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
+    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::OplogCursor;
+use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
     ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::model::{
-    GetOplogResponse, GolemErrorUnknown, ResourceLimits, WorkerMetadata,
+    GetOplogResponse, GolemErrorUnknown, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
 };
 use golem_service_base::routing_table::HasRoutingTableService;
 use golem_service_base::{
@@ -233,6 +233,16 @@ pub trait WorkerService<AuthCtx> {
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> Result<GetOplogResponse, WorkerServiceError>;
+
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        query: String,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
@@ -870,8 +880,8 @@ where
                                 last_index,
                             },
                         )),
-                } => Ok(GetOplogResponse {
-                    entries: entries
+                } => {
+                    let entries: Vec<PublicOplogEntry> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
@@ -879,11 +889,23 @@ where
                             GolemError::Unknown(GolemErrorUnknown {
                                 details: format!("Unexpected oplog entries in error: {err}"),
                             })
-                        })?,
-                    next: next.map(|c| c.into()),
-                    first_index_in_chunk,
-                    last_index,
-                }),
+                        })?;
+                    Ok(GetOplogResponse {
+                        entries: entries
+                            .into_iter()
+                            .enumerate()
+                            .map(|(idx, entry)| PublicOplogEntryWithIndex {
+                                oplog_index: OplogIndex::from_u64(
+                                    (first_index_in_chunk) + idx as u64,
+                                ),
+                                entry,
+                            })
+                            .collect(),
+                        next: next.map(|c| c.into()),
+                        first_index_in_chunk,
+                        last_index,
+                    })
+                }
                 workerexecutor::v1::GetOplogResponse {
                     result: Some(workerexecutor::v1::get_oplog_response::Result::Failure(err)),
                 } => Err(err.into()),
@@ -892,6 +914,70 @@ where
             WorkerServiceError::InternalCallError,
         )
         .await
+    }
+
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        query: String,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<GetOplogResponse, WorkerServiceError> {
+        let worker_id = worker_id.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                info!("Search oplog");
+                let worker_id = worker_id.clone();
+                let query_clone = query.clone();
+                Box::pin(
+                    worker_executor_client.search_oplog(workerexecutor::v1::SearchOplogRequest {
+                        worker_id: Some(worker_id.into()),
+                        query: query_clone,
+                        cursor: cursor.clone().map(|c| c.into()),
+                        count,
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::SearchOplogResponse {
+                    result:
+                    Some(golem_api_grpc::proto::golem::workerexecutor::v1::search_oplog_response::Result::Success(
+                             workerexecutor::v1::SearchOplogSuccessResponse {
+                                 entries,
+                                 next,
+                                 last_index,
+                             },
+                         )),
+                } => {
+                    let entries: Vec<PublicOplogEntryWithIndex> = entries
+                        .into_iter()
+                        .map(|e| e.try_into())
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|err| {
+                            GolemError::Unknown(GolemErrorUnknown {
+                                details: format!("Unexpected oplog entries in error: {err}"),
+                            })
+                        })?;
+                    let first_index_in_chunk =  entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
+                    Ok(GetOplogResponse {
+                        entries,
+                        next: next.map(|c| c.into()),
+                        first_index_in_chunk,
+                        last_index,
+                    })
+                }
+                SearchOplogResponse {
+                    result: Some(workerexecutor::v1::search_oplog_response::Result::Failure(err)),
+                } => Err(err.into()),
+                SearchOplogResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+            .await
     }
 }
 

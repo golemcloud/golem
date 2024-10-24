@@ -493,9 +493,10 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                 .get_oplog(
                     &worker_urn.id.component_id.0,
                     &worker_name_required(&worker_urn)?,
-                    from,
+                    Some(from),
                     100,
                     cursor.as_ref(),
+                    None,
                 )
                 .await?;
 
@@ -509,13 +510,46 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
             if chunk.entries.is_empty() {
                 break;
             } else {
-                entries.extend(
-                    chunk
-                        .entries
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, e)| (chunk.first_index_in_chunk + i as u64, e)),
-                );
+                entries.extend(chunk.entries.into_iter().map(|e| (e.oplog_index, e.entry)));
+                cursor = chunk.next;
+            }
+        }
+
+        Ok(entries)
+    }
+
+    async fn search_oplog(
+        &self,
+        worker_urn: WorkerUrn,
+        query: String,
+    ) -> Result<Vec<(u64, PublicOplogEntry)>, GolemError> {
+        let mut entries = Vec::new();
+        let mut cursor: Option<OplogCursor> = None;
+
+        loop {
+            let chunk = self
+                .client
+                .get_oplog(
+                    &worker_urn.id.component_id.0,
+                    &worker_name_required(&worker_urn)?,
+                    None,
+                    100,
+                    cursor.as_ref(),
+                    Some(&query),
+                )
+                .await?;
+
+            trace!(
+                "Got {} oplog entries starting from {}, last index is {}",
+                chunk.entries.len(),
+                chunk.first_index_in_chunk,
+                chunk.last_index
+            );
+
+            if chunk.entries.is_empty() {
+                break;
+            } else {
+                entries.extend(chunk.entries.into_iter().map(|e| (e.oplog_index, e.entry)));
                 cursor = chunk.next;
             }
         }
