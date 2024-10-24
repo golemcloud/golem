@@ -8,6 +8,7 @@ import public "golem/component/component.proto";
 import public "golem/component/component_type.proto";
 import public "golem/component/v1/component_error.proto";
 import public "golem/component/component_id.proto";
+import public "golem/component/component_constraints.proto";
 
 service ComponentService {
   rpc GetComponents (GetComponentsRequest) returns (GetComponentsResponse);
@@ -17,6 +18,23 @@ service ComponentService {
   rpc GetLatestComponentMetadata (GetLatestComponentRequest) returns (GetComponentMetadataResponse);
   rpc UpdateComponent (stream UpdateComponentRequest) returns (UpdateComponentResponse);
   rpc GetComponentMetadata(GetVersionedComponentRequest) returns (GetComponentMetadataResponse);
+  rpc CreateComponentConstraints(CreateComponentConstraintsRequest) returns (CreateComponentConstraintsResponse);
+}
+
+message CreateComponentConstraintsRequest {
+  golem.common.ProjectId projectId = 1;
+  ComponentConstraints componentConstraints = 2;
+}
+
+message CreateComponentConstraintsResponse {
+  oneof result {
+    CreateComponentConstraintsSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message CreateComponentConstraintsSuccessResponse {
+  ComponentConstraints components = 1;
 }
 
 message GetComponentsRequest {

@@ -210,6 +210,9 @@ mod conversion {
                 ApiDeploymentError::InternalConversionError { .. } => {
                     ApiEndpointError::internal(error)
                 }
+                ApiDeploymentError::ComponentConstraintCreateError(_) => {
+                    ApiEndpointError::internal(error)
+                }
             }
         }
     }

@@ -269,12 +269,12 @@ mod internal {
                 )?));
             }
 
-            Expr::Call(invocation_name, arguments, inferred_type) => {
+            Expr::Call(call_type, arguments, inferred_type) => {
                 for expr in arguments.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
 
-                match invocation_name {
+                match call_type {
                     CallType::Function(parsed_function_name) => {
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
@@ -285,11 +285,13 @@ mod internal {
                             )?)
                         };
 
+                        // Invoke Function after resolving the function name
                         instructions
                             .push(RibIR::InvokeFunction(arguments.len(), function_result_type));
 
                         let site = parsed_function_name.site.clone();
 
+                        // Resolve the function name and update stack
                         match &parsed_function_name.function {
                             DynamicParsedFunctionReference::Function { function } => instructions
                                 .push(RibIR::CreateFunctionName(

@@ -1,6 +1,8 @@
+use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::ComponentType;
+use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
+use rib::WorkerFunctionsInRib;
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
@@ -13,6 +15,50 @@ pub struct Component<Namespace> {
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub component_type: ComponentType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComponentConstraints<Namespace> {
+    pub namespace: Namespace,
+    pub component_id: ComponentId,
+    pub constraints: FunctionConstraintCollection,
+}
+
+impl<Namespace: Clone> ComponentConstraints<Namespace> {
+    pub fn init(
+        namespace: &Namespace,
+        component_id: &ComponentId,
+        worker_functions_in_rib: WorkerFunctionsInRib,
+    ) -> ComponentConstraints<Namespace> {
+        ComponentConstraints {
+            namespace: namespace.clone(),
+            component_id: component_id.clone(),
+            constraints: FunctionConstraintCollection {
+                function_usages: worker_functions_in_rib
+                    .function_calls
+                    .iter()
+                    .map(FunctionConstraint::from_worker_function_in_rib)
+                    .collect(),
+            },
+        }
+    }
+
+    pub fn update_with(
+        &self,
+        function_usages: &FunctionConstraintCollection,
+    ) -> Result<ComponentConstraints<Namespace>, String> {
+        let function_usage_collection = FunctionConstraintCollection::try_merge(vec![
+            self.constraints.clone(),
+            function_usages.clone(),
+        ])?;
+        let component_constraints = ComponentConstraints {
+            namespace: self.namespace.clone(),
+            component_id: self.component_id.clone(),
+            constraints: function_usage_collection,
+        };
+
+        Ok(component_constraints)
+    }
 }
 
 impl<Namespace> Component<Namespace> {

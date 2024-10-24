@@ -929,8 +929,28 @@ impl DynamicParsedFunctionName {
         }
     }
 
-    pub fn function_name(&self) -> String {
+    pub fn function_name_with_prefix_identifiers(&self) -> String {
         self.to_parsed_function_name().function.function_name()
+    }
+
+    // Usually resource name in the real metadata consist of prefixes such as [constructor]
+    // However, the one obtained through the dynamic-parsed-function-name is simple without these prefix
+    pub fn resource_name_simplified(&self) -> Option<String> {
+        self.to_parsed_function_name()
+            .function
+            .resource_name()
+            .cloned()
+    }
+
+    // Usually resource method in the real metadata consist of prefixes such as [method]
+    pub fn resource_method_name_simplified(&self) -> Option<String> {
+        self.to_parsed_function_name()
+            .function
+            .resource_method_name()
+    }
+
+    pub fn raw_resource_params_mut(&mut self) -> Option<&mut Vec<Expr>> {
+        self.function.raw_resource_params_mut()
     }
 
     //

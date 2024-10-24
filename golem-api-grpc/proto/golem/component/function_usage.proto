@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+package golem.component;
+import "wasm/ast/type.proto";
+import "golem/rib/worker_invoke_calls_in_rib.proto";
+
+message FunctionConstraint {
+    golem.rib.RegistryKey function_key = 1;
+    repeated wasm.ast.Type parameter_types = 2;
+    repeated wasm.ast.Type return_types = 3;
+    uint32 usage_count = 4;
+}

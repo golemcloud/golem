@@ -1,4 +1,3 @@
-use crate::call_type::CallType;
 use crate::type_checker::{Path, TypeMismatchError, UnResolvedTypesError};
 use crate::{Expr, FunctionTypeRegistry, RegistryKey, TypeName};
 use golem_wasm_ast::analysis::AnalysedType;
@@ -32,20 +31,20 @@ pub fn check_type_errors_in_function_call(
 
 pub enum FunctionCallTypeError {
     InvalidFunctionCall {
-        function_name: CallType,
+        function_call_name: String,
     },
     TypeMisMatch {
-        call_type: CallType,
+        function_call_name: String,
         argument: Expr,
         error: TypeMismatchError,
     },
     MissingRecordFields {
-        call_type: CallType,
+        function_call_name: String,
         argument: Expr,
         missing_fields: Vec<Path>,
     },
     UnResolvedTypes {
-        call_type: CallType,
+        function_call_name: String,
         argument: Expr,
         unresolved_error: UnResolvedTypesError,
         expected_type: AnalysedType,
@@ -55,7 +54,9 @@ pub enum FunctionCallTypeError {
 impl Display for FunctionCallTypeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FunctionCallTypeError::InvalidFunctionCall { function_name } => {
+            FunctionCallTypeError::InvalidFunctionCall {
+                function_call_name: function_name,
+            } => {
                 write!(
                     f,
                     "Function {} is not defined in the registry",
@@ -63,7 +64,7 @@ impl Display for FunctionCallTypeError {
                 )
             }
             FunctionCallTypeError::TypeMisMatch {
-                call_type,
+                function_call_name: call_type,
                 argument,
                 error,
             } => {
@@ -74,7 +75,7 @@ impl Display for FunctionCallTypeError {
                 )
             }
             FunctionCallTypeError::MissingRecordFields {
-                call_type,
+                function_call_name: call_type,
                 argument,
                 missing_fields,
                 ..
@@ -93,7 +94,7 @@ impl Display for FunctionCallTypeError {
             }
 
             FunctionCallTypeError::UnResolvedTypes {
-                call_type,
+                function_call_name: call_type,
                 argument,
                 unresolved_error,
                 expected_type,
@@ -128,7 +129,7 @@ mod internal {
             .types
             .get(&RegistryKey::from_call_type(call_type))
             .ok_or(FunctionCallTypeError::InvalidFunctionCall {
-                function_name: call_type.clone(),
+                function_call_name: call_type.to_string(),
             })?;
 
         let expected_arg_types = registry_value.argument_types();
@@ -151,7 +152,7 @@ mod internal {
 
             if let Err(unresolved_error) = unresolved_type {
                 return Err(FunctionCallTypeError::UnResolvedTypes {
-                    call_type: call_type.clone(),
+                    function_call_name: call_type.to_string(),
                     argument: actual_arg.clone(),
                     unresolved_error,
                     expected_type: expected_arg_type.clone(),
@@ -163,7 +164,7 @@ mod internal {
 
             if !missing_fields.is_empty() {
                 return Err(FunctionCallTypeError::MissingRecordFields {
-                    call_type: call_type.clone(),
+                    function_call_name: call_type.to_string(),
                     argument: actual_arg.clone(),
                     missing_fields,
                 });
@@ -171,7 +172,7 @@ mod internal {
 
             type_checker::check_type_mismatch(&expected_arg_type, actual_arg_type).map_err(
                 |e| FunctionCallTypeError::TypeMisMatch {
-                    call_type: call_type.clone(),
+                    function_call_name: call_type.to_string(),
                     argument: actual_arg.clone(),
                     error: e,
                 },

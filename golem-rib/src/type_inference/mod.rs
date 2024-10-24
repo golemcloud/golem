@@ -18,6 +18,7 @@ pub use expr_visitor::*;
 pub use global_input_inference::*;
 pub use identifier_inference::*;
 pub use inference_fix_point::*;
+pub use inferred_expr::*;
 pub use name_binding::*;
 pub use pattern_match_binding::*;
 pub use rib_input_type::*;
@@ -43,6 +44,7 @@ mod variant_resolution;
 mod enum_resolution;
 mod global_input_inference;
 mod inference_fix_point;
+mod inferred_expr;
 pub(crate) mod kind;
 mod type_binding;
 

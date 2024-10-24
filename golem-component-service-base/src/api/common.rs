@@ -66,6 +66,16 @@ mod conversion {
                         error: value.to_safe_string(),
                     })
                 }
+                component::ComponentError::ComponentConstraintConflictError(_) => {
+                    component_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![value.to_safe_string()],
+                    })
+                }
+                component::ComponentError::ComponentConstraintCreateError(_) => {
+                    component_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![value.to_safe_string()],
+                    })
+                }
             };
             ComponentError { error: Some(error) }
         }
