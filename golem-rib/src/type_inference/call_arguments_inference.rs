@@ -534,7 +534,7 @@ mod function_parameters_inference_tests {
             InferredType::Sequence(vec![]), // Call Expressions return type is updated
         );
 
-        let expected = Expr::Multiple(vec![let_binding, call_expr], InferredType::Unknown);
+        let expected = Expr::ExprBlock(vec![let_binding, call_expr], InferredType::Unknown);
 
         assert_eq!(expr, expected);
     }

@@ -5,7 +5,7 @@ use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
 
 // This is very similar to WorkerFunctionsInRib data structure in `rib`, however
-// it adds more info that is specific to other golem services.
+// it adds more info that is specific to other golem services,
 // such as the total number of usages for each function in that component.
 // This forms the core of component constraints.
 #[derive(Debug, Clone, PartialEq, Eq)]
