@@ -46,7 +46,7 @@ pub enum Expr {
     Identifier(VariableId, InferredType),
     Boolean(bool, InferredType),
     Concat(Vec<Expr>, InferredType),
-    Multiple(Vec<Expr>, InferredType),
+    ExprBlock(Vec<Expr>, InferredType),
     Not(Box<Expr>, InferredType),
     GreaterThan(Box<Expr>, Box<Expr>, InferredType),
     And(Box<Expr>, Box<Expr>, InferredType),
@@ -176,7 +176,7 @@ impl Expr {
     }
 
     pub fn is_multiple(&self) -> bool {
-        matches!(self, Expr::Multiple(_, _))
+        matches!(self, Expr::ExprBlock(_, _))
     }
 
     pub fn inbuilt_variant(&self) -> Option<(String, Option<Expr>)> {
@@ -306,7 +306,7 @@ impl Expr {
             .last()
             .map_or(InferredType::Unknown, |e| e.inferred_type());
 
-        Expr::Multiple(expressions, inferred_type)
+        Expr::ExprBlock(expressions, inferred_type)
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -413,7 +413,7 @@ impl Expr {
             | Expr::Identifier(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
-            | Expr::Multiple(_, inferred_type)
+            | Expr::ExprBlock(_, inferred_type)
             | Expr::Not(_, inferred_type)
             | Expr::GreaterThan(_, _, inferred_type)
             | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
@@ -546,7 +546,7 @@ impl Expr {
             | Expr::Flags(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
-            | Expr::Multiple(_, inferred_type)
+            | Expr::ExprBlock(_, inferred_type)
             | Expr::Not(_, inferred_type)
             | Expr::GreaterThan(_, _, inferred_type)
             | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
@@ -588,7 +588,7 @@ impl Expr {
             | Expr::Flags(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
-            | Expr::Multiple(_, inferred_type)
+            | Expr::ExprBlock(_, inferred_type)
             | Expr::Not(_, inferred_type)
             | Expr::GreaterThan(_, _, inferred_type)
             | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
@@ -1214,7 +1214,7 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
                 },
             )),
-            Expr::Multiple(exprs, _) => {
+            Expr::ExprBlock(exprs, _) => {
                 Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
                     golem_api_grpc::proto::golem::rib::MultipleExpr {
                         exprs: exprs.into_iter().map(|expr| expr.into()).collect(),

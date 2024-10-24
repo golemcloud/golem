@@ -1,15 +1,16 @@
-use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
+use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
-use serde::{Deserialize, Serialize};
+use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
 
-// This is very similar to WorkerFunctionsInRib data structure, however
-// it adds the total number of usages for each function in that component
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// This is very similar to WorkerFunctionsInRib data structure in `rib`, however
+// it adds more info that is specific to other golem services,
+// such as the total number of usages for each function in that component.
+// This forms the core of component constraints.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionConstraintCollection {
-    pub function_usages: Vec<FunctionConstraint>,
+    pub function_constraints: Vec<FunctionConstraint>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>
@@ -21,10 +22,10 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollecti
         value: golem_api_grpc::proto::golem::component::FunctionConstraintCollection,
     ) -> Result<Self, Self::Error> {
         let collection = FunctionConstraintCollection {
-            function_usages: value
+            function_constraints: value
                 .constraints
                 .iter()
-                .map(|x| FunctionConstraint::try_from(x.clone()))
+                .map(|constraint_proto| FunctionConstraint::try_from(constraint_proto.clone()))
                 .collect::<Result<_, _>>()?,
         };
 
@@ -32,16 +33,14 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollecti
     }
 }
 
-impl From<FunctionConstraintCollection>
-    for golem_api_grpc::proto::golem::component::FunctionConstraintCollection
-{
+impl From<FunctionConstraintCollection> for FunctionConstraintCollectionProto {
     fn from(value: FunctionConstraintCollection) -> Self {
-        golem_api_grpc::proto::golem::component::FunctionConstraintCollection {
+        FunctionConstraintCollectionProto {
             constraints: value
-                .function_usages
+                .function_constraints
                 .iter()
-                .map(|x| {
-                    golem_api_grpc::proto::golem::component::FunctionConstraint::from(x.clone())
+                .map(|function_constraint| {
+                    FunctionConstraintProto::from(function_constraint.clone())
                 })
                 .collect(),
         }
@@ -52,9 +51,11 @@ impl From<FunctionConstraintCollection> for WorkerFunctionsInRib {
     fn from(value: FunctionConstraintCollection) -> Self {
         WorkerFunctionsInRib {
             function_calls: value
-                .function_usages
+                .function_constraints
                 .iter()
-                .map(|x| rib::WorkerFunctionInRibMetadata::from(x.clone()))
+                .map(|function_constraint| {
+                    rib::WorkerFunctionType::from(function_constraint.clone())
+                })
                 .collect(),
         }
     }
@@ -67,11 +68,11 @@ impl FunctionConstraintCollection {
         let functions = worker_functions_in_rib
             .function_calls
             .iter()
-            .map(FunctionConstraint::from_worker_function_in_rib)
+            .map(FunctionConstraint::from_worker_function_type)
             .collect::<Vec<_>>();
 
         FunctionConstraintCollection {
-            function_usages: functions,
+            function_constraints: functions,
         }
     }
     pub fn try_merge(
@@ -80,7 +81,7 @@ impl FunctionConstraintCollection {
         let mut merged_function_calls: HashMap<RegistryKey, FunctionConstraint> = HashMap::new();
 
         for wf in worker_functions {
-            for call in wf.function_usages {
+            for call in wf.function_constraints {
                 match merged_function_calls.get_mut(&call.function_key) {
                     Some(existing_call) => {
                         // Check for parameter type conflicts
@@ -119,12 +120,12 @@ impl FunctionConstraintCollection {
         merged_function_calls_vec.sort_by(|a, b| a.function_key.cmp(&b.function_key));
 
         Ok(FunctionConstraintCollection {
-            function_usages: merged_function_calls_vec,
+            function_constraints: merged_function_calls_vec,
         })
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionConstraint {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,
@@ -132,9 +133,9 @@ pub struct FunctionConstraint {
     pub usage_count: u32,
 }
 
-impl From<FunctionConstraint> for WorkerFunctionInRibMetadata {
+impl From<FunctionConstraint> for WorkerFunctionType {
     fn from(value: FunctionConstraint) -> Self {
-        WorkerFunctionInRibMetadata {
+        WorkerFunctionType {
             function_key: value.function_key.clone(),
             parameter_types: value.parameter_types.clone(),
             return_types: value.return_types.clone(),
@@ -143,13 +144,13 @@ impl From<FunctionConstraint> for WorkerFunctionInRibMetadata {
 }
 
 impl FunctionConstraint {
-    pub fn from_worker_function_in_rib(
-        worker_function_rib: &WorkerFunctionInRibMetadata,
+    pub fn from_worker_function_type(
+        worker_function_type: &WorkerFunctionType,
     ) -> FunctionConstraint {
         FunctionConstraint {
-            function_key: worker_function_rib.function_key.clone(),
-            parameter_types: worker_function_rib.parameter_types.clone(),
-            return_types: worker_function_rib.return_types.clone(),
+            function_key: worker_function_type.function_key.clone(),
+            parameter_types: worker_function_type.parameter_types.clone(),
+            return_types: worker_function_type.return_types.clone(),
             usage_count: 1,
         }
     }
@@ -199,8 +200,16 @@ impl From<FunctionConstraint> for FunctionConstraintProto {
 
         FunctionConstraintProto {
             function_key: Some(registry_key),
-            parameter_types: value.parameter_types.iter().map(|x| x.into()).collect(),
-            return_types: value.return_types.iter().map(|x| x.into()).collect(),
+            parameter_types: value
+                .parameter_types
+                .iter()
+                .map(|analysed_type| analysed_type.into())
+                .collect(),
+            return_types: value
+                .return_types
+                .iter()
+                .map(|analysed_type| analysed_type.into())
+                .collect(),
             usage_count: value.usage_count,
         }
     }

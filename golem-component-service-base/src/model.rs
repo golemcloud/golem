@@ -17,7 +17,7 @@ pub struct Component<Namespace> {
     pub component_type: ComponentType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentConstraints<Namespace> {
     pub namespace: Namespace,
     pub component_id: ComponentId,
@@ -34,10 +34,10 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
             namespace: namespace.clone(),
             component_id: component_id.clone(),
             constraints: FunctionConstraintCollection {
-                function_usages: worker_functions_in_rib
+                function_constraints: worker_functions_in_rib
                     .function_calls
                     .iter()
-                    .map(FunctionConstraint::from_worker_function_in_rib)
+                    .map(FunctionConstraint::from_worker_function_type)
                     .collect(),
             },
         }
@@ -45,16 +45,16 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
 
     pub fn update_with(
         &self,
-        function_usages: &FunctionConstraintCollection,
+        function_constraints: &FunctionConstraintCollection,
     ) -> Result<ComponentConstraints<Namespace>, String> {
-        let function_usage_collection = FunctionConstraintCollection::try_merge(vec![
+        let constraints = FunctionConstraintCollection::try_merge(vec![
             self.constraints.clone(),
-            function_usages.clone(),
+            function_constraints.clone(),
         ])?;
         let component_constraints = ComponentConstraints {
             namespace: self.namespace.clone(),
             component_id: self.component_id.clone(),
-            constraints: function_usage_collection,
+            constraints,
         };
 
         Ok(component_constraints)

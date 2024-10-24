@@ -260,7 +260,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
             Expr::Concat(exprs, _) => {
                 queue.extend(exprs);
             }
-            Expr::Multiple(expr, inferred_type) => {
+            Expr::ExprBlock(expr, inferred_type) => {
                 queue.extend(expr);
 
                 let unified_inferred_type = inferred_type.unify();

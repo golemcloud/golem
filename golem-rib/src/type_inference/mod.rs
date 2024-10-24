@@ -98,7 +98,7 @@ mod type_inference_tests {
             );
 
             let expected =
-                Expr::Multiple(vec![let_binding, call_expr], InferredType::Sequence(vec![]));
+                Expr::ExprBlock(vec![let_binding, call_expr], InferredType::Sequence(vec![]));
 
             assert_eq!(expr, expected);
         }
@@ -168,7 +168,7 @@ mod type_inference_tests {
                 InferredType::Sequence(vec![]),
             );
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![let_binding1, let_binding2, call_expr1, call_expr2],
                 InferredType::Sequence(vec![]),
             );
@@ -195,7 +195,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -227,7 +227,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -266,7 +266,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -513,7 +513,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -559,7 +559,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -596,7 +596,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -679,7 +679,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -718,7 +718,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -775,7 +775,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -820,7 +820,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -870,7 +870,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("n", 0),
@@ -931,7 +931,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -980,7 +980,7 @@ mod type_inference_tests {
 
             expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("y", 0),
@@ -1137,7 +1137,7 @@ mod type_inference_tests {
                 InferredType::Sequence(vec![]),
             );
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![let_binding1, let_binding2, match_expr_expected],
                 InferredType::Sequence(vec![]),
             );
@@ -1179,7 +1179,7 @@ mod type_inference_tests {
 
             expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -1272,7 +1272,7 @@ mod type_inference_tests {
 
             expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -1348,7 +1348,7 @@ mod type_inference_tests {
 
             expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -1429,7 +1429,7 @@ mod type_inference_tests {
 
             expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -1560,7 +1560,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -1599,7 +1599,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -1663,7 +1663,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("number", 0),
@@ -1716,7 +1716,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),
@@ -1740,7 +1740,7 @@ mod type_inference_tests {
                     Expr::Let(
                         VariableId::local("y", 0),
                         None,
-                        Box::new(Expr::Multiple(
+                        Box::new(Expr::ExprBlock(
                             vec![
                                 Expr::Let(
                                     VariableId::local("z", 0),
@@ -1846,7 +1846,7 @@ mod type_inference_tests {
             let mut expr = Expr::from_text(rib_expr).unwrap();
             expr.infer_types(&function_type_registry).unwrap();
 
-            let expected = Expr::Multiple(
+            let expected = Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("p", 0),
@@ -2042,7 +2042,7 @@ mod type_inference_tests {
         }
 
         pub(crate) fn expected_expr_for_enum_test() -> Expr {
-            Expr::Multiple(
+            Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("user", 0),
@@ -2425,7 +2425,7 @@ mod type_inference_tests {
         }
 
         pub(crate) fn expected_expr_for_select_index() -> Expr {
-            Expr::Multiple(
+            Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::local("x", 0),

@@ -196,7 +196,7 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
         _auth_ctx: &AuthCtx,
     ) -> ComponentResult<FunctionConstraintCollection> {
         Ok(FunctionConstraintCollection {
-            function_usages: vec![],
+            function_constraints: vec![],
         })
     }
 }

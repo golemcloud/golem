@@ -389,7 +389,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr).unwrap();
         expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-        let expected = Expr::Multiple(
+        let expected = Expr::ExprBlock(
             vec![
                 Expr::Let(
                     VariableId::local("x", 0),

@@ -6,7 +6,7 @@ import "golem/component/component_id.proto";
 import "golem/rib/expr.proto";
 import "golem/rib/rib_input.proto";
 import "golem/rib/rib_byte_code.proto";
-import "golem/rib/worker_invoke_calls_in_rib.proto";
+import "golem/rib/worker_functions_in_rib.proto";
 import "golem/component/versioned_component_id.proto";
 import "google/protobuf/timestamp.proto";
 

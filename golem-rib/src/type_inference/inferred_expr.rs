@@ -17,7 +17,7 @@ use crate::{DynamicParsedFunctionName, Expr, FunctionTypeRegistry, RegistryKey};
 use std::collections::{HashSet, VecDeque};
 
 #[derive(Debug, Clone)]
-pub struct InferredExpr(pub Expr);
+pub struct InferredExpr(Expr);
 
 impl InferredExpr {
     pub fn from_expr(
@@ -60,5 +60,11 @@ impl InferredExpr {
         }
 
         registry_keys
+    }
+}
+
+impl From<InferredExpr> for Expr {
+    fn from(value: InferredExpr) -> Self {
+        value.0
     }
 }
