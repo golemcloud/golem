@@ -454,8 +454,12 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         worker_ref: WorkerRef,
 
         /// Index of the first oplog entry to get. If missing, the whole oplog is returned
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "query")]
         from: Option<u64>,
+
+        /// Lucene query to look for oplog entries. If missing, the whole oplog is returned
+        #[arg(long, conflicts_with = "from")]
+        query: Option<String>,
     },
 }
 
@@ -665,12 +669,23 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                     )
                     .await
             }
-            WorkerSubcommand::Oplog { worker_ref, from } => {
+            WorkerSubcommand::Oplog {
+                worker_ref,
+                from,
+                query,
+            } => {
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
-                service
-                    .get_oplog(worker_uri, from.unwrap_or_default(), project_id)
-                    .await
+                match (from, query) {
+                    (Some(_), Some(_)) => Err(GolemError(
+                        "Only one of 'from' and 'query' can be specified".to_string(),
+                    )),
+                    (None, None) => service.get_oplog(worker_uri, 0, project_id).await,
+                    (None, Some(query)) => {
+                        service.search_oplog(worker_uri, query, project_id).await
+                    }
+                    (Some(from), None) => service.get_oplog(worker_uri, from, project_id).await,
+                }
             }
         }
     }

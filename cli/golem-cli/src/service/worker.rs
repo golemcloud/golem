@@ -197,6 +197,13 @@ pub trait WorkerService {
         from: u64,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
+    async fn search_oplog(
+        &self,
+        worker_uri: WorkerUri,
+        query: String,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct WorkerServiceLive<ProjectContext: Send + Sync> {
@@ -838,6 +845,18 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
         let worker_urn = self.resolve_uri(worker_uri, project).await?;
 
         let entries = self.client.get_oplog(worker_urn, from).await?;
+        Ok(GolemResult::Ok(Box::new(entries)))
+    }
+
+    async fn search_oplog(
+        &self,
+        worker_uri: WorkerUri,
+        query: String,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+
+        let entries = self.client.search_oplog(worker_urn, query).await?;
         Ok(GolemResult::Ok(Box::new(entries)))
     }
 }

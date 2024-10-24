@@ -100,6 +100,12 @@ pub trait WorkerClient {
         worker_urn: WorkerUrn,
         from: u64,
     ) -> Result<Vec<(u64, PublicOplogEntry)>, GolemError>;
+
+    async fn search_oplog(
+        &self,
+        worker_urn: WorkerUrn,
+        query: String,
+    ) -> Result<Vec<(u64, PublicOplogEntry)>, GolemError>;
 }
 
 pub fn worker_name_required(urn: &WorkerUrn) -> Result<String, GolemError> {
