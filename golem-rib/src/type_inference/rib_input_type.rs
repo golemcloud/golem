@@ -33,7 +33,8 @@ impl RibInputTypeInfo {
         }
     }
 
-    pub fn from_expr(expr: &mut Expr) -> Result<RibInputTypeInfo, String> {
+    // TODO; Convert this to immtutable
+    pub fn from_expr(expr: &Expr) -> Result<RibInputTypeInfo, String> {
         let mut queue = VecDeque::new();
 
         let mut global_variables = HashMap::new();
@@ -44,11 +45,11 @@ impl RibInputTypeInfo {
             match expr {
                 Expr::Identifier(variable_id, inferred_type) => {
                     if variable_id.is_global() {
-                        let analysed_type = AnalysedType::try_from(&*inferred_type)?;
+                        let analysed_type = AnalysedType::try_from(inferred_type)?;
                         global_variables.insert(variable_id.name(), analysed_type);
                     }
                 }
-                _ => expr.visit_children_mut_bottom_up(&mut queue),
+                _ => expr.visit_children_bottom_up(&mut queue),
             }
         }
 

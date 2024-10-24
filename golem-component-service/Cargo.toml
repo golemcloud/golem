@@ -17,6 +17,7 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-component-service-base = { version = "0.0.0", path = "../golem-component-service-base" }
 golem-service-base = { path = "../golem-service-base" }
+golem-rib = {path = "../golem-rib"}
 golem-wasm-rpc = { workspace = true }
 
 anyhow = { workspace = true }

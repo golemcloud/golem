@@ -162,7 +162,7 @@ pub fn golem_def(id: &str, component_id: &str) -> HttpApiDefinitionRequest {
     golem_def_with_response(
         id,
         component_id,
-        "let status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
+        "let x = golem:it/api.{checkout}();\nlet status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
             .to_string(),
     )
 }
@@ -193,7 +193,7 @@ pub fn make_open_api_file(
                 "worker-name": "\"foo\"",
                 "component-id": component_id,
                 "component-version": component_version,
-                "response" : "let status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
+                "response" : "let x = golem:it/api.{checkout}();\nlet status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
               },
               "get": {
                 "summary": "Get Cart Contents",

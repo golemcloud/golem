@@ -6,6 +6,7 @@ import "golem/component/component_id.proto";
 import "golem/rib/expr.proto";
 import "golem/rib/rib_input.proto";
 import "golem/rib/rib_byte_code.proto";
+import "golem/rib/worker_invoke_calls_in_rib.proto";
 import "golem/component/versioned_component_id.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -77,4 +78,5 @@ message CompiledWorkerBinding {
   optional golem.rib.Expr idempotency_key = 8;
   optional golem.rib.RibByteCode compiled_idempotency_key_expr = 9;
   optional golem.rib.RibInputType idempotency_key_rib_input = 10;
+  optional golem.rib.WorkerFunctionsInRib worker_functions_in_response = 11;
 }

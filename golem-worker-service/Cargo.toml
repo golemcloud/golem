@@ -21,6 +21,7 @@ harness = false
 golem-api-grpc = { path = "../golem-api-grpc" }
 golem-common = { path = "../golem-common" }
 golem-service-base = { path = "../golem-service-base" }
+golem-rib = {path = "../golem-rib"}
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 golem-worker-service-base = { path = "../golem-worker-service-base" }

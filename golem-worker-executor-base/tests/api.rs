@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{flaky, inherit_test_dep, test};
+use test_r::{inherit_test_dep, test};
 
 use std::collections::HashMap;
 use std::env;
@@ -1536,7 +1536,6 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 
 #[test]
 #[tracing::instrument]
-#[flaky(3)]
 async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_message_after_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

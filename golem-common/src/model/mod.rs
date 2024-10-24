@@ -47,6 +47,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::{uuid, Uuid};
 
+pub mod component_constraint;
 pub mod component_metadata;
 pub mod exports;
 pub mod lucene;
