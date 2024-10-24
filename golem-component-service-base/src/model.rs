@@ -37,7 +37,7 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
                 function_constraints: worker_functions_in_rib
                     .function_calls
                     .iter()
-                    .map(FunctionConstraint::from_worker_function_in_rib)
+                    .map(FunctionConstraint::from_worker_function_type)
                     .collect(),
             },
         }

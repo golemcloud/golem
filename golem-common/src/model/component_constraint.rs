@@ -67,7 +67,7 @@ impl FunctionConstraintCollection {
         let functions = worker_functions_in_rib
             .function_calls
             .iter()
-            .map(FunctionConstraint::from_worker_function_in_rib)
+            .map(FunctionConstraint::from_worker_function_type)
             .collect::<Vec<_>>();
 
         FunctionConstraintCollection {
@@ -143,13 +143,13 @@ impl From<FunctionConstraint> for WorkerFunctionType {
 }
 
 impl FunctionConstraint {
-    pub fn from_worker_function_in_rib(
-        worker_function_rib: &WorkerFunctionType,
+    pub fn from_worker_function_type(
+        worker_function_type: &WorkerFunctionType,
     ) -> FunctionConstraint {
         FunctionConstraint {
-            function_key: worker_function_rib.function_key.clone(),
-            parameter_types: worker_function_rib.parameter_types.clone(),
-            return_types: worker_function_rib.return_types.clone(),
+            function_key: worker_function_type.function_key.clone(),
+            parameter_types: worker_function_type.parameter_types.clone(),
+            return_types: worker_function_type.return_types.clone(),
             usage_count: 1,
         }
     }
