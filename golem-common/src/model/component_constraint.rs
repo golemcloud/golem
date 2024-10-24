@@ -1,6 +1,6 @@
 use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
 use golem_wasm_ast::analysis::AnalysedType;
-use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
+use rib::{RegistryKey, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
 
 // This is very similar to WorkerFunctionsInRib data structure in `rib`, however
@@ -54,7 +54,7 @@ impl From<FunctionConstraintCollection> for WorkerFunctionsInRib {
             function_calls: value
                 .function_constraints
                 .iter()
-                .map(|x| rib::WorkerFunctionInRibMetadata::from(x.clone()))
+                .map(|x| rib::WorkerFunctionType::from(x.clone()))
                 .collect(),
         }
     }
@@ -132,9 +132,9 @@ pub struct FunctionConstraint {
     pub usage_count: u32,
 }
 
-impl From<FunctionConstraint> for WorkerFunctionInRibMetadata {
+impl From<FunctionConstraint> for WorkerFunctionType {
     fn from(value: FunctionConstraint) -> Self {
-        WorkerFunctionInRibMetadata {
+        WorkerFunctionType {
             function_key: value.function_key.clone(),
             parameter_types: value.parameter_types.clone(),
             return_types: value.return_types.clone(),
@@ -144,7 +144,7 @@ impl From<FunctionConstraint> for WorkerFunctionInRibMetadata {
 
 impl FunctionConstraint {
     pub fn from_worker_function_in_rib(
-        worker_function_rib: &WorkerFunctionInRibMetadata,
+        worker_function_rib: &WorkerFunctionType,
     ) -> FunctionConstraint {
         FunctionConstraint {
             function_key: worker_function_rib.function_key.clone(),

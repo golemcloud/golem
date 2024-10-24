@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
-use golem_api_grpc::proto::golem::rib::WorkerFunctionInRibMetadata as WorkerFunctionInRibMetadataProto;
+use golem_api_grpc::proto::golem::rib::WorkerFunctionType as WorkerFunctionTypeProto;
 use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use golem_wasm_ast::analysis::AnalysedType;
 
@@ -26,7 +26,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 // If Rib has inbuilt function support, those will not be included here either.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerFunctionsInRib {
-    pub function_calls: Vec<WorkerFunctionInRibMetadata>,
+    pub function_calls: Vec<WorkerFunctionType>,
 }
 
 impl WorkerFunctionsInRib {
@@ -45,7 +45,7 @@ impl WorkerFunctionsInRib {
                 return_types,
             } = value
             {
-                let function_call_in_rib = WorkerFunctionInRibMetadata {
+                let function_call_in_rib = WorkerFunctionType {
                     function_key: key,
                     parameter_types,
                     return_types,
@@ -53,7 +53,7 @@ impl WorkerFunctionsInRib {
                 function_calls.push(function_call_in_rib)
             } else {
                 return Err(
-                    "Internal Error: Function Calls should have parameter types and return types"
+                    "Internal Error: Function calls should have parameter types and return types"
                         .to_string(),
                 );
             }
@@ -74,7 +74,7 @@ impl TryFrom<WorkerFunctionsInRibProto> for WorkerFunctionsInRib {
         let function_calls_proto = value.function_calls;
         let function_calls = function_calls_proto
             .iter()
-            .map(|x| WorkerFunctionInRibMetadata::try_from(x.clone()))
+            .map(|x| WorkerFunctionType::try_from(x.clone()))
             .collect::<Result<_, _>>()?;
         Ok(Self { function_calls })
     }
@@ -86,23 +86,23 @@ impl From<WorkerFunctionsInRib> for WorkerFunctionsInRibProto {
             function_calls: value
                 .function_calls
                 .iter()
-                .map(|x| WorkerFunctionInRibMetadataProto::from(x.clone()))
+                .map(|x| WorkerFunctionTypeProto::from(x.clone()))
                 .collect(),
         }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkerFunctionInRibMetadata {
+pub struct WorkerFunctionType {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,
     pub return_types: Vec<AnalysedType>,
 }
 
-impl TryFrom<WorkerFunctionInRibMetadataProto> for WorkerFunctionInRibMetadata {
+impl TryFrom<WorkerFunctionTypeProto> for WorkerFunctionType {
     type Error = String;
 
-    fn try_from(value: WorkerFunctionInRibMetadataProto) -> Result<Self, Self::Error> {
+    fn try_from(value: WorkerFunctionTypeProto) -> Result<Self, Self::Error> {
         let return_types = value
             .return_types
             .iter()
@@ -126,11 +126,11 @@ impl TryFrom<WorkerFunctionInRibMetadataProto> for WorkerFunctionInRibMetadata {
     }
 }
 
-impl From<WorkerFunctionInRibMetadata> for WorkerFunctionInRibMetadataProto {
-    fn from(value: WorkerFunctionInRibMetadata) -> Self {
+impl From<WorkerFunctionType> for WorkerFunctionTypeProto {
+    fn from(value: WorkerFunctionType) -> Self {
         let registry_key = value.function_key.into();
 
-        WorkerFunctionInRibMetadataProto {
+        WorkerFunctionTypeProto {
             function_key: Some(registry_key),
             parameter_types: value.parameter_types.iter().map(|x| x.into()).collect(),
             return_types: value.return_types.iter().map(|x| x.into()).collect(),
