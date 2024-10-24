@@ -17,7 +17,7 @@ pub struct Component<Namespace> {
     pub component_type: ComponentType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComponentConstraints<Namespace> {
     pub namespace: Namespace,
     pub component_id: ComponentId,
@@ -34,7 +34,7 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
             namespace: namespace.clone(),
             component_id: component_id.clone(),
             constraints: FunctionConstraintCollection {
-                function_usages: worker_functions_in_rib
+                function_constraints: worker_functions_in_rib
                     .function_calls
                     .iter()
                     .map(FunctionConstraint::from_worker_function_in_rib)

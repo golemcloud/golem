@@ -1,15 +1,15 @@
-use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{RegistryKey, WorkerFunctionInRibMetadata, WorkerFunctionsInRib};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// This is very similar to WorkerFunctionsInRib data structure, however
-// it adds the total number of usages for each function in that component
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// This is very similar to WorkerFunctionsInRib data structure in `rib`, however
+// it adds more info that is specific to other golem services.
+// such as the total number of usages for each function in that component.
+// This forms the core of component constraints.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionConstraintCollection {
-    pub function_usages: Vec<FunctionConstraint>,
+    pub function_constraints: Vec<FunctionConstraint>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>
@@ -21,7 +21,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollecti
         value: golem_api_grpc::proto::golem::component::FunctionConstraintCollection,
     ) -> Result<Self, Self::Error> {
         let collection = FunctionConstraintCollection {
-            function_usages: value
+            function_constraints: value
                 .constraints
                 .iter()
                 .map(|x| FunctionConstraint::try_from(x.clone()))
@@ -38,7 +38,7 @@ impl From<FunctionConstraintCollection>
     fn from(value: FunctionConstraintCollection) -> Self {
         golem_api_grpc::proto::golem::component::FunctionConstraintCollection {
             constraints: value
-                .function_usages
+                .function_constraints
                 .iter()
                 .map(|x| {
                     golem_api_grpc::proto::golem::component::FunctionConstraint::from(x.clone())
@@ -52,7 +52,7 @@ impl From<FunctionConstraintCollection> for WorkerFunctionsInRib {
     fn from(value: FunctionConstraintCollection) -> Self {
         WorkerFunctionsInRib {
             function_calls: value
-                .function_usages
+                .function_constraints
                 .iter()
                 .map(|x| rib::WorkerFunctionInRibMetadata::from(x.clone()))
                 .collect(),
@@ -71,7 +71,7 @@ impl FunctionConstraintCollection {
             .collect::<Vec<_>>();
 
         FunctionConstraintCollection {
-            function_usages: functions,
+            function_constraints: functions,
         }
     }
     pub fn try_merge(
@@ -80,7 +80,7 @@ impl FunctionConstraintCollection {
         let mut merged_function_calls: HashMap<RegistryKey, FunctionConstraint> = HashMap::new();
 
         for wf in worker_functions {
-            for call in wf.function_usages {
+            for call in wf.function_constraints {
                 match merged_function_calls.get_mut(&call.function_key) {
                     Some(existing_call) => {
                         // Check for parameter type conflicts
@@ -119,12 +119,12 @@ impl FunctionConstraintCollection {
         merged_function_calls_vec.sort_by(|a, b| a.function_key.cmp(&b.function_key));
 
         Ok(FunctionConstraintCollection {
-            function_usages: merged_function_calls_vec,
+            function_constraints: merged_function_calls_vec,
         })
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionConstraint {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,

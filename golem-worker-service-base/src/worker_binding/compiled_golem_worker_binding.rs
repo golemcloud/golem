@@ -5,7 +5,7 @@ use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo, WorkerFunctionsInRib};
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompiledGolemWorkerBinding {
     pub component_id: VersionedComponentId,
     pub worker_name_compiled: WorkerNameCompiled,
@@ -87,7 +87,7 @@ impl IdempotencyKeyCompiled {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResponseMappingCompiled {
     pub response_rib_expr: Expr,
     pub compiled_response: RibByteCode,

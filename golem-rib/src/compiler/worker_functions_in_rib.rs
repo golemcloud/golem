@@ -13,22 +13,18 @@
 // limitations under the License.
 
 use crate::{FunctionTypeRegistry, InferredExpr, RegistryKey, RegistryValue};
-use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::WorkerFunctionInRibMetadata as WorkerFunctionInRibMetadataProto;
 use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
 use golem_wasm_ast::analysis::AnalysedType;
-use serde::{Deserialize, Serialize};
 
-// An easier data type that focus just the function calls,
-// return types and parameter types, corresponding to a function
-// that can also be a resource constructor, resource method, as well
-// as a simple function name.
-// These will not include variant or enum calls, that are originally
-// tagged as functions. This is why we need a fully inferred Rib (fully compiled rib),
+// An easier data type that focus just on the side effecting function calls in Rib script.
+// These will not include variant or enum calls, that were originally
+// tagged as functions before compilation.
+// This is why we need a fully inferred Rib (fully compiled rib),
 // which has specific details, along with original type registry to construct this data.
-// These function calls are specifically worker invoke calls and nothing else.
-// If Rib has inbuilt function support, that will not be included here either.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+// These function calls are indeed worker invoke calls and nothing else.
+// If Rib has inbuilt function support, those will not be included here either.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerFunctionsInRib {
     pub function_calls: Vec<WorkerFunctionInRibMetadata>,
 }
@@ -96,7 +92,7 @@ impl From<WorkerFunctionsInRib> for WorkerFunctionsInRibProto {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkerFunctionInRibMetadata {
     pub function_key: RegistryKey,
     pub parameter_types: Vec<AnalysedType>,

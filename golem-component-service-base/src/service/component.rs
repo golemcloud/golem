@@ -241,7 +241,7 @@ impl ComponentServiceDefault {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
-        for existing_function_call in &worker_function_usages.function_usages {
+        for existing_function_call in &worker_function_usages.function_constraints {
             if let Some(new_registry_value) =
                 new_type_registry.lookup(&existing_function_call.function_key)
             {

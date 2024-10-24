@@ -318,7 +318,13 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
         .await
         .unwrap();
 
-    assert_eq!(component1_constrained.constraints.function_usages.len(), 2);
+    assert_eq!(
+        component1_constrained
+            .constraints
+            .function_constraints
+            .len(),
+        2
+    );
 
     let component1v2 = component_service
         .update(
@@ -684,11 +690,13 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 
     let expected_updated_constraint = {
         let mut function_usages =
-            constraint_data::get_shopping_cart_worker_functions_constraint2().function_usages;
+            constraint_data::get_shopping_cart_worker_functions_constraint2().function_constraints;
         function_usages.extend(
-            constraint_data::get_shopping_cart_worker_functions_constraint1().function_usages,
+            constraint_data::get_shopping_cart_worker_functions_constraint1().function_constraints,
         );
-        Some(FunctionConstraintCollection { function_usages })
+        Some(FunctionConstraintCollection {
+            function_constraints: function_usages,
+        })
     };
 
     assert!(component_create_result.is_ok());
@@ -709,7 +717,7 @@ mod constraint_data {
 
     pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionConstraintCollection {
         FunctionConstraintCollection {
-            function_usages: vec![FunctionConstraint {
+            function_constraints: vec![FunctionConstraint {
                 function_key: RegistryKey::FunctionNameWithInterface {
                     interface_name: "golem:it/api".to_string(),
                     function_name: "initialize-cart".to_string(),
@@ -723,7 +731,7 @@ mod constraint_data {
 
     pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionConstraintCollection {
         FunctionConstraintCollection {
-            function_usages: vec![FunctionConstraint {
+            function_constraints: vec![FunctionConstraint {
                 function_key: RegistryKey::FunctionNameWithInterface {
                     interface_name: "golem:it/api".to_string(),
                     function_name: "get-cart-contents".to_string(),
@@ -756,7 +764,7 @@ mod constraint_data {
     pub(crate) fn get_shopping_cart_worker_functions_constraint_incompatible(
     ) -> FunctionConstraintCollection {
         FunctionConstraintCollection {
-            function_usages: vec![FunctionConstraint {
+            function_constraints: vec![FunctionConstraint {
                 function_key: RegistryKey::FunctionNameWithInterface {
                     interface_name: "golem:it/api".to_string(),
                     function_name: "initialize-cart".to_string(),
@@ -770,7 +778,7 @@ mod constraint_data {
 
     pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraintCollection {
         FunctionConstraintCollection {
-            function_usages: vec![FunctionConstraint {
+            function_constraints: vec![FunctionConstraint {
                 usage_count: 1,
                 function_key: RegistryKey::FunctionName("foo".to_string()),
                 parameter_types: vec![],
