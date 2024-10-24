@@ -207,6 +207,14 @@ fn make(
             worker_get_oplog((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
     );
+    add_test!(
+        r,
+        format!("worker_search_oplog{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_search_oplog((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
 }
 
 pub fn add_component_from_file(
@@ -1265,5 +1273,135 @@ fn worker_get_oplog(
     // depends on timing
     assert!(result.len() >= 12 && result.len() <= 14);
 
+    Ok(())
+}
+
+fn worker_search_oplog(
+    (deps, name, cli, _ref_kind): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+        RefKind,
+    ),
+) -> anyhow::Result<()> {
+    let component = add_component_from_file(
+        deps,
+        &format!("{name} worker_search_oplog"),
+        &cli,
+        "shopping-cart.wasm",
+    )?;
+    let cfg = &cli.config;
+
+    let url = WorkerUrl {
+        component_name: component.component_name.clone(),
+        worker_name: Some("search-oplog-1".to_string()),
+    };
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{initialize-cart}",
+        &cfg.arg('a', "arg"),
+        r#""test-user-1""#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{add-item}",
+        &cfg.arg('a', "arg"),
+        r#"{ product-id: "G1000", name: "Golem T-Shirt M", price: 100.0, quantity: 5 }"#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{add-item}",
+        &cfg.arg('a', "arg"),
+        r#"{ product-id: "G1001", name: "Golem Cloud Subscription 1y", price: 999999.0, quantity: 1 }"#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{add-item}",
+        &cfg.arg('a', "arg"),
+        r#"{ product-id: "G1002", name: "Mud Golem", price: 11.0, quantity: 10 }"#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{update-item-quantity}",
+        &cfg.arg('a', "arg"),
+        r#""G1002""#,
+        &cfg.arg('a', "arg"),
+        r#"20"#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{get-cart-contents}",
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{checkout}",
+    ])?;
+
+    let _oplog: Vec<(u64, PublicOplogEntry)> =
+        cli.run(&["worker", "oplog", &cfg.arg('W', "worker"), &url.to_string()])?;
+
+    let result1: Vec<(u64, PublicOplogEntry)> = cli.run(&[
+        "worker",
+        "oplog",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        "--query",
+        "G1002",
+    ])?;
+    let result2: Vec<(u64, PublicOplogEntry)> = cli.run(&[
+        "worker",
+        "oplog",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        "--query",
+        "imported-function",
+    ])?;
+    let result3: Vec<(u64, PublicOplogEntry)> = cli.run(&[
+        "worker",
+        "oplog",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        "--query",
+        "product-id:G1001 OR product-id:G1000",
+    ])?;
+
+    assert_eq!(result1.len(), 4); // two invocations and two log messages
+    assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
+    assert_eq!(result3.len(), 2); // two invocations
     Ok(())
 }
