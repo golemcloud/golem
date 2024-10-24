@@ -235,13 +235,13 @@ impl ComponentServiceDefault {
     }
 
     pub fn find_component_metadata_conflicts(
-        worker_function_usages: &FunctionConstraintCollection,
+        function_constraint_collection: &FunctionConstraintCollection,
         new_type_registry: &FunctionTypeRegistry,
     ) -> ConflictReport {
         let mut missing_functions = vec![];
         let mut conflicting_functions = vec![];
 
-        for existing_function_call in &worker_function_usages.function_constraints {
+        for existing_function_call in &function_constraint_collection.function_constraints {
             if let Some(new_registry_value) =
                 new_type_registry.lookup(&existing_function_call.function_key)
             {

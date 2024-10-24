@@ -45,16 +45,16 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
 
     pub fn update_with(
         &self,
-        function_usages: &FunctionConstraintCollection,
+        function_constraints: &FunctionConstraintCollection,
     ) -> Result<ComponentConstraints<Namespace>, String> {
-        let function_usage_collection = FunctionConstraintCollection::try_merge(vec![
+        let constraints = FunctionConstraintCollection::try_merge(vec![
             self.constraints.clone(),
-            function_usages.clone(),
+            function_constraints.clone(),
         ])?;
         let component_constraints = ComponentConstraints {
             namespace: self.namespace.clone(),
             component_id: self.component_id.clone(),
-            constraints: function_usage_collection,
+            constraints,
         };
 
         Ok(component_constraints)

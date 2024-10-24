@@ -226,7 +226,7 @@ where
         constraints: FunctionConstraintCollection,
         metadata: &AuthCtx,
     ) -> ComponentResult<FunctionConstraintCollection> {
-        let function_usages = FunctionConstraintCollectionProto::from(constraints);
+        let constraints_proto = FunctionConstraintCollectionProto::from(constraints);
 
         let value = with_retries(
             "component",
@@ -237,9 +237,9 @@ where
                 self.client.clone(),
                 component_id.clone(),
                 metadata.clone(),
-                function_usages.clone(),
+                constraints_proto.clone(),
             ),
-            |(client, id, metadata, function_usages)| {
+            |(client, id, metadata, function_constraints)| {
                 Box::pin(async move {
                     let response = client
                         .call(move |client| {
@@ -251,7 +251,7 @@ where
                                             id.clone(),
                                         ),
                                     ),
-                                    constraints: Some(function_usages.clone()),
+                                    constraints: Some(function_constraints.clone()),
                                 }),
                             };
                             let request = with_metadata(request, metadata.clone());
