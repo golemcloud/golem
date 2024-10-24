@@ -679,18 +679,12 @@ impl PublicOplogEntry {
                     .iter()
                     .any(|name| Self::string_match(name, path_stack, query_path, query))
             }
-            (Value::Option(value), AnalysedType::Option(typ)) => {
-                if let Some(value) = value {
-                    Self::match_value(
-                        &ValueAndType::new((**value).clone(), (*typ.inner).clone()),
-                        path_stack,
-                        query_path,
-                        query,
-                    )
-                } else {
-                    false
-                }
-            }
+            (Value::Option(Some(value)), AnalysedType::Option(typ)) => Self::match_value(
+                &ValueAndType::new((**value).clone(), (*typ.inner).clone()),
+                path_stack,
+                query_path,
+                query,
+            ),
             (Value::Result(value), AnalysedType::Result(typ)) => match value {
                 Ok(Some(value)) if typ.ok.is_some() => {
                     let mut new_path = path_stack.to_vec();
