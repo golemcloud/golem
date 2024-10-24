@@ -534,6 +534,7 @@ mod compiler_tests {
 
     use super::*;
     use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, Number, VariableId};
+    use golem_wasm_ast::analysis::analysed_type::{list, str};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
@@ -820,7 +821,7 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_if_conditional() {
-        let if_expr = Expr::Literal("pred".to_string(), InferredType::Str);
+        let if_expr = Expr::Literal("pred".to_string(), InferredType::Bool);
         let then_expr = Expr::Literal("then".to_string(), InferredType::Str);
         let else_expr = Expr::Literal("else".to_string(), InferredType::Str);
 
@@ -855,10 +856,10 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_nested_if_else() {
-        let if_expr = Expr::Literal("if-pred1".to_string(), InferredType::Str);
+        let if_expr = Expr::Literal("if-pred1".to_string(), InferredType::Bool);
         let then_expr = Expr::Literal("then1".to_string(), InferredType::Str);
         let else_expr = Expr::Cond(
-            Box::new(Expr::Literal("else-pred2".to_string(), InferredType::Str)),
+            Box::new(Expr::Literal("else-pred2".to_string(), InferredType::Bool)),
             Box::new(Expr::Literal("else-then2".to_string(), InferredType::Str)),
             Box::new(Expr::Literal("else-else2".to_string(), InferredType::Str)),
             InferredType::Str,
@@ -935,11 +936,11 @@ mod compiler_tests {
             RibIR::CreateAndPushRecord(AnalysedType::Record(TypeRecord {
                 fields: vec![
                     NameTypePair {
-                        name: "foo_key".to_string(),
+                        name: "bar_key".to_string(),
                         typ: AnalysedType::Str(TypeStr),
                     },
                     NameTypePair {
-                        name: "bar_key".to_string(),
+                        name: "foo_key".to_string(),
                         typ: AnalysedType::Str(TypeStr),
                     },
                 ],
@@ -963,7 +964,7 @@ mod compiler_tests {
                 Expr::Literal("foo".to_string(), InferredType::Str),
                 Expr::Literal("bar".to_string(), InferredType::Str),
             ],
-            InferredType::Str,
+            InferredType::List(Box::new(InferredType::Str)),
         );
 
         let expr = Expr::SelectIndex(Box::new(sequence), 1, InferredType::Str);
@@ -976,7 +977,7 @@ mod compiler_tests {
         let instruction_set = vec![
             RibIR::PushLit(TypeAnnotatedValue::Str("bar".to_string())),
             RibIR::PushLit(TypeAnnotatedValue::Str("foo".to_string())),
-            RibIR::PushList(AnalysedType::Str(TypeStr), 2),
+            RibIR::PushList(list(str()), 2),
             RibIR::SelectIndex(1),
         ];
 

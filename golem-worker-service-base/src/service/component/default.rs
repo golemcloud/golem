@@ -236,7 +236,7 @@ where
             &(
                 self.client.clone(),
                 component_id.clone(),
-                metadata.clone(),
+                metadata.clone(),   
                 constraints_proto.clone(),
             ),
             |(client, id, metadata, function_constraints)| {
