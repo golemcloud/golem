@@ -24,7 +24,6 @@ use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
 
-// To create any type, example, CreateOption, you have to feed a fully formed AnalysedType
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub enum RibIR {
     PushLit(TypeAnnotatedValue),
@@ -60,6 +59,54 @@ pub enum RibIR {
     GetTag,
     Concat(usize),
     Negate,
+    UnCons(),
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Modulo,
+    ListToIterator, // head of stack and it should be list, non-destructive
+    AdvanceIterator, // before we AdvanceIterator, make use of byte code to see if iterator is empty (somehow; bool/option ) // Deconstructions
+    /// Comprehension specific byte
+    CreateSink,
+    SinkToList,
+    PushToSink
+
+    // ```
+    // let ages =
+    //   for p in people {
+    //     yield_all [p.age, p.age];
+    //   };
+    // ```
+
+    // ```
+    // let ages =
+    //   for p in people, p2 in  { if p.age > 1 { [] } else { [p.age] } } {
+    //       p2
+    //   };
+
+    // ```
+    // let ages =
+    //   for p in people  {
+    //      yield-many if p.age > 1 {
+    //         []
+    //      } else {
+    //         [p.age]
+    //      }
+    //   };
+    // ```
+
+    // let ages =
+    //   for p1 in people1 {
+    //     yield for p2 in people2 {
+    //            p2
+    //     }
+    // ListToIterator -> V
+    // CreateSink -> V
+    // AdvanceIterator
+    // PushToSink
+    // Jump
+    // SinkToList
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]

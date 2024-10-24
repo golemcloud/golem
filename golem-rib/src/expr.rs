@@ -63,6 +63,8 @@ pub enum Expr {
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
     GetTag(Box<Expr>, InferredType),
+    Reduce(VariableId, VariableId, Box<Expr>, Box<Expr>, Box<Expr>),
+    ListComprehension(VariableId, Box<Expr>, Box<Expr>)
 }
 
 impl Expr {
