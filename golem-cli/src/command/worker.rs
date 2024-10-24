@@ -458,7 +458,7 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         from: Option<u64>,
 
         /// Lucene query to look for oplog entries. If missing, the whole oplog is returned
-        #[arg(short, long, conflicts_with = "from")]
+        #[arg(long, conflicts_with = "from")]
         query: Option<String>,
     },
 }
