@@ -662,11 +662,65 @@ impl PublicOplogEntry {
                     _ => false,
                 }
             }
-            (Value::Enum(_), _) => todo!(),
-            (Value::Flags(_), _) => todo!(),
-            (Value::Option(_), _) => todo!(),
-            (Value::Result(_), _) => todo!(),
-            (Value::Handle { .. }, _) => todo!(),
+            (Value::Enum(value), AnalysedType::Enum(typ)) => {
+                if let Some(case) = typ.cases.get(*value as usize) {
+                    Self::string_match(case, path_stack, query_path, query)
+                } else {
+                    false
+                }
+            }
+            (Value::Flags(bitmap), AnalysedType::Flags(flags)) => {
+                let names = bitmap
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, set)| if *set { flags.names.get(idx) } else { None })
+                    .collect::<Vec<_>>();
+                names
+                    .iter()
+                    .any(|name| Self::string_match(name, path_stack, query_path, query))
+            }
+            (Value::Option(value), AnalysedType::Option(typ)) => {
+                if let Some(value) = value {
+                    Self::match_value(
+                        &ValueAndType::new((**value).clone(), (*typ.inner).clone()),
+                        path_stack,
+                        query_path,
+                        query,
+                    )
+                } else {
+                    false
+                }
+            }
+            (Value::Result(value), AnalysedType::Result(typ)) => match value {
+                Ok(Some(value)) if typ.ok.is_some() => {
+                    let mut new_path = path_stack.to_vec();
+                    new_path.push("ok".to_string());
+                    Self::match_value(
+                        &ValueAndType::new(
+                            (**value).clone(),
+                            (**(typ.ok.as_ref().unwrap())).clone(),
+                        ),
+                        &new_path,
+                        query_path,
+                        query,
+                    )
+                }
+                Err(Some(value)) if typ.err.is_some() => {
+                    let mut new_path = path_stack.to_vec();
+                    new_path.push("err".to_string());
+                    Self::match_value(
+                        &ValueAndType::new(
+                            (**value).clone(),
+                            (**(typ.err.as_ref().unwrap())).clone(),
+                        ),
+                        &new_path,
+                        query_path,
+                        query,
+                    )
+                }
+                _ => false,
+            },
+            (Value::Handle { .. }, _) => false,
             _ => false,
         }
     }

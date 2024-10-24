@@ -27,8 +27,9 @@ use golem_api_grpc::proto::golem::worker::v1::{
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
     InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
     InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
+    SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, LogEvent, WorkerId};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
@@ -528,6 +529,56 @@ impl WorkerService for ForwardingWorkerService {
                     result: Some(worker::v1::get_oplog_response::Result::Error(WorkerError {
                         error: Some(worker::v1::worker_error::Error::InternalError(error)),
                     })),
+                })
+            }
+        }
+    }
+
+    async fn search_oplog(
+        &self,
+        request: SearchOplogRequest,
+    ) -> crate::Result<SearchOplogResponse> {
+        let result = self
+            .worker_executor
+            .client()
+            .await?
+            .search_oplog(workerexecutor::v1::SearchOplogRequest {
+                worker_id: request.worker_id,
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
+                query: request.query,
+                cursor: request.cursor,
+                count: request.count,
+            })
+            .await?
+            .into_inner();
+
+        match result.result {
+            None => Err(anyhow!(
+                "No response from golem-worker-executor search-oplog call"
+            )),
+            Some(workerexecutor::v1::search_oplog_response::Result::Success(oplog)) => {
+                Ok(SearchOplogResponse {
+                    result: Some(worker::v1::search_oplog_response::Result::Success(
+                        SearchOplogSuccessResponse {
+                            entries: oplog.entries,
+                            next: oplog.next,
+                            last_index: oplog.last_index,
+                        },
+                    )),
+                })
+            }
+            Some(workerexecutor::v1::search_oplog_response::Result::Failure(error)) => {
+                Ok(SearchOplogResponse {
+                    result: Some(worker::v1::search_oplog_response::Result::Error(
+                        WorkerError {
+                            error: Some(worker::v1::worker_error::Error::InternalError(error)),
+                        },
+                    )),
                 })
             }
         }

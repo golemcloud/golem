@@ -22,12 +22,13 @@ use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
     get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
     interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
-    worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, GetOplogRequest,
-    GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest, ResumeWorkerRequest,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    invoke_response, launch_new_worker_response, resume_worker_response, search_oplog_response,
+    update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest,
+    GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest,
+    ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{
     log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
@@ -42,6 +43,7 @@ use golem_common::model::{
     SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatusRecord,
 };
+use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_wasm_rpc::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -171,6 +173,11 @@ pub trait TestDsl {
         worker_id: &WorkerId,
         from: OplogIndex,
     ) -> crate::Result<Vec<PublicOplogEntry>>;
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        query: &str,
+    ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
 }
 
 #[async_trait]
@@ -824,6 +831,56 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         Ok(result)
     }
+
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        query: &str,
+    ) -> crate::Result<Vec<PublicOplogEntryWithIndex>> {
+        let mut result = Vec::new();
+        let mut cursor = None;
+
+        loop {
+            let chunk = self
+                .worker_service()
+                .search_oplog(SearchOplogRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    cursor: cursor.clone(),
+                    count: 100,
+                    query: query.to_string(),
+                })
+                .await?;
+
+            if let Some(chunk) = chunk.result {
+                match chunk {
+                    search_oplog_response::Result::Success(chunk) => {
+                        if chunk.entries.is_empty() {
+                            break;
+                        } else {
+                            result.extend(
+                                chunk
+                                    .entries
+                                    .into_iter()
+                                    .map(|entry| entry.try_into())
+                                    .collect::<Result<Vec<_>, _>>()
+                                    .map_err(|err| {
+                                        anyhow!("Failed to convert oplog entry: {err}")
+                                    })?,
+                            );
+                            cursor = chunk.next;
+                        }
+                    }
+                    search_oplog_response::Result::Error(error) => {
+                        return Err(anyhow!("Failed to search oplog: {error:?}"));
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(result)
+    }
 }
 
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
@@ -1256,6 +1313,11 @@ pub trait TestDslUnsafe {
     async fn auto_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
     async fn manual_update_worker(&self, worker_id: &WorkerId, target_version: ComponentVersion);
     async fn get_oplog(&self, worker_id: &WorkerId, from: OplogIndex) -> Vec<PublicOplogEntry>;
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        query: &str,
+    ) -> Vec<PublicOplogEntryWithIndex>;
 }
 
 #[async_trait]
@@ -1471,5 +1533,15 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::get_oplog(self, worker_id, from)
             .await
             .expect("Failed to get oplog")
+    }
+
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        query: &str,
+    ) -> Vec<PublicOplogEntryWithIndex> {
+        <T as TestDsl>::search_oplog(self, worker_id, query)
+            .await
+            .expect("Failed to search oplog")
     }
 }
