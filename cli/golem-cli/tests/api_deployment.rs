@@ -16,8 +16,9 @@ use crate::api_definition::{golem_def, make_golem_file, make_shopping_cart_compo
 use crate::cli::{Cli, CliLive};
 use crate::Tracing;
 use assert2::assert;
+use golem_cli::model::component::ComponentView;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
-use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::sync::Arc;
 use test_r::core::{DynamicTestRegistration, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
@@ -74,11 +75,11 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
 pub fn make_definition(
     deps: &EnvBasedTestDependencies,
     cli: &CliLive,
-    id: &str,
+    component_name: &str,
 ) -> Result<HttpApiDefinitionWithTypeInfo, anyhow::Error> {
-    let component = make_shopping_cart_component(deps, id, cli)?;
+    let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_def(id, &component_id);
+    let def = golem_def(component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     cli.run(&["api-definition", "add", path.to_str().unwrap()])
@@ -121,6 +122,32 @@ fn api_deployment_deploy(
     assert!(definition.draft);
     assert!(!updated_def.draft, "deploy makes definition immutable");
 
+    // We try an update the same component urn with a wrong wasm other than shopping-cart
+    // to make it incompatible, and this shouldn't succeed!
+    let component_id_in_def = definition
+        .routes
+        .first()
+        .unwrap()
+        .binding
+        .component_id
+        .component_id;
+
+    // Updating the component after a deployment with incompatible changes should fail
+    let component_urn = format!("urn:component:{}", component_id_in_def);
+    let env_service = deps.component_directory().join("environment-service.wasm");
+    let cfg = &cli.config;
+    let result: Result<ComponentView, _> = cli.run_trimmed(&[
+        "component",
+        "update",
+        &cfg.arg('C', "component"),
+        &component_urn,
+        env_service.to_str().unwrap(),
+    ]);
+
+    assert!(
+        result.is_err(),
+        "api deployment disallows incompatible component updates"
+    );
     Ok(())
 }
 
