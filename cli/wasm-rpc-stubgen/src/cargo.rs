@@ -88,7 +88,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     );
 
     let stub_package_name = def.stub_package_name();
-    for (dep_package, (dep_package_path, _)) in def.packages_with_wit_sources() {
+    for (_, dep_package, (dep_package_path, _)) in def.packages_with_wit_sources() {
         if dep_package.name == stub_package_name {
             continue;
         }

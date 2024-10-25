@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::{log_action_plan, log_warn_action};
-use crate::fs::OverwriteSafeAction::WriteFile;
+use crate::commands::log::{log_action, log_action_plan, log_warn_action, LogIndent};
 use crate::fs::{get_file_name, strip_path_prefix, OverwriteSafeAction, OverwriteSafeActions};
 use crate::wit_generate::generate_stub_wit_from_wit_dir;
 use crate::wit_resolve::ResolvedWitDir;
@@ -37,6 +36,17 @@ pub fn add_stub_dependency(
     overwrite: bool,
     update_cargo_toml: UpdateCargoToml,
 ) -> anyhow::Result<()> {
+    log_action(
+        "Adding",
+        format!(
+            "stub dependencies to {} from {}",
+            dest_wit_root.display(),
+            stub_wit_root.display()
+        ),
+    );
+
+    let _indent = LogIndent::new();
+
     let stub_resolved_wit_root = ResolvedWitDir::new(stub_wit_root)?;
     let mut stub_transformer = WitTransformer::new(&stub_resolved_wit_root.resolve)?;
     let stub_package = stub_resolved_wit_root.main_package()?;
@@ -180,7 +190,7 @@ pub fn add_stub_dependency(
         )?;
         let content = dest_transformer.render_package(dest_main_package_id)?;
 
-        actions.add(WriteFile {
+        actions.add(OverwriteSafeAction::WriteFile {
             content,
             target: dest_main_sources[0].clone(),
         });

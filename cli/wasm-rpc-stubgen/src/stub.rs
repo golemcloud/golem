@@ -17,6 +17,7 @@ use crate::{naming, WasmRpcOverride};
 use anyhow::anyhow;
 use indexmap::IndexMap;
 use std::cell::OnceCell;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use wit_parser::{
     Function, FunctionKind, Interface, InterfaceId, Package, PackageId, PackageName, Resolve,
@@ -28,8 +29,12 @@ pub struct StubDefinition {
     resolve: Resolve,
     source_world_id: WorldId,
     sources: IndexMap<PackageId, (PathBuf, Vec<PathBuf>)>,
-    stub_imported_interfaces: OnceCell<Vec<InterfaceStub>>,
 
+    stub_imported_interfaces: OnceCell<Vec<InterfaceStub>>,
+    stub_imports: OnceCell<IndexMap<InterfaceStubImport, InterfaceStubTypeDef>>,
+    stub_dep_package_ids: OnceCell<HashSet<PackageId>>,
+
+    pub source_package_id: PackageId,
     pub source_package_name: PackageName,
     pub source_wit_root: PathBuf,
     pub target_root: PathBuf,
@@ -71,6 +76,9 @@ impl StubDefinition {
             source_world_id,
             sources: resolved_source.sources,
             stub_imported_interfaces: OnceCell::new(),
+            stub_imports: OnceCell::new(),
+            stub_dep_package_ids: OnceCell::new(),
+            source_package_id: resolved_source.package_id,
             source_package_name,
             source_wit_root: source_wit_root.to_path_buf(),
             target_root: target_root.to_path_buf(),
@@ -92,12 +100,13 @@ impl StubDefinition {
 
     pub fn packages_with_wit_sources(
         &self,
-    ) -> impl Iterator<Item = (&Package, &(PathBuf, Vec<PathBuf>))> {
+    ) -> impl Iterator<Item = (PackageId, &Package, &(PathBuf, Vec<PathBuf>))> {
         self.resolve
             .topological_packages()
             .into_iter()
             .map(|package_id| {
                 (
+                    package_id,
                     self.resolve
                         .packages
                         .get(package_id)
@@ -199,6 +208,29 @@ impl StubDefinition {
                 .flat_map(|(name, interface)| self.interface_to_stub_interfaces(name, interface))
                 .chain(self.global_stub_interface(types, functions))
                 .collect::<Vec<_>>()
+        })
+    }
+
+    pub fn stub_imports(&self) -> &IndexMap<InterfaceStubImport, InterfaceStubTypeDef> {
+        self.stub_imports.get_or_init(|| {
+            self.stub_imported_interfaces()
+                .iter()
+                .flat_map(|i| {
+                    i.imports
+                        .iter()
+                        .map(|i| (InterfaceStubImport::from(i), i.clone()))
+                })
+                .collect()
+        })
+    }
+
+    pub fn stub_dep_package_ids(&self) -> &HashSet<PackageId> {
+        self.stub_dep_package_ids.get_or_init(|| {
+            self.resolve
+                .packages
+                .iter()
+                .map(|(package_id, _)| package_id)
+                .collect()
         })
     }
 

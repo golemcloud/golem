@@ -1,13 +1,81 @@
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
 use crate::model::validation::ValidatedResult;
 use colored::Colorize;
+use std::sync::{LazyLock, RwLock};
+
+static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
+
+struct LogState {
+    indent_count: usize,
+    indent_prefix: String,
+}
+
+impl LogState {
+    pub fn new() -> Self {
+        Self {
+            indent_count: 0,
+            indent_prefix: "".to_string(),
+        }
+    }
+
+    pub fn inc_indent(&mut self) {
+        self.indent_count += 1;
+        self.regen_indent_prefix()
+    }
+
+    pub fn dec_indent(&mut self) {
+        self.indent_count -= 1;
+        self.regen_indent_prefix()
+    }
+
+    fn regen_indent_prefix(&mut self) {
+        self.indent_prefix = "  ".repeat(self.indent_count);
+    }
+}
+
+impl Default for LogState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct LogIndent;
+
+impl LogIndent {
+    pub fn new() -> Self {
+        LOG_STATE.write().unwrap().inc_indent();
+        Self {}
+    }
+}
+
+impl Default for LogIndent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for LogIndent {
+    fn drop(&mut self) {
+        LOG_STATE.write().unwrap().dec_indent();
+    }
+}
 
 pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
-    println!("{} {}", action.green(), subject.as_ref())
+    println!(
+        "{}{} {}",
+        LOG_STATE.read().unwrap().indent_prefix,
+        action.green(),
+        subject.as_ref()
+    )
 }
 
 pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
-    println!("{} {}", action.yellow(), subject.as_ref())
+    println!(
+        "{}{} {}",
+        LOG_STATE.read().unwrap().indent_prefix,
+        action.yellow(),
+        subject.as_ref(),
+    )
 }
 
 pub fn log_skipping_up_to_date<T: AsRef<str>>(subject: T) {

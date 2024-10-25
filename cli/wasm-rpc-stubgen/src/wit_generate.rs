@@ -12,16 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::{log_action, log_warn_action};
+use crate::commands::log::{log_action, log_warn_action, LogIndent};
 use crate::fs::{copy, copy_transformed, get_file_name};
 use crate::stub::{
-    FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubImport,
-    InterfaceStubTypeDef, StubDefinition,
+    FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubTypeDef,
+    StubDefinition,
 };
 use crate::wit_transform::import_remover;
 use crate::{naming, WasmRpcOverride};
 use anyhow::{anyhow, bail};
-use indexmap::IndexMap;
 use std::fmt::Write;
 use std::fs;
 use std::path::Path;
@@ -30,7 +29,7 @@ use wit_parser::{Enum, Field, Flags, Handle, Result_, Tuple, Type, TypeDef, Type
 pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
         "Generating",
-        format!("stub WIT to {}", def.target_wit_path().to_string_lossy()),
+        format!("stub WIT to {}", def.target_wit_path().display()),
     );
 
     let out = generate_stub_wit_from_stub_def(def)?;
@@ -62,11 +61,7 @@ pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<S
     writeln!(out)?;
     writeln!(out, "interface stub-{} {{", world.name)?;
 
-    let all_imports = def
-        .stub_imported_interfaces()
-        .iter()
-        .flat_map(|i| i.imports.iter().map(|i| (InterfaceStubImport::from(i), i)))
-        .collect::<IndexMap<_, _>>();
+    let all_imports = def.stub_imports();
 
     // Renaming the mandatory imports to avoid collisions with types coming from the stubbed package
     writeln!(out, "  use golem:rpc/types@0.1.0.{{uri as golem-rpc-uri}};")?;
@@ -79,8 +74,8 @@ pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<S
         let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
 
         for (import, type_def_info) in all_imports {
-            match &type_def_info.package_name {
-                Some(package) if package == &def.source_package_name => {
+            match &type_def_info.package_id {
+                Some(package_id) if package_id == &def.source_package_id => {
                     inline_types.push(type_def_info.clone());
                 }
                 _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?,
@@ -493,22 +488,41 @@ fn write_param_list(
     Ok(())
 }
 
-pub fn copy_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
+pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
+    log_action(
+        "Adding",
+        format!(
+            "WIT dependencies from {} to {}",
+            def.source_wit_root.display(),
+            def.target_root.display()
+        ),
+    );
+
     let stub_package_name = def.stub_package_name();
+    let stub_dep_packages = def.stub_dep_package_ids();
     let remove_stub_imports = import_remover(&stub_package_name);
 
     let target_wit_root = def.target_wit_root();
     let target_deps = target_wit_root.join(naming::wit::DEPS_DIR);
 
-    for (package, (_, sources)) in def.packages_with_wit_sources() {
-        if package.name == stub_package_name {
-            log_warn_action("Skipping", format!("package {}", package.name));
+    let _indent = LogIndent::new();
+    for (package_id, package, (_, sources)) in def.packages_with_wit_sources() {
+        if !stub_dep_packages.contains(&package_id) {
+            log_warn_action(
+                "Skipping",
+                format!(
+                    "package dependency {}, not used in the stub interface",
+                    package.name
+                ),
+            );
             continue;
         }
 
         let is_source_package = package.name == def.source_package_name;
 
-        log_action("Copying", format!("source package {}", package.name));
+        log_action("Copying", format!("package dependency {}", package.name));
+
+        let _indent = LogIndent::new();
         for source in sources {
             if is_source_package {
                 let dest = target_deps
