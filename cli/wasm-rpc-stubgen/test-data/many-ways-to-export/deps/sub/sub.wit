@@ -3,3 +3,15 @@ package test:sub;
 interface iface4 {
   func5: func();
 }
+
+interface iface5 {
+    record rec1 {
+        field: f64,
+    }
+}
+
+interface iface7 {
+    record rec1 {
+        field: f64,
+    }
+}

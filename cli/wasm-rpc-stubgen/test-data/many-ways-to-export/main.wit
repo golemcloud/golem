@@ -19,6 +19,18 @@ interface iface3 {
     }
 }
 
+interface iface6 {
+    use test:sub/iface5.{rec1};
+
+    func6: func() -> rec1;
+}
+
+interface iface8 {
+    use test:sub/iface7.{rec1};
+
+    func8: func() -> rec1;
+}
+
 world api {
     export func1: func();
     export iface1;
@@ -29,4 +41,7 @@ world api {
     }
 
     export test:sub/iface4;
+
+    export iface6;
+    export iface8;
 }
