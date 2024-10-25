@@ -17,10 +17,12 @@ use golem_api_grpc::proto::golem::component::v1::component_service_server::Compo
 use std::net::SocketAddr;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::{Error, Server};
-
+use golem_api_grpc::proto::golem::component::v1::ifs_service_server::IfsServiceServer;
 use crate::grpcapi::component::ComponentGrpcApi;
+use crate::grpcapi::ifs::IFSGrpcApi;
 use crate::service::Services;
 mod component;
+mod ifs;
 
 pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<(), Error> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -43,6 +45,13 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
             })
             .accept_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            IfsServiceServer::new(IFSGrpcApi {
+                ifs_service: services.ifs_service.clone(),
+            })
+                .accept_compressed(CompressionEncoding::Gzip)
+                .send_compressed(CompressionEncoding::Gzip),
         )
         .serve(addr)
         .await

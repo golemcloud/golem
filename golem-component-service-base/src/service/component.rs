@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use std::fmt::{Debug, Display};
+use std::io::Cursor;
 use std::num::TryFromIntError;
 use std::sync::Arc;
-
+use anyhow::Error;
 use crate::model::Component;
 use crate::repo::component::ComponentRepo;
 use crate::service::component_compilation::ComponentCompilationService;
@@ -30,7 +31,12 @@ use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
 use tap::TapFallible;
+use tonic::include_file_descriptor_set;
 use tracing::{error, info};
+use golem_common::tracing::directive::default::info;
+use zip::read::ZipArchive;
+use tokio::fs;
+use golem_service_base::service::ifs_object_store::IFSObjectStore;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -48,6 +54,8 @@ pub enum ComponentError {
     InternalConversionError { what: String, error: String },
     #[error("Internal component store error: {message}: {error}")]
     ComponentStoreError { message: String, error: String },
+    #[error("Initial file system storage error: {message}")]
+    InitialFileSystemStorageError { message: String },
 }
 
 impl ComponentError {
@@ -76,6 +84,7 @@ impl SafeDisplay for ComponentError {
             ComponentError::InternalRepoError(inner) => inner.to_safe_string(),
             ComponentError::InternalConversionError { .. } => self.to_string(),
             ComponentError::ComponentStoreError { .. } => self.to_string(),
+            ComponentError::InitialFileSystemStorageError { .. } => self.to_string(),
         }
     }
 }
@@ -123,6 +132,7 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
+        ifs_data: Vec<u8>,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
@@ -200,6 +210,7 @@ pub struct ComponentServiceDefault {
     component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
     component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
+    ifs_store: Arc<dyn IFSObjectStore + Sync + Send>
 }
 
 impl ComponentServiceDefault {
@@ -207,11 +218,13 @@ impl ComponentServiceDefault {
         component_repo: Arc<dyn ComponentRepo + Sync + Send>,
         object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
         component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
+        ifs_store: Arc<dyn IFSObjectStore + Sync + Send>,
     ) -> Self {
         ComponentServiceDefault {
             component_repo,
             object_store,
             component_compilation,
+            ifs_store
         }
     }
 }
@@ -229,6 +242,7 @@ where
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
+        ifs_data: Vec<u8>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Create component");
 
@@ -249,8 +263,46 @@ where
         tokio::try_join!(
             self.upload_user_component(&component.versioned_component_id, data.clone()),
             self.upload_protected_component(&component.versioned_component_id, data)
+
         )?;
 
+        match self.save_ifs_zip(component_id, ifs_data.clone()).await {
+            Ok(_) => {
+                info!(
+            "Successfully saved IFS zip for component: {}",
+            component.versioned_component_id
+        );
+            }
+            Err(e) => {
+                // Log the error and handle it appropriately
+                error!(
+            "Failed to save IFS for component {}: {}",
+            component.versioned_component_id, e
+        );
+                return Err(ComponentError::InitialFileSystemStorageError {
+                    message: format!("Failed to decompress and save IFS: {}", e),
+                });
+            }
+        }
+
+        // match self.decompress_and_save_ifs(component_id, ifs_data.clone()).await {
+        //     Ok(_) => {
+        //         info!(
+        //     "Successfully decompressed and saved IFS for component: {}",
+        //     component.versioned_component_id
+        // );
+        //     }
+        //     Err(e) => {
+        //         // Log the error and handle it appropriately
+        //         error!(
+        //     "Failed to decompress and save IFS for component {}: {}",
+        //     component.versioned_component_id, e
+        // );
+        //         return Err(ComponentError::InitialFileSystemStorageError {
+        //             message: format!("Failed to decompress and save IFS: {}", e),
+        //         });
+        //     }
+        // }
         let record = component
             .clone()
             .try_into()
@@ -262,7 +314,7 @@ where
         }
 
         self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version)
+            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data)
             .await;
 
         Ok(component)
@@ -317,8 +369,9 @@ where
 
         self.component_repo.create(&record).await?;
 
+        let ifs_data = vec![];
         self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version)
+            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data)
             .await;
 
         Ok(component)
@@ -574,6 +627,7 @@ impl ComponentServiceDefault {
         user_component_id: &VersionedComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
+        info!("Uploading use content --------------------------------------------------");
         self.object_store
             .put(&self.get_user_object_store_key(user_component_id), data)
             .await
@@ -587,6 +641,7 @@ impl ComponentServiceDefault {
         protected_component_id: &VersionedComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
+        info!("Uploading protected component  ------------------------------------");
         self.object_store
             .put(
                 &self.get_protected_object_store_key(protected_component_id),
@@ -597,6 +652,103 @@ impl ComponentServiceDefault {
                 ComponentError::component_store_error("Failed to upload protected component", e)
             })
     }
+
+
+    async fn save_ifs_zip(
+        &self,
+        component_id: &ComponentId,
+        ifs_data : Vec<u8>
+    ) -> Result<(), ComponentError> {
+
+        if ifs_data.is_empty(){
+            return Err(ComponentError::InitialFileSystemStorageError {
+                message: "Initial file system data is empty".to_string(),
+            })
+        };
+
+        let object_key = format!("{}.zip",component_id);
+        info!("(99999999999999999999999999999999999999999999999999)");
+        self.ifs_store.put(
+            &object_key,ifs_data
+        ).await.map_err(|e| {
+            ComponentError::InitialFileSystemStorageError {
+                message: format!("Failed to upload IFS zip to object store: {}", e.to_string())
+            }
+        })?;
+
+        info!("Saved IFS zip to object store");
+        Ok(())
+
+
+    }
+
+    async fn decompress_and_save_ifs(
+        &self,
+        component_id: &ComponentId,  // Component ID for which we are saving IFS
+        ifs_data: Vec<u8>,                    // The compressed IFS data
+    ) -> Result<(), ComponentError> {
+
+        // Check if the IFS data is empty
+        if ifs_data.is_empty() {
+            return Err(ComponentError::InitialFileSystemStorageError {
+                message: "Initial file system data is empty".to_string(),
+            });
+        }
+
+        // Create a cursor for in-memory IFS data (assumed to be in ZIP format)
+        let cursor = Cursor::new(ifs_data);
+
+        // Create a ZIP archive from the in-memory data
+        let mut zip = ZipArchive::new(cursor)
+            .map_err(|e| ComponentError::InitialFileSystemStorageError {
+                message: format!("Failed to open zip archive: {}", e.to_string())
+            })?;
+
+        // Collect all the files and their content before any await call
+        let mut extracted_files = Vec::new();
+
+        // Iterate through the files in the ZIP archive
+        for i in 0..zip.len() {
+            let mut file  = zip.by_index(i).map_err(|e| {
+                ComponentError::InitialFileSystemStorageError {
+                    message: format!("Failed to read ZIP entry at index {}: {}", i, e),
+                }
+            })?;
+            let file_name = file.name().to_string();
+
+            info!("Processing file: {}", file_name);
+
+            // Create a buffer to hold the file content
+            let mut file_content = Vec::new();
+            std::io::copy(&mut file, &mut file_content)
+                .map_err(|e| ComponentError::InitialFileSystemStorageError {
+                    message: format!("Failed to read file from zip: {}", e.to_string())
+                })?;
+
+            // Collect file name and content for later upload
+            extracted_files.push((file_name, file_content));
+        }
+
+        // Now, asynchronously upload the files
+        for (file_name, file_content) in extracted_files {
+            // let file_name = file_name.trim_start_matches('/').to_string();
+            let object_key = format!("ifs/{}/{}", component_id, file_name);
+
+            // Upload the decompressed file to the object store
+            self.object_store
+                .put(&object_key, file_content)
+                .await
+                .map_err(|e| ComponentError::InitialFileSystemStorageError {
+                    message: format!("Failed to upload file to object store: {}", e.to_string())
+                })?;
+        }
+
+        // Log the success message
+        info!("Successfully decompressed and saved IFS for component: {}", component_id);
+
+        Ok(())
+    }
+
 
     async fn get_versioned_component_id<Namespace: Display + Clone>(
         &self,

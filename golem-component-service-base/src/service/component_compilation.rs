@@ -24,7 +24,7 @@ use tonic::transport::Channel;
 
 #[async_trait]
 pub trait ComponentCompilationService {
-    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64);
+    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64, ifs_data: Vec<u8>);
 }
 
 pub struct ComponentCompilationServiceDefault {
@@ -48,16 +48,20 @@ impl ComponentCompilationServiceDefault {
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDefault {
-    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64) {
+    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64, ifs_data: Vec<u8>) {
         let component_id_clone = component_id.clone();
+        let ifs_data_clone = ifs_data.clone();
         let result = self
             .client
             .call(move |client| {
                 let component_id_clone = component_id_clone.clone();
+                let ifs_data_clone = ifs_data_clone.clone();
                 Box::pin(async move {
                     let request = ComponentCompilationRequest {
                         component_id: Some(component_id_clone.into()),
                         component_version,
+                        ifs_data: ifs_data_clone,
+
                     };
 
                     client.enqueue_compilation(request).await
@@ -77,5 +81,5 @@ pub struct ComponentCompilationServiceDisabled;
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDisabled {
-    async fn enqueue_compilation(&self, _: &ComponentId, _: u64) {}
+    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64, ifs_data: Vec<u8>) {}
 }

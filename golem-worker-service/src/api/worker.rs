@@ -17,6 +17,7 @@ use tap::TapFallible;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use tracing::Instrument;
+use tracing::log::info;
 
 pub struct WorkerApi {
     pub component_service: ComponentService,
@@ -45,6 +46,9 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         request: Json<WorkerCreationRequest>,
     ) -> Result<Json<WorkerCreationResponse>> {
+
+        info!("-------------------------------------------");
+        println!("********************************************");
         let record = recorded_http_api_request!(
             "launch_new_worker",
             component_id = component_id.0.to_string(),

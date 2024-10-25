@@ -19,6 +19,7 @@ use golem_common::model::Timestamp;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio_stream::StreamExt;
+use tracing::info;
 
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
@@ -81,6 +82,10 @@ impl FileSystemBlobStorage {
                 result.push(account_id.to_string());
                 result.push(component_id.to_string());
                 result.push(level.to_string());
+            }
+            BlobStorageNamespace::InitialFileSystem(account_id) => {
+                result.push("initial_file_system");
+                result.push(account_id.to_string());
             }
         }
 
@@ -155,6 +160,12 @@ impl BlobStorage for FileSystemBlobStorage {
     ) -> Result<(), String> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
+        info!("In the file system ---------------------------------------------------");
+
+        info!("The path is {}", path.display());
+        info!("The full path is {},", full_path.display());
+
+        info!("In the file system ---------------------------------------------------");
 
         if let Some(parent) = full_path.parent() {
             if async_fs::metadata(parent).await.is_err() {

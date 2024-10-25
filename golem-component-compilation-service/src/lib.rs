@@ -36,6 +36,7 @@ use service::CompilationService;
 use crate::config::make_config_loader;
 use crate::service::compile_service::ComponentCompilationServiceImpl;
 use wasmtime::WasmBacktraceDetails;
+use golem_worker_executor_base::services::ifs;
 
 mod config;
 mod grpc;
@@ -87,7 +88,7 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
     let compiled_component =
         compiled_component::configured(&config.compiled_component_service, blob_storage.clone());
     let engine = wasmtime::Engine::new(&create_wasmtime_config()).expect("Failed to create engine");
-
+    let ifs_service = ifs::configured(&config.compiled_component_service, blob_storage.clone());
     // Start metrics and healthcheck server.
     let address = config.http_addr().expect("Invalid HTTP address");
     let http_server = HttpServerImpl::new(
@@ -101,6 +102,8 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
         config.component_service,
         engine,
         compiled_component,
+        ifs_service
+
     );
 
     let compilation_service = Arc::new(compilation_service);

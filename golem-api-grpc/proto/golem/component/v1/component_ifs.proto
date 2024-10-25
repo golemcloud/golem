@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package golem.component.v1;
+
+// Import the ComponentId from the appropriate file
+import "golem/component/component_id.proto";
+import public "golem/component/v1/component_error.proto";
+
+message DownloadIFSRequest {
+    golem.component.ComponentId component_id = 1;
+    optional uint64 version = 2;
+}
+
+message DownloadIFSResponse {
+    oneof result {
+        bytes success_chunk = 1;
+        golem.component.v1.ComponentError error = 2;
+    }
+}
+
+message Error {
+    string message = 1;
+}
+
+service IFSService {
+    rpc DownloadIFS (DownloadIFSRequest) returns (stream DownloadIFSResponse);
+}

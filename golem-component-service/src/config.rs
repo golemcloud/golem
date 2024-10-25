@@ -14,15 +14,13 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-
+use tracing::log::info;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbConfig, DbSqliteConfig, HasConfigExamples,
 };
 use golem_common::tracing::TracingConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_service_base::config::{
-    ComponentStoreConfig, ComponentStoreLocalConfig, ComponentStoreS3Config,
-};
+use golem_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig, ComponentStoreS3Config, IFSStoreConfig, IFSStoreLocalConfig};
 use golem_service_base::model::Empty;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -33,6 +31,7 @@ pub struct ComponentServiceConfig {
     pub db: DbConfig,
     pub component_store: ComponentStoreConfig,
     pub compilation: ComponentCompilationConfig,
+    pub ifs_store: IFSStoreConfig
 }
 
 impl Default for ComponentServiceConfig {
@@ -50,6 +49,10 @@ impl Default for ComponentServiceConfig {
                 object_prefix: "".to_string(),
             }),
             compilation: ComponentCompilationConfig::default(),
+            ifs_store: IFSStoreConfig::Local(IFSStoreLocalConfig {
+                root_path: "/ifs".to_string(),
+                object_prefix: "".to_string(),
+            })
         }
     }
 }
@@ -72,6 +75,7 @@ impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
 }
 
 pub fn make_config_loader() -> ConfigLoader<ComponentServiceConfig> {
+    info!("getting from ---------------------------- service.toml");
     ConfigLoader::new_with_examples(Path::new("config/component-service.toml"))
 }
 

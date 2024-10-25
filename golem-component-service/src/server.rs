@@ -30,6 +30,10 @@ use tokio::select;
 use tracing::{error, info};
 
 fn main() -> Result<(), std::io::Error> {
+
+    info!("-----------------------------------------------------");
+    info!("_____________________________________________________");
+
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -37,7 +41,7 @@ fn main() -> Result<(), std::io::Error> {
             .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_config_loader().load_or_dump_config() {
         init_tracing_with_default_env_filter(&config.tracing);
-
+        info!("--------------------------dfklajfodahj ***************** {:?}", config);
         let prometheus = metrics::register_all();
 
         let exporter = opentelemetry_prometheus::exporter()
@@ -61,6 +65,8 @@ fn main() -> Result<(), std::io::Error> {
 }
 
 async fn dump_openapi_yaml() -> Result<(), std::io::Error> {
+    info!("-----------------------------------------------------");
+    info!("_____________________________________________________");
     let config = ComponentServiceConfig::default();
     let services = Services::new(&config).await.map_err(|e| {
         error!("Services - init error: {}", e);

@@ -78,6 +78,14 @@ pub struct CompileWorkerConfig {
     pub max_component_size: usize,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IFSWorkerConfig {
+    pub retries: RetryConfig,
+    pub max_component_size: usize,
+}
+
+
+
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {

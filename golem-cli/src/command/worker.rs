@@ -492,6 +492,7 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                // At the point we also needs to transfer the files to the worker
                 service
                     .add(component_name_or_uri, worker_name, env, args, project_id)
                     .await

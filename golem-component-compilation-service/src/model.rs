@@ -17,6 +17,7 @@ use std::fmt::Display;
 use golem_common::model::ComponentId;
 use tokio::sync::mpsc;
 use wasmtime::component::Component;
+use golem_worker_executor_base::services::ifs::InitialFileSystem;
 
 #[derive(Debug, Clone)]
 pub struct ComponentWithVersion {
@@ -52,6 +53,17 @@ pub enum CompilationError {
     ComponentUploadFailed(String),
     #[error("Unexpected error: {0}")]
     Unexpected(String),
+}
+
+pub struct InitialFileSystemToUpload{
+    pub component_and_version: ComponentWithVersion,
+    pub initial_file_system: Vec<u8>
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum InitialFileSystemError{
+    #[error("Unexpected error: {0}")]
+    Unexpected(String)
 }
 
 impl<T> From<mpsc::error::SendError<T>> for CompilationError {

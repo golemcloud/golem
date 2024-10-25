@@ -71,6 +71,7 @@ impl S3BlobStorage {
             BlobStorageNamespace::CompressedOplog { level, .. } => {
                 &self.config.compressed_oplog_buckets[*level]
             }
+            BlobStorageNamespace::InitialFileSystem(_account_id) => &self.config.custom_data_bucket
         }
     }
 
@@ -121,6 +122,16 @@ impl S3BlobStorage {
                     Path::new(&self.config.object_prefix)
                         .join(account_id_string)
                         .join(component_id_string)
+                        .to_path_buf()
+                }
+            }
+            BlobStorageNamespace::InitialFileSystem(account_id) => {
+                let account_id_string = account_id.to_string();
+                if self.config.object_prefix.is_empty() {
+                    Path::new(&account_id_string).to_path_buf()
+                } else {
+                    Path::new(&self.config.object_prefix)
+                        .join(account_id_string)
                         .to_path_buf()
                 }
             }

@@ -15,6 +15,7 @@
 pub mod compile_service;
 mod compile_worker;
 mod upload_worker;
+mod ifs_worker;
 
 pub use compile_service::CompilationService;
 pub use compile_worker::CompileWorker;

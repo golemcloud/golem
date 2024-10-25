@@ -13,6 +13,7 @@ service ComponentCompilationService {
 message ComponentCompilationRequest {
     golem.component.ComponentId component_id = 1;
     uint64 component_version = 2;
+    bytes ifs_data = 3;
 }
 
 message ComponentCompilationResponse {

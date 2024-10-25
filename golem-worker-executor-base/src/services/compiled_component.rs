@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::time::Instant;
-use tracing::debug;
+use tracing::{debug, info};
 use wasmtime::component::Component;
 
 use golem_common::model::ComponentId;
@@ -113,6 +113,9 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         component_version: u64,
         component: &Component,
     ) -> Result<(), GolemError> {
+
+        info!("-------------------------------------putting something --------");
+
         let bytes = component
             .serialize()
             .expect("Could not serialize component");

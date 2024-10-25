@@ -337,6 +337,7 @@ pub enum BlobStorageNamespace {
         component_id: ComponentId,
         level: usize,
     },
+    InitialFileSystem(AccountId)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

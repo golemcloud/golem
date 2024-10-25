@@ -129,6 +129,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             component_repo.clone(),
             object_store.clone(),
             compilation_service.clone(),
+            ,
         ));
 
     let component_name1 = ComponentName("shopping-cart".to_string());
@@ -141,6 +142,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             ComponentType::Durable,
             get_component_data("shopping-cart"),
             &DefaultNamespace::default(),
+            ,
         )
         .await
         .unwrap();
@@ -152,6 +154,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             ComponentType::Durable,
             get_component_data("rust-echo"),
             &DefaultNamespace::default(),
+            ,
         )
         .await
         .unwrap();

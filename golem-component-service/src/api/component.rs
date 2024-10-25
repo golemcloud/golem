@@ -107,6 +107,11 @@ impl From<ComponentServiceError> for ComponentError {
                     error: error.to_safe_string(),
                 }))
             }
+            ComponentServiceError::InitialFileSystemStorageError { .. } => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
         }
     }
 }
@@ -142,8 +147,13 @@ impl ComponentApi {
 
         let record =
             recorded_http_api_request!("create_component", component_name = payload.name.0);
+
+        let ifs_data = payload.ifs.into_vec().await?;
         info!("------------------------------------");
         info!("{:?}",payload.file_permissions);
+        info!("{:?}", payload.component.file_name());
+        // info!("{:?}", payload.ifs.file_name());
+        info!("{:?}", ifs_data);
         info!("------------------------------------");
         let response = {
             let data = payload.component.into_vec().await?;
@@ -155,6 +165,7 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     &DefaultNamespace::default(),
+                    ifs_data
                 )
                 .instrument(record.span.clone())
                 .await

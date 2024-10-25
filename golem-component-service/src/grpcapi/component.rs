@@ -158,13 +158,7 @@ impl ComponentGrpcApi {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let result = self
             .component_service
-            .create(
-                &ComponentId::new_v4(),
-                &name,
-                request.component_type().into(),
-                data,
-                &DefaultNamespace::default(),
-            )
+            .create(&ComponentId::new_v4(), &name, request.component_type().into(), data, &DefaultNamespace::default(), vec![])
             .await?;
         Ok(result.into())
     }

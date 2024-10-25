@@ -21,6 +21,9 @@ use golem_worker_executor_base::services::compiled_component::CompiledComponentS
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use wasmtime::Engine;
+use golem_api_grpc::proto::golem::component::v1::ifs_service_server::IfsService;
+use golem_worker_executor_base::services::ifs::InitialFileSystemService;
+use crate::service::ifs_worker::InitialFileSystemWorker;
 
 #[async_trait]
 pub trait CompilationService {
@@ -44,22 +47,31 @@ impl ComponentCompilationServiceImpl {
         engine: Engine,
 
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
+        ifs_service : Arc<dyn InitialFileSystemService + Send + Sync>
     ) -> Self {
         let (compile_tx, compile_rx) = mpsc::channel(100);
         let (upload_tx, upload_rx) = mpsc::channel(100);
+        let (ifs_tx, ifs_rx) = mpsc::channel(100);
 
         CompileWorker::start(
             component_service.uri(),
-            component_service.access_token,
-            compile_worker,
+            component_service.clone().access_token,
+            compile_worker.clone(),
             engine.clone(),
             compiled_component_service.clone(),
             upload_tx,
             compile_rx,
         );
 
-        UploadWorker::start(compiled_component_service.clone(), upload_rx);
-
+        UploadWorker::start(
+            component_service.uri(),
+            component_service.clone().access_token,
+            compiled_component_service.clone(),
+            compile_worker ,
+            upload_rx,
+            ifs_tx
+        );
+        InitialFileSystemWorker::start(ifs_service.clone(), ifs_rx);
         Self { queue: compile_tx }
     }
 }

@@ -66,6 +66,11 @@ mod conversion {
                         error: value.to_safe_string(),
                     })
                 }
+                component::ComponentError::InitialFileSystemStorageError { .. } => {
+                    component_error::Error::InternalError(ErrorBody {
+                        error: value.to_safe_string(),
+                    })
+                }
             };
             ComponentError { error: Some(error) }
         }

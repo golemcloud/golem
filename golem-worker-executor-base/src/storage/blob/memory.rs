@@ -18,6 +18,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use golem_common::model::Timestamp;
 use std::path::{Path, PathBuf};
+use tracing::info;
 
 #[derive(Debug)]
 pub struct InMemoryBlobStorage {
@@ -100,6 +101,7 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), String> {
+        info!("--------------------In memory -----------------");
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())

@@ -58,3 +58,32 @@ impl Default for WorkerExecutorClientCacheConfig {
         }
     }
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum IFSStoreConfig {
+    S3(IFSStoreS3Config),
+    Local(IFSStoreLocalConfig),
+}
+
+impl Default for IFSStoreConfig {
+    fn default() -> Self {
+        IFSStoreConfig::Local(IFSStoreLocalConfig {
+            root_path: "/tmp".to_string(),
+            object_prefix: "".to_string(),
+        })
+    }
+}
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IFSStoreLocalConfig {
+    pub root_path: String,
+    pub object_prefix: String
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IFSStoreS3Config {
+    pub bucket_name: String,
+    pub object_prefix: String,
+}

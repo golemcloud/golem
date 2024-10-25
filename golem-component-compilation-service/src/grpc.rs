@@ -31,6 +31,7 @@ use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::ComponentId;
 use golem_common::recorded_grpc_api_request;
 use tonic::{Request, Response, Status};
+use tracing::log::info;
 
 #[derive(Clone)]
 pub struct CompileGrpcService {
@@ -50,6 +51,8 @@ impl GrpcCompilationServer for CompileGrpcService {
         request: Request<ComponentCompilationRequest>,
     ) -> Result<tonic::Response<ComponentCompilationResponse>, Status> {
         let request = request.into_inner();
+        // info!("------------------------------------------{:?}", request.ifs_data);
+        info!("Enqueue compilation");
         let record = recorded_grpc_api_request!(
             "enqueue_compilation",
             component_id = proto_component_id_string(&request.component_id),
@@ -80,6 +83,7 @@ impl CompileGrpcService {
     ) -> Result<(), ComponentCompilationError> {
         let component_id = make_component_id(request.component_id)?;
         let component_version = request.component_version;
+        let ifs_data = request.ifs_data;
         self.service
             .enqueue_compilation(component_id, component_version)
             .await?;

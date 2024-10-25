@@ -52,6 +52,9 @@ impl SqliteBlobStorage {
                 "compressed_oplog-{}-{}-{}",
                 account_id.value, component_id, level
             ),
+            BlobStorageNamespace::InitialFileSystem(account_id) =>{
+                format!("initial_file_system-{}", account_id.value)
+            }
         }
     }
 

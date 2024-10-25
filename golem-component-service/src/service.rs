@@ -18,26 +18,31 @@ use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
-use golem_service_base::config::ComponentStoreConfig;
+use golem_service_base::config::{ComponentStoreConfig, IFSStoreConfig};
 use golem_service_base::db;
-use golem_service_base::service::component_object_store;
+use golem_service_base::service::{component_object_store, ifs_object_store};
 use std::sync::Arc;
-
+use tracing::log::info;
 use crate::config::ComponentServiceConfig;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
 use golem_component_service_base::service::component::{ComponentService, ComponentServiceDefault};
+use golem_component_service_base::service::ifs::{InitialFileSystemService, InitialFileSystemServiceDefault};
 use golem_service_base::auth::DefaultNamespace;
 
 #[derive(Clone)]
 pub struct Services {
     pub component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
     pub compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
+    pub ifs_service: Arc<dyn InitialFileSystemService<DefaultNamespace> + Sync + Send>
 }
 
 impl Services {
     pub async fn new(config: &ComponentServiceConfig) -> Result<Services, String> {
+
+        info!("-------------------- {:?}", config);
+
         let component_repo: Arc<dyn ComponentRepo + Sync + Send> = match config.db.clone() {
             DbConfig::Postgres(c) => {
                 let db_pool = db::create_postgres_pool(&c)
@@ -67,6 +72,16 @@ impl Services {
                 }
             };
 
+        let ifs_object_store: Arc<dyn ifs_object_store::IFSObjectStore + Sync + Send> =
+            match config.ifs_store.clone() {
+                IFSStoreConfig::Local(c) => {
+                    Arc::new(ifs_object_store::FsIFSObjectStore::new(&c)?)
+                }
+                IFSStoreConfig::S3(c) => {
+                    Arc::new(ifs_object_store::AwsS3IFSObjectStore::new(&c).await)
+                }
+            };
+
         let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
             match config.compilation.clone() {
                 ComponentCompilationConfig::Enabled(config) => {
@@ -82,11 +97,19 @@ impl Services {
                 component_repo.clone(),
                 object_store.clone(),
                 compilation_service.clone(),
+                ifs_object_store.clone()
+            ));
+
+        let ifs_service: Arc<dyn InitialFileSystemService<DefaultNamespace> + Sync + Send> =
+            Arc::new(InitialFileSystemServiceDefault::new(
+                component_repo.clone(),
+                ifs_object_store.clone(),
             ));
 
         Ok(Services {
             component_service,
             compilation_service,
+            ifs_service
         })
     }
 }
