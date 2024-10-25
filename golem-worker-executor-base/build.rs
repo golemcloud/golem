@@ -99,7 +99,9 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
             "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
             "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
             "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
-            "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry
+            "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry,
+            "wasi:rdbms/postgres/db-connection": super::durable_host::rdbms::postgres::PostgresDbConnection,
+            "wasi:rdbms/types/db-result-set": super::durable_host::rdbms::types::DbResultSetEntry,
         }},
     }});
         "#
