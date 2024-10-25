@@ -63,7 +63,7 @@ pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<S
     writeln!(out, "interface stub-{} {{", world.name)?;
 
     let all_imports = def
-        .stub_exported_interfaces()
+        .stub_imported_interfaces()
         .iter()
         .flat_map(|i| i.imports.iter().map(|i| (InterfaceStubImport::from(i), i)))
         .collect::<IndexMap<_, _>>();
@@ -100,7 +100,7 @@ pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<S
     }
 
     // Generating async return types
-    for interface in def.stub_exported_interfaces() {
+    for interface in def.stub_imported_interfaces() {
         for function in &interface.functions {
             if !function.results.is_empty() {
                 write_async_return_type(&mut out, function, interface, def)?;
@@ -114,7 +114,7 @@ pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<S
     }
 
     // Generating function definitions
-    for interface in def.stub_exported_interfaces() {
+    for interface in def.stub_imported_interfaces() {
         writeln!(out, "  resource {} {{", &interface.name)?;
         match &interface.constructor_params {
             None => {
