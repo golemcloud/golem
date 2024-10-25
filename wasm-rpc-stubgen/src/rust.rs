@@ -236,8 +236,8 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         let remote_function_name = get_remote_function_name(
             def,
             "drop",
-            interface.interface_name().as_ref(),
-            interface.resource_name().as_ref(),
+            interface.interface_name(),
+            interface.resource_name(),
         );
         if interface.is_resource() {
             interface_impls.push(quote! {
@@ -331,8 +331,8 @@ fn generate_result_wrapper_get_source(
     let remote_function_name = get_remote_function_name(
         def,
         &function.name,
-        interface.interface_name().as_ref(),
-        interface.resource_name().as_ref(),
+        interface.interface_name(),
+        interface.resource_name(),
     );
 
     Ok(quote! {
@@ -392,8 +392,8 @@ fn generate_function_stub_source(
     let remote_function_name = get_remote_function_name(
         def,
         &function.name,
-        owner.interface_name().as_ref(),
-        owner.resource_name().as_ref(),
+        owner.interface_name(),
+        owner.resource_name(),
     );
 
     let rpc = match mode {
@@ -593,8 +593,8 @@ fn get_result_type_source(
 fn get_remote_function_name(
     def: &StubDefinition,
     function_name: &str,
-    interface_name: Option<&String>,
-    resource_name: Option<&String>,
+    interface_name: Option<&str>,
+    resource_name: Option<&str>,
 ) -> String {
     match (interface_name, resource_name) {
         (Some(remote_interface), None) => {
