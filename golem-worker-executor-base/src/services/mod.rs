@@ -12,17 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::worker_activator::WorkerActivator;
-use std::sync::Arc;
-
+use crate::services::component_readonly_file::ComponentReadOnlyFileService;
 use crate::services::events::Events;
+use crate::services::worker_activator::WorkerActivator;
 use crate::workerctx::WorkerCtx;
+use std::sync::Arc;
 use tokio::runtime::Handle;
 
 pub mod active_workers;
 pub mod blob_store;
 pub mod compiled_component;
 pub mod component;
+pub mod component_readonly_file;
 pub mod events;
 pub mod golem_config;
 pub mod key_value;
@@ -37,7 +38,6 @@ pub mod worker_activator;
 pub mod worker_enumeration;
 pub mod worker_event;
 pub mod worker_proxy;
-
 // HasXXX traits for fine-grained control of which dependencies a function needs
 
 pub trait HasActiveWorkers<Ctx: WorkerCtx> {
@@ -130,6 +130,12 @@ pub trait HasEvents {
     fn events(&self) -> Arc<Events>;
 }
 
+pub trait HasComponentReadOnlyFileService {
+    fn component_read_only_file_service(
+        &self,
+    ) -> Arc<dyn ComponentReadOnlyFileService + Send + Sync>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -151,6 +157,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShardManagerService
     + HasShardService
     + HasExtraDeps<Ctx>
+    + HasComponentReadOnlyFileService
     + Clone
 {
 }
@@ -176,6 +183,7 @@ impl<
             + HasShardManagerService
             + HasShardService
             + HasExtraDeps<Ctx>
+            + HasComponentReadOnlyFileService
             + Clone,
     > HasAll<Ctx> for T
 {
@@ -205,6 +213,7 @@ pub struct All<Ctx: WorkerCtx> {
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     events: Arc<Events>,
+    component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -231,6 +240,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             worker_activator: self.worker_activator.clone(),
             worker_proxy: self.worker_proxy.clone(),
             events: self.events.clone(),
+            component_read_only_file_service: self.component_read_only_file_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -263,6 +273,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         events: Arc<Events>,
+        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -286,6 +297,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             worker_activator,
             worker_proxy,
             events,
+            component_read_only_file_service,
             extra_deps,
         }
     }
@@ -312,6 +324,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.worker_activator(),
             this.worker_proxy(),
             this.events(),
+            this.component_read_only_file_service(),
             this.extra_deps(),
         )
     }
@@ -448,6 +461,14 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerProxy for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasEvents for T {
     fn events(&self) -> Arc<Events> {
         self.all().events.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentReadOnlyFileService for T {
+    fn component_read_only_file_service(
+        &self,
+    ) -> Arc<dyn ComponentReadOnlyFileService + Send + Sync> {
+        self.all().component_read_only_file_service.clone()
     }
 }
 

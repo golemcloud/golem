@@ -29,20 +29,24 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
-    download_component_response, get_component_metadata_response, ComponentError,
-    DownloadComponentRequest, GetLatestComponentRequest, GetVersionedComponentRequest,
+    download_component_initial_file_response, download_component_response,
+    get_component_initial_file_response, get_component_metadata_response, ComponentError,
+    DownloadComponentInitialFileRequest, DownloadComponentRequest, GetComponentInitialFilesRequest,
+    GetLatestComponentInitialFilesRequest, GetLatestComponentRequest, GetVersionedComponentRequest,
 };
-use golem_api_grpc::proto::golem::component::LinearMemory;
+use golem_api_grpc::proto::golem::component::{ComponentInitialFile, LinearMemory};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::{ComponentId, ComponentType, ComponentVersion};
+use golem_common::model::{ComponentId, ComponentType, ComponentVersion, InitialFilePermission};
 use golem_common::retries::with_retries;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
+use itertools::Itertools;
 use prost::Message;
+use serde::{Deserialize, Serialize};
 use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -60,6 +64,33 @@ pub struct ComponentMetadata {
     pub component_type: ComponentType,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct InitialFile {
+    pub version: ComponentVersion,
+    pub file_path: PathBuf,
+    pub file_permission: InitialFilePermission,
+}
+
+impl TryFrom<ComponentInitialFile> for InitialFile {
+    type Error = String;
+
+    fn try_from(value: ComponentInitialFile) -> Result<Self, Self::Error> {
+        Ok(Self {
+            version: value
+                .versioned_component_id
+                .ok_or("Cannot find component version")?
+                .version,
+            file_path: PathBuf::from(&value.file_path),
+            file_permission: value.file_permission.try_into()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ComponentInitialFiles {
+    pub initial_files: Vec<InitialFile>,
+}
+
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
 pub trait ComponentService {
@@ -75,6 +106,19 @@ pub trait ComponentService {
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
     ) -> Result<ComponentMetadata, GolemError>;
+
+    async fn get_initial_files(
+        &self,
+        component_id: &ComponentId,
+        forced_version: Option<ComponentVersion>,
+    ) -> Result<ComponentInitialFiles, GolemError>;
+
+    async fn get_initial_file_data(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+        file_path: &Path,
+    ) -> Result<Vec<u8>, GolemError>;
 }
 
 pub async fn configured(
@@ -95,6 +139,7 @@ pub async fn configured(
                     .expect("Access token must be an UUID"),
                 cache_config.max_capacity,
                 cache_config.max_metadata_capacity,
+                cache_config.max_initial_files_capacity,
                 cache_config.time_to_idle,
                 config.retries.clone(),
                 compiled_component_service,
@@ -105,6 +150,7 @@ pub async fn configured(
             &config.root,
             cache_config.max_capacity,
             cache_config.max_metadata_capacity,
+            cache_config.max_initial_files_capacity,
             cache_config.time_to_idle,
             compiled_component_service,
         )),
@@ -112,14 +158,15 @@ pub async fn configured(
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct ComponentKey {
-    component_id: ComponentId,
-    component_version: ComponentVersion,
+pub(crate) struct ComponentKey {
+    pub(crate) component_id: ComponentId,
+    pub(crate) component_version: ComponentVersion,
 }
 
 pub struct ComponentServiceGrpc {
     component_cache: Cache<ComponentKey, (), Component, GolemError>,
     component_metadata_cache: Cache<ComponentKey, (), ComponentMetadata, GolemError>,
+    component_initial_file_cache: Cache<ComponentKey, (), ComponentInitialFiles, GolemError>,
     access_token: Uuid,
     retry_config: RetryConfig,
     compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
@@ -132,6 +179,7 @@ impl ComponentServiceGrpc {
         access_token: Uuid,
         max_capacity: usize,
         max_metadata_capacity: usize,
+        max_initial_files_capacity: usize,
         time_to_idle: Duration,
         retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
@@ -141,6 +189,10 @@ impl ComponentServiceGrpc {
             component_cache: create_component_cache(max_capacity, time_to_idle),
             component_metadata_cache: create_component_metadata_cache(
                 max_metadata_capacity,
+                time_to_idle,
+            ),
+            component_initial_file_cache: create_component_initial_files_cache(
+                max_initial_files_capacity,
                 time_to_idle,
             ),
             access_token,
@@ -312,6 +364,112 @@ impl ComponentService for ComponentServiceGrpc {
             }
         }
     }
+
+    async fn get_initial_files(
+        &self,
+        component_id: &ComponentId,
+        forced_version: Option<ComponentVersion>,
+    ) -> Result<ComponentInitialFiles, GolemError> {
+        match forced_version {
+            Some(version) => {
+                let client = self.client.clone();
+                let access_token = self.access_token;
+                let retry_config = self.retry_config.clone();
+                let component_id = component_id.clone();
+                self.component_initial_file_cache
+                    .get_or_insert_simple(
+                        &ComponentKey {
+                            component_id: component_id.clone(),
+                            component_version: version,
+                        },
+                        || {
+                            Box::pin(async move {
+                                get_initial_files_via_grpc(
+                                    &client,
+                                    &access_token,
+                                    &retry_config,
+                                    &component_id,
+                                    forced_version,
+                                )
+                                .await
+                            })
+                        },
+                    )
+                    .await
+            }
+            None => {
+                let component_initial_files = get_initial_files_via_grpc(
+                    &self.client,
+                    &self.access_token,
+                    &self.retry_config,
+                    component_id,
+                    None,
+                )
+                .await?;
+
+                let mut version_opt_result = Ok(None);
+                for initial_file in component_initial_files.initial_files.iter() {
+                    match version_opt_result {
+                        Ok(Some(version)) => {
+                            if version == initial_file.version {
+                                version_opt_result = Ok(Some(version));
+                            } else {
+                                version_opt_result = Err(GolemError::runtime(
+                                    "version mismatch between initial files",
+                                ));
+                            }
+                        }
+                        Ok(None) => {
+                            version_opt_result = Ok(Some(initial_file.version));
+                        }
+                        Err(_) => {}
+                    }
+                }
+
+                match version_opt_result {
+                    Ok(Some(version)) => {
+                        let component_initial_files = self
+                            .component_initial_file_cache
+                            .get_or_insert_simple(
+                                &ComponentKey {
+                                    component_id: component_id.clone(),
+                                    component_version: version,
+                                },
+                                || Box::pin(async move { Ok(component_initial_files) }),
+                            )
+                            .await?;
+
+                        Ok(component_initial_files)
+                    }
+                    Ok(None) => Ok(ComponentInitialFiles {
+                        initial_files: vec![],
+                    }),
+                    Err(err) => Err(err),
+                }
+            }
+        }
+    }
+
+    async fn get_initial_file_data(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+        file_path: &Path,
+    ) -> Result<Vec<u8>, GolemError> {
+        let client = self.client.clone();
+        let access_token = self.access_token;
+        let retry_config = self.retry_config.clone();
+        let component_id = component_id.clone();
+        download_initial_file_via_grpc(
+            &client,
+            &access_token,
+            &retry_config,
+            &component_id,
+            component_version,
+            file_path,
+        )
+        .await
+    }
 }
 
 async fn download_via_grpc(
@@ -473,6 +631,165 @@ async fn get_metadata_via_grpc(
     .map_err(|error| grpc_get_latest_version_error(error, component_id))
 }
 
+async fn get_initial_files_via_grpc(
+    client: &GrpcClient<ComponentServiceClient<Channel>>,
+    access_token: &Uuid,
+    retry_config: &RetryConfig,
+    component_id: &ComponentId,
+    component_version: Option<ComponentVersion>,
+) -> Result<ComponentInitialFiles, GolemError> {
+    let desc = format!("Getting component initial files of {component_id}");
+    debug!("{}", &desc);
+    with_retries(
+        "components",
+        "get_initial_files",
+        Some(component_id.to_string()),
+        retry_config,
+        &(
+            client.clone(),
+            component_id.clone(),
+            access_token.to_owned(),
+        ),
+        |(client, component_id, access_token)| {
+            Box::pin(async move {
+                let response = match component_version {
+                    Some(component_version) => client
+                        .call(move |client| {
+                            let request = authorised_grpc_request(
+                                GetComponentInitialFilesRequest {
+                                    component_id: Some(component_id.clone().into()),
+                                    version: component_version,
+                                },
+                                access_token,
+                            );
+                            Box::pin(client.get_component_initial_files(request))
+                        })
+                        .await?
+                        .into_inner(),
+                    None => client
+                        .call(move |client| {
+                            let request = authorised_grpc_request(
+                                GetLatestComponentInitialFilesRequest {
+                                    component_id: Some(component_id.clone().into()),
+                                },
+                                access_token,
+                            );
+                            Box::pin(client.get_latest_component_initial_files(request))
+                        })
+                        .await?
+                        .into_inner(),
+                };
+                let len = response.encoded_len();
+                let result = match response.result {
+                    None => Err("Empty response".to_string().into()),
+                    Some(get_component_initial_file_response::Result::Success(response)) => {
+                        Ok(ComponentInitialFiles {
+                            initial_files: response
+                                .initial_files
+                                .into_iter()
+                                .map(|i| {
+                                    i.try_into().map_err(|e| {
+                                        GrpcError::Unexpected(format!(
+                                            "Failed to parse component initial file: {}",
+                                            e
+                                        ))
+                                    })
+                                })
+                                .try_collect()?,
+                        })
+                    }
+                    Some(get_component_initial_file_response::Result::Error(error)) => {
+                        Err(GrpcError::Domain(error))
+                    }
+                }?;
+
+                record_external_call_response_size_bytes("components", "get_initial_files", len);
+
+                Ok(result)
+            })
+        },
+        is_grpc_retriable::<ComponentError>,
+    )
+    .await
+    .map_err(|error| grpc_get_latest_version_initial_files_error(error, component_id))
+}
+
+async fn download_initial_file_via_grpc(
+    client: &GrpcClient<ComponentServiceClient<Channel>>,
+    access_token: &Uuid,
+    retry_config: &RetryConfig,
+    component_id: &ComponentId,
+    component_version: ComponentVersion,
+    file_path: &Path,
+) -> Result<Vec<u8>, GolemError> {
+    let file_path = file_path
+        .to_path_buf()
+        .into_os_string()
+        .into_string()
+        .map_err(|e| {
+            GolemError::component_initial_file_download_failed(
+                component_id.clone(),
+                component_version,
+                format!("Cannot convert {} into string", e.to_string_lossy()),
+            )
+        })?;
+    with_retries(
+        "components",
+        "download_initial_file",
+        Some(component_id.to_string()),
+        retry_config,
+        &(
+            client.clone(),
+            component_id.clone(),
+            access_token.to_owned(),
+            file_path.clone(),
+        ),
+        |(client, component_id, access_token, file_path)| {
+            Box::pin(async move {
+                let response = client
+                    .call(move |client| {
+                        let request = authorised_grpc_request(
+                            DownloadComponentInitialFileRequest {
+                                component_id: Some(component_id.clone().into()),
+                                version: component_version,
+                                file_path: file_path.to_string(),
+                            },
+                            access_token,
+                        );
+                        Box::pin(client.download_component_initial_file(request))
+                    })
+                    .await?
+                    .into_inner();
+
+                let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
+                let bytes = chunks
+                    .into_iter()
+                    .map(|chunk| match chunk.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(download_component_initial_file_response::Result::SuccessChunk(
+                            chunk,
+                        )) => Ok(chunk),
+                        Some(download_component_initial_file_response::Result::Error(error)) => {
+                            Err(GrpcError::Domain(error))
+                        }
+                    })
+                    .collect::<Result<Vec<Vec<u8>>, GrpcError<ComponentError>>>()?;
+
+                let bytes: Vec<u8> = bytes.into_iter().flatten().collect();
+
+                record_external_call_response_size_bytes("components", "download", bytes.len());
+
+                Ok(bytes)
+            })
+        },
+        is_grpc_retriable::<ComponentError>,
+    )
+    .await
+    .map_err(|error| {
+        grpc_component_initial_file_download_error(error, component_id, component_version)
+    })
+}
+
 fn grpc_component_download_error(
     error: GrpcError<ComponentError>,
     component_id: &ComponentId,
@@ -491,6 +808,28 @@ fn grpc_get_latest_version_error(
 ) -> GolemError {
     GolemError::GetLatestVersionOfComponentFailed {
         component_id: component_id.clone(),
+        reason: format!("{}", error),
+    }
+}
+
+fn grpc_get_latest_version_initial_files_error(
+    error: GrpcError<ComponentError>,
+    component_id: &ComponentId,
+) -> GolemError {
+    GolemError::GetComponentLatestInitialFilesFailed {
+        component_id: component_id.clone(),
+        reason: format!("{}", error),
+    }
+}
+
+fn grpc_component_initial_file_download_error(
+    error: GrpcError<ComponentError>,
+    component_id: &ComponentId,
+    component_version: ComponentVersion,
+) -> GolemError {
+    GolemError::ComponentInitialFileDownloadFailed {
+        component_id: component_id.clone(),
+        component_version,
         reason: format!("{}", error),
     }
 }
@@ -525,6 +864,21 @@ fn create_component_metadata_cache(
     )
 }
 
+fn create_component_initial_files_cache(
+    max_capacity: usize,
+    time_to_idle: Duration,
+) -> Cache<ComponentKey, (), ComponentInitialFiles, GolemError> {
+    Cache::new(
+        Some(max_capacity),
+        FullCacheEvictionMode::LeastRecentlyUsed(1),
+        BackgroundEvictionMode::OlderThan {
+            ttl: time_to_idle,
+            period: Duration::from_secs(60),
+        },
+        "component_initial_files",
+    )
+}
+
 impl From<std::io::Error> for GolemError {
     fn from(value: std::io::Error) -> Self {
         GolemError::Unknown {
@@ -537,6 +891,7 @@ pub struct ComponentServiceLocalFileSystem {
     root: PathBuf,
     component_cache: Cache<ComponentKey, (), Component, GolemError>,
     component_metadata_cache: Cache<ComponentKey, (), ComponentMetadata, GolemError>,
+    component_initial_file_cache: Cache<ComponentKey, (), ComponentInitialFiles, GolemError>,
     compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
 }
 
@@ -545,6 +900,7 @@ impl ComponentServiceLocalFileSystem {
         root: &Path,
         max_capacity: usize,
         max_metadata_capacity: usize,
+        max_initial_files_capacity: usize,
         time_to_idle: Duration,
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
     ) -> Self {
@@ -556,6 +912,10 @@ impl ComponentServiceLocalFileSystem {
             component_cache: create_component_cache(max_capacity, time_to_idle),
             component_metadata_cache: create_component_metadata_cache(
                 max_metadata_capacity,
+                time_to_idle,
+            ),
+            component_initial_file_cache: create_component_initial_files_cache(
+                max_initial_files_capacity,
                 time_to_idle,
             ),
             compiled_component_service,
@@ -701,11 +1061,11 @@ impl ComponentServiceLocalFileSystem {
         Ok((version, component_type))
     }
 
-    async fn get_metadata_impl(
+    async fn get_component_local_data(
         root: &Path,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
-    ) -> Result<ComponentMetadata, GolemError> {
+    ) -> Result<(PathBuf, ComponentVersion, ComponentType), GolemError> {
         let prefix = format!("{}-", component_id);
         let mut reader = tokio::fs::read_dir(&root).await?;
         let mut matching_files = Vec::new();
@@ -727,7 +1087,8 @@ impl ComponentServiceLocalFileSystem {
 
         let (path, (version, component_type)) = match forced_version {
             Some(forced_version) => matching_files
-                .iter()
+                .clone()
+                .into_iter()
                 .find(|(_path, (version, _component_type))| *version == forced_version)
                 .ok_or(GolemError::GetLatestVersionOfComponentFailed {
                     component_id: component_id.clone(),
@@ -735,25 +1096,35 @@ impl ComponentServiceLocalFileSystem {
                         .to_string(),
                 })?,
             None => matching_files
-                .iter()
+                .clone()
+                .into_iter()
                 .max_by_key(|(_path, (version, _))| *version)
                 .ok_or(GolemError::GetLatestVersionOfComponentFailed {
                     component_id: component_id.clone(),
                     reason: "Could not find any component with the given id".to_string(),
                 })?,
         };
+        Ok((path, version, component_type))
+    }
 
+    async fn get_metadata_impl(
+        root: &Path,
+        component_id: &ComponentId,
+        forced_version: Option<ComponentVersion>,
+    ) -> Result<ComponentMetadata, GolemError> {
+        let (path, version, component_type) =
+            Self::get_component_local_data(root, component_id, forced_version).await?;
         let size = tokio::fs::metadata(&path).await?.len();
-        let (memories, exports) = Self::analyze_memories_and_exports(component_id, path)
+        let (memories, exports) = Self::analyze_memories_and_exports(component_id, &path)
             .await
             .unwrap_or((vec![], vec![])); // We don't want to fail here if the component cannot be read, because that lead to a different kind of error compared to using the gRPC based component service
 
         Ok(ComponentMetadata {
-            version: *version,
+            version,
             size,
             memories,
             exports,
-            component_type: *component_type,
+            component_type,
         })
     }
 
@@ -771,6 +1142,44 @@ impl ComponentServiceLocalFileSystem {
         // We expect the component metadata to be in the same directory as the component file with extension as json
         target_dir.set_extension("json");
         Some(target_dir)
+    }
+
+    async fn read_component_initial_files_from_local_file(
+        component_path: &Path,
+    ) -> Option<Vec<u8>> {
+        let component_initial_files_local =
+            Self::get_component_initial_files_file(component_path).await?;
+        tokio::fs::read(component_initial_files_local).await.ok()
+    }
+
+    pub async fn get_component_initial_files_file(component_path: &Path) -> Option<PathBuf> {
+        let mut target_dir = Path::new("../target").to_path_buf();
+        let component_file = component_path
+            .file_name()
+            .and_then(|os_str| os_str.to_str())?;
+        // We expect the component metadata to be in the same directory as the component file with extension as json
+        // and name ends with "-initial-files"
+        target_dir.push(format!("{component_file}-initial-files"));
+        target_dir.set_extension("json");
+        Some(target_dir)
+    }
+
+    async fn analyze_initial_files(path: &Path) -> Vec<InitialFile> {
+        match Self::read_component_initial_files_from_local_file(path).await {
+            None => vec![],
+            Some(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|_| vec![]),
+        }
+    }
+
+    async fn get_versioned_component_initial_files_impl(
+        root: &Path,
+        component_id: &ComponentId,
+        forced_version: Option<ComponentVersion>,
+    ) -> Result<ComponentInitialFiles, GolemError> {
+        let (path, _, _) =
+            Self::get_component_local_data(root, component_id, forced_version).await?;
+        let initial_files = Self::analyze_initial_files(path.as_path()).await;
+        Ok(ComponentInitialFiles { initial_files })
     }
 }
 
@@ -837,5 +1246,109 @@ impl ComponentService for ComponentServiceLocalFileSystem {
                 Ok(metadata)
             }
         }
+    }
+
+    async fn get_initial_files(
+        &self,
+        component_id: &ComponentId,
+        forced_version: Option<ComponentVersion>,
+    ) -> Result<ComponentInitialFiles, GolemError> {
+        match &forced_version {
+            Some(component_version) => {
+                let key = ComponentKey {
+                    component_id: component_id.clone(),
+                    component_version: *component_version,
+                };
+                let root = self.root.clone();
+                let component_id = component_id.clone();
+                self.component_initial_file_cache
+                    .get_or_insert_simple(&key.clone(), || {
+                        Box::pin(async move {
+                            Self::get_versioned_component_initial_files_impl(
+                                &root,
+                                &component_id,
+                                forced_version,
+                            )
+                            .await
+                        })
+                    })
+                    .await
+            }
+            None => {
+                let component_initial_files = Self::get_versioned_component_initial_files_impl(
+                    &self.root,
+                    component_id,
+                    None,
+                )
+                .await?;
+
+                let mut version_opt_result = Ok(None);
+                for initial_file in component_initial_files.initial_files.iter() {
+                    match version_opt_result {
+                        Ok(Some(version)) => {
+                            if version == initial_file.version {
+                                version_opt_result = Ok(Some(version));
+                            } else {
+                                version_opt_result = Err(GolemError::runtime(
+                                    "version mismatch between initial files",
+                                ));
+                            }
+                        }
+                        Ok(None) => {
+                            version_opt_result = Ok(Some(initial_file.version));
+                        }
+                        Err(_) => {}
+                    }
+                }
+
+                match version_opt_result {
+                    Ok(Some(version)) => {
+                        let key = ComponentKey {
+                            component_id: component_id.clone(),
+                            component_version: version,
+                        };
+                        let component_initial_files = self
+                            .component_initial_file_cache
+                            .get_or_insert_simple(&key.clone(), || {
+                                Box::pin(async move { Ok(component_initial_files) })
+                            })
+                            .await?;
+                        Ok(component_initial_files)
+                    }
+                    Ok(None) => Ok(ComponentInitialFiles {
+                        initial_files: vec![],
+                    }),
+                    Err(err) => Err(err),
+                }
+            }
+        }
+    }
+
+    async fn get_initial_file_data(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+        file_path: &Path,
+    ) -> Result<Vec<u8>, GolemError> {
+        let metadata = self
+            .get_metadata(component_id, Some(component_version))
+            .await?;
+
+        let postfix = match metadata.component_type {
+            ComponentType::Ephemeral => "-ephemeral",
+            ComponentType::Durable => "",
+        };
+
+        let mut root_file_path = self.root.join(format!(
+            "{}-{}{postfix}.wasm",
+            component_id, component_version
+        ));
+        for path_component in file_path.components() {
+            root_file_path.push(path_component);
+        }
+
+        debug!("Loading component initial file from {:?}", root_file_path);
+
+        Ok(tokio::fs::read(root_file_path).await?)
     }
 }

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -23,17 +24,21 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_request, create_component_response,
-    download_component_response, get_component_metadata_all_versions_response,
+    download_component_initial_file_response, download_component_response,
+    get_component_initial_file_response, get_component_metadata_all_versions_response,
     get_component_metadata_response, get_components_response, update_component_request,
     update_component_response, ComponentError, CreateComponentRequest,
-    CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentRequest,
-    DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
+    CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentInitialFileRequest,
+    DownloadComponentInitialFileResponse, DownloadComponentRequest, DownloadComponentResponse,
+    GetComponentInitialFileResponse, GetComponentInitialFileSuccessResponse,
+    GetComponentInitialFilesRequest, GetComponentMetadataAllVersionsResponse,
     GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest,
     GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse,
-    GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
-    UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
+    GetComponentsSuccessResponse, GetLatestComponentInitialFilesRequest, GetLatestComponentRequest,
+    GetVersionedComponentRequest, UpdateComponentRequest, UpdateComponentRequestHeader,
+    UpdateComponentResponse,
 };
-use golem_api_grpc::proto::golem::component::Component;
+use golem_api_grpc::proto::golem::component::{Component, ComponentInitialFile};
 use golem_common::grpc::proto_component_id_string;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
@@ -202,6 +207,88 @@ impl ComponentGrpcApi {
             )
             .await?;
         Ok(result.into())
+    }
+
+    async fn get_version_component_initial_files(
+        &self,
+        request: GetComponentInitialFilesRequest,
+    ) -> Result<Vec<ComponentInitialFile>, ComponentError> {
+        let id: ComponentId = request
+            .component_id
+            .and_then(|id| id.try_into().ok())
+            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let versioned_component_id = golem_service_base::model::VersionedComponentId {
+            component_id: id,
+            version: request.version,
+        };
+        let result = self
+            .component_service
+            .get_version_initial_files(&versioned_component_id, &DefaultNamespace::default())
+            .await?;
+        result
+            .into_iter()
+            .map(|f| {
+                f.try_into().map_err(|e| ComponentError {
+                    error: Some(component_error::Error::InternalError(ErrorBody {
+                        error: e,
+                    })),
+                })
+            })
+            .try_fold(vec![], |mut acc, result| {
+                let initial_file = result?;
+                acc.push(initial_file);
+                Ok(acc)
+            })
+    }
+
+    async fn get_latest_component_initial_files(
+        &self,
+        request: GetLatestComponentInitialFilesRequest,
+    ) -> Result<Vec<ComponentInitialFile>, ComponentError> {
+        let id: ComponentId = request
+            .component_id
+            .and_then(|id| id.try_into().ok())
+            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let result = self
+            .component_service
+            .get_latest_version_initial_files(&id, &DefaultNamespace::default())
+            .await?;
+        result
+            .into_iter()
+            .map(|f| {
+                f.try_into().map_err(|e| ComponentError {
+                    error: Some(component_error::Error::InternalError(ErrorBody {
+                        error: e,
+                    })),
+                })
+            })
+            .try_fold(vec![], |mut acc, result| {
+                let initial_file = result?;
+                acc.push(initial_file);
+                Ok(acc)
+            })
+    }
+
+    async fn download_initial_file(
+        &self,
+        request: DownloadComponentInitialFileRequest,
+    ) -> Result<ByteStream, ComponentError> {
+        let id: ComponentId = request
+            .component_id
+            .and_then(|id| id.try_into().ok())
+            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let version = request.version;
+        let file_path = PathBuf::from(request.file_path);
+        let result = self
+            .component_service
+            .download_initial_file_stream(
+                &id,
+                version,
+                file_path.as_path(),
+                &DefaultNamespace::default(),
+            )
+            .await?;
+        Ok(result)
     }
 }
 
@@ -554,5 +641,121 @@ impl ComponentService for ComponentGrpcApi {
         Ok(Response::new(GetComponentMetadataResponse {
             result: Some(response),
         }))
+    }
+
+    async fn get_latest_component_initial_files(
+        &self,
+        request: Request<GetLatestComponentInitialFilesRequest>,
+    ) -> Result<Response<GetComponentInitialFileResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_latest_component_initial_files",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+
+        let response = match self
+            .get_latest_component_initial_files(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(initial_files) => {
+                record.succeed(get_component_initial_file_response::Result::Success(
+                    GetComponentInitialFileSuccessResponse { initial_files },
+                ))
+            }
+            Err(error) => record.fail(
+                get_component_initial_file_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetComponentInitialFileResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn get_component_initial_files(
+        &self,
+        request: Request<GetComponentInitialFilesRequest>,
+    ) -> Result<Response<GetComponentInitialFileResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_component_initial_files",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+
+        let response = match self
+            .get_version_component_initial_files(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(initial_files) => {
+                record.succeed(get_component_initial_file_response::Result::Success(
+                    GetComponentInitialFileSuccessResponse { initial_files },
+                ))
+            }
+            Err(error) => record.fail(
+                get_component_initial_file_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetComponentInitialFileResponse {
+            result: Some(response),
+        }))
+    }
+
+    type DownloadComponentInitialFileStream =
+        BoxStream<'static, Result<DownloadComponentInitialFileResponse, Status>>;
+
+    async fn download_component_initial_file(
+        &self,
+        request: Request<DownloadComponentInitialFileRequest>,
+    ) -> Result<Response<Self::DownloadComponentInitialFileStream>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "download_component_initial_file",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+        let stream: Self::DownloadComponentInitialFileStream = match self
+            .download_initial_file(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(response) => {
+                let stream = response.map(|content| {
+                    let res = match content {
+                        Ok(content) => DownloadComponentInitialFileResponse {
+                            result: Some(
+                                download_component_initial_file_response::Result::SuccessChunk(
+                                    content,
+                                ),
+                            ),
+                        },
+                        Err(_) => DownloadComponentInitialFileResponse {
+                            result: Some(download_component_initial_file_response::Result::Error(
+                                internal_error("Internal error"),
+                            )),
+                        },
+                    };
+                    Ok(res)
+                });
+                let stream: Self::DownloadComponentInitialFileStream = Box::pin(stream);
+                record.succeed(stream)
+            }
+            Err(err) => {
+                let res = DownloadComponentInitialFileResponse {
+                    result: Some(download_component_initial_file_response::Result::Error(
+                        err.clone(),
+                    )),
+                };
+
+                let stream: Self::DownloadComponentInitialFileStream =
+                    Box::pin(tokio_stream::iter([Ok(res)]));
+                record.fail(stream, &ComponentTraceErrorKind(&err))
+            }
+        };
+
+        Ok(Response::new(stream))
     }
 }

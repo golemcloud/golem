@@ -88,6 +88,7 @@ pub fn create_context(
     args: &[impl AsRef<str>],
     env: &[(impl AsRef<str>, impl AsRef<str>)],
     root_dir: PathBuf,
+    read_only_root_dir: PathBuf,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
     stderr: impl StdoutStream + Sized + 'static,
@@ -104,6 +105,12 @@ pub fn create_context(
         .monotonic_clock(helpers::clocks::monotonic_clock())
         .preopened_dir(root_dir.clone(), "/", DirPerms::all(), FilePerms::all())?
         .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(
+            read_only_root_dir.clone(),
+            "/ro",
+            DirPerms::READ,
+            FilePerms::READ,
+        )?
         .set_suspend(suspend_threshold, suspend_signal)
         .allow_ip_name_lookup(true)
         .build();

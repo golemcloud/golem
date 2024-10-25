@@ -97,6 +97,15 @@ pub enum GolemError {
         details: String,
     },
     ShardingNotReady,
+    GetComponentLatestInitialFilesFailed {
+        component_id: ComponentId,
+        reason: String,
+    },
+    ComponentInitialFileDownloadFailed {
+        component_id: ComponentId,
+        component_version: u64,
+        reason: String,
+    },
 }
 
 impl GolemError {
@@ -163,6 +172,28 @@ impl GolemError {
     pub fn unknown(details: impl Into<String>) -> Self {
         GolemError::Unknown {
             details: details.into(),
+        }
+    }
+
+    pub fn get_component_latest_initial_files_failed(
+        component_id: ComponentId,
+        reason: impl Into<String>,
+    ) -> Self {
+        GolemError::GetComponentLatestInitialFilesFailed {
+            component_id,
+            reason: reason.into(),
+        }
+    }
+
+    pub fn component_initial_file_download_failed(
+        component_id: ComponentId,
+        component_version: u64,
+        reason: impl Into<String>,
+    ) -> Self {
+        GolemError::ComponentInitialFileDownloadFailed {
+            component_id,
+            component_version,
+            reason: reason.into(),
         }
     }
 }
@@ -262,6 +293,25 @@ impl Display for GolemError {
             GolemError::ShardingNotReady => {
                 write!(f, "Sharding not ready")
             }
+            GolemError::GetComponentLatestInitialFilesFailed {
+                component_id,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "Failed to get latest component's initial files: {component_id}: {reason}"
+                )
+            }
+            GolemError::ComponentInitialFileDownloadFailed {
+                component_id,
+                component_version,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "Failed to parse downloaded component's initial file: {component_id}#{component_version}: {reason}"
+                )
+            }
         }
     }
 }
@@ -294,6 +344,12 @@ impl Error for GolemError {
             GolemError::PreviousInvocationExited => "The previously invoked function exited",
             GolemError::Unknown { .. } => "Unknown error",
             GolemError::ShardingNotReady => "Sharding not ready",
+            GolemError::ComponentInitialFileDownloadFailed { .. } => {
+                "Failed to download component's initial file"
+            }
+            GolemError::GetComponentLatestInitialFilesFailed { .. } => {
+                "Failed to get component's latest initial files"
+            }
         }
     }
 }
@@ -326,6 +382,12 @@ impl TraceErrorKind for GolemError {
             GolemError::PreviousInvocationExited => "PreviousInvocationExited",
             GolemError::Unknown { .. } => "Unknown",
             GolemError::ShardingNotReady => "ShardingNotReady",
+            GolemError::ComponentInitialFileDownloadFailed { .. } => {
+                "ComponentInitialFileDownloadFailed"
+            }
+            GolemError::GetComponentLatestInitialFilesFailed { .. } => {
+                "GetComponentLatestInitialFilesFailed"
+            }
         }
     }
 }
@@ -587,6 +649,34 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
+            GolemError::GetComponentLatestInitialFilesFailed {
+                component_id,
+                reason,
+            } => golem::worker::v1::WorkerExecutionError {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::GetComponentLatestInitialFilesFailed(
+                        golem::worker::v1::GetComponentLatestInitialFilesFailed {
+                            component_id: Some(component_id.into()),
+                            reason,
+                        }
+                    ),
+                ),
+            },
+            GolemError::ComponentInitialFileDownloadFailed {
+                component_id,
+                component_version,
+                reason,
+            } => golem::worker::v1::WorkerExecutionError {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::ComponentInitialFileDownloadFailed(
+                        golem::worker::v1::ComponentInitialFileDownloadFailed {
+                            component_id: Some(component_id.into()),
+                            component_version,
+                            reason,
+                        }
+                    ),
+                ),
+            },
         }
     }
 }
@@ -755,6 +845,23 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             Some(golem::worker::v1::worker_execution_error::Error::ShardingNotReady(_)) => {
                 Ok(GolemError::ShardingNotReady)
             }
+            Some(golem::worker::v1::worker_execution_error::Error::ComponentInitialFileDownloadFailed(
+                component_initial_file_download
+            )) => {
+                Ok(GolemError::ComponentInitialFileDownloadFailed {
+                    component_id: component_initial_file_download.component_id.ok_or("Missing component_id")?.try_into()?,
+                    component_version: component_initial_file_download.component_version,
+                    reason: component_initial_file_download.reason,
+                })
+            },
+            Some(golem::worker::v1::worker_execution_error::Error::GetComponentLatestInitialFilesFailed(
+                 get_component_latest_initial_files,
+             )) => {
+                Ok(GolemError::GetComponentLatestInitialFilesFailed {
+                    component_id: get_component_latest_initial_files.component_id.ok_or("Missing component_id")?.try_into()?,
+                    reason: get_component_latest_initial_files.reason,
+                })
+            },
         }
     }
 }

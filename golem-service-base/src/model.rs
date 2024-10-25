@@ -16,8 +16,8 @@ use bincode::{Decode, Encode};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
-    WorkerFilter, WorkerId, WorkerStatus,
+    ComponentId, ComponentType, ComponentVersion, InitialFilePermission, PromiseId, ScanCursor,
+    ShardId, Timestamp, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -958,6 +958,102 @@ impl From<crate::model::GolemErrorShardingNotReady>
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+#[error("Failed to download component initial file {component_id}: {reason}")]
+pub struct GolemErrorComponentInitialFileDownloadFailed {
+    pub component_id: VersionedComponentId,
+    pub reason: String,
+}
+
+impl SafeDisplay for GolemErrorComponentInitialFileDownloadFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::v1::ComponentInitialFileDownloadFailed>
+    for GolemErrorComponentInitialFileDownloadFailed
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::v1::ComponentInitialFileDownloadFailed,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            component_id: VersionedComponentId {
+                component_id: value
+                    .component_id
+                    .ok_or("Missing field: component_id")?
+                    .try_into()?,
+                version: value.component_version,
+            },
+            reason: value.reason,
+        })
+    }
+}
+
+impl From<GolemErrorComponentInitialFileDownloadFailed>
+    for golem_api_grpc::proto::golem::worker::v1::ComponentInitialFileDownloadFailed
+{
+    fn from(value: GolemErrorComponentInitialFileDownloadFailed) -> Self {
+        let component_version = value.component_id.version;
+        let component_id = golem_api_grpc::proto::golem::component::ComponentId {
+            value: Some(value.component_id.component_id.0.into()),
+        };
+        Self {
+            component_id: Some(component_id),
+            component_version,
+            reason: value.reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+#[error("Failed to get component's latest version initial files {component_id}: {reason}")]
+pub struct GolemErrorGetComponentLatestInitialFilesFailed {
+    pub component_id: ComponentId,
+    pub reason: String,
+}
+
+impl SafeDisplay for crate::model::GolemErrorGetComponentLatestInitialFilesFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::v1::GetComponentLatestInitialFilesFailed>
+    for GolemErrorGetComponentLatestInitialFilesFailed
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::v1::GetComponentLatestInitialFilesFailed,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self {
+            component_id: value
+                .component_id
+                .ok_or("Missing field: component_id")?
+                .try_into()?,
+            reason: value.reason,
+        })
+    }
+}
+
+impl From<GolemErrorGetComponentLatestInitialFilesFailed>
+    for golem_api_grpc::proto::golem::worker::v1::GetComponentLatestInitialFilesFailed
+{
+    fn from(value: GolemErrorGetComponentLatestInitialFilesFailed) -> Self {
+        Self {
+            component_id: Some(value.component_id.into()),
+            reason: value.reason,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeParameters {
     pub params: Vec<TypeAnnotatedValue>,
@@ -1333,6 +1429,10 @@ pub enum GolemError {
     InvalidAccount(GolemErrorInvalidAccount),
     #[error(transparent)]
     ShardingNotReady(GolemErrorShardingNotReady),
+    #[error(transparent)]
+    ComponentInitialFileDownloadFailed(GolemErrorComponentInitialFileDownloadFailed),
+    #[error(transparent)]
+    GetComponentLatestInitialFilesFailed(GolemErrorGetComponentLatestInitialFilesFailed),
 }
 
 impl SafeDisplay for GolemError {
@@ -1361,6 +1461,8 @@ impl SafeDisplay for GolemError {
             GolemError::Unknown(inner) => inner.to_safe_string(),
             GolemError::InvalidAccount(inner) => inner.to_safe_string(),
             GolemError::ShardingNotReady(inner) => inner.to_safe_string(),
+            GolemError::GetComponentLatestInitialFilesFailed(inner) => inner.to_safe_string(),
+            GolemError::ComponentInitialFileDownloadFailed(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -1444,6 +1546,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError> for
             }
             Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err)) => {
                 Ok(GolemError::ShardingNotReady(err.into()))
+            }
+            Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ComponentInitialFileDownloadFailed(err)) => {
+                Ok(GolemError::ComponentInitialFileDownloadFailed(err.try_into()?))
+            }
+            Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::GetComponentLatestInitialFilesFailed(err)) => {
+                Ok(GolemError::GetComponentLatestInitialFilesFailed(err.try_into()?))
             }
             None => Err("Missing field: error".to_string()),
         }
@@ -1529,6 +1637,12 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::v1::worker_execu
             }
             GolemError::ShardingNotReady(err) => {
                 golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err.into())
+            }
+            GolemError::GetComponentLatestInitialFilesFailed(err) => {
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::GetComponentLatestInitialFilesFailed(err.into())
+            }
+            GolemError::ComponentInitialFileDownloadFailed(err) => {
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ComponentInitialFileDownloadFailed(err.into())
             }
         }
     }
@@ -1679,32 +1793,6 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
         Self {
             available_fuel: value.available_fuel,
             max_memory_per_worker: value.max_memory_per_worker,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
-pub enum InitialFilePermission {
-    ReadOnly,
-    ReadWrite,
-}
-
-impl From<InitialFilePermission> for i32 {
-    fn from(permission: InitialFilePermission) -> Self {
-        match permission {
-            InitialFilePermission::ReadOnly => 0,
-            InitialFilePermission::ReadWrite => 1,
-        }
-    }
-}
-
-impl TryFrom<i32> for InitialFilePermission {
-    type Error = String;
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::ReadOnly),
-            1 => Ok(Self::ReadWrite),
-            _ => Err(format!("Invalid permission: {}", value)),
         }
     }
 }

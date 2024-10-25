@@ -994,6 +994,18 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::ShardingNotReady(_error) => {
                     "Sharing not ready".to_string()
                 }
+                worker_execution_error::Error::ComponentInitialFileDownloadFailed(error) => {
+                    format!(
+                        "Component initial file download failed: {:?} version {}: {}",
+                        error.component_id, error.component_version, error.reason
+                    )
+                }
+                worker_execution_error::Error::GetComponentLatestInitialFilesFailed(error) => {
+                    format!(
+                        "Failed to get component latest initial files: {:?}: {}",
+                        error.component_id, error.reason
+                    )
+                }
             },
         },
     }

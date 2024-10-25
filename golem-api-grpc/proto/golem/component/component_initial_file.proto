@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/component/versioned_component_id.proto";
+import "google/protobuf/timestamp.proto";
+
+message ComponentInitialFile {
+  VersionedComponentId versioned_component_id = 1;
+  string file_path = 2;
+  InitialFilePermission file_permission = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+enum InitialFilePermission {
+  READONLY = 0;
+  READWRITE = 1;
+}

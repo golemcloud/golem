@@ -1,7 +1,7 @@
-use crate::repo::component::InitialFileRecord;
+use golem_api_grpc::proto::golem::component::ComponentInitialFile;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::ComponentType;
-use golem_service_base::model::{ComponentName, InitialFilePermission, VersionedComponentId};
+use golem_common::model::{ComponentType, InitialFilePermission};
+use golem_service_base::model::{ComponentName, VersionedComponentId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -62,23 +62,29 @@ impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::com
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InitialFile {
+pub struct InitialFile<Namespace> {
+    pub namespace: Namespace,
     pub versioned_component_id: VersionedComponentId,
     pub file_path: PathBuf,
     pub file_permission: InitialFilePermission,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub blob_storage_id: String,
 }
 
-impl From<InitialFile> for InitialFileRecord {
-    fn from(value: InitialFile) -> Self {
-        Self {
-            component_id: value.versioned_component_id.component_id.0,
-            version: value.versioned_component_id.version as i64,
-            file_path: value.file_path.to_string_lossy().to_string(),
+impl<Namespace> TryFrom<InitialFile<Namespace>> for ComponentInitialFile {
+    type Error = String;
+
+    fn try_from(value: InitialFile<Namespace>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            versioned_component_id: Some(value.versioned_component_id.into()),
+            file_path: value
+                .file_path
+                .into_os_string()
+                .into_string()
+                .map_err(|e| format!("cannot convert {} into string", e.to_string_lossy()))?,
             file_permission: value.file_permission.into(),
-            created_at: value.created_at,
-            blob_storage_id: value.blob_storage_id,
-        }
+            created_at: Some(prost_types::Timestamp::from(SystemTime::from(
+                value.created_at,
+            ))),
+        })
     }
 }

@@ -1030,6 +1030,14 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
                 worker_execution_error::Error::ShardingNotReady(_) => {
                     "Sharding Not Ready".to_string()
                 }
+                worker_execution_error::Error::ComponentInitialFileDownloadFailed(err) => format!(
+                    "Component Initial File Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
+                    err.component_id, err.component_version, err.reason
+                ),
+                worker_execution_error::Error::GetComponentLatestInitialFilesFailed(err) => format!(
+                    "Get Component Latest Initial Files Failed: Component ID = {:?}, Reason: {}",
+                    err.component_id, err.reason
+                ),
             };
             Status::internal(message)
         }

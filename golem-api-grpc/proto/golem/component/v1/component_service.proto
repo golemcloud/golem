@@ -8,6 +8,7 @@ import public "golem/component/component.proto";
 import public "golem/component/component_type.proto";
 import public "golem/component/v1/component_error.proto";
 import public "golem/component/component_id.proto";
+import public "golem/component/component_initial_file.proto";
 
 service ComponentService {
   rpc GetComponents (GetComponentsRequest) returns (GetComponentsResponse);
@@ -17,6 +18,9 @@ service ComponentService {
   rpc GetLatestComponentMetadata (GetLatestComponentRequest) returns (GetComponentMetadataResponse);
   rpc UpdateComponent (stream UpdateComponentRequest) returns (UpdateComponentResponse);
   rpc GetComponentMetadata(GetVersionedComponentRequest) returns (GetComponentMetadataResponse);
+  rpc GetLatestComponentInitialFiles (GetLatestComponentInitialFilesRequest) returns (GetComponentInitialFileResponse);
+  rpc GetComponentInitialFiles(GetComponentInitialFilesRequest) returns (GetComponentInitialFileResponse);
+  rpc DownloadComponentInitialFile (DownloadComponentInitialFileRequest) returns (stream DownloadComponentInitialFileResponse);
 }
 
 message GetComponentsRequest {
@@ -149,6 +153,39 @@ message UpdateComponentRequestInitialFileChunk {
 message UpdateComponentResponse {
   oneof result {
     golem.component.Component success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message GetComponentInitialFilesRequest {
+  golem.component.ComponentId componentId = 1;
+  uint64 version = 2;
+}
+
+message GetLatestComponentInitialFilesRequest {
+  golem.component.ComponentId componentId = 1;
+}
+
+message GetComponentInitialFileResponse {
+  oneof result {
+    GetComponentInitialFileSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message GetComponentInitialFileSuccessResponse {
+  repeated ComponentInitialFile initial_files = 2;
+}
+
+message DownloadComponentInitialFileRequest {
+  golem.component.ComponentId componentId = 1;
+  uint64 version = 2;
+  string file_path = 3;
+}
+
+message DownloadComponentInitialFileResponse {
+  oneof result {
+    bytes successChunk = 1;
     golem.component.v1.ComponentError error = 2;
   }
 }

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::Component;
+use crate::model::{Component, InitialFile};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -22,6 +22,7 @@ use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, Row};
 use std::fmt::Display;
 use std::ops::Deref;
+use std::path::PathBuf;
 use std::result::Result;
 use std::sync::Arc;
 use tracing::{debug, error};
@@ -96,12 +97,55 @@ where
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct InitialFileRecord {
+    pub namespace: String,
     pub component_id: Uuid,
     pub version: i64,
     pub file_path: String,
     pub file_permission: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub blob_storage_id: String,
+}
+
+impl<Namespace> TryFrom<InitialFile<Namespace>> for InitialFileRecord
+where
+    Namespace: Display,
+{
+    type Error = String;
+
+    fn try_from(value: InitialFile<Namespace>) -> Result<Self, Self::Error> {
+        Ok(Self {
+            namespace: value.namespace.to_string(),
+            component_id: value.versioned_component_id.component_id.0,
+            version: value.versioned_component_id.version as i64,
+            file_path: value
+                .file_path
+                .into_os_string()
+                .into_string()
+                .map_err(|e| format!("{} contains invalid character", e.to_string_lossy()))?,
+            file_permission: value.file_permission.into(),
+            created_at: value.created_at,
+        })
+    }
+}
+
+impl<Namespace> TryFrom<InitialFileRecord> for InitialFile<Namespace>
+where
+    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+    <Namespace as TryFrom<String>>::Error: Display + Send + Sync + 'static,
+{
+    type Error = String;
+    fn try_from(value: InitialFileRecord) -> Result<Self, Self::Error> {
+        let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
+        Ok(Self {
+            namespace,
+            versioned_component_id: VersionedComponentId {
+                component_id: ComponentId(value.component_id),
+                version: value.version as u64,
+            },
+            file_path: PathBuf::from(value.file_path),
+            file_permission: value.file_permission.try_into()?,
+            created_at: value.created_at,
+        })
+    }
 }
 
 #[async_trait]
@@ -140,10 +184,15 @@ pub trait ComponentRepo {
         initial_file_records: Vec<InitialFileRecord>,
     ) -> Result<(), RepoError>;
 
-    async fn get_all_initial_files(
+    async fn get_version_initial_files(
         &self,
         component_id: &Uuid,
         version: u64,
+    ) -> Result<Vec<InitialFileRecord>, RepoError>;
+
+    async fn get_latest_version_initial_files(
+        &self,
+        component_id: &Uuid,
     ) -> Result<Vec<InitialFileRecord>, RepoError>;
 }
 
@@ -257,9 +306,27 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
         Self::logged("upload_initial_files", result)
     }
 
-    async fn get_all_initial_files(&self, component_id: &Uuid, version: u64) -> Result<Vec<InitialFileRecord>, RepoError> {
-        let result = self.repo.get_all_initial_files(component_id, version).await;
-        Self::logged_with_id("get_all_initial_files", component_id, result)
+    async fn get_version_initial_files(
+        &self,
+        component_id: &Uuid,
+        version: u64,
+    ) -> Result<Vec<InitialFileRecord>, RepoError> {
+        let result = self
+            .repo
+            .get_version_initial_files(component_id, version)
+            .await;
+        Self::logged_with_id("get_version_initial_files", component_id, result)
+    }
+
+    async fn get_latest_version_initial_files(
+        &self,
+        component_id: &Uuid,
+    ) -> Result<Vec<InitialFileRecord>, RepoError> {
+        let result = self
+            .repo
+            .get_latest_version_initial_files(component_id)
+            .await;
+        Self::logged_with_id("get_latest_initial_files", component_id, result)
     }
 }
 
@@ -362,10 +429,10 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                 WHERE c.component_id = $1
                 "#,
         )
-            .bind(component_id)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(component_id)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
     #[when(sqlx::Postgres -> get_all)]
@@ -651,7 +718,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             sqlx::query(
                 r#"
                   INSERT INTO component_initial_files
-                    (component_id, version, file_path, file_permission, created_at, blob_storage_id)
+                    (component_id, version, file_path, file_permission, created_at)
                   VALUES
                     ($1, $2, $3, $4, $5, $6)
                    "#,
@@ -661,7 +728,6 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             .bind(initial_file_record.file_path)
             .bind(initial_file_record.file_permission)
             .bind(initial_file_record.created_at)
-            .bind(initial_file_record.blob_storage_id)
             .execute(&mut *transaction)
             .await?;
         }
@@ -671,8 +737,12 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    #[when(sqlx::Postgres -> get_all_initial_files)]
-    async fn get_all_initial_files_postgres(&self, component_id: &Uuid, version: u64) -> Result<Vec<InitialFileRecord>, RepoError> {
+    #[when(sqlx::Postgres -> get_version_initial_files)]
+    async fn get_version_initial_files_postgres(
+        &self,
+        component_id: &Uuid,
+        version: u64,
+    ) -> Result<Vec<InitialFileRecord>, RepoError> {
         sqlx::query_as::<_, InitialFileRecord>(
             r#"
                 SELECT
@@ -680,21 +750,24 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.version AS version,
                     c.file_path AS file_path,
                     c.file_permission AS file_permission,
-                    c.created_at::timestamptz AS created_at,
-                    c.blob_storage_id AS blob_storage_id
+                    c.created_at::timestamptz AS created_at
                 FROM component_initial_files c
                 WHERE c.component_id = $1 AND c.version = $2
                 "#,
         )
-            .bind(component_id)
-            .bind(version as i64)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(component_id)
+        .bind(version as i64)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 
-    #[when(sqlx::Sqlite -> get_all_initial_files)]
-    async fn get_all_initial_files_sqlite(&self, component_id: &Uuid, version: u64) -> Result<Vec<InitialFileRecord>, RepoError> {
+    #[when(sqlx::Sqlite -> get_version_initial_files)]
+    async fn get_version_initial_files_sqlite(
+        &self,
+        component_id: &Uuid,
+        version: u64,
+    ) -> Result<Vec<InitialFileRecord>, RepoError> {
         sqlx::query_as::<_, InitialFileRecord>(
             r#"
                 SELECT
@@ -702,17 +775,73 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     c.version AS version,
                     c.file_path AS file_path,
                     c.file_permission AS file_permission,
-                    c.created_at AS created_at,
-                    c.blob_storage_id AS blob_storage_id
+                    c.created_at AS created_at
                 FROM component_initial_files c
                 WHERE c.component_id = $1 AND c.version = $2
                 "#,
         )
-            .bind(component_id)
-            .bind(version as i64)
-            .fetch_all(self.db_pool.deref())
-            .await
-            .map_err(|e| e.into())
+        .bind(component_id)
+        .bind(version as i64)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Postgres -> get_latest_version_initial_files)]
+    async fn get_latest_version_initial_files_postgres(
+        &self,
+        component_id: &Uuid,
+    ) -> Result<Vec<InitialFileRecord>, RepoError> {
+        sqlx::query_as::<_, InitialFileRecord>(
+            r#"
+                SELECT
+                    c.component_id AS component_id,
+                    c.version AS version,
+                    c.file_path AS file_path,
+                    c.file_permission AS file_permission,
+                    c.created_at::timestamptz AS created_at
+                FROM component_initial_files c
+                WHERE c.component_id = $1
+                AND c.version = (
+                    SELECT MAX(ci.version)
+                    FROM component_initial_files ci
+                    WHERE component_id = $2
+                )
+                "#,
+        )
+        .bind(component_id)
+        .bind(component_id)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Sqlite -> get_latest_version_initial_files)]
+    async fn get_latest_version_initial_files_sqlite(
+        &self,
+        component_id: &Uuid,
+    ) -> Result<Vec<InitialFileRecord>, RepoError> {
+        sqlx::query_as::<_, InitialFileRecord>(
+            r#"
+                SELECT
+                    c.component_id AS component_id,
+                    c.version AS version,
+                    c.file_path AS file_path,
+                    c.file_permission AS file_permission,
+                    c.created_at AS created_at
+                FROM component_initial_files c
+                WHERE c.component_id = $1
+                AND c.version = (
+                    SELECT MAX(ci.version)
+                    FROM component_initial_files ci
+                    WHERE component_id = $2
+                )
+                "#,
+        )
+        .bind(component_id)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
     }
 }
 

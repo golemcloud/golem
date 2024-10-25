@@ -6,19 +6,22 @@ mod tests {
     use golem_service_base::config::ComponentStoreLocalConfig;
     use golem_service_base::db;
 
+    use chrono::Utc;
+    use golem_common::model::InitialFilePermission;
     use golem_common::model::{ComponentId, ComponentType};
     use golem_component_service_base::model::Component;
-    use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo, InitialFileRecord};
+    use golem_component_service_base::repo::component::{
+        ComponentRepo, DbComponentRepo, InitialFileRecord,
+    };
     use golem_component_service_base::service::component::{
         create_new_component, ComponentService, ComponentServiceDefault,
     };
     use golem_component_service_base::service::component_compilation::{
         ComponentCompilationService, ComponentCompilationServiceDisabled,
     };
-    use golem_service_base::model::{ComponentName, InitialFile, InitialFilePermission};
+    use golem_service_base::model::{ComponentName, InitialFile};
     use golem_service_base::service::component_object_store;
     use std::sync::Arc;
-    use chrono::Utc;
     use testcontainers::clients::Cli;
     use testcontainers::{Container, RunnableImage};
     use testcontainers_modules::postgres::Postgres;
@@ -552,7 +555,7 @@ mod tests {
             &data,
             &namespace1,
         )
-            .unwrap();
+        .unwrap();
 
         let result1 = component_repo
             .create(&component1.clone().try_into().unwrap())
@@ -579,25 +582,24 @@ mod tests {
                 file_permission: InitialFilePermission::ReadWrite,
                 file_content: vec![],
             },
-        ].into_iter().map(|r| {
-            InitialFileRecord {
-                component_id: component1.versioned_component_id.component_id.0,
-                version: component1.versioned_component_id.version as i64,
-                file_path: r.file_path,
-                file_permission: r.file_permission.into(),
-                created_at: Utc::now(),
-                blob_storage_id: "".to_string(),
-            }
-        }).collect();
+        ]
+        .into_iter()
+        .map(|r| InitialFileRecord {
+            namespace: namespace1.clone(),
+            component_id: component1.versioned_component_id.component_id.0,
+            version: component1.versioned_component_id.version as i64,
+            file_path: r.file_path,
+            file_permission: r.file_permission.into(),
+            created_at: Utc::now(),
+        })
+        .collect();
 
-        let result2 = component_repo
-            .upload_initial_files(files)
-            .await;
+        let result2 = component_repo.upload_initial_files(files).await;
 
         let result3 = component_repo
-            .get_all_initial_files(
+            .get_version_initial_files(
                 &component1.versioned_component_id.component_id.0,
-                component1.versioned_component_id.version
+                component1.versioned_component_id.version,
             )
             .await;
 

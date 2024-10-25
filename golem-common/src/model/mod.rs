@@ -2468,6 +2468,32 @@ impl FromStr for ComponentType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
+pub enum InitialFilePermission {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl From<InitialFilePermission> for i32 {
+    fn from(permission: InitialFilePermission) -> Self {
+        match permission {
+            InitialFilePermission::ReadOnly => 0,
+            InitialFilePermission::ReadWrite => 1,
+        }
+    }
+}
+
+impl TryFrom<i32> for InitialFilePermission {
+    type Error = String;
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::ReadOnly),
+            1 => Ok(Self::ReadWrite),
+            _ => Err(format!("Invalid permission: {}", value)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;

@@ -1762,6 +1762,28 @@ impl IntoValue for GolemError {
                     case_idx: 22,
                     case_value: None,
                 },
+                GolemError::ComponentInitialFileDownloadFailed {
+                    component_id,
+                    component_version,
+                    reason,
+                } => Value::Variant {
+                    case_idx: 23,
+                    case_value: Some(Box::new(Value::Record(vec![
+                        component_id.into_value(),
+                        component_version.into_value(),
+                        reason.into_value(),
+                    ]))),
+                },
+                GolemError::GetComponentLatestInitialFilesFailed {
+                    component_id,
+                    reason,
+                } => Value::Variant {
+                    case_idx: 24,
+                    case_value: Some(Box::new(Value::Record(vec![
+                        component_id.into_value(),
+                        reason.into_value(),
+                    ]))),
+                },
             }
         }
         into_value(self, true)

@@ -29,10 +29,10 @@ use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
-    HasExtraDeps, HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasRpc,
-    HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService, HasWorkerProxy,
-    HasWorkerService, UsesAllDeps,
+    All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentReadOnlyFileService,
+    HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasKeyValueService, HasOplog,
+    HasOplogService, HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker,
+    HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
@@ -1226,6 +1226,7 @@ impl RunningWorker {
                 worker_metadata.last_known_status.total_linear_memory_size,
             ),
             parent.execution_status.clone(),
+            parent.component_read_only_file_service().clone(),
         )
         .await?;
 

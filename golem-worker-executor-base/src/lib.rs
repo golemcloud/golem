@@ -33,6 +33,9 @@ use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
+use crate::services::component_readonly_file::{
+    ComponentReadOnlyFileService, DefaultComponentReadOnlyFileService,
+};
 use crate::services::events::Events;
 use crate::services::golem_config::{
     BlobStorageConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
@@ -95,6 +98,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `All` service.
     /// This is the place to initialize additional services and store them in `All`'s `extra_deps`
     /// field.
+    #[allow(clippy::too_many_arguments)]
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<Ctx>>,
@@ -116,6 +120,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
+        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -359,6 +364,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             golem_config.limits.invocation_result_broadcast_capacity,
         ));
 
+        let component_read_only_file_service = Arc::new(DefaultComponentReadOnlyFileService::new(
+            component_service.clone(),
+        ));
+
         let services = self
             .create_services(
                 active_workers,
@@ -380,6 +389,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 scheduler_service,
                 worker_proxy,
                 events,
+                component_read_only_file_service,
             )
             .await?;
 

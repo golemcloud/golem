@@ -16,17 +16,14 @@ use std::sync::{Arc, RwLock, Weak};
 
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{Uri, Value};
-use wasmtime::component::{Instance, ResourceAny};
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
-
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::{Uri, Value};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -37,6 +34,7 @@ use golem_worker_executor_base::model::{
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
+use golem_worker_executor_base::services::component_readonly_file::ComponentReadOnlyFileService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
@@ -54,6 +52,8 @@ use golem_worker_executor_base::workerctx::{
     ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
     InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
+use wasmtime::component::{Instance, ResourceAny};
+use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use crate::services::AdditionalDeps;
 
@@ -305,6 +305,7 @@ impl WorkerCtx for Context {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -325,6 +326,7 @@ impl WorkerCtx for Context {
             config,
             worker_config,
             execution_status,
+            component_read_only_file_service,
         )
         .await?;
         Ok(Self {

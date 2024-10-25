@@ -12,24 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Display};
-use std::num::TryFromIntError;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use anyhow::anyhow;
-use crate::model::Component;
+use crate::model::{Component, InitialFile};
 use crate::repo::component::ComponentRepo;
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_processor::process_component;
+use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ComponentName, InitialFile, VersionedComponentId};
+use golem_service_base::model::{
+    ComponentName, InitialFile as ServiceInitialFile, VersionedComponentId,
+};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
+use std::fmt::{Debug, Display};
+use std::num::TryFromIntError;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tap::TapFallible;
 use tracing::{error, info};
 
@@ -124,7 +126,7 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
-        initial_files: Vec<InitialFile>,
+        initial_files: Vec<ServiceInitialFile>,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
@@ -133,7 +135,7 @@ pub trait ComponentService<Namespace> {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
-        initial_files: Vec<InitialFile>,
+        initial_files: Vec<ServiceInitialFile>,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
@@ -197,6 +199,26 @@ pub trait ComponentService<Namespace> {
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<(), ComponentError>;
+
+    async fn get_version_initial_files(
+        &self,
+        component_id: &VersionedComponentId,
+        namespace: &Namespace,
+    ) -> Result<Vec<InitialFile<Namespace>>, ComponentError>;
+
+    async fn get_latest_version_initial_files(
+        &self,
+        component_id: &ComponentId,
+        namespace: &Namespace,
+    ) -> Result<Vec<InitialFile<Namespace>>, ComponentError>;
+
+    async fn download_initial_file_stream(
+        &self,
+        component_id: &ComponentId,
+        version: u64,
+        file_path: &Path,
+        namespace: &Namespace,
+    ) -> Result<ByteStream, ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
@@ -232,7 +254,7 @@ where
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
-        initial_files: Vec<InitialFile>,
+        initial_files: Vec<ServiceInitialFile>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Create component");
 
@@ -259,28 +281,32 @@ where
         for initial_file in initial_files {
             let file_path_buf = PathBuf::from(&initial_file.file_path);
             if file_path_buf.is_absolute() {
-                let blob_storage_id = self
-                    .upload_initial_file(
-                        &component.versioned_component_id,
-                        file_path_buf.as_path(),
-                        initial_file.file_content,
-                    )
-                    .await?;
+                self.upload_initial_file(
+                    &component.versioned_component_id,
+                    file_path_buf.as_path(),
+                    initial_file.file_content,
+                )
+                .await?;
 
                 initial_file_records.push(
-                    crate::model::InitialFile {
+                    InitialFile {
+                        namespace: namespace.clone(),
                         versioned_component_id: component.versioned_component_id.clone(),
                         file_path: file_path_buf,
                         file_permission: initial_file.file_permission,
                         created_at: Utc::now(),
-                        blob_storage_id,
                     }
-                        .into(),
+                    .try_into()
+                    .map_err(|e| ComponentError::conversion_error("File path error", e))?,
                 );
             } else {
-                return Err(
-                    ComponentError::component_store_error("File path error", anyhow!("{} is not an absolute path", file_path_buf.to_string_lossy()))
-                );
+                return Err(ComponentError::component_store_error(
+                    "File path error",
+                    anyhow!(
+                        "{} is not an absolute path",
+                        file_path_buf.to_string_lossy()
+                    ),
+                ));
             }
         }
 
@@ -312,7 +338,7 @@ where
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
-        initial_files: Vec<InitialFile>,
+        initial_files: Vec<ServiceInitialFile>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
         let created_at = Utc::now();
@@ -346,28 +372,32 @@ where
         for initial_file in initial_files {
             let file_path_buf = PathBuf::from(&initial_file.file_path);
             if file_path_buf.is_absolute() {
-                let blob_storage_id = self
-                    .upload_initial_file(
-                        &next_component.versioned_component_id,
-                        file_path_buf.as_path(),
-                        initial_file.file_content,
-                    )
-                    .await?;
+                self.upload_initial_file(
+                    &next_component.versioned_component_id,
+                    file_path_buf.as_path(),
+                    initial_file.file_content,
+                )
+                .await?;
 
                 initial_file_records.push(
-                    crate::model::InitialFile {
+                    InitialFile {
+                        namespace: namespace.clone(),
                         versioned_component_id: next_component.versioned_component_id.clone(),
                         file_path: file_path_buf,
                         file_permission: initial_file.file_permission,
                         created_at: Utc::now(),
-                        blob_storage_id,
                     }
-                        .into(),
+                    .try_into()
+                    .map_err(|e| ComponentError::conversion_error("File path error", e))?,
                 );
             } else {
-                return Err(
-                    ComponentError::component_store_error("File path error", anyhow!("{} is not an absolute path", file_path_buf.to_string_lossy()))
-                );
+                return Err(ComponentError::component_store_error(
+                    "File path error",
+                    anyhow!(
+                        "{} is not an absolute path",
+                        file_path_buf.to_string_lossy()
+                    ),
+                ));
             }
         }
 
@@ -631,6 +661,80 @@ where
             Err(ComponentError::UnknownComponentId(component_id.clone()))
         }
     }
+
+    async fn get_version_initial_files(
+        &self,
+        component_id: &VersionedComponentId,
+        namespace: &Namespace,
+    ) -> Result<Vec<InitialFile<Namespace>>, ComponentError> {
+        info!(namespace = %namespace, "Get versioned component's initial files");
+        let result = self
+            .component_repo
+            .get_version_initial_files(&component_id.component_id.0, component_id.version)
+            .await?;
+        let result = result
+            .into_iter()
+            .filter(|d| d.namespace == namespace.to_string())
+            .map(|c| {
+                c.try_into()
+                    .map_err(|e| ComponentError::conversion_error("initial_file_record", e))
+            })
+            .try_fold(vec![], |mut acc, result| {
+                let initial_file = result?;
+                acc.push(initial_file);
+                Ok::<Vec<InitialFile<Namespace>>, ComponentError>(acc)
+            })?;
+
+        Ok(result)
+    }
+
+    async fn get_latest_version_initial_files(
+        &self,
+        component_id: &ComponentId,
+        namespace: &Namespace,
+    ) -> Result<Vec<InitialFile<Namespace>>, ComponentError> {
+        info!(namespace = %namespace, "Get latest component's initial files");
+        let result = self
+            .component_repo
+            .get_latest_version_initial_files(&component_id.0)
+            .await?;
+        let result = result
+            .into_iter()
+            .filter(|d| d.namespace == namespace.to_string())
+            .map(|c| {
+                c.try_into()
+                    .map_err(|e| ComponentError::conversion_error("initial_file_record", e))
+            })
+            .try_fold(vec![], |mut acc, result| {
+                let initial_file = result?;
+                acc.push(initial_file);
+                Ok::<Vec<InitialFile<Namespace>>, ComponentError>(acc)
+            })?;
+
+        Ok(result)
+    }
+
+    async fn download_initial_file_stream(
+        &self,
+        component_id: &ComponentId,
+        version: u64,
+        file_path: &Path,
+        namespace: &Namespace,
+    ) -> Result<ByteStream, ComponentError> {
+        let versioned_component_id = self
+            .get_versioned_component_id(component_id, Some(version), namespace)
+            .await?
+            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
+
+        info!(namespace = %namespace, "Download component initial file as stream");
+
+        let stream = self
+            .object_store
+            .get_stream(&self.get_initial_file_store_key(&versioned_component_id, file_path)?)
+            .await;
+
+        Ok(stream)
+    }
 }
 
 impl ComponentServiceDefault {
@@ -642,9 +746,23 @@ impl ComponentServiceDefault {
         format!("{id}:protected")
     }
 
-    fn get_initial_file_store_key(&self, id: &VersionedComponentId, file_path: &Path) -> String {
-        let file_path_string = file_path.to_string_lossy().replace("/", ":");
-        format!("{id}:files{file_path_string}")
+    fn get_initial_file_store_key(
+        &self,
+        id: &VersionedComponentId,
+        file_path: &Path,
+    ) -> Result<String, ComponentError> {
+        let file_path_string = file_path
+            .to_path_buf()
+            .into_os_string()
+            .into_string()
+            .map_err(|e| {
+                ComponentError::conversion_error(
+                    "File path conversion error",
+                    format!("Cannot convert {} into string", e.to_string_lossy()),
+                )
+            })?
+            .replace("/", ":");
+        Ok(format!("{id}:files{file_path_string}"))
     }
 
     async fn upload_user_component(
@@ -681,10 +799,12 @@ impl ComponentServiceDefault {
         protected_component_id: &VersionedComponentId,
         file_path: &Path,
         data: Vec<u8>,
-    ) -> Result<String, ComponentError> {
-        let file_storage_key = self.get_initial_file_store_key(protected_component_id, file_path);
+    ) -> Result<(), ComponentError> {
         self.object_store
-            .put(&file_storage_key, data)
+            .put(
+                &self.get_initial_file_store_key(protected_component_id, file_path)?,
+                data,
+            )
             .await
             .map_err(|e| {
                 ComponentError::component_store_error(
@@ -692,7 +812,7 @@ impl ComponentServiceDefault {
                     e,
                 )
             })?;
-        Ok(file_storage_key)
+        Ok(())
     }
 
     async fn get_versioned_component_id<Namespace: Display + Clone>(

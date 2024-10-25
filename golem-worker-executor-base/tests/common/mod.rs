@@ -6,12 +6,11 @@ use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use prometheus::Registry;
 
+use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, RwLock, Weak};
-
-use crate::{WorkerExecutorPerTestDependencies, BASE_DEPS};
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 
@@ -76,6 +75,7 @@ use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::preview2::golem::api1_1_0_rc1;
+use golem_worker_executor_base::services::component_readonly_file::ComponentReadOnlyFileService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -641,6 +641,7 @@ impl WorkerCtx for TestWorkerCtx {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -661,6 +662,7 @@ impl WorkerCtx for TestWorkerCtx {
             config,
             worker_config,
             execution_status,
+            component_read_only_file_service,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -765,6 +767,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
+        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -789,6 +792,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             scheduler_service.clone(),
             worker_activator.clone(),
             events.clone(),
+            component_read_only_file_service.clone(),
             (),
         ));
         Ok(All::new(
@@ -812,6 +816,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             worker_activator,
             worker_proxy,
             events.clone(),
+            component_read_only_file_service,
             (),
         ))
     }
