@@ -40,7 +40,7 @@ interface iface9 {
 interface iface11 {
     use test:sub2/iface10.{rec1};
 
-    // using the same func name
+    // intentionally using the same func name
     func9: func() -> rec1;
 }
 
@@ -60,4 +60,6 @@ world api {
     export iface9;
     export test:sub2/iface10;
     export iface11;
+    export test:sub/iface12;
+    export test:sub/iface13;
 }
