@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::cargo::generate_cargo_toml;
+use crate::commands::log::{log_action, LogIndent};
 use crate::compilation::compile;
 use crate::fs::copy;
 use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit_generate::{copy_wit_dependencies, generate_stub_wit_to_target};
+use crate::wit_generate::{add_wit_dependencies, generate_stub_wit_to_target};
 use crate::wit_resolve::ResolvedWitDir;
 use anyhow::Context;
 use fs_extra::dir::CopyOptions;
@@ -55,8 +56,13 @@ pub async fn build(
 }
 
 pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
+    log_action(
+        "Generating",
+        format!("stub WIT directory to {}", stub_def.target_root.display()),
+    );
+    let _indent = LogIndent::new();
     generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
-    copy_wit_dependencies(stub_def).context("Failed to copy the dependent wit files")?;
+    add_wit_dependencies(stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .resolve_target_wit()
         .context("Failed to resolve the result WIT root")
