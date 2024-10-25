@@ -562,7 +562,7 @@ impl InterfaceStub {
 pub struct InterfaceStubTypeDef {
     pub name: String,
     pub path: String,
-    pub package_name: Option<PackageName>,
+    pub package_id: Option<PackageId>,
     pub type_def: TypeDef,
 }
 
