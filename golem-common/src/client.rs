@@ -60,27 +60,32 @@ impl<T: Clone> GrpcClient<T> {
             target_name = self.target_name,
             description = description.as_ref()
         );
-        let _span = span.enter();
         loop {
             retries.start_attempt();
             let mut entry = self
                 .get()
                 .await
                 .map_err(|err| Status::from_error(Box::new(err)))?;
-            match f(&mut entry.client).in_current_span().await {
+            match f(&mut entry.client).instrument(span.clone()).await {
                 Ok(result) => break Ok(result),
                 Err(e) => {
                     if requires_reconnect(&e) {
                         let _ = self.client.lock().await.take();
                         if !retries.failed_attempt().await {
-                            warn!("gRPC call failed: {:?}, no more retries", e);
+                            span.in_scope(|| {
+                                warn!("gRPC call failed: {:?}, no more retries", e);
+                            });
                             break Err(e);
                         } else {
-                            debug!("gRPC call failed with {:?}, retrying", e);
+                            span.in_scope(|| {
+                                debug!("gRPC call failed with {:?}, retrying", e);
+                            });
                             continue; // retry
                         }
                     } else {
-                        warn!("gRPC call failed: {:?}, not retriable", e);
+                        span.in_scope(|| {
+                            warn!("gRPC call failed: {:?}, not retriable", e);
+                        });
                         break Err(e);
                     }
                 }
@@ -145,26 +150,31 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             endpoint = endpoint.to_string(),
             description = description.as_ref()
         );
-        let _span = span.enter();
         loop {
             retries.start_attempt();
             let mut entry = self
                 .get(endpoint.clone())
                 .map_err(|err| Status::from_error(Box::new(err)))?;
-            match f(&mut entry.client).in_current_span().await {
+            match f(&mut entry.client).instrument(span.clone()).await {
                 Ok(result) => break Ok(result),
                 Err(e) => {
                     if requires_reconnect(&e) {
                         self.clients.remove(&endpoint);
                         if !retries.failed_attempt().await {
-                            warn!("gRPC call failed: {:?}, no more retries", e);
+                            span.in_scope(|| {
+                                warn!("gRPC call failed: {:?}, no more retries", e);
+                            });
                             break Err(e);
                         } else {
-                            debug!("gRPC call failed with {:?}, retrying", e);
+                            span.in_scope(|| {
+                                debug!("gRPC call failed with {:?}, retrying", e);
+                            });
                             continue; // retry
                         }
                     } else {
-                        warn!("gRPC call failed: {:?}, not retriable", e);
+                        span.in_scope(|| {
+                            warn!("gRPC call failed: {:?}, not retriable", e);
+                        });
                         break Err(e);
                     }
                 }
