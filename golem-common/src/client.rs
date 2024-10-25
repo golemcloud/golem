@@ -22,6 +22,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tonic::transport::{Channel, Endpoint};
 use tonic::{Code, Status};
+use tracing::{debug, debug_span, warn, Instrument};
 
 #[derive(Clone)]
 pub struct GrpcClient<T: Clone> {
@@ -29,15 +30,18 @@ pub struct GrpcClient<T: Clone> {
     config: GrpcClientConfig,
     client: Arc<Mutex<Option<GrpcClientConnection<T>>>>,
     client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync + 'static>,
+    target_name: String,
 }
 
 impl<T: Clone> GrpcClient<T> {
     pub fn new(
+        target_name: impl AsRef<str>,
         client_factory: impl Fn(Channel) -> T + Send + Sync + 'static,
         endpoint: http_02::Uri,
         config: GrpcClientConfig,
     ) -> Self {
         Self {
+            target_name: target_name.as_ref().to_string(),
             endpoint,
             config,
             client: Arc::new(Mutex::new(None)),
@@ -45,29 +49,38 @@ impl<T: Clone> GrpcClient<T> {
         }
     }
 
-    pub async fn call<F, R>(&self, f: F) -> Result<R, Status>
+    pub async fn call<F, R>(&self, description: impl AsRef<str>, f: F) -> Result<R, Status>
     where
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
         let mut retries = RetryState::new(&self.config.retries_on_unavailable);
+        let span = debug_span!(
+            "gRPC call",
+            target_name = self.target_name,
+            description = description.as_ref()
+        );
+        let _span = span.enter();
         loop {
             retries.start_attempt();
             let mut entry = self
                 .get()
                 .await
                 .map_err(|err| Status::from_error(Box::new(err)))?;
-            match f(&mut entry.client).await {
+            match f(&mut entry.client).in_current_span().await {
                 Ok(result) => break Ok(result),
                 Err(e) => {
                     if requires_reconnect(&e) {
                         let _ = self.client.lock().await.take();
                         if !retries.failed_attempt().await {
+                            warn!("gRPC call failed: {:?}, no more retries", e);
                             break Err(e);
                         } else {
+                            debug!("gRPC call failed with {:?}, retrying", e);
                             continue; // retry
                         }
                     } else {
+                        warn!("gRPC call failed: {:?}, not retriable", e);
                         break Err(e);
                     }
                 }
@@ -98,10 +111,12 @@ pub struct MultiTargetGrpcClient<T: Clone> {
     config: GrpcClientConfig,
     clients: Arc<DashMap<http_02::Uri, GrpcClientConnection<T>>>,
     client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync>,
+    target_name: String,
 }
 
 impl<T: Clone> MultiTargetGrpcClient<T> {
     pub fn new(
+        target_name: impl AsRef<str>,
         client_factory: impl Fn(Channel) -> T + Send + Sync + 'static,
         config: GrpcClientConfig,
     ) -> Self {
@@ -109,31 +124,47 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             config,
             clients: Arc::new(DashMap::new()),
             client_factory: Arc::new(client_factory),
+            target_name: target_name.as_ref().to_string(),
         }
     }
 
-    pub async fn call<F, R>(&self, endpoint: http_02::Uri, f: F) -> Result<R, Status>
+    pub async fn call<F, R>(
+        &self,
+        description: impl AsRef<str>,
+        endpoint: http_02::Uri,
+        f: F,
+    ) -> Result<R, Status>
     where
         F: for<'a> Fn(&'a mut T) -> Pin<Box<dyn Future<Output = Result<R, Status>> + 'a + Send>>
             + Send,
     {
         let mut retries = RetryState::new(&self.config.retries_on_unavailable);
+        let span = debug_span!(
+            "gRPC call",
+            target_name = self.target_name,
+            endpoint = endpoint.to_string(),
+            description = description.as_ref()
+        );
+        let _span = span.enter();
         loop {
             retries.start_attempt();
             let mut entry = self
                 .get(endpoint.clone())
                 .map_err(|err| Status::from_error(Box::new(err)))?;
-            match f(&mut entry.client).await {
+            match f(&mut entry.client).in_current_span().await {
                 Ok(result) => break Ok(result),
                 Err(e) => {
                     if requires_reconnect(&e) {
                         self.clients.remove(&endpoint);
                         if !retries.failed_attempt().await {
+                            warn!("gRPC call failed: {:?}, no more retries", e);
                             break Err(e);
                         } else {
+                            debug!("gRPC call failed with {:?}, retrying", e);
                             continue; // retry
                         }
                     } else {
+                        warn!("gRPC call failed: {:?}, not retriable", e);
                         break Err(e);
                     }
                 }

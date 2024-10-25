@@ -38,14 +38,11 @@ use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
     ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
+use golem_service_base::model::{Component, GolemError};
 use golem_service_base::model::{
     GetOplogResponse, GolemErrorUnknown, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
 };
-use golem_service_base::routing_table::HasRoutingTableService;
-use golem_service_base::{
-    model::{Component, GolemError},
-    routing_table::RoutingTableService,
-};
+use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 
 use crate::service::component::ComponentService;
 
@@ -319,6 +316,7 @@ where
         let worker_id_clone = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "create_worker",
             move |worker_executor_client| {
                 info!("Create worker");
                 let worker_id = worker_id_clone.clone();
@@ -358,6 +356,7 @@ where
         let stream = self
             .call_worker_executor(
                 worker_id.clone(),
+                "connect_worker",
                 move |worker_executor_client| {
                     info!("Connect worker");
                     Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
@@ -391,6 +390,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "delete_worker",
             move |worker_executor_client| {
                 info!("Delete worker");
                 let worker_id = worker_id.clone();
@@ -447,6 +447,7 @@ where
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
+            "invoke_and_await_worker_typed",
             move |worker_executor_client| {
                 info!("Invoking function on {}: {}", worker_id_clone, function_name);
                 Box::pin(worker_executor_client.invoke_and_await_worker_typed(
@@ -508,6 +509,7 @@ where
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
+            "invoke_and_await_worker",
             move |worker_executor_client| {
                 info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
@@ -566,6 +568,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "invoke_worker",
             move |worker_executor_client| {
                 info!("Invoke function");
                 let worker_id = worker_id.clone();
@@ -615,6 +618,7 @@ where
         let result = self
             .call_worker_executor(
                 worker_id.clone(),
+                "complete_promise",
                 move |worker_executor_client| {
                     info!("Complete promise");
                     let promise_id = promise_id.clone();
@@ -663,6 +667,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "interrupt_worker",
             move |worker_executor_client| {
                 info!("Interrupt");
                 let worker_id = worker_id.clone();
@@ -700,6 +705,7 @@ where
         let worker_id = worker_id.clone();
         let metadata = self.call_worker_executor(
             worker_id.clone(),
+            "get_metadata",
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 info!("Get metadata");
@@ -776,6 +782,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "resume_worker",
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.resume_worker(ResumeWorkerRequest {
@@ -809,6 +816,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "update_worker",
             move |worker_executor_client| {
                 info!("Update worker");
                 let worker_id = worker_id.clone();
@@ -856,6 +864,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "get_oplog",
             move |worker_executor_client| {
                 info!("Get oplog");
                 let worker_id = worker_id.clone();
@@ -928,6 +937,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "search_oplog",
             move |worker_executor_client| {
                 info!("Search oplog");
                 let worker_id = worker_id.clone();
@@ -1025,6 +1035,7 @@ where
         let component_id = component_id.clone();
         let result = self.call_worker_executor(
             AllExecutors,
+            "get_running_workers_metadata",
             move |worker_executor_client| {
                 let component_id: golem_api_grpc::proto::golem::component::ComponentId =
                     component_id.clone().into();
@@ -1082,6 +1093,7 @@ where
         let result = self
             .call_worker_executor(
                 RandomExecutor,
+                "get_workers_metadata",
                 move |worker_executor_client| {
                     let component_id: golem_api_grpc::proto::golem::component::ComponentId =
                         component_id.clone().into();

@@ -17,10 +17,8 @@ pub mod config;
 pub mod db;
 pub mod model;
 pub mod repo;
-pub mod routing_table;
 pub mod service;
 pub mod stream;
-pub mod type_inference;
 
 #[cfg(test)]
 test_r::enable!();

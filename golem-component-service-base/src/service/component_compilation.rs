@@ -34,6 +34,7 @@ pub struct ComponentCompilationServiceDefault {
 impl ComponentCompilationServiceDefault {
     pub fn new(uri: http_02::Uri) -> Self {
         let client = GrpcClient::new(
+            "component-compilation-service",
             |channel| {
                 ComponentCompilationServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
@@ -52,7 +53,7 @@ impl ComponentCompilationService for ComponentCompilationServiceDefault {
         let component_id_clone = component_id.clone();
         let result = self
             .client
-            .call(move |client| {
+            .call("enqueue-compilation", move |client| {
                 let component_id_clone = component_id_clone.clone();
                 Box::pin(async move {
                     let request = ComponentCompilationRequest {
@@ -66,9 +67,15 @@ impl ComponentCompilationService for ComponentCompilationServiceDefault {
             .await;
         match result {
             Ok(_) => tracing::info!(
-                "Enqueued compilation for component {component_id} version {component_version}",
+                component_id = component_id.to_string(),
+                component_version = component_version.to_string(),
+                "Enqueued compilation of uploaded component",
             ),
-            Err(e) => tracing::error!("Failed to enqueue compilation: {e:?}"),
+            Err(e) => tracing::error!(
+                component_id = component_id.to_string(),
+                component_version = component_version.to_string(),
+                "Failed to enqueue compilation: {e:?}"
+            ),
         }
     }
 }

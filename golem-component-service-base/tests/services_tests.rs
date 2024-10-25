@@ -11,8 +11,7 @@ use golem_common::SafeDisplay;
 use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
 use golem_component_service_base::service::component::{
-    create_new_component, ComponentError, ComponentService, ComponentServiceDefault,
-    ConflictReport, ConflictingFunction,
+    ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
 };
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
@@ -506,7 +505,7 @@ async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo + S
     let component_name1 = ComponentName("shopping-cart1".to_string());
     let data = get_component_data("shopping-cart");
 
-    let component1 = create_new_component(
+    let component1 = Component::new(
         &ComponentId::new_v4(),
         &component_name1,
         ComponentType::Durable,
@@ -546,7 +545,7 @@ async fn test_repo_component_name_unique_in_namespace(
     let component_name1 = ComponentName("shopping-cart1".to_string());
     let data = get_component_data("shopping-cart");
 
-    let component1 = create_new_component(
+    let component1 = Component::new(
         &ComponentId::new_v4(),
         &component_name1,
         ComponentType::Durable,
@@ -554,7 +553,7 @@ async fn test_repo_component_name_unique_in_namespace(
         &namespace1,
     )
     .unwrap();
-    let component2 = create_new_component(
+    let component2 = Component::new(
         &ComponentId::new_v4(),
         &component_name1,
         ComponentType::Durable,
@@ -591,7 +590,7 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo + Sync
     let component_name1 = ComponentName("shopping-cart1".to_string());
     let data = get_component_data("shopping-cart");
 
-    let component1 = create_new_component(
+    let component1 = Component::new(
         &ComponentId::new_v4(),
         &component_name1,
         ComponentType::Durable,
@@ -635,7 +634,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
     // It has a function golem:it/api.{initialize-cart}(user-id: string)
     let data = get_component_data("shopping-cart");
 
-    let component1 = create_new_component(
+    let component1 = Component::new(
         &ComponentId::new_v4(),
         &component_name1,
         ComponentType::Durable,

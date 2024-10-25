@@ -14,25 +14,27 @@
 
 use std::fmt::{Debug, Display, Formatter};
 use std::num::TryFromIntError;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::model::{Component, ComponentConstraints};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
-use crate::service::component_processor::process_component;
 use async_trait::async_trait;
 use chrono::Utc;
+use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::component_metadata::ComponentProcessingError;
+use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
-use golem_service_base::stream::ByteStream;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use tap::TapFallible;
+use tokio_stream::Stream;
 use tracing::{error, info};
 
 #[derive(Debug, thiserror::Error)]
@@ -95,32 +97,51 @@ impl From<RepoError> for ComponentError {
     }
 }
 
-pub fn create_new_component<Namespace>(
-    component_id: &ComponentId,
-    component_name: &ComponentName,
-    component_type: ComponentType,
-    data: &[u8],
-    namespace: &Namespace,
-) -> Result<Component<Namespace>, ComponentProcessingError>
-where
-    Namespace: Eq + Clone + Send + Sync,
-{
-    let metadata = process_component(data)?;
-
-    let versioned_component_id = VersionedComponentId {
-        component_id: component_id.clone(),
-        version: 0,
-    };
-
-    Ok(Component {
-        namespace: namespace.clone(),
-        component_name: component_name.clone(),
-        component_size: data.len() as u64,
-        metadata,
-        created_at: Utc::now(),
-        versioned_component_id,
-        component_type,
-    })
+impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::ComponentError {
+    fn from(value: ComponentError) -> Self {
+        let error = match value {
+            ComponentError::AlreadyExists(_) => component_error::Error::AlreadyExists(ErrorBody {
+                error: value.to_safe_string(),
+            }),
+            ComponentError::UnknownComponentId(_)
+            | ComponentError::UnknownVersionedComponentId(_) => {
+                component_error::Error::NotFound(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::ComponentProcessingError(error) => {
+                component_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                })
+            }
+            ComponentError::InternalRepoError(_) => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::InternalConversionError { .. } => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::ComponentStoreError { .. } => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::ComponentConstraintConflictError(_) => {
+                component_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                })
+            }
+            ComponentError::ComponentConstraintCreateError(_) => {
+                component_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                })
+            }
+        };
+        Self { error: Some(error) }
+    }
 }
 
 #[async_trait]
@@ -154,7 +175,10 @@ pub trait ComponentService<Namespace> {
         component_id: &ComponentId,
         version: Option<u64>,
         namespace: &Namespace,
-    ) -> Result<ByteStream, ComponentError>;
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
+        ComponentError,
+    >;
 
     async fn get_protected_data(
         &self,
@@ -380,7 +404,7 @@ where
             .await?
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
-        let component = create_new_component(
+        let component = Component::new(
             component_id,
             component_name,
             component_type,
@@ -423,8 +447,8 @@ where
 
         let created_at = Utc::now();
 
-        let metadata =
-            process_component(&data).map_err(ComponentError::ComponentProcessingError)?;
+        let metadata = ComponentMetadata::analyse_component(&data)
+            .map_err(ComponentError::ComponentProcessingError)?;
 
         let constraints = self.component_repo.get_constraint(component_id).await?;
 
@@ -509,7 +533,10 @@ where
         component_id: &ComponentId,
         version: Option<u64>,
         namespace: &Namespace,
-    ) -> Result<ByteStream, ComponentError> {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
+        ComponentError,
+    > {
         let versioned_component_id = self
             .get_versioned_component_id(component_id, version, namespace)
             .await?

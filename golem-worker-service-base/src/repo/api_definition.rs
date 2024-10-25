@@ -20,6 +20,7 @@ use sqlx::{Database, Pool, Row};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
+use tracing::{debug, error};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDefinitionRecord {
@@ -110,6 +111,102 @@ pub trait ApiDefinitionRepo {
         namespace: &str,
         id: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError>;
+}
+
+pub struct LoggedApiDefinitionRepo<Repo: ApiDefinitionRepo> {
+    repo: Repo,
+}
+
+impl<Repo: ApiDefinitionRepo> LoggedApiDefinitionRepo<Repo> {
+    pub fn new(repo: Repo) -> Self {
+        Self { repo }
+    }
+
+    fn logged_with_id<R>(
+        message: &'static str,
+        namespace: &str,
+        api_definition_id: &str,
+        result: Result<R, RepoError>,
+    ) -> Result<R, RepoError> {
+        match &result {
+            Ok(_) => debug!(
+                namespace = namespace,
+                api_definition_id = api_definition_id.to_string(),
+                "{}",
+                message
+            ),
+            Err(error) => error!(
+                namespace = namespace,
+                api_definition_id = api_definition_id.to_string(),
+                error = error.to_string(),
+                "{message}"
+            ),
+        }
+        result
+    }
+}
+
+#[async_trait]
+impl<Repo: ApiDefinitionRepo + Sync> ApiDefinitionRepo for LoggedApiDefinitionRepo<Repo> {
+    async fn create(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
+        let result = self.repo.create(definition).await;
+        Self::logged_with_id("create", &definition.namespace, &definition.id, result)
+    }
+
+    async fn update(&self, definition: &ApiDefinitionRecord) -> Result<(), RepoError> {
+        let result = self.repo.update(definition).await;
+        Self::logged_with_id("update", &definition.namespace, &definition.id, result)
+    }
+
+    async fn set_draft(
+        &self,
+        namespace: &str,
+        id: &str,
+        version: &str,
+        draft: bool,
+    ) -> Result<(), RepoError> {
+        let result = self.repo.set_draft(namespace, id, version, draft).await;
+        Self::logged_with_id("set_draft", namespace, id, result)
+    }
+
+    async fn get(
+        &self,
+        namespace: &str,
+        id: &str,
+        version: &str,
+    ) -> Result<Option<ApiDefinitionRecord>, RepoError> {
+        let result = self.repo.get(namespace, id, version).await;
+        Self::logged_with_id("get", namespace, id, result)
+    }
+
+    async fn get_draft(
+        &self,
+        namespace: &str,
+        id: &str,
+        version: &str,
+    ) -> Result<Option<bool>, RepoError> {
+        let result = self.repo.get_draft(namespace, id, version).await;
+        Self::logged_with_id("get_draft", namespace, id, result)
+    }
+
+    async fn delete(&self, namespace: &str, id: &str, version: &str) -> Result<bool, RepoError> {
+        let result = self.repo.delete(namespace, id, version).await;
+        Self::logged_with_id("delete", namespace, id, result)
+    }
+
+    async fn get_all(&self, namespace: &str) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
+        let result = self.repo.get_all(namespace).await;
+        Self::logged_with_id("get_all", namespace, "*", result)
+    }
+
+    async fn get_all_versions(
+        &self,
+        namespace: &str,
+        id: &str,
+    ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
+        let result = self.repo.get_all_versions(namespace, id).await;
+        Self::logged_with_id("get_all_versions", namespace, id, result)
+    }
 }
 
 pub struct DbApiDefinitionRepo<DB: Database> {

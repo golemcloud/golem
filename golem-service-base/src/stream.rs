@@ -14,10 +14,12 @@
 
 use futures::stream;
 use futures::Stream;
+use pin_project::pin_project;
 use std::error::Error;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::task::{Context, Poll};
+use tracing::error;
 
 pub struct ByteStream {
     inner: Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + Send + Sync>,
@@ -55,6 +57,31 @@ impl ByteStream {
 
     pub fn error(error: impl Error + Send + Sync + 'static) -> Self {
         Self::new(stream::iter(vec![Err(anyhow::Error::new(error))]))
+    }
+}
+
+#[pin_project]
+pub struct LoggedByteStream<Inner> {
+    #[pin]
+    inner: Inner,
+}
+
+impl<S: Stream<Item = Result<Vec<u8>, anyhow::Error>>> LoggedByteStream<S> {
+    pub fn new(inner: S) -> Self {
+        Self { inner }
+    }
+}
+
+impl<S: Stream<Item = Result<Vec<u8>, anyhow::Error>>> Stream for LoggedByteStream<S> {
+    type Item = Result<Vec<u8>, anyhow::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        let poll_result = this.inner.poll_next(cx);
+        if let Poll::Ready(Some(Err(error))) = &poll_result {
+            error!("Error in stream: {}", error);
+        }
+        poll_result
     }
 }
 

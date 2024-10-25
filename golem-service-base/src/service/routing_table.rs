@@ -138,6 +138,7 @@ pub struct RoutingTableServiceDefault {
 impl RoutingTableServiceDefault {
     pub fn new(config: RoutingTableConfig) -> Self {
         let client = GrpcClient::new(
+            "shard-manager",
             |channel| {
                 ShardManagerServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
@@ -168,7 +169,7 @@ impl RoutingTableService for RoutingTableServiceDefault {
             .get_or_insert_simple(&(), || {
                 Box::pin(async move {
                     let response = client
-                        .call(|client| {
+                        .call("get_routing_table", |client| {
                             Box::pin(
                                 client
                                     .get_routing_table(shardmanager::v1::GetRoutingTableRequest {}),
