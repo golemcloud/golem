@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::pin::Pin;
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -45,7 +46,7 @@ use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::ComponentConstraints;
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
-use golem_service_base::stream::ByteStream;
+use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
 fn bad_request_error(error: &str) -> ComponentError {
@@ -143,7 +144,10 @@ impl ComponentGrpcApi {
     async fn download(
         &self,
         request: DownloadComponentRequest,
-    ) -> Result<ByteStream, ComponentError> {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
+        ComponentError,
+    > {
         let id: ComponentId = request
             .component_id
             .and_then(|id| id.try_into().ok())
@@ -158,6 +162,7 @@ impl ComponentGrpcApi {
 
     async fn create(
         &self,
+        component_id: ComponentId,
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
     ) -> Result<Component, ComponentError> {
@@ -165,7 +170,7 @@ impl ComponentGrpcApi {
         let result = self
             .component_service
             .create(
-                &ComponentId::new_v4(),
+                &component_id,
                 &name,
                 request.component_type().into(),
                 data,
@@ -252,9 +257,11 @@ impl ComponentService for ComponentGrpcApi {
             })
         });
 
+        let component_id = ComponentId::new_v4();
         let record = recorded_grpc_api_request!(
             "create_component",
-            component_name = header.as_ref().map(|r| r.component_name.clone())
+            component_name = header.as_ref().map(|r| r.component_name.clone()),
+            component_id = component_id.to_string(),
         );
 
         let result = match header {
@@ -271,7 +278,7 @@ impl ComponentService for ComponentGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                self.create(request, data)
+                self.create(component_id, request, data)
                     .instrument(record.span.clone())
                     .await
             }
@@ -300,7 +307,8 @@ impl ComponentService for ComponentGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "download_component",
-            component_id = proto_component_id_string(&request.component_id)
+            component_id = proto_component_id_string(&request.component_id),
+            component_version = request.version.unwrap_or_default().to_string(),
         );
         let stream: Self::DownloadComponentStream =
             match self.download(request).instrument(record.span.clone()).await {
@@ -371,7 +379,7 @@ impl ComponentService for ComponentGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_latest_component_metadata",
-            component_id = proto_component_id_string(&request.component_id)
+            component_id = proto_component_id_string(&request.component_id),
         );
 
         let response = match self
@@ -456,7 +464,8 @@ impl ComponentService for ComponentGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_component_metadata",
-            component_id = proto_component_id_string(&request.component_id)
+            component_id = proto_component_id_string(&request.component_id),
+            component_version = request.version.to_string(),
         );
 
         let response = match self

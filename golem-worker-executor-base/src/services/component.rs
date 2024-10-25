@@ -147,6 +147,7 @@ impl ComponentServiceGrpc {
             retry_config: retry_config.clone(),
             compiled_component_service,
             client: GrpcClient::new(
+                "component_service",
                 move |channel| {
                     ComponentServiceClient::new(channel)
                         .max_decoding_message_size(max_component_size)
@@ -334,7 +335,7 @@ async fn download_via_grpc(
         |(client, component_id, access_token)| {
             Box::pin(async move {
                 let response = client
-                    .call(move |client| {
+                    .call("download_component", move |client| {
                         let request = authorised_grpc_request(
                             DownloadComponentRequest {
                                 component_id: Some(component_id.clone().into()),
@@ -395,7 +396,7 @@ async fn get_metadata_via_grpc(
             Box::pin(async move {
                 let response = match component_version {
                     Some(component_version) => client
-                        .call(move |client| {
+                        .call("get_component_metadata", move |client| {
                             let request = authorised_grpc_request(
                                 GetVersionedComponentRequest {
                                     component_id: Some(component_id.clone().into()),
@@ -408,7 +409,7 @@ async fn get_metadata_via_grpc(
                         .await?
                         .into_inner(),
                     None => client
-                        .call(move |client| {
+                        .call("get_latest_component_metadata", move |client| {
                             let request = authorised_grpc_request(
                                 GetLatestComponentRequest {
                                     component_id: Some(component_id.clone().into()),

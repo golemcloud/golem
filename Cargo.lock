@@ -464,7 +464,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4042078ea593edffc452eef14e99fdb2b120caa4ad9618bcdeabc4a023b98740"
 dependencies = [
  "futures",
- "pin-project 1.1.6",
+ "pin-project 1.1.7",
  "tokio",
 ]
 
@@ -3791,6 +3791,7 @@ dependencies = [
  "humantime-serde",
  "hyper 1.5.0",
  "num-traits 0.2.19",
+ "pin-project 1.1.7",
  "poem-openapi",
  "proptest",
  "prost-types",
@@ -3803,6 +3804,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tracing",
+ "tracing-futures",
  "url",
 ]
 
@@ -5284,7 +5286,7 @@ dependencies = [
  "k8s-openapi",
  "kube-client",
  "parking_lot",
- "pin-project 1.1.6",
+ "pin-project 1.1.7",
  "serde 1.0.213",
  "serde_json",
  "thiserror",
@@ -6435,11 +6437,11 @@ dependencies = [
 
 [[package]]
 name = "pin-project"
-version = "1.1.6"
+version = "1.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "baf123a161dde1e524adf36f90bc5d8d3462824a9c43553ad07a8183161189ec"
+checksum = "be57f64e946e500c8ee36ef6331845d40a93055567ec57e8fae13efd33759b95"
 dependencies = [
- "pin-project-internal 1.1.6",
+ "pin-project-internal 1.1.7",
 ]
 
 [[package]]
@@ -6455,9 +6457,9 @@ dependencies = [
 
 [[package]]
 name = "pin-project-internal"
-version = "1.1.6"
+version = "1.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4502d8515ca9f32f1fb543d987f63d95a14934883db45bdb48060b6b69257f8"
+checksum = "3c0f5fad0874fc7abcd4d750e76917eaebbecaa2c20bde22e1dbeeba8beb758c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9213,7 +9215,7 @@ dependencies = [
  "hyper 0.14.31",
  "hyper-timeout 0.4.1",
  "percent-encoding",
- "pin-project 1.1.6",
+ "pin-project 1.1.7",
  "prost",
  "tokio",
  "tokio-stream",
@@ -9277,7 +9279,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "indexmap 1.9.3",
- "pin-project 1.1.6",
+ "pin-project 1.1.7",
  "pin-project-lite",
  "rand",
  "slab",
@@ -9358,7 +9360,9 @@ version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97d095ae15e245a057c8e8451bab9b3ee1e1f68e9ba2b4fbc18d0ac5237835f2"
 dependencies = [
- "pin-project 1.1.6",
+ "futures",
+ "futures-task",
+ "pin-project 1.1.7",
  "tracing",
 ]
 
@@ -9936,7 +9940,7 @@ dependencies = [
  "mime_guess",
  "multer 2.1.0",
  "percent-encoding",
- "pin-project 1.1.6",
+ "pin-project 1.1.7",
  "scoped-tls",
  "serde 1.0.213",
  "serde_json",

@@ -131,27 +131,6 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         .await
     }
 
-    async fn revoke_shards(
-        &self,
-        pod: &Pod,
-        shard_ids: &BTreeSet<ShardId>,
-    ) -> Result<(), ShardManagerError> {
-        info!(
-            revoked_shards = pod_shard_assignments_to_string(pod, shard_ids.iter()),
-            "Revoking shards",
-        );
-
-        with_retriable_errors(
-            "worker_executor",
-            "revoke_shards",
-            Some(format!("{pod}")),
-            &self.config.retries,
-            &(pod, shard_ids),
-            |(pod, shard_ids)| Box::pin(self.revoke_shards_internal(pod, shard_ids)),
-        )
-        .await
-    }
-
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError> {
         // NOTE: retries are handled in healthcheck.rs
         let endpoint = pod.endpoint();
@@ -177,11 +156,33 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             Err(_) => Err(HealthCheckError::GrpcOther("connect timeout")),
         }
     }
+
+    async fn revoke_shards(
+        &self,
+        pod: &Pod,
+        shard_ids: &BTreeSet<ShardId>,
+    ) -> Result<(), ShardManagerError> {
+        info!(
+            revoked_shards = pod_shard_assignments_to_string(pod, shard_ids.iter()),
+            "Revoking shards",
+        );
+
+        with_retriable_errors(
+            "worker_executor",
+            "revoke_shards",
+            Some(format!("{pod}")),
+            &self.config.retries,
+            &(pod, shard_ids),
+            |(pod, shard_ids)| Box::pin(self.revoke_shards_internal(pod, shard_ids)),
+        )
+        .await
+    }
 }
 
 impl WorkerExecutorServiceDefault {
     pub fn new(config: WorkerExecutorServiceConfig) -> Self {
         let client = MultiTargetGrpcClient::new(
+            "worker_executor",
             |channel| {
                 WorkerExecutorClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
@@ -210,7 +211,7 @@ impl WorkerExecutorServiceDefault {
 
         let assign_shards_response = timeout(
             self.config.assign_shards_timeout,
-            self.client.call(pod.uri(), move |client| {
+            self.client.call("assign_shards", pod.uri(), move |client| {
                 let assign_shards_request = assign_shards_request.clone();
                 Box::pin(client.assign_shards(assign_shards_request))
             }),
@@ -251,7 +252,7 @@ impl WorkerExecutorServiceDefault {
 
         let revoke_shards_response = timeout(
             self.config.revoke_shards_timeout,
-            self.client.call(pod.uri(), move |client| {
+            self.client.call("revoke_shards", pod.uri(), move |client| {
                 let revoke_shards_request = revoke_shards_request.clone();
                 Box::pin(client.revoke_shards(revoke_shards_request))
             }),

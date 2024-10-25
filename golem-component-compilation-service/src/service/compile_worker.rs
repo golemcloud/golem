@@ -72,6 +72,7 @@ impl CompileWorker {
             config: config.clone(),
             access_token,
             client: GrpcClient::new(
+                "component_service",
                 move |channel| {
                     ComponentServiceClient::new(channel)
                         .max_decoding_message_size(max_component_size)
@@ -192,7 +193,7 @@ async fn download_via_grpc(
                 let component_id = component_id.clone();
                 let access_token = *access_token;
                 let response = client
-                    .call(move |client| {
+                    .call("download_component", move |client| {
                         let request = authorised_grpc_request(
                             DownloadComponentRequest {
                                 component_id: Some(component_id.clone().into()),

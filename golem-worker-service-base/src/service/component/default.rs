@@ -55,6 +55,7 @@ impl RemoteComponentService {
     pub fn new(uri: Uri, retry_config: RetryConfig) -> Self {
         Self {
             client: GrpcClient::new(
+                "component_service",
                 |channel| {
                     ComponentServiceClient::new(channel)
                         .send_compressed(CompressionEncoding::Gzip)
@@ -162,7 +163,7 @@ where
             |(client, id, metadata)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("get_component_metadata", move |client| {
                             let request = GetVersionedComponentRequest {
                                 component_id: Some(id.clone().into()),
                                 version,
@@ -199,7 +200,7 @@ where
             |(client, id, metadata)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("get_latest_component_metadata", move |client| {
                             let request = GetLatestComponentRequest {
                                 component_id: Some(id.clone().into()),
                             };
@@ -242,7 +243,7 @@ where
             |(client, id, metadata, function_constraints)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("create_component_constraints", move |client| {
                             let request = CreateComponentConstraintsRequest {
                                 project_id: None,
                                 component_constraints: Some(ComponentConstraints {

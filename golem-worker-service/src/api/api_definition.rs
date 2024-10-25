@@ -312,7 +312,9 @@ mod test {
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
-    use golem_worker_service_base::repo::api_definition::{ApiDefinitionRepo, DbApiDefinitionRepo};
+    use golem_worker_service_base::repo::api_definition::{
+        ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
+    };
     use golem_worker_service_base::repo::api_deployment;
     use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::component::ComponentResult;
@@ -387,11 +389,12 @@ mod test {
 
         let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
 
-        let api_definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send> =
-            Arc::new(DbApiDefinitionRepo::new(db_pool.clone().into()));
+        let api_definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send> = Arc::new(
+            LoggedApiDefinitionRepo::new(DbApiDefinitionRepo::new(db_pool.clone().into())),
+        );
         let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
-            Arc::new(api_deployment::DbApiDeploymentRepo::new(
-                db_pool.clone().into(),
+            Arc::new(api_deployment::LoggedDeploymentRepo::new(
+                api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
             ));
 
         let component_service: ComponentService = Arc::new(TestComponentService);

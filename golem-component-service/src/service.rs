@@ -29,6 +29,9 @@ use golem_component_service_base::repo::component::{
 };
 use golem_component_service_base::service::component::{ComponentService, ComponentServiceDefault};
 use golem_service_base::auth::DefaultNamespace;
+use golem_service_base::service::component_object_store::{
+    ComponentObjectStore, LoggedComponentObjectStore,
+};
 
 #[derive(Clone)]
 pub struct Services {
@@ -57,13 +60,21 @@ impl Services {
             }
         };
 
-        let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
-            match config.component_store.clone() {
+        let object_store: Arc<dyn ComponentObjectStore + Sync + Send> =
+            match &config.component_store {
                 ComponentStoreConfig::S3(c) => {
-                    Arc::new(component_object_store::AwsS3ComponentObjectStore::new(&c).await)
+                    let store: Arc<dyn ComponentObjectStore + Sync + Send> =
+                        Arc::new(LoggedComponentObjectStore::new(
+                            component_object_store::AwsS3ComponentObjectStore::new(c).await,
+                        ));
+                    store
                 }
                 ComponentStoreConfig::Local(c) => {
-                    Arc::new(component_object_store::FsComponentObjectStore::new(&c)?)
+                    let store: Arc<dyn ComponentObjectStore + Sync + Send> =
+                        Arc::new(LoggedComponentObjectStore::new(
+                            component_object_store::FsComponentObjectStore::new(c)?,
+                        ));
+                    store
                 }
             };
 

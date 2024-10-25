@@ -22,6 +22,7 @@ use sqlx::{Database, Pool};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
+use tracing::{debug, error};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDeploymentRecord {
@@ -78,6 +79,95 @@ pub trait ApiDeploymentRepo {
         &self,
         site: &str,
     ) -> Result<Vec<ApiDefinitionRecord>, RepoError>;
+}
+
+pub struct LoggedDeploymentRepo<Repo: ApiDeploymentRepo> {
+    repo: Repo,
+}
+
+impl<Repo: ApiDeploymentRepo> LoggedDeploymentRepo<Repo> {
+    pub fn new(repo: Repo) -> Self {
+        Self { repo }
+    }
+
+    fn logged<R>(message: &'static str, result: Result<R, RepoError>) -> Result<R, RepoError> {
+        match &result {
+            Ok(_) => debug!("{}", message),
+            Err(error) => error!(error = error.to_string(), "{message}"),
+        }
+        result
+    }
+
+    fn logged_with_id<R>(
+        message: &'static str,
+        namespace: &str,
+        api_definition_id: &str,
+        result: Result<R, RepoError>,
+    ) -> Result<R, RepoError> {
+        match &result {
+            Ok(_) => debug!(
+                namespace = namespace,
+                api_definition_id = api_definition_id.to_string(),
+                "{}",
+                message
+            ),
+            Err(error) => error!(
+                namespace = namespace,
+                api_definition_id = api_definition_id.to_string(),
+                error = error.to_string(),
+                "{message}"
+            ),
+        }
+        result
+    }
+}
+
+#[async_trait]
+impl<Repo: ApiDeploymentRepo + Sync> ApiDeploymentRepo for LoggedDeploymentRepo<Repo> {
+    async fn create(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<(), RepoError> {
+        let result = self.repo.create(deployments).await;
+        Self::logged("create", result)
+    }
+
+    async fn delete(&self, deployments: Vec<ApiDeploymentRecord>) -> Result<bool, RepoError> {
+        let result = self.repo.delete(deployments).await;
+        Self::logged("delete", result)
+    }
+
+    async fn get_by_id(
+        &self,
+        namespace: &str,
+        definition_id: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        let result = self.repo.get_by_id(namespace, definition_id).await;
+        Self::logged_with_id("get_by_id", namespace, definition_id, result)
+    }
+
+    async fn get_by_id_and_version(
+        &self,
+        namespace: &str,
+        definition_id: &str,
+        definition_version: &str,
+    ) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        let result = self
+            .repo
+            .get_by_id_and_version(namespace, definition_id, definition_version)
+            .await;
+        Self::logged_with_id("get_by_id_and_version", namespace, definition_id, result)
+    }
+
+    async fn get_by_site(&self, site: &str) -> Result<Vec<ApiDeploymentRecord>, RepoError> {
+        let result = self.repo.get_by_site(site).await;
+        Self::logged("get_by_site", result)
+    }
+
+    async fn get_definitions_by_site(
+        &self,
+        site: &str,
+    ) -> Result<Vec<ApiDefinitionRecord>, RepoError> {
+        let result = self.repo.get_definitions_by_site(site).await;
+        Self::logged("get_definitions_by_site", result)
+    }
 }
 
 pub struct DbApiDeploymentRepo<DB: Database> {
