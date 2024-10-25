@@ -506,20 +506,20 @@ impl InterfaceStub {
         self.constructor_params.is_some()
     }
 
-    pub fn interface_name(&self) -> Option<String> {
+    pub fn interface_name(&self) -> Option<&str> {
         if self.global {
             None
         } else {
             match &self.owner_interface {
-                Some(iface) => Some(iface.clone()),
-                None => Some(self.name.clone()),
+                Some(iface) => Some(iface),
+                None => Some(&self.name),
             }
         }
     }
 
-    pub fn resource_name(&self) -> Option<String> {
+    pub fn resource_name(&self) -> Option<&str> {
         if self.is_resource() {
-            Some(self.name.clone())
+            Some(&self.name)
         } else {
             None
         }
