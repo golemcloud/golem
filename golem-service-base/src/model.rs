@@ -16,8 +16,8 @@ use bincode::{Decode, Encode};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    ComponentId, ComponentType, ComponentVersion, InitialFilePermission, PromiseId, ScanCursor,
-    ShardId, Timestamp, WorkerFilter, WorkerId, WorkerStatus,
+    ComponentId, ComponentType, ComponentVersion, FilePermission, PromiseId, ScanCursor, ShardId,
+    Timestamp, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -1800,6 +1800,6 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct InitialFile {
     pub file_path: String,
-    pub file_permission: InitialFilePermission,
+    pub file_permission: FilePermission,
     pub file_content: Vec<u8>,
 }

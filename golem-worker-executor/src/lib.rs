@@ -25,7 +25,6 @@ use golem_worker_executor_base::preview2::golem::{api0_2_0, api1_1_0_rc1};
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
-use golem_worker_executor_base::services::component_readonly_file::ComponentReadOnlyFileService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
@@ -40,6 +39,7 @@ use golem_worker_executor_base::services::worker_activator::WorkerActivator;
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor_base::services::worker_file::WorkerFileService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::All;
 use golem_worker_executor_base::wasi_host::create_linker;
@@ -79,7 +79,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
-        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+        worker_file_service: Arc<dyn WorkerFileService + Send + Sync>,
     ) -> anyhow::Result<All<Context>> {
         let additional_deps = AdditionalDeps {};
 
@@ -106,7 +106,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             scheduler_service.clone(),
             worker_activator.clone(),
             events.clone(),
-            component_read_only_file_service.clone(),
+            worker_file_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -131,7 +131,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             worker_activator.clone(),
             worker_proxy.clone(),
             events.clone(),
-            component_read_only_file_service.clone(),
+            worker_file_service.clone(),
             additional_deps,
         ))
     }

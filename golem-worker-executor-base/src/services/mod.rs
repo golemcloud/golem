@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::component_readonly_file::ComponentReadOnlyFileService;
 use crate::services::events::Events;
 use crate::services::worker_activator::WorkerActivator;
+use crate::services::worker_file::WorkerFileService;
 use crate::workerctx::WorkerCtx;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -23,7 +23,6 @@ pub mod active_workers;
 pub mod blob_store;
 pub mod compiled_component;
 pub mod component;
-pub mod component_readonly_file;
 pub mod events;
 pub mod golem_config;
 pub mod key_value;
@@ -37,6 +36,7 @@ pub mod worker;
 pub mod worker_activator;
 pub mod worker_enumeration;
 pub mod worker_event;
+pub mod worker_file;
 pub mod worker_proxy;
 // HasXXX traits for fine-grained control of which dependencies a function needs
 
@@ -130,10 +130,8 @@ pub trait HasEvents {
     fn events(&self) -> Arc<Events>;
 }
 
-pub trait HasComponentReadOnlyFileService {
-    fn component_read_only_file_service(
-        &self,
-    ) -> Arc<dyn ComponentReadOnlyFileService + Send + Sync>;
+pub trait HasWorkerFileService {
+    fn worker_file_service(&self) -> Arc<dyn WorkerFileService + Send + Sync>;
 }
 
 /// HasAll is a shortcut for requiring all available service dependencies
@@ -157,7 +155,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasShardManagerService
     + HasShardService
     + HasExtraDeps<Ctx>
-    + HasComponentReadOnlyFileService
+    + HasWorkerFileService
     + Clone
 {
 }
@@ -183,7 +181,7 @@ impl<
             + HasShardManagerService
             + HasShardService
             + HasExtraDeps<Ctx>
-            + HasComponentReadOnlyFileService
+            + HasWorkerFileService
             + Clone,
     > HasAll<Ctx> for T
 {
@@ -213,7 +211,7 @@ pub struct All<Ctx: WorkerCtx> {
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     events: Arc<Events>,
-    component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+    worker_file_service: Arc<dyn WorkerFileService + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -240,7 +238,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             worker_activator: self.worker_activator.clone(),
             worker_proxy: self.worker_proxy.clone(),
             events: self.events.clone(),
-            component_read_only_file_service: self.component_read_only_file_service.clone(),
+            worker_file_service: self.worker_file_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -273,7 +271,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         events: Arc<Events>,
-        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+        worker_file_service: Arc<dyn WorkerFileService + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -297,7 +295,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             worker_activator,
             worker_proxy,
             events,
-            component_read_only_file_service,
+            worker_file_service,
             extra_deps,
         }
     }
@@ -324,7 +322,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.worker_activator(),
             this.worker_proxy(),
             this.events(),
-            this.component_read_only_file_service(),
+            this.worker_file_service(),
             this.extra_deps(),
         )
     }
@@ -464,11 +462,9 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasEvents for T {
     }
 }
 
-impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasComponentReadOnlyFileService for T {
-    fn component_read_only_file_service(
-        &self,
-    ) -> Arc<dyn ComponentReadOnlyFileService + Send + Sync> {
-        self.all().component_read_only_file_service.clone()
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerFileService for T {
+    fn worker_file_service(&self) -> Arc<dyn WorkerFileService + Send + Sync> {
+        self.all().worker_file_service.clone()
     }
 }
 

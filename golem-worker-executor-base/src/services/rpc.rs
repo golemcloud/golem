@@ -26,18 +26,18 @@ use tracing::debug;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
 
 use crate::error::GolemError;
-use crate::services::component_readonly_file::ComponentReadOnlyFileService;
 use crate::services::events::Events;
 use crate::services::shard::ShardService;
+use crate::services::worker_file::WorkerFileService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
     shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
-    HasBlobStoreService, HasComponentReadOnlyFileService, HasComponentService, HasConfig,
-    HasEvents, HasExtraDeps, HasKeyValueService, HasOplogService, HasPromiseService, HasRpc,
+    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
+    HasKeyValueService, HasOplogService, HasPromiseService, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService,
+    HasWorkerFileService, HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -274,7 +274,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
     events: Arc<Events>,
-    component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+    worker_file_service: Arc<dyn WorkerFileService + Send + Sync>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -300,7 +300,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             scheduler_service: self.scheduler_service.clone(),
             worker_activator: self.worker_activator.clone(),
             events: self.events.clone(),
-            component_read_only_file_service: self.component_read_only_file_service.clone(),
+            worker_file_service: self.worker_file_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -432,11 +432,9 @@ impl<Ctx: WorkerCtx> HasWorkerProxy for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasComponentReadOnlyFileService for DirectWorkerInvocationRpc<Ctx> {
-    fn component_read_only_file_service(
-        &self,
-    ) -> Arc<dyn ComponentReadOnlyFileService + Send + Sync> {
-        self.component_read_only_file_service.clone()
+impl<Ctx: WorkerCtx> HasWorkerFileService for DirectWorkerInvocationRpc<Ctx> {
+    fn worker_file_service(&self) -> Arc<dyn WorkerFileService + Send + Sync> {
+        self.worker_file_service.clone()
     }
 }
 
@@ -466,7 +464,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
         events: Arc<Events>,
-        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+        worker_file_service: Arc<dyn WorkerFileService + Send + Sync>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -489,7 +487,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             scheduler_service,
             worker_activator,
             events,
-            component_read_only_file_service,
+            worker_file_service,
             extra_deps,
         }
     }

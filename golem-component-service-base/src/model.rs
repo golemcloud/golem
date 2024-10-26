@@ -1,6 +1,6 @@
 use golem_api_grpc::proto::golem::component::ComponentInitialFile;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::{ComponentType, InitialFilePermission};
+use golem_common::model::{ComponentType, FilePermission};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -66,7 +66,7 @@ pub struct InitialFile<Namespace> {
     pub namespace: Namespace,
     pub versioned_component_id: VersionedComponentId,
     pub file_path: PathBuf,
-    pub file_permission: InitialFilePermission,
+    pub file_permission: FilePermission,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 

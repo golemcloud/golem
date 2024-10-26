@@ -50,9 +50,9 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
-    InitialFilePermission, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord,
-    Timestamp, WorkerEvent, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
-    WorkerStatus, WorkerStatusRecord,
+    OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -101,7 +101,7 @@ use crate::durable_host::replay_state::ReplayState;
 use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
 use crate::function_result_interpreter::interpret_function_results;
 use crate::services::component::{ComponentMetadata, ComponentService};
-use crate::services::component_readonly_file::ComponentReadOnlyFileService;
+use crate::services::worker_file::WorkerFileService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::worker::{RetryDecision, Worker};
 pub use durability::*;
@@ -142,75 +142,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+        worker_file_service: Arc<dyn WorkerFileService + Send + Sync>,
     ) -> Result<Self, GolemError> {
-        let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
-            |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
-        )?);
-        debug!(
-            "Created temporary file system root at {:?}",
-            temp_dir.path()
-        );
-
-        debug!("Populate temporary file system with files");
-
-        let read_only_temp_dir = component_read_only_file_service
-            .get_component_read_only_dir(
-                &owned_worker_id.worker_id.component_id,
-                component_metadata.version,
-            )
-            .await?;
-
-        let component_initial_files = component_service
-            .get_initial_files(
-                &owned_worker_id.worker_id.component_id,
-                Some(component_metadata.version),
-            )
-            .await?;
-
-        for initial_file in component_initial_files.initial_files {
-            if initial_file.file_path.is_absolute() {
-                let mut cur_path = temp_dir.path().to_path_buf();
-                let mut cur_read_only_path = read_only_temp_dir.path().to_path_buf();
-                for path_component in initial_file.file_path.components() {
-                    if !cur_path.exists() {
-                        tokio::fs::create_dir(&cur_path).await?;
-                    }
-                    cur_path.push(path_component);
-                    cur_read_only_path.push(path_component);
-                }
-                match initial_file.file_permission {
-                    InitialFilePermission::ReadOnly => {
-                        if cur_read_only_path.exists() {
-                            tokio::fs::symlink(cur_path.as_path(), cur_read_only_path.as_path())
-                                .await?;
-                        } else {
-                            return Err(GolemError::runtime(format!(
-                                "Failed to populate temporary directory: try link {} with a non existence {}",
-                                cur_path.display(),
-                                cur_read_only_path.display()
-                            )));
-                        }
-                    }
-                    InitialFilePermission::ReadWrite => {
-                        let file_content = component_service
-                            .get_initial_file_data(
-                                &owned_worker_id.worker_id.component_id,
-                                component_metadata.version,
-                                cur_path.as_path(),
-                            )
-                            .await?;
-                        tokio::fs::write(cur_path, file_content).await?;
-                    }
-                }
-            } else {
-                return Err(GolemError::runtime(format!(
-                    "Failed to populate temporary directory: {} is not an absolute path",
-                    initial_file.file_path.display()
-                )));
-            }
-        }
-
         debug!(
             "Worker {} initialized with deleted regions {}",
             owned_worker_id.worker_id, worker_config.deleted_regions
@@ -221,6 +154,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let stderr = ManagedStdErr::from_stderr(Stderr);
 
         let last_oplog_index = oplog.current_oplog_index().await;
+        let temp_dir = worker_file_service.get_worker_dir(&owned_worker_id).await?;
+
+        let read_only_temp_dir = worker_file_service
+            .get_worker_read_only_dir(&owned_worker_id)
+            .await?;
 
         let (wasi, table) = wasi_host::create_context(
             &worker_config.args,

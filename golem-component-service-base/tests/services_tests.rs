@@ -7,7 +7,7 @@ mod tests {
     use golem_service_base::db;
 
     use chrono::Utc;
-    use golem_common::model::InitialFilePermission;
+    use golem_common::model::FilePermission;
     use golem_common::model::{ComponentId, ComponentType};
     use golem_component_service_base::model::Component;
     use golem_component_service_base::repo::component::{
@@ -139,41 +139,41 @@ mod tests {
         let files_1 = vec![
             InitialFile {
                 file_path: String::from("/tests/test_json.json"),
-                file_permission: InitialFilePermission::ReadOnly,
+                file_permission: FilePermission::ReadOnly,
                 file_content: get_test_file("test_json.json"),
             },
             InitialFile {
                 file_path: String::from("/tests/inner/test_pdf.pdf"),
-                file_permission: InitialFilePermission::ReadWrite,
+                file_permission: FilePermission::ReadWrite,
                 file_content: get_test_file("test_pdf.pdf"),
             },
         ];
         let files_2 = vec![
             InitialFile {
                 file_path: String::from("/test_txt.txt"),
-                file_permission: InitialFilePermission::ReadWrite,
+                file_permission: FilePermission::ReadWrite,
                 file_content: get_test_file("test_txt.txt"),
             },
             InitialFile {
                 file_path: String::from("/a/b/c/test_sql.sql"),
-                file_permission: InitialFilePermission::ReadWrite,
+                file_permission: FilePermission::ReadWrite,
                 file_content: get_test_file("test_sql.sql"),
             },
         ];
         let files_3 = vec![
             InitialFile {
                 file_path: String::from("/a/b/c/d/test_jpg.jpg"),
-                file_permission: InitialFilePermission::ReadWrite,
+                file_permission: FilePermission::ReadWrite,
                 file_content: get_test_file("test_jpg.jpg"),
             },
             InitialFile {
                 file_path: String::from("/x/y/test_pdf.pdf"),
-                file_permission: InitialFilePermission::ReadOnly,
+                file_permission: FilePermission::ReadOnly,
                 file_content: get_test_file("test_pdf.pdf"),
             },
             InitialFile {
                 file_path: String::from("/a/b/test_txt.txt"),
-                file_permission: InitialFilePermission::ReadOnly,
+                file_permission: FilePermission::ReadOnly,
                 file_content: get_test_file("test_txt.txt"),
             },
         ];
@@ -564,22 +564,22 @@ mod tests {
         let files = vec![
             InitialFile {
                 file_path: String::from("/a/b/c/d/test_jpg.jpg"),
-                file_permission: InitialFilePermission::ReadWrite,
+                file_permission: FilePermission::ReadWrite,
                 file_content: vec![],
             },
             InitialFile {
                 file_path: String::from("/x/y/test_pdf.pdf"),
-                file_permission: InitialFilePermission::ReadOnly,
+                file_permission: FilePermission::ReadOnly,
                 file_content: vec![],
             },
             InitialFile {
                 file_path: String::from("/a/b/test_txt.txt"),
-                file_permission: InitialFilePermission::ReadOnly,
+                file_permission: FilePermission::ReadOnly,
                 file_content: vec![],
             },
             InitialFile {
                 file_path: String::from("/test_json.json"),
-                file_permission: InitialFilePermission::ReadWrite,
+                file_permission: FilePermission::ReadWrite,
                 file_content: vec![],
             },
         ]

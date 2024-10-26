@@ -32,7 +32,6 @@ use crate::model::{
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
-use crate::services::component_readonly_file::ComponentReadOnlyFileService;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
@@ -41,6 +40,7 @@ use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_file::WorkerFileService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
     worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
@@ -115,7 +115,7 @@ pub trait WorkerCtx:
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+        worker_file_service: Arc<dyn WorkerFileService + Send + Sync>,
     ) -> Result<Self, GolemError>;
 
     /// Get the public part of the worker context

@@ -14,6 +14,7 @@
 
 use std::sync::{Arc, RwLock, Weak};
 
+use crate::services::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::model::oplog::WorkerResourceId;
@@ -34,7 +35,6 @@ use golem_worker_executor_base::model::{
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
-use golem_worker_executor_base::services::component_readonly_file::ComponentReadOnlyFileService;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
@@ -43,6 +43,7 @@ use golem_worker_executor_base::services::rpc::Rpc;
 use golem_worker_executor_base::services::scheduler::SchedulerService;
 use golem_worker_executor_base::services::worker::WorkerService;
 use golem_worker_executor_base::services::worker_event::WorkerEventService;
+use golem_worker_executor_base::services::worker_file::WorkerFileService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::services::{
     worker_enumeration, HasAll, HasConfig, HasOplogService,
@@ -54,8 +55,6 @@ use golem_worker_executor_base::workerctx::{
 };
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
-
-use crate::services::AdditionalDeps;
 
 pub struct Context {
     pub durable_ctx: DurableWorkerCtx<Context>,
@@ -305,7 +304,7 @@ impl WorkerCtx for Context {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+        component_read_only_file_service: Arc<dyn WorkerFileService + Send + Sync>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,

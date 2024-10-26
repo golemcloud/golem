@@ -40,7 +40,7 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::{ComponentId, ComponentType, ComponentVersion, InitialFilePermission};
+use golem_common::model::{ComponentId, ComponentType, ComponentVersion, FilePermission};
 use golem_common::retries::with_retries;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
@@ -68,7 +68,7 @@ pub struct ComponentMetadata {
 pub struct InitialFile {
     pub version: ComponentVersion,
     pub file_path: PathBuf,
-    pub file_permission: InitialFilePermission,
+    pub file_permission: FilePermission,
 }
 
 impl TryFrom<ComponentInitialFile> for InitialFile {

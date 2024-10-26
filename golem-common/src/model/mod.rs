@@ -2469,21 +2469,30 @@ impl FromStr for ComponentType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
-pub enum InitialFilePermission {
+pub enum FilePermission {
     ReadOnly,
     ReadWrite,
 }
 
-impl From<InitialFilePermission> for i32 {
-    fn from(permission: InitialFilePermission) -> Self {
+impl From<FilePermission> for i32 {
+    fn from(permission: FilePermission) -> Self {
         match permission {
-            InitialFilePermission::ReadOnly => 0,
-            InitialFilePermission::ReadWrite => 1,
+            FilePermission::ReadOnly => 0,
+            FilePermission::ReadWrite => 1,
         }
     }
 }
 
-impl TryFrom<i32> for InitialFilePermission {
+impl From<FilePermission> for String {
+    fn from(permission: FilePermission) -> Self {
+        match permission {
+            FilePermission::ReadOnly => String::from("read_only"),
+            FilePermission::ReadWrite => String::from("read_write"),
+        }
+    }
+}
+
+impl TryFrom<i32> for FilePermission {
     type Error = String;
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {

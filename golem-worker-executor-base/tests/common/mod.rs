@@ -75,7 +75,6 @@ use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_worker_executor_base::preview2::golem;
 use golem_worker_executor_base::preview2::golem::api1_1_0_rc1;
-use golem_worker_executor_base::services::component_readonly_file::ComponentReadOnlyFileService;
 use golem_worker_executor_base::services::events::Events;
 use golem_worker_executor_base::services::rpc::{
     DirectWorkerInvocationRpc, RemoteInvocationRpc, Rpc,
@@ -83,6 +82,7 @@ use golem_worker_executor_base::services::rpc::{
 use golem_worker_executor_base::services::worker_enumeration::{
     RunningWorkerEnumerationService, WorkerEnumerationService,
 };
+use golem_worker_executor_base::services::worker_file::WorkerFileService;
 use golem_worker_executor_base::services::worker_proxy::WorkerProxy;
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use tonic::transport::Channel;
@@ -641,7 +641,7 @@ impl WorkerCtx for TestWorkerCtx {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+        component_read_only_file_service: Arc<dyn WorkerFileService + Send + Sync>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -767,7 +767,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
-        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+        worker_file_service: Arc<dyn WorkerFileService + Send + Sync>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -792,7 +792,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             scheduler_service.clone(),
             worker_activator.clone(),
             events.clone(),
-            component_read_only_file_service.clone(),
+            worker_file_service.clone(),
             (),
         ));
         Ok(All::new(
@@ -816,7 +816,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             worker_activator,
             worker_proxy,
             events.clone(),
-            component_read_only_file_service,
+            worker_file_service,
             (),
         ))
     }

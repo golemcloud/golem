@@ -23,6 +23,8 @@ import public "golem/worker/v1/worker_execution_error.proto";
 import public "wasm/rpc/val.proto";
 import public "wasm/rpc/type_annotated_value.proto";
 
+import "google/protobuf/timestamp.proto";
+
 package golem.workerexecutor.v1;
 
 service WorkerExecutor {
@@ -42,6 +44,8 @@ service WorkerExecutor {
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
+  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+  rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
 }
 
 message InvokeWorkerResponse {
@@ -278,4 +282,47 @@ message GetOplogSuccessResponse {
   optional golem.worker.OplogCursor next = 2;
   uint64 first_index_in_chunk = 3;
   uint64 last_index = 5;
+}
+
+message ListDirectoryRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  string path = 3;
+}
+
+message ListDirectoryResponse {
+  oneof result {
+    ListDirectorySuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message ListDirectorySuccessResponse {
+  repeated FileSystemNode nodes = 1;
+}
+
+message FileSystemNode {
+  string name = 1;
+  NodeType type = 2;
+  uint64 size = 3;  // Size in bytes, applicable for files
+  string permissions = 4;  // String representation of file permissions
+  google.protobuf.Timestamp last_modified = 5;
+}
+
+enum NodeType {
+  FILE = 0;
+  DIRECTORY = 1;
+}
+
+message GetFileContentsRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  string file_path = 3;
+}
+
+message GetFileContentsResponse {
+  oneof result {
+    bytes contentChunk = 1;
+    golem.worker.v1.WorkerExecutionError error = 2;
+  }
 }

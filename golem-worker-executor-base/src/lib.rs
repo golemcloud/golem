@@ -33,9 +33,6 @@ use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
-use crate::services::component_readonly_file::{
-    ComponentReadOnlyFileService, DefaultComponentReadOnlyFileService,
-};
 use crate::services::events::Events;
 use crate::services::golem_config::{
     BlobStorageConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
@@ -55,6 +52,7 @@ use crate::services::worker_enumeration::{
     DefaultWorkerEnumerationService, RunningWorkerEnumerationService,
     RunningWorkerEnumerationServiceDefault, WorkerEnumerationService,
 };
+use crate::services::worker_file::{DefaultWorkerFileService, WorkerFileService};
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{component, shard_manager, All};
 use crate::storage::blob::s3::S3BlobStorage;
@@ -120,7 +118,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
-        component_read_only_file_service: Arc<dyn ComponentReadOnlyFileService + Send + Sync>,
+        worker_file_service: Arc<dyn WorkerFileService + Send + Sync>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -364,8 +362,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             golem_config.limits.invocation_result_broadcast_capacity,
         ));
 
-        let component_read_only_file_service = Arc::new(DefaultComponentReadOnlyFileService::new(
+        let worker_file_service = Arc::new(DefaultWorkerFileService::new(
             component_service.clone(),
+            worker_service.clone(),
         ));
 
         let services = self
@@ -389,7 +388,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 scheduler_service,
                 worker_proxy,
                 events,
-                component_read_only_file_service,
+                worker_file_service,
             )
             .await?;
 
