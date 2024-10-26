@@ -428,7 +428,7 @@ impl StubDefinition {
         InterfaceStubTypeDef {
             name: type_name,
             path: interface_path,
-            package_name: package.map(|p| p.name.clone()),
+            package_id: owner_interface.package,
             type_def,
         }
     }
