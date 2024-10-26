@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use std::path::{Path, PathBuf};
-
+use anyhow::Error;
 use crate::storage::{
     blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult},
     sqlite_types::SqlitePool,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::model::WorkerId;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -176,5 +177,13 @@ impl BlobStorage for SqliteBlobStorage {
             .exists_blob(&Self::into_string(namespace), &Self::to_string(path))
             .await
             .map_err(|err| err.to_string())
+    }
+
+    async fn initialize_ifs(&self, worker_id: WorkerId) -> anyhow::Result<(), String> {
+        todo!()
+    }
+
+    async fn copy_dir_contents(&self, target_label: &'static str, op_label: &'static str, from: &Path, to: &Path) -> Result<(), String> {
+        todo!()
     }
 }

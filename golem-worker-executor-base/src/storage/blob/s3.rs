@@ -23,7 +23,7 @@ use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use bytes::Bytes;
-use golem_common::model::Timestamp;
+use golem_common::model::{Timestamp, WorkerId};
 use golem_common::retries::with_retries_customized;
 use std::error::Error;
 use std::path::{Path, PathBuf};
@@ -835,5 +835,13 @@ impl BlobStorage for S3BlobStorage {
         .await
         .map_err(|err| err.to_string())?;
         Ok(())
+    }
+
+    async fn initialize_ifs(&self, worker_id: WorkerId) -> anyhow::Result<(), String> {
+        todo!()
+    }
+
+    async fn copy_dir_contents(&self, target_label: &'static str, op_label: &'static str, from: &Path, to: &Path) -> Result<(), String> {
+        todo!()
     }
 }

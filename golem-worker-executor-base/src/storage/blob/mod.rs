@@ -14,7 +14,7 @@
 
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
-
+use anyhow::Error;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
@@ -155,6 +155,17 @@ pub trait BlobStorage: Debug {
             .await?;
         self.delete(target_label, op_label, namespace, from).await
     }
+    async fn initialize_ifs(
+        &self,
+        worker_id: WorkerId
+    ) -> anyhow::Result<(), String>;
+    async fn copy_dir_contents(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        from: &Path,
+        to: &Path,
+    ) -> Result<(), String>;
 }
 
 pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized + Sync> {

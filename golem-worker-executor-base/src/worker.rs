@@ -119,6 +119,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
+        info!("gettting or creating suspended");
         deps.active_workers()
             .get_or_add(
                 deps,
@@ -1944,6 +1945,7 @@ fn calculate_latest_worker_status(
 
         match entry {
             OplogEntry::Create { .. } => {
+                info!("Creating sfdfdslkjljk");
                 result = WorkerStatus::Idle;
             }
             OplogEntry::ImportedFunctionInvokedV1 { .. } => {

@@ -649,6 +649,19 @@ impl WorkerApi {
 
         record.result(response)
     }
+
+    // #[oai(
+    //     path = "/:component_id/workers/:worker_name/files/"
+    //     method = "get",
+    //     operation_id = "get_files"
+    // )]
+    // async fn get_files(
+    //     &self,
+    //     component_id: Path<ComponentId>,
+    //     worker_name: Path<String>,
+    //     from: Query<u64>,
+    //     cursor: Query<Option<OplogCursor>>,
+    // )
 }
 
 fn make_worker_id(

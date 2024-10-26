@@ -36,7 +36,7 @@ use golem_common::model::{
 use golem_common::serialization::{serialize, try_deserialize};
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
 pub use primary::PrimaryOplogService;
-use tracing::Instrument;
+use tracing::{info, Instrument};
 
 use crate::error::GolemError;
 
@@ -365,6 +365,9 @@ impl OpenOplogs {
         worker_id: &WorkerId,
         constructor: impl OplogConstructor + Send + 'static,
     ) -> Arc<dyn Oplog + Send + Sync> {
+
+        info!("------------------------------------------------getting and oopen -");
+
         loop {
             let constructor_clone = constructor.clone();
             let close = Box::new(self.oplogs.create_weak_remover(worker_id.clone()));

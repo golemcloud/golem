@@ -15,9 +15,10 @@
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::Timestamp;
+use golem_common::model::{ComponentId, Timestamp, WorkerId};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use anyhow::Error;
 use tokio_stream::StreamExt;
 use tracing::info;
 
@@ -78,6 +79,7 @@ impl FileSystemBlobStorage {
                 component_id,
                 level,
             } => {
+                info!("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^");
                 result.push("compressed_oplog");
                 result.push(account_id.to_string());
                 result.push(component_id.to_string());
@@ -204,6 +206,8 @@ impl BlobStorage for FileSystemBlobStorage {
     ) -> Result<(), String> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
+        info!("Creating the dir -----------------------------------------((9099009090909");
+        info!("{}",full_path.display());
 
         async_fs::create_dir_all(&full_path)
             .await
@@ -288,4 +292,77 @@ impl BlobStorage for FileSystemBlobStorage {
             .map_err(|err| err.to_string())?;
         Ok(())
     }
+
+    async fn initialize_ifs(&self, worker_id: WorkerId) -> Result<(), String> {
+        // Define the source and target directories
+        let source_dir = format!(
+            "/worker_executor_store/initial_file_system/{}/{}/extracted",
+            worker_id.component_id, worker_id.component_id
+        );
+
+        let target_dir = format!(
+            "/worker_executor_store/compressed_oplog/-1/{}/{}/{}",
+            worker_id.component_id, worker_id.component_id, worker_id.worker_name
+        );
+
+        // Check if the source directory exists
+        if !Path::new(&source_dir).exists() {
+            return Err(format!("Source directory does not exist: {}", source_dir));
+        }
+
+        // Create the target directory if it doesn't exist
+        if !Path::new(&target_dir).exists() {
+            async_fs::create_dir_all(&target_dir)
+                .await
+                .map_err(|e| format!("Failed to create target directory: {}", e))?;
+        }
+
+        // Copy contents from the source to the target directory
+        self.copy_dir_contents(
+            "initialize_ifs",
+            "copy_dir_contents",
+            &PathBuf::from(source_dir),
+            &PathBuf::from(target_dir),
+        )
+            .await
+    }
+
+    async fn copy_dir_contents(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        source: &Path,
+        target: &Path,
+    ) -> Result<(), String> {
+        // Read entries in the source directory
+        let mut entries = async_fs::read_dir(source)
+            .await
+            .map_err(|e| format!("Failed to read source directory: {}", e))?;
+
+        while let Some(entry) = entries
+            .try_next()
+            .await
+            .map_err(|e| format!("Failed to read directory entry: {}", e))?
+        {
+            let entry_path = entry.path();
+            let target_path = target.join(entry.file_name());
+
+            if entry_path.is_dir() {
+                // Recursively copy subdirectories
+                async_fs::create_dir_all(&target_path)
+                    .await
+                    .map_err(|e| format!("Failed to create directory: {}", e))?;
+                self.copy_dir_contents(target_label, op_label, &entry_path, &target_path)
+                    .await?;
+            } else {
+                // Manual file copy operation
+                async_fs::copy(&entry_path, &target_path)
+                    .await
+                    .map_err(|e| format!("Failed to copy file {:?} to {:?}: {}", entry_path, target_path, e))?;
+            }
+        }
+
+        Ok(())
+    }
+
 }

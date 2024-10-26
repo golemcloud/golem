@@ -234,6 +234,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::v1::CreateWorkerRequest,
     ) -> Result<(), GolemError> {
+        info!("Creating internal worker ");
         let worker_id = request
             .worker_id
             .ok_or(GolemError::invalid_request("worker_id not found"))?;
@@ -257,6 +258,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if existing_worker.is_some() {
             return Err(GolemError::worker_already_exists(worker_id.clone()));
         }
+
+        info!("Worker does not exists so creating contbinued");
 
         let args = request.args;
         let env = request
@@ -1228,6 +1231,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: Request<golem::workerexecutor::v1::CreateWorkerRequest>,
     ) -> Result<Response<golem::workerexecutor::v1::CreateWorkerResponse>, Status> {
         let request = request.into_inner();
+
+        info!("Creating the worker----------------");
+
         let record = recorded_grpc_api_request!(
             "create_worker",
             worker_id = proto_worker_id_string(&request.worker_id),

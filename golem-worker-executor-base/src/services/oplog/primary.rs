@@ -29,7 +29,7 @@ use std::fmt::{Debug, Formatter};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::error;
+use tracing::{error, info};
 
 /// The primary oplog service implementation, suitable for direct use (top level of a multi-layered setup).
 ///
@@ -159,7 +159,7 @@ impl OplogService for PrimaryOplogService {
         component_type: ComponentType,
     ) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("create");
-
+        info!("-----------------------------------------primary -----------------------");
         let key = Self::oplog_key(&owned_worker_id.worker_id);
         let already_exists: bool = self
             .indexed_storage
@@ -171,6 +171,7 @@ impl OplogService for PrimaryOplogService {
             });
 
         if already_exists {
+            info!("worker alread exists");
             panic!("oplog for worker {owned_worker_id} already exists in indexed storage")
         }
 

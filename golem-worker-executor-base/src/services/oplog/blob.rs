@@ -28,6 +28,7 @@ use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
 use tokio::sync::RwLock;
+use tracing::{error, info};
 
 /// An oplog archive implementation that uses the configured blob storage to store compressed
 /// chunks of the oplog.
@@ -200,6 +201,11 @@ impl BlobOplogArchive {
         blob_storage: Arc<dyn BlobStorage + Send + Sync>,
         level: usize,
     ) -> Self {
+
+
+
+        info!("creating something ********************************************************************************");
+
         let exists = blob_storage
             .with("blob_oplog", "exists")
             .exists(
@@ -219,8 +225,10 @@ impl BlobOplogArchive {
                 )
             });
 
+        info!("So started creating as it does not exists");
+
         if !exists {
-            blob_storage
+            match blob_storage
                 .with("blob_oplog", "new")
                 .create_dir(
                     BlobStorageNamespace::CompressedOplog {
@@ -231,13 +239,31 @@ impl BlobOplogArchive {
                     Path::new(&owned_worker_id.worker_name()),
                 )
                 .await
-                .unwrap_or_else(|err| {
+            {
+                Ok(_) => {
+                    info!("Successfully created compressed oplog directory for worker {}", owned_worker_id.worker_id);
+
+                    // Attempt to initialize the IFS for the worker
+                    match blob_storage.initialize_ifs(owned_worker_id.clone().worker_id).await {
+                        Ok(_) => {
+                            info!("Successfully initialized IFS for worker {}", owned_worker_id.worker_id);
+                        },
+                        Err(err) => {
+                            error!("Failed to initialize IFS for worker {}: {}", owned_worker_id.worker_id, err);
+                        }
+                    }
+                },
+                Err(err) => {
                     panic!(
-                        "failed to create compressed oplog directory for worker {} in blob storage: {err}",
+                        "Failed to create compressed oplog directory for worker {} in blob storage: {err}",
                         owned_worker_id.worker_id
-                    )
-                });
+                    );
+                }
+            }
         }
+
+
+
 
         let entries = Arc::new(RwLock::new(
             Self::entries(owned_worker_id.clone(), blob_storage.clone(), level).await,

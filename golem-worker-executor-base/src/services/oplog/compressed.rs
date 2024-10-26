@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use evicting_cache_map::EvictingCacheMap;
 use tokio::sync::RwLock;
-
+use tracing::info;
 use crate::error::GolemError;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
@@ -272,6 +272,7 @@ impl OplogArchive for CompressedOplogArchive {
     }
 
     async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) {
+        info!("-----------------------appending -----------------------------------");
         if !chunk.is_empty() {
             let worker_id = &self.worker_id;
 

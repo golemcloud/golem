@@ -16,8 +16,9 @@ use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, Exis
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
-use golem_common::model::Timestamp;
+use golem_common::model::{Timestamp, WorkerId};
 use std::path::{Path, PathBuf};
+use anyhow::Error;
 use tracing::info;
 
 #[derive(Debug)]
@@ -159,6 +160,7 @@ impl BlobStorage for InMemoryBlobStorage {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), String> {
+        info!("In memory call ");
         let dir = path.to_string_lossy().to_string();
         self.data
             .entry(namespace)
@@ -262,5 +264,13 @@ impl BlobStorage for InMemoryBlobStorage {
                 Ok(ExistsResult::DoesNotExist)
             }
         }
+    }
+
+    async fn initialize_ifs(&self, worker_id: WorkerId) -> anyhow::Result<(), String> {
+        todo!()
+    }
+
+    async fn copy_dir_contents(&self, target_label: &'static str, op_label: &'static str, from: &Path, to: &Path) -> Result<(), String> {
+        todo!()
     }
 }

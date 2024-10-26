@@ -19,7 +19,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 
-use golem_common::model::AccountId;
+use golem_common::model::{AccountId, ComponentId, WorkerId};
 
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 
@@ -413,6 +413,7 @@ impl BlobStoreService for DefaultBlobStoreService {
             .await
             .map_err(|err| anyhow!(err))
     }
+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]

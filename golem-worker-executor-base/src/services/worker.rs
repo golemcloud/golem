@@ -20,7 +20,7 @@ use golem_common::model::{
     ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::error::GolemError;
 use crate::metrics::workers::record_worker_call;
@@ -117,6 +117,8 @@ impl WorkerService for DefaultWorkerService {
     ) -> Result<(), GolemError> {
         record_worker_call("add");
 
+        info!("Adding the worker ---------------------------------");
+
         let worker_id = &worker_metadata.worker_id;
         let owned_worker_id = OwnedWorkerId::new(&worker_metadata.account_id, worker_id);
 
@@ -130,6 +132,10 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.last_known_status.component_size,
             worker_metadata.last_known_status.total_linear_memory_size,
         );
+
+
+        info!("{:?}", initial_oplog_entry);
+
         self.oplog_service
             .create(&owned_worker_id, initial_oplog_entry, component_type)
             .await;
