@@ -71,6 +71,7 @@ impl S3BlobStorage {
             BlobStorageNamespace::CompressedOplog { level, .. } => {
                 &self.config.compressed_oplog_buckets[*level]
             }
+            BlobStorageNamespace::InitialComponentFiles => &self.config.initial_component_files_bucket,
         }
     }
 
@@ -123,6 +124,9 @@ impl S3BlobStorage {
                         .join(component_id_string)
                         .to_path_buf()
                 }
+            },
+            BlobStorageNamespace::InitialComponentFiles => {
+                Path::new(&self.config.object_prefix).to_path_buf()
             }
         }
     }

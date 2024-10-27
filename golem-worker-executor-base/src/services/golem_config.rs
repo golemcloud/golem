@@ -288,6 +288,7 @@ pub struct S3BlobStorageConfig {
     pub oplog_payload_bucket: String,
     pub compressed_oplog_buckets: Vec<String>,
     pub use_minio_credentials: bool,
+    pub initial_component_files_bucket: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -450,6 +451,7 @@ impl Default for S3BlobStorageConfig {
             aws_endpoint_url: None,
             compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
             use_minio_credentials: false,
+            initial_component_files_bucket: "golem-initial-component-files".to_string(),
         }
     }
 }

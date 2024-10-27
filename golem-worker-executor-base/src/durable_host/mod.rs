@@ -15,12 +15,14 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Add;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
+use std::vec;
 
 use crate::error::GolemError;
 use crate::invocation::{invoke_worker, InvokeResult};
@@ -29,6 +31,7 @@ use crate::model::{
     WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
+use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::promise::PromiseService;
@@ -49,19 +52,17 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
-    OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey, InitialComponentFile, InitialComponentFilePermissions, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord
 };
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use tempfile::TempDir;
 use tracing::{debug, info, span, warn, Instrument, Level};
-use wasmtime::component::{Instance, ResourceAny};
+use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
-use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, Stdout, WasiCtx, WasiView};
+use wasmtime_wasi::bindings::filesystem::preopens::Descriptor;
+use wasmtime_wasi::{FsResult, I32Exit, ResourceTable, ResourceTableError, Stderr, Stdout, WasiCtx, WasiView};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
@@ -116,6 +117,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     _temp_dir: Arc<TempDir>,
+    read_only_paths: Arc<RwLock<HashSet<PathBuf>>>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
@@ -141,6 +143,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        file_loader: Arc<FileLoader>,
     ) -> Result<Self, GolemError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -154,6 +157,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} initialized with deleted regions {}",
             owned_worker_id.worker_id, worker_config.deleted_regions
         );
+
+        let read_only_paths = prepare_filesystem(file_loader, temp_dir.path(), &component_metadata.files).await?;
 
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(Stdout);
@@ -205,6 +210,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await,
             _temp_dir: temp_dir,
+            read_only_paths: Arc::new(RwLock::new(read_only_paths)),
             execution_status,
         })
     }
@@ -214,6 +220,32 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
             .expect("ResourceTable mutex must never fail")
+    }
+
+    fn is_read_only(&mut self, fd: &Resource<Descriptor>) -> Result<bool, ResourceTableError> {
+        let table = Arc::get_mut(&mut self.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+
+        match table.get(fd)? {
+            Descriptor::File(f) => {
+                let read_only = self.read_only_paths
+                    .read()
+                    .expect("There should be no writers to read_only_paths")
+                    .contains(&f.path);
+                Ok(read_only)
+            },
+            Descriptor::Dir(_) => Ok(false),
+        }
+    }
+
+    fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
+        if self.is_read_only(fd)? {
+            return Err(wasmtime_wasi::bindings::filesystem::types::ErrorCode::NotPermitted.into());
+        } else {
+            Ok(())
+        }
     }
 
     fn ctx(&mut self) -> &mut WasiCtx {
@@ -1979,6 +2011,31 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
             Ok(default_send_request(request, config))
         }
     }
+}
+
+async fn prepare_filesystem(
+    file_loader: Arc<FileLoader>,
+    root: &Path,
+    files: &Vec<InitialComponentFile>,
+) -> Result<HashSet<PathBuf>, GolemError> {
+    let mut read_only_files = HashSet::with_capacity(files.len());
+    for file in files {
+        let path = root.join(&PathBuf::from(file.path.to_string()));
+
+        match file.permissions {
+            InitialComponentFilePermissions::ReadOnly => {
+                debug!("Loading read-only file {}", path.display());
+                file_loader.get_read_only_to(&file.key, &path).await?;
+                read_only_files.insert(path);
+            }
+            InitialComponentFilePermissions::ReadWrite => {
+
+                debug!("Loading read-write file {}", path.display());
+                file_loader.get_read_write_to(&file.key, &path).await?;
+            }
+        }
+    }
+    Ok(read_only_files)
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

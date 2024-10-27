@@ -36,10 +36,12 @@ use crate::services::{
     HasKeyValueService, HasOplogService, HasPromiseService, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService,
+    HasWorkerProxy, HasWorkerService, HasFileLoader
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
+
+use super::file_loader::FileLoader;
 
 #[async_trait]
 pub trait Rpc {
@@ -273,6 +275,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
     worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
     events: Arc<Events>,
+    file_loader: Arc<FileLoader>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -299,6 +302,7 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             worker_activator: self.worker_activator.clone(),
             events: self.events.clone(),
             extra_deps: self.extra_deps.clone(),
+            file_loader: self.file_loader.clone(),
         }
     }
 }
@@ -429,6 +433,13 @@ impl<Ctx: WorkerCtx> HasWorkerProxy for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasFileLoader for DirectWorkerInvocationRpc<Ctx> {
+    fn file_loader(&self) -> Arc<FileLoader> {
+        self.file_loader.clone()
+    }
+}
+
+
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
@@ -454,6 +465,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         scheduler_service: Arc<dyn scheduler::SchedulerService + Send + Sync>,
         worker_activator: Arc<dyn worker_activator::WorkerActivator + Send + Sync>,
         events: Arc<Events>,
+        file_loader: Arc<FileLoader>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -476,6 +488,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             scheduler_service,
             worker_activator,
             events,
+            file_loader,
             extra_deps,
         }
     }

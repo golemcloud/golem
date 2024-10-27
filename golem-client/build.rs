@@ -50,6 +50,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "ComponentMetadata",
                 "golem_common::model::component_metadata::ComponentMetadata",
             ),
+            ("InitialComponentFilePathAndPermissionsList", "golem_common::model::InitialComponentFilePathAndPermissionsList"),
             ("ComponentType", "golem_common::model::ComponentType"),
             (
                 "OplogCursor",

@@ -1874,9 +1874,14 @@ paths:
               properties:
                 name:
                   type: string
-                component_type:
+                componentType:
                   $ref: '#/components/schemas/ComponentType'
                 component:
+                  type: string
+                  format: binary
+                filesPermissions:
+                  $ref: '#/components/schemas/InitialComponentFilePathAndPermissionsList'
+                files:
                   type: string
                   format: binary
               required:
@@ -1931,7 +1936,7 @@ paths:
       tags:
       - Component
       summary: Update a component
-      operationId: update_component
+      operationId: upload_component
       parameters:
       - in: path
         name: component_id
@@ -1958,6 +1963,84 @@ paths:
             schema:
               type: string
               format: binary
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/updates:
+    post:
+      tags:
+      - Component
+      summary: Update a component
+      operationId: update_component
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                componentType:
+                  $ref: '#/components/schemas/ComponentType'
+                component:
+                  type: string
+                  format: binary
+                filesPermissions:
+                  $ref: '#/components/schemas/InitialComponentFilePathAndPermissionsList'
+                files:
+                  type: string
+                  format: binary
+              required:
+              - component
         required: true
       responses:
         '200':
@@ -2894,6 +2977,7 @@ components:
           Unknown: '#/components/schemas/GolemError_GolemErrorUnknown'
           InvalidAccount: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
           ShardingNotReady: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
+          InitialComponentFileDownloadFailed: '#/components/schemas/GolemError_GolemErrorInitialComponentFileDownloadFailed'
       type: object
       oneOf:
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
@@ -2919,6 +3003,7 @@ components:
       - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
       - $ref: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInitialComponentFileDownloadFailed'
     GolemErrorBody:
       type: object
       properties:
@@ -2966,6 +3051,16 @@ components:
           type: string
       required:
       - componentId
+      - reason
+    GolemErrorInitialComponentFileDownloadFailed:
+      type: object
+      properties:
+        path:
+          type: string
+        reason:
+          type: string
+      required:
+      - path
       - reason
     GolemErrorInterrupted:
       type: object
@@ -3139,6 +3234,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfComponentFailed'
+    GolemError_GolemErrorInitialComponentFileDownloadFailed:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: InitialComponentFileDownloadFailed
+            type: string
+            enum:
+            - InitialComponentFileDownloadFailed
+        required:
+        - type
+      - $ref: '#/components/schemas/GolemErrorInitialComponentFileDownloadFailed'
     GolemError_GolemErrorInterrupted:
       allOf:
       - type: object
@@ -4911,11 +5018,16 @@ components:
           format: date-time
         componentType:
           $ref: '#/components/schemas/ComponentType'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialComponentFile'
       required:
       - versionedComponentId
       - componentName
       - componentSize
       - metadata
+      - files
     ComponentMetadata:
       type: object
       properties:
@@ -4940,6 +5052,48 @@ components:
       enum:
       - Durable
       - Ephemeral
+    InitialComponentFile:
+      type: object
+      properties:
+        key:
+          title: |-
+            Key that can be used to identify a component file.
+            All files with the same content will have the same key.
+          type: string
+        path:
+          description: Path inside a component filesystem. Must be absolute.
+          type: string
+        permissions:
+          $ref: '#/components/schemas/InitialComponentFilePermissions'
+      required:
+      - key
+      - path
+      - permissions
+    InitialComponentFilePathAndPermissions:
+      type: object
+      properties:
+        path:
+          description: Path inside a component filesystem. Must be absolute.
+          type: string
+        permissions:
+          $ref: '#/components/schemas/InitialComponentFilePermissions'
+      required:
+      - path
+      - permissions
+    InitialComponentFilePathAndPermissionsList:
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialComponentFilePathAndPermissions'
+      required:
+      - values
+    InitialComponentFilePermissions:
+      type: string
+      enum:
+      - ReadOnly
+      - ReadWrite
     LinearMemory:
       type: object
       properties:

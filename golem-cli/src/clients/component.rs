@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
 use crate::model::component::Component;
 use crate::model::{ComponentName, GolemError, PathBufOrStdin};
 use async_trait::async_trait;
-use golem_client::model::ComponentType;
+use golem_client::model::{ComponentType, InitialComponentFilePathAndPermissionsList};
 use golem_common::uri::oss::urn::ComponentUrn;
+use std::path::Path;
 
 #[async_trait]
 pub trait ComponentClient {
@@ -42,11 +44,15 @@ pub trait ComponentClient {
         file: PathBufOrStdin,
         project: &Option<Self::ProjectContext>,
         component_type: ComponentType,
+        files_archive: Option<&Path>,
+        files_permissions: Option<&InitialComponentFilePathAndPermissionsList>
     ) -> Result<Component, GolemError>;
     async fn update(
         &self,
         urn: ComponentUrn,
         file: PathBufOrStdin,
         component_type: Option<ComponentType>,
+        files_archive: Option<&Path>,
+        files_permissions: Option<&InitialComponentFilePathAndPermissionsList>
     ) -> Result<Component, GolemError>;
 }

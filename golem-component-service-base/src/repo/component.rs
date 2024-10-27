@@ -16,8 +16,9 @@ use crate::model::{Component, ComponentConstraints};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
+use futures::future::try_join_all;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::{ComponentId, ComponentType, InitialComponentFile, InitialComponentFileKey, InitialComponentFilePath, InitialComponentFilePermissions};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, Row};
@@ -38,6 +39,9 @@ pub struct ComponentRecord {
     pub metadata: Vec<u8>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub component_type: i32,
+    // one-to-many relationship. Retrieved separately
+    #[sqlx(skip)]
+    pub files: Vec<FileRecord>,
 }
 
 impl<Namespace> TryFrom<ComponentRecord> for Component<Namespace>
@@ -53,6 +57,7 @@ where
             version: value.version as u64,
         };
         let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
+        let files = value.files.into_iter().map(|file| file.try_into()).collect::<Result<Vec<_>, _>>()?;
         Ok(Component {
             namespace,
             component_name: ComponentName(value.name),
@@ -61,6 +66,7 @@ where
             versioned_component_id,
             created_at: value.created_at,
             component_type: ComponentType::try_from(value.component_type)?,
+            files
         })
     }
 }
@@ -91,6 +97,15 @@ where
             metadata: metadata.into(),
             created_at: value.created_at,
             component_type: value.component_type as i32,
+            files: value.files.iter().map(|file|
+                FileRecord {
+                    component_id: value.versioned_component_id.component_id.0,
+                    version: value.versioned_component_id.version as i64,
+                    file_path: file.path.to_string(),
+                    file_key: file.key.0.clone(),
+                    file_permissions: file.permissions.as_compact_str().to_string(),
+                }
+            ).collect(),
         })
     }
 }
@@ -135,6 +150,40 @@ where
         })
     }
 }
+
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct FileRecord {
+    pub component_id: Uuid,
+    pub version: i64,
+    pub file_path: String,
+    pub file_key: String,
+    pub file_permissions: String,
+}
+
+impl FileRecord {
+    pub fn from_component_and_file<Namespace>(component: &Component<Namespace>, file: &InitialComponentFile) -> Self {
+        Self {
+            component_id: component.versioned_component_id.component_id.0,
+            version: component.versioned_component_id.version as i64,
+            file_path: file.path.to_string(),
+            file_key: file.key.0.clone(),
+            file_permissions: file.permissions.as_compact_str().to_string(),
+        }
+    }
+}
+
+impl TryFrom<FileRecord> for InitialComponentFile {
+    type Error = String;
+
+    fn try_from(value: FileRecord) -> Result<Self, Self::Error> {
+        Ok(InitialComponentFile {
+            path: InitialComponentFilePath::from_str(value.file_path.as_str())?,
+            key: InitialComponentFileKey(value.file_key),
+            permissions: InitialComponentFilePermissions::from_compact_str(&value.file_permissions)?,
+        })
+    }
+}
+
 
 #[async_trait]
 pub trait ComponentRepo {
@@ -185,6 +234,40 @@ pub struct DbComponentRepo<DB: Database> {
 impl<DB: Database> DbComponentRepo<DB> {
     pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
         Self { db_pool }
+    }
+}
+
+#[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
+impl DbComponentRepo<sqlx::Postgres> {
+    async fn get_files(&self, component_id: &Uuid, version: u64) -> Result<Vec<FileRecord>, RepoError> {
+        sqlx::query_as::<_, FileRecord>(
+            r#"
+            SELECT
+                component_id,
+                version,
+                file_path,
+                file_key,
+                file_permissions
+            FROM component_files
+            WHERE component_id = $1 AND version = $2
+            "#,
+        )
+        .bind(component_id)
+        .bind(version as i64)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
+    }
+    async fn add_files(&self, components: impl IntoIterator<Item = ComponentRecord>) -> Result<Vec<ComponentRecord>, RepoError> {
+        let result = components
+            .into_iter()
+            .map(|component| async move {
+                let files = self.get_files(&component.component_id, component.version as u64).await?;
+                Ok(ComponentRecord { files, ..component })
+            }).collect::<Vec<_>>();
+
+
+        try_join_all(result).await
     }
 }
 
@@ -353,13 +436,31 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .execute(&mut *transaction)
         .await?;
 
-        transaction.commit().await?;
+        for file in &component.files {
+            sqlx::query(
+                r#"
+                  INSERT INTO component_files
+                    (component_id, version, file_path, file_key, file_permissions)
+                  VALUES
+                    ($1, $2, $3, $4, $5)
+                "#,
+            )
+            .bind(component.component_id)
+            .bind(component.version)
+            .bind(file.file_path.clone())
+            .bind(file.file_key.clone())
+            .bind(file.file_permissions.clone())
+            .execute(&mut *transaction)
+            .await?;
+        };
 
+        transaction.commit().await?;
         Ok(())
     }
 
-    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>(
+    #[when(sqlx::Postgres -> get)]
+    async fn get_postgres(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
+        let component = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -378,12 +479,40 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(component_id)
         .fetch_all(self.db_pool.deref())
         .await
-        .map_err(|e| e.into())
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        self.add_files(component).await
+    }
+
+    #[when(sqlx::Sqlite -> get)]
+    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
+        let component = sqlx::query_as::<_, ComponentRecord>(
+            r#"
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.metadata AS metadata,
+                    cv.created_at AS created_at,
+                    cv.component_type AS component_type
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
+                WHERE c.component_id = $1
+                "#,
+        )
+        .bind(component_id)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        self.add_files(component).await
     }
 
     #[when(sqlx::Postgres -> get_all)]
     async fn get_all_postgres(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>(
+        let components = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -402,12 +531,14 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(namespace)
         .fetch_all(self.db_pool.deref())
         .await
-        .map_err(|e| e.into())
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        self.add_files(components).await
     }
 
     #[when(sqlx::Sqlite -> get_all)]
     async fn get_all_sqlite(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>(
+        let components = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -426,7 +557,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(namespace)
         .fetch_all(self.db_pool.deref())
         .await
-        .map_err(|e| e.into())
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        self.add_files(components).await
     }
 
     #[when(sqlx::Postgres -> get_latest_version)]
@@ -434,7 +567,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         &self,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>(
+        let component = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -454,7 +587,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(component_id)
         .fetch_optional(self.db_pool.deref())
         .await
-        .map_err(|e| e.into())
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        Ok(self.add_files(component).await?.pop())
     }
 
     #[when(sqlx::Sqlite -> get_latest_version)]
@@ -462,7 +597,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         &self,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>(
+        let component = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -482,7 +617,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(component_id)
         .fetch_optional(self.db_pool.deref())
         .await
-        .map_err(|e| e.into())
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        Ok(self.add_files(component).await?.pop())
     }
 
     #[when(sqlx::Postgres -> get_by_version)]
@@ -491,7 +628,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>(
+        let component = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -511,7 +648,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(version as i64)
         .fetch_optional(self.db_pool.deref())
         .await
-        .map_err(|e| e.into())
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        Ok(self.add_files(component).await?.pop())
     }
 
     #[when(sqlx::Sqlite -> get_by_version)]
@@ -520,7 +659,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>(
+        let component = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -540,7 +679,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(version as i64)
         .fetch_optional(self.db_pool.deref())
         .await
-        .map_err(|e| e.into())
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        Ok(self.add_files(component).await?.pop())
     }
 
     #[when(sqlx::Postgres -> get_by_name)]
@@ -549,7 +690,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         namespace: &str,
         name: &str,
     ) -> Result<Vec<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>(
+        let components = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -569,7 +710,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(name)
         .fetch_all(self.db_pool.deref())
         .await
-        .map_err(|e| e.into())
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        self.add_files(components).await
     }
 
     #[when(sqlx::Sqlite -> get_by_name)]
@@ -578,7 +721,7 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         namespace: &str,
         name: &str,
     ) -> Result<Vec<ComponentRecord>, RepoError> {
-        sqlx::query_as::<_, ComponentRecord>(
+        let components = sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
                     c.namespace AS namespace,
@@ -598,7 +741,9 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         .bind(name)
         .fetch_all(self.db_pool.deref())
         .await
-        .map_err(|e| e.into())
+        .map_err::<RepoError, _>(|e| e.into())?;
+
+        self.add_files(components).await
     }
 
     async fn get_id_by_name(&self, namespace: &str, name: &str) -> Result<Option<Uuid>, RepoError> {
@@ -626,6 +771,17 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         sqlx::query(
             r#"
                 DELETE FROM component_versions
+                WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
+            "#
+        )
+            .bind(namespace)
+            .bind(component_id)
+            .execute(&mut *transaction)
+            .await?;
+
+        sqlx::query(
+            r#"
+                DELETE FROM component_files
                 WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
             "#
         )

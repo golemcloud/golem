@@ -32,7 +32,7 @@ use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasRpc,
     HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService, HasWorkerProxy,
-    HasWorkerService, UsesAllDeps,
+    HasWorkerService, UsesAllDeps, HasFileLoader
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
@@ -1226,6 +1226,7 @@ impl RunningWorker {
                 worker_metadata.last_known_status.total_linear_memory_size,
             ),
             parent.execution_status.clone(),
+            parent.file_loader(),
         )
         .await?;
 

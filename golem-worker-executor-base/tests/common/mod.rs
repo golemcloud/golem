@@ -3,6 +3,7 @@ use async_trait::async_trait;
 
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
+use golem_worker_executor_base::services::file_loader::{FileLoader};
 use prometheus::Registry;
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
@@ -640,6 +641,7 @@ impl WorkerCtx for TestWorkerCtx {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        file_loader: Arc<FileLoader>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -660,6 +662,7 @@ impl WorkerCtx for TestWorkerCtx {
             config,
             worker_config,
             execution_status,
+            file_loader,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -764,6 +767,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
+        file_loader: Arc<FileLoader>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -788,6 +792,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             scheduler_service.clone(),
             worker_activator.clone(),
             events.clone(),
+            file_loader.clone(),
             (),
         ));
         Ok(All::new(
@@ -811,6 +816,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             worker_activator,
             worker_proxy,
             events.clone(),
+            file_loader,
             (),
         ))
     }

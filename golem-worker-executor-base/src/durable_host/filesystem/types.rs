@@ -52,11 +52,12 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     fn write_via_stream(
         &mut self,
-        self_: Resource<Descriptor>,
+        fd: Resource<Descriptor>,
         offset: Filesize,
     ) -> Result<Resource<OutputStream>, FsError> {
+        self.fail_if_read_only(&fd)?;
         record_host_function_call("filesystem::types::descriptor", "write_via_stream");
-        HostDescriptor::write_via_stream(&mut self.as_wasi_view(), self_, offset)
+        HostDescriptor::write_via_stream(&mut self.as_wasi_view(), fd, offset)
     }
 
     fn append_via_stream(
@@ -91,13 +92,22 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         HostDescriptor::sync_data(&mut self.as_wasi_view(), self_).await
     }
 
-    async fn get_flags(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorFlags, FsError> {
+    async fn get_flags(&mut self, fd: Resource<Descriptor>) -> Result<DescriptorFlags, FsError> {
         let _permit = self
             .begin_async_host_function()
             .await
             .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "get_flags");
-        HostDescriptor::get_flags(&mut self.as_wasi_view(), self_).await
+
+        let read_only = self.is_read_only(&fd)?;
+        let wasi_view = &mut self.as_wasi_view();
+        let mut descriptor_flags = HostDescriptor::get_flags(wasi_view, fd).await?;
+
+        if read_only {
+            descriptor_flags &= !DescriptorFlags::WRITE
+        };
+
+        Ok(descriptor_flags)
     }
 
     async fn get_type(&mut self, self_: Resource<Descriptor>) -> Result<DescriptorType, FsError> {
@@ -111,31 +121,37 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn set_size(
         &mut self,
-        self_: Resource<Descriptor>,
+        fd: Resource<Descriptor>,
         size: Filesize,
     ) -> Result<(), FsError> {
+        self.fail_if_read_only(&fd)?;
+
         let _permit = self
             .begin_async_host_function()
             .await
             .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "set_size");
-        HostDescriptor::set_size(&mut self.as_wasi_view(), self_, size).await
+
+        HostDescriptor::set_size(&mut self.as_wasi_view(), fd, size).await
     }
 
     async fn set_times(
         &mut self,
-        self_: Resource<Descriptor>,
+        fd: Resource<Descriptor>,
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
+        self.fail_if_read_only(&fd)?;
+
         let _permit = self
             .begin_async_host_function()
             .await
             .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "set_times");
+
         HostDescriptor::set_times(
             &mut self.as_wasi_view(),
-            self_,
+            fd,
             data_access_timestamp,
             data_modification_timestamp,
         )
@@ -158,16 +174,18 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn write(
         &mut self,
-        self_: Resource<Descriptor>,
+        fd: Resource<Descriptor>,
         buffer: Vec<u8>,
         offset: Filesize,
     ) -> Result<Filesize, FsError> {
+        self.fail_if_read_only(&fd)?;
+
         let _permit = self
             .begin_async_host_function()
             .await
             .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "write");
-        HostDescriptor::write(&mut self.as_wasi_view(), self_, buffer, offset).await
+        HostDescriptor::write(&mut self.as_wasi_view(), fd, buffer, offset).await
     }
 
     async fn read_directory(
@@ -330,12 +348,14 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn set_times_at(
         &mut self,
-        self_: Resource<Descriptor>,
+        fd: Resource<Descriptor>,
         path_flags: PathFlags,
         path: String,
         data_access_timestamp: NewTimestamp,
         data_modification_timestamp: NewTimestamp,
     ) -> Result<(), FsError> {
+        self.fail_if_read_only(&fd)?;
+
         let _permit = self
             .begin_async_host_function()
             .await
@@ -343,7 +363,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         record_host_function_call("filesystem::types::descriptor", "set_times_at");
         HostDescriptor::set_times_at(
             &mut self.as_wasi_view(),
-            self_,
+            fd,
             path_flags,
             path,
             data_access_timestamp,
@@ -428,11 +448,14 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn rename_at(
         &mut self,
-        self_: Resource<Descriptor>,
+        old_fd: Resource<Descriptor>,
         old_path: String,
-        new_descriptor: Resource<Descriptor>,
+        new_fd: Resource<Descriptor>,
         new_path: String,
     ) -> Result<(), FsError> {
+        self.fail_if_read_only(&old_fd)?;
+        self.fail_if_read_only(&new_fd)?;
+
         let _permit = self
             .begin_async_host_function()
             .await
@@ -440,9 +463,9 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         record_host_function_call("filesystem::types::descriptor", "rename_at");
         HostDescriptor::rename_at(
             &mut self.as_wasi_view(),
-            self_,
+            old_fd,
             old_path.clone(),
-            new_descriptor,
+            new_fd,
             new_path.clone(),
         )
         .await
@@ -450,30 +473,34 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
 
     async fn symlink_at(
         &mut self,
-        self_: Resource<Descriptor>,
+        fd: Resource<Descriptor>,
         old_path: String,
         new_path: String,
     ) -> Result<(), FsError> {
+        self.fail_if_read_only(&fd)?;
+
         let _permit = self
             .begin_async_host_function()
             .await
             .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "symlink_at");
-        HostDescriptor::symlink_at(&mut self.as_wasi_view(), self_, old_path, new_path.clone())
+        HostDescriptor::symlink_at(&mut self.as_wasi_view(), fd, old_path, new_path.clone())
             .await
     }
 
     async fn unlink_file_at(
         &mut self,
-        self_: Resource<Descriptor>,
+        fd: Resource<Descriptor>,
         path: String,
     ) -> Result<(), FsError> {
+        self.fail_if_read_only(&fd)?;
+
         let _permit = self
             .begin_async_host_function()
             .await
             .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "unlink_file_at");
-        HostDescriptor::unlink_file_at(&mut self.as_wasi_view(), self_, path.clone()).await
+        HostDescriptor::unlink_file_at(&mut self.as_wasi_view(), fd, path.clone()).await
     }
 
     async fn is_same_object(

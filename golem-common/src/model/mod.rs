@@ -41,10 +41,11 @@ use golem_wasm_rpc::IntoValue;
 use poem::http::Uri;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
-use poem_openapi::{Enum, Object, Union};
+use poem_openapi::{Enum, NewType, Object, Union};
 use rand::prelude::IteratorRandom;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
 pub mod component_constraint;
@@ -2482,6 +2483,211 @@ impl FromStr for ComponentType {
     }
 }
 
+/// Key that can be used to identify a component file.
+/// All files with the same content will have the same key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, NewType)]
+pub struct InitialComponentFileKey(pub String);
+
+
+/// Path inside a component filesystem. Must be
+/// - absolute (start with '/')
+/// - not contain ".." components
+/// - not contain "." components
+/// - use '/' as a separator
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct InitialComponentFilePath(Utf8UnixPathBuf);
+
+impl InitialComponentFilePath {
+    pub fn from_str(s: &str) -> Result<Self, String> {
+        let buf: Utf8UnixPathBuf = s.into();
+        if !buf.is_absolute() {
+            return Err("Path must be absolute".to_string());
+        }
+
+        Ok(InitialComponentFilePath(buf.normalize()))
+    }
+
+    pub fn as_path(&self) -> &Utf8UnixPathBuf {
+        &self.0
+    }
+
+    pub fn extend(&mut self, path: &str) -> Result<(), String> {
+        self.0.push_checked(path).map_err(|e| e.to_string())
+    }
+}
+
+impl ToString for InitialComponentFilePath {
+    fn to_string(&self) -> String {
+        self.0.to_string()
+    }
+}
+
+impl poem_openapi::types::Type for InitialComponentFilePath {
+    const IS_REQUIRED: bool = true;
+
+    type RawValueType = Self;
+
+    type RawElementValueType = Self;
+
+    fn name() -> Cow<'static, str> {
+        "string".into()
+    }
+
+    fn schema_ref() -> MetaSchemaRef {
+        MetaSchemaRef::Inline(Box::new(MetaSchema {
+            description: Some("Path inside a component filesystem. Must be absolute."),
+            ..MetaSchema::new("string")
+        }))
+    }
+
+    fn as_raw_value(&self) -> Option<&Self::RawValueType> {
+        Some(self)
+    }
+
+    fn raw_element_iter<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a Self::RawElementValueType> + 'a> {
+        Box::new(self.as_raw_value().into_iter())
+    }
+}
+
+impl poem_openapi::types::ToJSON for InitialComponentFilePath {
+    fn to_json(&self) -> Option<serde_json::Value> {
+        Some(serde_json::Value::String(self.to_string()))
+    }
+}
+
+impl poem_openapi::types::ParseFromJSON for InitialComponentFilePath {
+    fn parse_from_json(value: Option<serde_json::Value>) -> Result<Self, poem_openapi::types::ParseError<Self>> {
+        match value {
+            None => Err(poem_openapi::types::ParseError::custom("Missing value for ComponentFilePath")),
+            Some(value) => serde_json::from_value(value).map_err(|err| poem_openapi::types::ParseError::custom(err))
+        }
+    }
+}
+
+impl Serialize for InitialComponentFilePath {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        String::serialize(&self.to_string(), serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for InitialComponentFilePath {
+    fn deserialize<D>(deserializer: D) -> Result<InitialComponentFilePath, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let str = String::deserialize(deserializer)?;
+        Self::from_str(&str).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Enum)]
+#[serde(rename_all = "kebab-case")]
+pub enum InitialComponentFilePermissions {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl InitialComponentFilePermissions {
+    pub fn as_compact_str(&self) -> &'static str {
+        match self {
+            InitialComponentFilePermissions::ReadOnly => "ro",
+            InitialComponentFilePermissions::ReadWrite => "rw",
+        }
+    }
+    pub fn from_compact_str(s: &str) -> Result<Self, String> {
+        match s {
+            "ro" => Ok(InitialComponentFilePermissions::ReadOnly),
+            "rw" => Ok(InitialComponentFilePermissions::ReadWrite),
+            _ => Err(format!("Unknown permissions: {}", s)),
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::component::InitialComponentFilePermissions> for InitialComponentFilePermissions {
+
+    fn from(value: golem_api_grpc::proto::golem::component::InitialComponentFilePermissions) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadOnly => InitialComponentFilePermissions::ReadOnly,
+            golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadWrite => InitialComponentFilePermissions::ReadWrite,
+        }
+    }
+}
+
+impl From<InitialComponentFilePermissions> for golem_api_grpc::proto::golem::component::InitialComponentFilePermissions {
+    fn from(value: InitialComponentFilePermissions) -> Self {
+        match value {
+            InitialComponentFilePermissions::ReadOnly => golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadOnly,
+            InitialComponentFilePermissions::ReadWrite => golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadWrite,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Object)]
+pub struct InitialComponentFile {
+    pub key: InitialComponentFileKey,
+    pub path: InitialComponentFilePath,
+    pub permissions: InitialComponentFilePermissions,
+}
+
+impl From<InitialComponentFile> for golem_api_grpc::proto::golem::component::InitialComponentFile {
+    fn from(value: InitialComponentFile) -> Self {
+        let permissions: golem_api_grpc::proto::golem::component::InitialComponentFilePermissions = value.permissions.into();
+        Self {
+            key: value.key.0,
+            path: value.path.to_string(),
+            permissions: permissions.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+pub struct InitialComponentFilePathAndPermissions {
+    pub path: InitialComponentFilePath,
+    pub permissions: InitialComponentFilePermissions,
+}
+
+impl InitialComponentFilePathAndPermissions {
+    pub fn extend_path(&mut self, path: &str) -> Result<(), String> {
+        self.path.extend(path)
+    }
+}
+
+impl Display for InitialComponentFilePathAndPermissions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", serde_json::to_string(self).unwrap())
+    }
+}
+
+// /// Format of the properties.json file inside of the archive file that can be uploaded when creating a component
+#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+pub struct InitialComponentFilePathAndPermissionsList {
+    pub values: Vec<InitialComponentFilePathAndPermissions>,
+}
+
+impl Display for InitialComponentFilePathAndPermissionsList {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", serde_json::to_string(self).unwrap())
+    }
+}
+
+impl poem_openapi::types::ParseFromMultipartField for InitialComponentFilePathAndPermissionsList {
+    fn parse_from_multipart(
+            field: Option<poem::web::Field>,
+        ) -> impl std::future::Future<Output = ParseResult<Self>> + Send {
+        async {
+            String::parse_from_multipart(field)
+                .await
+                .map_err(|err| err.propagate::<InitialComponentFilePathAndPermissionsList>())
+                .and_then(|s| serde_json::from_str(&s).map_err(|err| poem_openapi::types::ParseError::custom(err)))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use test_r::test;
@@ -2495,7 +2701,7 @@ mod tests {
     use crate::model::{
         AccountId, ComponentId, FilterComparator, IdempotencyKey, ShardId, StringFilterComparator,
         TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-        WorkerStatusRecord,
+        WorkerStatusRecord, InitialComponentFilePath
     };
     use bincode::{Decode, Encode};
     use poem_openapi::types::ToJSON;
@@ -2832,5 +3038,17 @@ mod tests {
         let serialized = key.to_json_string();
         let deserialized: IdempotencyKey = serde_json::from_str(&serialized).unwrap();
         assert_eq!(key, deserialized);
+    }
+
+    #[test]
+    fn initial_component_file_path_from_absolute() {
+        let path = InitialComponentFilePath::from_str("/a/b/c").unwrap();
+        assert_eq!(path.to_string(), "/a/b/c");
+    }
+
+    #[test]
+    fn initial_component_file_path_from_relative() {
+        let path = InitialComponentFilePath::from_str("a/b/c");
+        assert!(path.is_err());
     }
 }

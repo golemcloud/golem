@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::services::events::Events;
 use crate::workerctx::WorkerCtx;
+use file_loader::FileLoader;
 use tokio::runtime::Handle;
 
 pub mod active_workers;
@@ -25,6 +26,8 @@ pub mod compiled_component;
 pub mod component;
 pub mod events;
 pub mod golem_config;
+pub mod initial_component_files;
+pub mod file_loader;
 pub mod key_value;
 pub mod oplog;
 pub mod promise;
@@ -130,6 +133,10 @@ pub trait HasEvents {
     fn events(&self) -> Arc<Events>;
 }
 
+pub trait HasFileLoader {
+    fn file_loader(&self) -> Arc<FileLoader>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
@@ -150,6 +157,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasEvents
     + HasShardManagerService
     + HasShardService
+    + HasFileLoader
     + HasExtraDeps<Ctx>
     + Clone
 {
@@ -175,6 +183,7 @@ impl<
             + HasEvents
             + HasShardManagerService
             + HasShardService
+            + HasFileLoader
             + HasExtraDeps<Ctx>
             + Clone,
     > HasAll<Ctx> for T
@@ -205,6 +214,7 @@ pub struct All<Ctx: WorkerCtx> {
     worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
     events: Arc<Events>,
+    file_loader: Arc<FileLoader>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -231,6 +241,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             worker_activator: self.worker_activator.clone(),
             worker_proxy: self.worker_proxy.clone(),
             events: self.events.clone(),
+            file_loader: self.file_loader.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -263,6 +274,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         worker_activator: Arc<dyn WorkerActivator + Send + Sync>,
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy + Send + Sync>,
         events: Arc<Events>,
+        file_loader: Arc<FileLoader>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -286,6 +298,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             worker_activator,
             worker_proxy,
             events,
+            file_loader,
             extra_deps,
         }
     }
@@ -312,6 +325,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.worker_activator(),
             this.worker_proxy(),
             this.events(),
+            this.file_loader(),
             this.extra_deps(),
         )
     }
@@ -448,6 +462,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasWorkerProxy for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasEvents for T {
     fn events(&self) -> Arc<Events> {
         self.all().events.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasFileLoader for T {
+    fn file_loader(&self) -> Arc<FileLoader> {
+        self.all().file_loader.clone()
     }
 }
 

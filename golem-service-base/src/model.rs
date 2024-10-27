@@ -18,8 +18,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
-    WorkerFilter, WorkerId, WorkerStatus,
+    ComponentId, ComponentType, ComponentVersion, InitialComponentFile, InitialComponentFileKey, InitialComponentFilePath, InitialComponentFilePermissions, PromiseId, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerId, WorkerStatus
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -913,6 +912,8 @@ impl From<GolemErrorUnknown> for golem_api_grpc::proto::golem::worker::v1::Unkno
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 #[error("Invalid account")]
 pub struct GolemErrorInvalidAccount {}
 
@@ -933,6 +934,59 @@ impl From<GolemErrorInvalidAccount> for golem_api_grpc::proto::golem::worker::v1
         Self {}
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+#[error("Initial file upload failed")]
+pub struct GolemErrorInitialComponentFileUploadFailed {
+    pub component_id: VersionedComponentId,
+    pub path: String,
+    pub reason: String,
+}
+
+impl SafeDisplay for GolemErrorInitialComponentFileUploadFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Initial file download failed")]
+pub struct GolemErrorInitialComponentFileDownloadFailed {
+    pub path: String,
+    pub reason: String,
+}
+
+impl SafeDisplay for GolemErrorInitialComponentFileDownloadFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::v1::InitialComponentFileDownloadFailed>
+    for GolemErrorInitialComponentFileDownloadFailed
+{
+
+    fn from(value: golem_api_grpc::proto::golem::worker::v1::InitialComponentFileDownloadFailed) -> Self {
+        Self {
+            path: value.path,
+            reason: value.reason,
+        }
+    }
+}
+
+impl From<GolemErrorInitialComponentFileDownloadFailed>
+    for golem_api_grpc::proto::golem::worker::v1::InitialComponentFileDownloadFailed
+{
+    fn from(value: GolemErrorInitialComponentFileDownloadFailed) -> Self {
+        Self {
+            path: value.path,
+            reason: value.reason,
+         }
+    }
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[error("Invalid account")]
@@ -1371,6 +1425,8 @@ pub enum GolemError {
     InvalidAccount(GolemErrorInvalidAccount),
     #[error(transparent)]
     ShardingNotReady(GolemErrorShardingNotReady),
+    #[error(transparent)]
+    InitialComponentFileDownloadFailed(GolemErrorInitialComponentFileDownloadFailed),
 }
 
 impl SafeDisplay for GolemError {
@@ -1399,6 +1455,7 @@ impl SafeDisplay for GolemError {
             GolemError::Unknown(inner) => inner.to_safe_string(),
             GolemError::InvalidAccount(inner) => inner.to_safe_string(),
             GolemError::ShardingNotReady(inner) => inner.to_safe_string(),
+            GolemError::InitialComponentFileDownloadFailed(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -1482,6 +1539,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError> for
             }
             Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err)) => {
                 Ok(GolemError::ShardingNotReady(err.into()))
+            }
+            Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(err)) => {
+                Ok(GolemError::InitialComponentFileDownloadFailed(err.into()))
             }
             None => Err("Missing field: error".to_string()),
         }
@@ -1568,6 +1628,9 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::v1::worker_execu
             GolemError::ShardingNotReady(err) => {
                 golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err.into())
             }
+            GolemError::InitialComponentFileDownloadFailed(err) => {
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(err.into())
+            }
         }
     }
 }
@@ -1624,6 +1687,7 @@ pub struct Component {
     pub metadata: ComponentMetadata,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub component_type: Option<ComponentType>,
+    pub files: Vec<InitialComponentFile>
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
@@ -1640,6 +1704,28 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             }
             None => None,
         };
+
+        let files = value.files
+            .iter()
+            .map(|f| {
+                let permissions = match f.permissions.try_into() {
+                    Ok(golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadOnly) =>
+                        InitialComponentFilePermissions::ReadOnly,
+                    Ok(golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadWrite) =>
+                        InitialComponentFilePermissions::ReadWrite,
+                    Err(_) => Err("Invalid file permissions".to_string())?
+                };
+
+                let path = InitialComponentFilePath::from_str(f.path.as_str())?;
+
+                Ok::<InitialComponentFile, String>(InitialComponentFile {
+                    key: InitialComponentFileKey(f.key.clone()),
+                    path,
+                    permissions,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
@@ -1659,6 +1745,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             } else {
                 None
             },
+            files
         })
     }
 }
@@ -1678,6 +1765,7 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 let c: golem_api_grpc::proto::golem::component::ComponentType = c.into();
                 c.into()
             }),
+            files: value.files.into_iter().map(|f| f.into()).collect()
         }
     }
 }

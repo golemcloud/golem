@@ -271,6 +271,7 @@ checksum = "0cb8f1d480b0ea3783ab015936d2a55c87e219676f0c0b7dec61494043f21857"
 dependencies = [
  "flate2",
  "futures-core",
+ "futures-io",
  "memchr",
  "pin-project-lite",
  "tokio",
@@ -523,6 +524,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.85",
+]
+
+[[package]]
+name = "async_zip"
+version = "0.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00b9f7252833d5ed4b00aa9604b563529dd5e11de9c23615de2dcdf91eb87b52"
+dependencies = [
+ "async-compression",
+ "crc32fast",
+ "futures-lite 2.3.0",
+ "pin-project 1.1.7",
+ "thiserror",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -3469,6 +3485,7 @@ dependencies = [
  "assert2",
  "async-recursion",
  "async-trait",
+ "async_zip",
  "base64 0.22.1",
  "chrono",
  "clap 4.5.20",
@@ -3480,6 +3497,7 @@ dependencies = [
  "dirs 5.0.1",
  "env_logger 0.11.5",
  "futures-util",
+ "glob",
  "golem-client",
  "golem-common",
  "golem-examples",
@@ -3513,12 +3531,14 @@ dependencies = [
  "strip-ansi-escapes",
  "strum",
  "strum_macros",
+ "tempfile",
  "test-r",
  "testcontainers",
  "testcontainers-modules",
  "textwrap 0.16.1",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
  "tokio-tungstenite 0.20.1",
  "tonic",
  "tonic-health",
@@ -3600,6 +3620,7 @@ dependencies = [
  "tracing-serde",
  "tracing-subscriber",
  "tracing-test",
+ "typed-path",
  "url",
  "uuid",
  "wasm-wave",
@@ -3649,6 +3670,7 @@ dependencies = [
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "golem-worker-executor-base",
  "http 0.2.12",
  "humantime-serde",
  "lazy_static 1.5.0",
@@ -3682,20 +3704,27 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "async_zip",
  "bincode",
  "bytes 1.8.0",
  "chrono",
  "conditional-trait-gen",
  "fastrand 2.1.1",
+ "futures",
  "golem-api-grpc",
  "golem-common",
  "golem-rib",
  "golem-service-base",
  "golem-wasm-ast",
+ "golem-worker-executor-base",
+ "hex",
  "http 0.2.12",
  "prost",
  "prost-types",
+ "sanitize-filename",
  "serde 1.0.213",
+ "serde_json",
+ "sha2",
  "sqlx",
  "tap",
  "test-r",
@@ -7695,6 +7724,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sanitize-filename"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ed72fbaf78e6f2d41744923916966c4fbe3d7c74e3037a8ee482f1115572603"
+dependencies = [
+ "lazy_static 1.5.0",
+ "regex",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9497,6 +9536,12 @@ dependencies = [
  "thiserror",
  "utf-8",
 ]
+
+[[package]]
+name = "typed-path"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82205ffd44a9697e34fc145491aa47310f9871540bb7909eaa9365e0a9a46607"
 
 [[package]]
 name = "typenum"

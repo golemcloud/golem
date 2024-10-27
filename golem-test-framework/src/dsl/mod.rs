@@ -1061,6 +1061,9 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::ShardingNotReady(_error) => {
                     "Sharing not ready".to_string()
                 }
+                worker_execution_error::Error::InitialComponentFileDownloadFailed(error) => {
+                    format!("Initial File download failed: {}", error.reason)
+                }
             },
         },
     }

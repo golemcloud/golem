@@ -33,6 +33,7 @@ use crate::model::{
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
@@ -90,6 +91,7 @@ pub trait WorkerCtx:
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
     /// - `execution_status`: Lock created to store the execution status
+    /// - `file_loader`: The service for loading files and making them available to workers
     #[allow(clippy::too_many_arguments)]
     async fn create(
         owned_worker_id: OwnedWorkerId,
@@ -114,6 +116,7 @@ pub trait WorkerCtx:
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        file_loader: Arc<FileLoader>,
     ) -> Result<Self, GolemError>;
 
     /// Get the public part of the worker context

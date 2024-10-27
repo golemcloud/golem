@@ -2,9 +2,11 @@ use chrono::Utc;
 use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::{InitialComponentFile, InitialComponentFilePathAndPermissionsList};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use rib::WorkerFunctionsInRib;
 use serde::{Deserialize, Serialize};
+use tokio::fs::File;
 use std::time::SystemTime;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -16,6 +18,7 @@ pub struct Component<Namespace> {
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<Utc>,
     pub component_type: ComponentType,
+    pub files: Vec<InitialComponentFile>
 }
 
 impl<Namespace> Component<Namespace> {
@@ -25,6 +28,7 @@ impl<Namespace> Component<Namespace> {
         component_type: ComponentType,
         data: &[u8],
         namespace: &Namespace,
+        files: Vec<InitialComponentFile>,
     ) -> Result<Component<Namespace>, ComponentProcessingError>
     where
         Namespace: Eq + Clone + Send + Sync,
@@ -44,6 +48,7 @@ impl<Namespace> Component<Namespace> {
             created_at: Utc::now(),
             versioned_component_id,
             component_type,
+            files
         })
     }
 
@@ -68,6 +73,7 @@ impl<Namespace> From<Component<Namespace>> for golem_service_base::model::Compon
             metadata: value.metadata,
             created_at: Some(value.created_at),
             component_type: Some(value.component_type),
+            files: value.files
         }
     }
 }
@@ -76,6 +82,7 @@ impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::com
     fn from(value: Component<Namespace>) -> Self {
         let component_type: golem_api_grpc::proto::golem::component::ComponentType =
             value.component_type.into();
+
         Self {
             versioned_component_id: Some(value.versioned_component_id.into()),
             component_name: value.component_name.0,
@@ -86,6 +93,7 @@ impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::com
                 value.created_at,
             ))),
             component_type: Some(component_type.into()),
+            files: value.files.into_iter().map(|file| file.into()).collect()
         }
     }
 }
@@ -132,4 +140,11 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
 
         Ok(component_constraints)
     }
+
+}
+
+#[derive(Debug)]
+pub struct InitialComponentFilesArchiveAndPermissions {
+    pub archive: File,
+    pub permissions: InitialComponentFilePathAndPermissionsList,
 }

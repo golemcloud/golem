@@ -16,17 +16,24 @@ golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-service-base = { path = "../golem-service-base" }
 golem-rib = { path = "../golem-rib" }
 golem-wasm-ast = { workspace = true }
+golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "0.0.0" }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
 http_02 = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
+sanitize-filename = "0.5.0"
 serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 sqlx = { workspace = true, features = [
     "runtime-tokio",
     "sqlite",

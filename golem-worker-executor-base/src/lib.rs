@@ -76,6 +76,8 @@ use golem_common::redis::RedisPool;
 use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
 use prometheus::Registry;
+use services::file_loader::FileLoader;
+use services::initial_component_files::InitialComponentFilesServiceDefault;
 use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use storage::sqlite::SqlitePool;
@@ -121,6 +123,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
+        file_loader: Arc<FileLoader>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -292,6 +295,10 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             }
         };
 
+        let initial_files_service = Arc::new(InitialComponentFilesServiceDefault::new(blob_storage.clone()));
+
+        let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
+
         let component_service = component::configured(
             &golem_config.component_service,
             &golem_config.component_cache,
@@ -432,6 +439,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 scheduler_service,
                 worker_proxy,
                 events,
+                file_loader,
             )
             .await?;
 

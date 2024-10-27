@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
+use golem_worker_executor_base::services::file_loader::FileLoader;
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
@@ -305,6 +306,7 @@ impl WorkerCtx for Context {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        file_loader: Arc<FileLoader>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -325,6 +327,7 @@ impl WorkerCtx for Context {
             config,
             worker_config,
             execution_status,
+            file_loader,
         )
         .await?;
         Ok(Self {

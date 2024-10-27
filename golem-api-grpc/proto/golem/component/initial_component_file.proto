@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/component/initial_component_file_permissions.proto";
+
+message InitialComponentFile {
+  string key = 1;
+  string path = 2;
+  InitialComponentFilePermissions permissions = 3;
+}

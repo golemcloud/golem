@@ -53,6 +53,8 @@ services:
       - WASMTIME_BACKTRACE_DETAILS=1
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
+      - GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem"
+      - GOLEM__BLOB_STORAGE__CONFIG__ROOT="/worker_executor_store"
       - GOLEM__COMPONENT_STORE__TYPE="Local"
       - GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX=""
       - GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH=/component_store
@@ -67,6 +69,7 @@ services:
     volumes:
       - component_store:/component_store
       - golem_db:/app/golem_db
+      - worker_executor_store:/worker_executor_store
     ports:
       - "${COMPONENT_SERVICE_HTTP_PORT}:${COMPONENT_SERVICE_HTTP_PORT}"
       - "${COMPONENT_SERVICE_GRPC_PORT}:${COMPONENT_SERVICE_GRPC_PORT}"

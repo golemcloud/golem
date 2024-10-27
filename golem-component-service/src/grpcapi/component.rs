@@ -174,6 +174,7 @@ impl ComponentGrpcApi {
                 &name,
                 request.component_type().into(),
                 data,
+                None,
                 &DefaultNamespace::default(),
             )
             .await?;
@@ -198,7 +199,7 @@ impl ComponentGrpcApi {
         };
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultNamespace::default())
+            .update(&id, data, component_type, None, &DefaultNamespace::default())
             .await?;
         Ok(result.into())
     }

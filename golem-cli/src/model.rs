@@ -17,6 +17,7 @@ pub mod deploy;
 pub mod invoke_result_view;
 pub mod text;
 pub mod wave;
+pub mod application_manifest;
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;

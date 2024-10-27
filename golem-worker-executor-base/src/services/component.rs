@@ -38,7 +38,7 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::config::RetryConfig;
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::component_metadata::RawComponentMetadata;
-use golem_common::model::{ComponentId, ComponentType, ComponentVersion};
+use golem_common::model::{InitialComponentFilePath, ComponentId, ComponentType, ComponentVersion, InitialComponentFile};
 use golem_common::retries::with_retries;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
@@ -50,6 +50,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
+use golem_common::model::InitialComponentFileKey;
 
 #[derive(Debug, Clone)]
 pub struct ComponentMetadata {
@@ -58,6 +59,7 @@ pub struct ComponentMetadata {
     pub memories: Vec<LinearMemory>,
     pub exports: Vec<AnalysedExport>,
     pub component_type: ComponentType,
+    pub files: Vec<InitialComponentFile>,
 }
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -461,6 +463,32 @@ async fn get_metadata_via_grpc(
                         .map_err(|_| {
                             GrpcError::Unexpected("Failed to get the exports".to_string())
                         })?,
+                    files: component
+                        .files
+                        .into_iter()
+                        .map::<Result<InitialComponentFile, GrpcError<ComponentError>>, _>(|file| {
+                            let permissions = match file.permissions.try_into() {
+                                Ok(golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadOnly) => {
+                                    golem_common::model::InitialComponentFilePermissions::ReadOnly
+                                }
+                                Ok(golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadWrite) => {
+                                    golem_common::model::InitialComponentFilePermissions::ReadWrite
+                                }
+                                Err(_) => {
+                                    Err(GrpcError::Unexpected("Failed to get the file permissions".to_string()))?
+                                }
+                            };
+
+                            let path = InitialComponentFilePath::from_str(file.path.as_str())
+                                .map_err(|_| GrpcError::Unexpected("Failed to get the file path".to_string()))?;
+
+                            Ok(InitialComponentFile {
+                                key: InitialComponentFileKey(file.key),
+                                permissions,
+                                path,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
                 };
 
                 record_external_call_response_size_bytes("components", "get_metadata", len);
@@ -755,6 +783,7 @@ impl ComponentServiceLocalFileSystem {
             memories,
             exports,
             component_type: *component_type,
+            files: vec![], // TODO: Implement this
         })
     }
 
