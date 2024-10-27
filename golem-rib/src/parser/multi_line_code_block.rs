@@ -57,7 +57,7 @@ mod internal {
                     if expressions.len() == 1 {
                         expressions.first().unwrap().clone()
                     } else {
-                        Expr::multiple(expressions)
+                        Expr::expr_block(expressions)
                     }
                 },
             ),
@@ -85,7 +85,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let expected = Expr::multiple(vec![
+        let expected = Expr::expr_block(vec![
             Expr::let_binding("x", Expr::number(1f64)),
             Expr::let_binding("y", Expr::number(2f64)),
             Expr::call(
@@ -116,7 +116,7 @@ mod tests {
 
         let expected = Expr::cond(
             Expr::boolean(true),
-            Expr::multiple(vec![
+            Expr::expr_block(vec![
                 Expr::let_binding("x", Expr::number(1f64)),
                 Expr::let_binding("y", Expr::number(2f64)),
                 Expr::call(
@@ -156,7 +156,7 @@ mod tests {
                     "some".to_string(),
                     vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                 ),
-                Expr::multiple(vec![
+                Expr::expr_block(vec![
                     Expr::let_binding("x", Expr::number(1f64)),
                     Expr::let_binding("y", Expr::number(2f64)),
                     Expr::call(
@@ -190,7 +190,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let expected = Expr::multiple(vec![
+        let expected = Expr::expr_block(vec![
             Expr::let_binding("foo", Expr::option(Some(Expr::number(1f64)))),
             Expr::pattern_match(
                 Expr::identifier("foo"),
@@ -199,7 +199,7 @@ mod tests {
                         "some".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                     ),
-                    Expr::multiple(vec![
+                    Expr::expr_block(vec![
                         Expr::let_binding("x", Expr::number(1f64)),
                         Expr::let_binding("y", Expr::number(2f64)),
                         Expr::call(

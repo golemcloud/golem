@@ -16,6 +16,7 @@ use crate::call_type::CallType;
 use crate::parser::rib_expr::rib_program;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
+use crate::Expr::ListComprehension;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType,
     ParsedFunctionName, VariableId,
@@ -63,6 +64,7 @@ pub enum Expr {
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
     GetTag(Box<Expr>, InferredType),
+    ListComprehension(VariableId, Box<Expr>, Box<Expr>, InferredType),
 }
 
 impl Expr {
@@ -293,6 +295,19 @@ impl Expr {
         )
     }
 
+    pub fn list_comprehension(
+        variable_id: VariableId,
+        iterable_expr: Expr,
+        yield_expr: Expr,
+    ) -> Self {
+        ListComprehension(
+            variable_id,
+            Box::new(iterable_expr),
+            Box::new(yield_expr),
+            InferredType::List(Box::new(InferredType::Unknown)),
+        )
+    }
+
     pub fn literal(value: impl AsRef<str>) -> Self {
         Expr::Literal(value.as_ref().to_string(), InferredType::Str)
     }
@@ -301,7 +316,7 @@ impl Expr {
         Expr::literal("")
     }
 
-    pub fn multiple(expressions: Vec<Expr>) -> Self {
+    pub fn expr_block(expressions: Vec<Expr>) -> Self {
         let inferred_type = expressions
             .last()
             .map_or(InferredType::Unknown, |e| e.inferred_type());
@@ -429,6 +444,7 @@ impl Expr {
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
             | Expr::Or(_, _, inferred_type)
+            | Expr::ListComprehension(_, _, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => inferred_type.clone(),
         }
     }
@@ -454,6 +470,7 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), Vec<String>> {
         self.bind_types();
+        self.name_binding_list_comprehension();
         self.name_binding_pattern_match_variables();
         self.name_binding_local_variables();
         self.infer_variants(function_type_registry);
@@ -486,6 +503,10 @@ impl Expr {
     // This is done only for local variables and not global variables
     pub fn name_binding_local_variables(&mut self) {
         type_inference::name_binding_local_variables(self);
+    }
+
+    pub fn name_binding_list_comprehension(&mut self) {
+        type_inference::name_binding_list_comprehension(self);
     }
 
     pub fn infer_call_arguments_type(
@@ -562,6 +583,7 @@ impl Expr {
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
             | Expr::Or(_, _, inferred_type)
+            | Expr::ListComprehension(_, _, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -604,6 +626,7 @@ impl Expr {
             | Expr::And(_, _, inferred_type)
             | Expr::Or(_, _, inferred_type)
             | Expr::GetTag(_, inferred_type)
+            | Expr::ListComprehension(_, _, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
@@ -953,7 +976,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     .into_iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                Expr::multiple(exprs)
+                Expr::expr_block(exprs)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
@@ -1339,6 +1362,7 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     right: Some(Box::new((*right).into())),
                 }),
             )),
+            Expr::ListComprehension(_, _, _, _) => todo!(),
         };
 
         golem_api_grpc::proto::golem::rib::Expr { expr }
@@ -1605,7 +1629,7 @@ mod tests {
     }
 
     fn expected() -> Expr {
-        Expr::multiple(vec![
+        Expr::expr_block(vec![
             Expr::let_binding("x", Expr::number(1f64)),
             Expr::let_binding("y", Expr::number(2f64)),
             Expr::let_binding(

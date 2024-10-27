@@ -291,6 +291,17 @@ impl<W: Write> Writer<W> {
                 self.write_str(" || ")?;
                 self.write_expr(right)
             }
+            Expr::ListComprehension(variable_id, iterable_expr, yield_expr, _) => {
+                self.write_display("for")?;
+                self.write_display(variable_id.to_string())?;
+                self.write_display(" in ")?;
+                self.write_expr(iterable_expr)?;
+                self.write_display(" { ")?;
+                self.write_display("\n")?;
+                self.write_display("yield ")?;
+                self.write_expr(yield_expr)?;
+                self.write_display(" } ")
+            }
         }
     }
 

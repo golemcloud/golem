@@ -21,6 +21,7 @@ use crate::RibByteCode;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
 mod env;
+mod instruction_cursor;
 mod literal;
 mod result;
 mod rib_interpreter;

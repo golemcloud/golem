@@ -967,7 +967,7 @@ mod let_tests {
 
     #[test]
     fn test_round_trip_read_write_let() {
-        let input_expr = Expr::multiple(vec![
+        let input_expr = Expr::expr_block(vec![
             Expr::let_binding("x", Expr::literal("hello")),
             Expr::let_binding("y", Expr::literal("bar")),
         ]);
@@ -979,7 +979,7 @@ mod let_tests {
 
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_str() {
-        let input_expr = Expr::multiple(vec![
+        let input_expr = Expr::expr_block(vec![
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::Str),
@@ -1001,7 +1001,7 @@ mod let_tests {
 
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_u8() {
-        let input_expr = Expr::multiple(vec![
+        let input_expr = Expr::expr_block(vec![
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U8),
@@ -1023,7 +1023,7 @@ mod let_tests {
 
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_u16() {
-        let input_expr = Expr::multiple(vec![
+        let input_expr = Expr::expr_block(vec![
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U16),
@@ -1045,7 +1045,7 @@ mod let_tests {
 
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_u32() {
-        let input_expr = Expr::multiple(vec![
+        let input_expr = Expr::expr_block(vec![
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::U32),
@@ -1067,7 +1067,7 @@ mod let_tests {
 
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_option() {
-        let input_expr = Expr::multiple(vec![
+        let input_expr = Expr::expr_block(vec![
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::Option(Box::new(TypeName::Str))),
@@ -1096,7 +1096,7 @@ mod let_tests {
 
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_list() {
-        let input_expr = Expr::multiple(vec![
+        let input_expr = Expr::expr_block(vec![
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::List(Box::new(TypeName::Str))),
@@ -1125,7 +1125,7 @@ mod let_tests {
 
     #[test]
     fn test_round_trip_read_write_let_with_type_binding_tuple() {
-        let input_expr = Expr::multiple(vec![
+        let input_expr = Expr::expr_block(vec![
             Expr::Let(
                 VariableId::global("x".to_string()),
                 Some(TypeName::Tuple(vec![TypeName::Str])),

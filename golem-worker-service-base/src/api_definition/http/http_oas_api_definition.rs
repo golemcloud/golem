@@ -275,7 +275,7 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_name: Expr::multiple(vec![
+                    worker_name: Expr::expr_block(vec![
                         Expr::let_binding_with_type(
                             "x",
                             rib::TypeName::Str,

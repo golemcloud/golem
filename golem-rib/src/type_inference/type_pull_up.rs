@@ -87,6 +87,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
+            //
             Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
                 internal::handle_pattern_match(
                     predicate,
@@ -217,6 +218,16 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
             Expr::GetTag(_, inferred_type) => {
                 internal::handle_get_tag(expr, inferred_type, &mut inferred_type_stack);
             }
+
+            Expr::ListComprehension(variable_id, iterable_expr, yield_expr, inferred_type) => {
+                internal::handle_list_comprehension(
+                    variable_id,
+                    iterable_expr,
+                    yield_expr,
+                    inferred_type,
+                    &mut inferred_type_stack,
+                );
+            }
         }
     }
 
@@ -244,6 +255,31 @@ mod internal {
 
             current_expr.visit_children_bottom_up(&mut stack)
         }
+    }
+
+    pub(crate) fn handle_list_comprehension(
+        variable_id: &VariableId,
+        current_iterable_expr: &Expr,
+        current_yield_expr: &Expr,
+        current_comprehension_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let yield_expr_inferred = inferred_type_stack
+            .pop_front()
+            .unwrap_or(current_yield_expr.clone());
+        let iterable_expr_inferred = inferred_type_stack
+            .pop_front()
+            .unwrap_or(current_iterable_expr.clone());
+
+        let list_expr = InferredType::List(Box::new(yield_expr_inferred.inferred_type()));
+        let comprehension_type = current_comprehension_type.merge(list_expr);
+
+        inferred_type_stack.push_front(Expr::ListComprehension(
+            variable_id.clone(),
+            Box::new(iterable_expr_inferred),
+            Box::new(yield_expr_inferred),
+            comprehension_type,
+        ))
     }
 
     pub(crate) fn handle_tuple(

@@ -72,6 +72,7 @@ mod internal {
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
             | Expr::Or(_, _, inferred_type)
+            | Expr::ListComprehension(_, _, _, inferred_type)
             | Expr::Call(_, _, inferred_type) => {
                 *inferred_type = new_type;
             }

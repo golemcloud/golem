@@ -112,7 +112,7 @@ mod name_binding_tests {
             InferredType::Unknown,
         );
 
-        let expected = Expr::multiple(vec![let_binding, call_expr]);
+        let expected = Expr::expr_block(vec![let_binding, call_expr]);
 
         assert_eq!(expr, expected);
     }
@@ -173,7 +173,7 @@ mod name_binding_tests {
             InferredType::Unknown,
         );
 
-        let expected = Expr::multiple(vec![let_binding1, let_binding2, call_expr1, call_expr2]);
+        let expected = Expr::expr_block(vec![let_binding1, let_binding2, call_expr1, call_expr2]);
 
         assert_eq!(expr, expected);
     }
@@ -234,7 +234,7 @@ mod name_binding_tests {
             InferredType::Unknown,
         );
 
-        let expected = Expr::multiple(vec![let_binding1, call_expr1, let_binding2, call_expr2]);
+        let expected = Expr::expr_block(vec![let_binding1, call_expr1, let_binding2, call_expr2]);
 
         assert_eq!(expr, expected);
     }

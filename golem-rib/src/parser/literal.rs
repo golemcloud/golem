@@ -119,7 +119,7 @@ mod internal {
                     if expressions.len() == 1 {
                         expressions.first().unwrap().clone()
                     } else {
-                        Expr::multiple(expressions)
+                        Expr::expr_block(expressions)
                     }
                 },
             ),

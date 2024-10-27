@@ -60,6 +60,21 @@ pub enum RibIR {
     GetTag,
     Concat(usize),
     Negate,
+    ListToIterator,
+    CreateSink(AnalysedType),
+    AdvanceIterator,
+    PushToSink,
+    SinkToList,
+}
+
+impl RibIR {
+    // We could assign ids to each instruction
+    pub fn get_instruction_id(&self) -> Option<InstructionId> {
+        match self {
+            RibIR::Label(id) => Some(id.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
@@ -522,6 +537,12 @@ impl From<RibIR> for ProtoRibIR {
                     function_reference_details: Some(reference_type.into()),
                 })
             }
+
+            RibIR::ListToIterator => todo!(),
+            RibIR::CreateSink(_) => todo!(),
+            RibIR::AdvanceIterator => todo!(),
+            RibIR::PushToSink => todo!(),
+            RibIR::SinkToList => todo!(),
         };
 
         ProtoRibIR {

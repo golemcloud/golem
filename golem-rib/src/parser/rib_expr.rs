@@ -37,7 +37,7 @@ where
                 if expressions.len() == 1 {
                     expressions.first().unwrap().clone()
                 } else {
-                    Expr::multiple(expressions)
+                    Expr::expr_block(expressions)
                 }
             })
             .skip(eof()),
@@ -96,6 +96,7 @@ mod internal {
     use crate::parser::record::record;
     use crate::parser::result::result;
 
+    use crate::parser::list_comprehension::list_comprehension;
     use crate::parser::select_field::select_field;
     use crate::parser::select_index::select_index;
     use crate::parser::sequence::sequence;
@@ -114,6 +115,7 @@ mod internal {
     {
         spaces()
             .with(choice((
+                list_comprehension(),
                 pattern_match(),
                 let_binding(),
                 conditional(),

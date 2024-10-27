@@ -24,6 +24,10 @@ pub struct RibByteCode {
 }
 
 impl RibByteCode {
+    pub fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
     // Convert expression to bytecode instructions
     pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibByteCode, String> {
         let expr = Expr::from(inferred_expr.clone());
@@ -86,7 +90,7 @@ mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, RibIR,
+        InferredType, InstructionId, RibIR, VariableId,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -461,6 +465,18 @@ mod internal {
                 let analysed_type = convert_to_analysed_type_for(expr, analysed_type)?;
                 instructions.push(RibIR::PushTuple(analysed_type, exprs.len()));
             }
+
+            Expr::ListComprehension(variable_id, iterable_expr, yield_expr, inferred_type) => {
+                let analysed_type = convert_to_analysed_type_for(expr, inferred_type)?;
+                handle_list_comprehension(
+                    instruction_id,
+                    stack,
+                    iterable_expr,
+                    yield_expr,
+                    variable_id,
+                    &analysed_type,
+                )
+            }
         }
 
         Ok(())
@@ -496,6 +512,43 @@ mod internal {
         pub(crate) fn from_ir(ir: RibIR) -> Self {
             ExprState::Instruction(ir)
         }
+    }
+
+    fn handle_list_comprehension(
+        instruction_id: &mut InstructionId,
+        stack: &mut Vec<ExprState>,
+        iterable_expr: &Expr,
+        yield_expr: &Expr,
+        variable_id: &VariableId,
+        sink_type: &AnalysedType,
+    ) {
+        stack.push(ExprState::from_expr(iterable_expr));
+
+        stack.push(ExprState::from_ir(RibIR::CreateSink(sink_type.clone())));
+
+        stack.push(ExprState::from_ir(RibIR::ListToIterator));
+
+        let loop_start_label = instruction_id.increment_mut();
+
+        stack.push(ExprState::from_ir(RibIR::Label(loop_start_label.clone())));
+
+        let exit_label = instruction_id.increment_mut();
+
+        stack.push(ExprState::from_ir(RibIR::JumpIfFalse(exit_label.clone())));
+
+        stack.push(ExprState::from_ir(RibIR::AdvanceIterator));
+
+        stack.push(ExprState::from_ir(RibIR::AssignVar(variable_id.clone())));
+
+        stack.push(ExprState::from_expr(yield_expr));
+
+        stack.push(ExprState::from_ir(RibIR::PushToSink));
+
+        stack.push(ExprState::from_ir(RibIR::Jump(loop_start_label)));
+
+        stack.push(ExprState::from_ir(RibIR::Label(exit_label)));
+
+        stack.push(ExprState::from_ir(RibIR::SinkToList))
     }
 
     fn handle_if_condition(

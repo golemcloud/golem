@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use binding_list_comprehension_variable::*;
+pub use binding_pattern_match_variables::*;
+pub use binding_variable_assignments::*;
 pub use call_arguments_inference::*;
 pub use enum_resolution::*;
 pub use expr_visitor::*;
@@ -19,8 +22,6 @@ pub use global_input_inference::*;
 pub use identifier_inference::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
-pub use name_binding::*;
-pub use pattern_match_binding::*;
 pub use rib_input_type::*;
 pub(crate) use type_binding::*;
 pub use type_pull_up::*;
@@ -29,11 +30,11 @@ pub use type_reset::*;
 pub use type_unification::*;
 pub use variant_resolution::*;
 
+mod binding_pattern_match_variables;
+mod binding_variable_assignments;
 mod call_arguments_inference;
 mod expr_visitor;
 mod identifier_inference;
-mod name_binding;
-mod pattern_match_binding;
 mod rib_input_type;
 mod type_pull_up;
 mod type_push_down;
@@ -41,6 +42,7 @@ mod type_reset;
 mod type_unification;
 mod variant_resolution;
 
+mod binding_list_comprehension_variable;
 mod enum_resolution;
 mod global_input_inference;
 mod inference_fix_point;
@@ -1828,6 +1830,61 @@ mod type_inference_tests {
             assert_eq!(expr, expected);
         }
     }
+
+    mod list_comprehension_tests {
+        use crate::{Expr, FunctionTypeRegistry, InferredExpr, InferredType, VariableId};
+        use test_r::test;
+
+        #[test]
+        fn test_list_comprehension_type_inference() {
+            let rib_expr = r#"
+          let x = ["foo", "bar"];
+
+          for i in x {
+            yield i;
+          }
+
+          "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let inferred_expr =
+                InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty()).unwrap();
+
+            let expected = Expr::ExprBlock(
+                vec![
+                    Expr::Let(
+                        VariableId::local("x", 0),
+                        None,
+                        Box::new(Expr::Sequence(
+                            vec![Expr::literal("foo"), Expr::literal("bar")],
+                            InferredType::List(Box::new(InferredType::Str)),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::ListComprehension(
+                        VariableId::list_comprehension_identifier("i"),
+                        Box::new(Expr::Identifier(
+                            VariableId::local("x", 0),
+                            InferredType::List(Box::new(InferredType::Str)),
+                        )),
+                        Box::new(Expr::ExprBlock(
+                            vec![Expr::Identifier(
+                                VariableId::list_comprehension_identifier("i"),
+                                InferredType::Str,
+                            )],
+                            InferredType::Str,
+                        )),
+                        InferredType::List(Box::new(InferredType::Str)),
+                    ),
+                ],
+                InferredType::List(Box::new(InferredType::Str)),
+            );
+
+            assert_eq!(Expr::from(inferred_expr), expected);
+        }
+    }
+
     mod result_type_tests {
         use test_r::test;
 

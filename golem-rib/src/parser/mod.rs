@@ -20,6 +20,7 @@ mod errors;
 mod flag;
 mod identifier;
 mod let_binding;
+mod list_comprehension;
 pub(crate) mod literal;
 mod multi_line_code_block;
 mod not;

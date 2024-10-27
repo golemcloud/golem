@@ -133,6 +133,7 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Unwrap(_, _) => {}
             Expr::Throw(_, _) => {}
             Expr::GetTag(_, _) => {}
+            Expr::ListComprehension(_, _, _, _) => {}
         }
     }
 

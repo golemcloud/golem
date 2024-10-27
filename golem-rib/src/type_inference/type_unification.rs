@@ -150,6 +150,25 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
+            Expr::ListComprehension(_, iterable_expr, yield_expr, inferred_type) => {
+                queue.push(iterable_expr);
+                queue.push(yield_expr);
+
+                let unified_inferred_type = inferred_type.unify();
+
+                match unified_inferred_type {
+                    Ok(unified_type) => *inferred_type = unified_type,
+                    Err(e) => {
+                        errors.push(format!(
+                            "Unable to resolve the type of list comprehension {}",
+                            expr_str
+                        ));
+
+                        errors.push(e)
+                    }
+                }
+            }
+
             Expr::PatternMatch(expr, arms, inferred_type) => {
                 queue.push(expr);
                 for arm in arms.iter_mut().rev() {
@@ -272,6 +291,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
+
             Expr::Not(expr, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
