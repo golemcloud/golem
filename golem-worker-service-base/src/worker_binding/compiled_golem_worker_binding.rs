@@ -1,4 +1,4 @@
-use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+use crate::worker_binding::{BindingType, GolemWorkerBinding, ResponseMapping};
 use crate::worker_service_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
@@ -11,6 +11,7 @@ pub struct CompiledGolemWorkerBinding {
     pub worker_name_compiled: WorkerNameCompiled,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub response_compiled: ResponseMappingCompiled,
+    pub binding_type: String
 }
 
 impl CompiledGolemWorkerBinding {
@@ -39,6 +40,7 @@ impl CompiledGolemWorkerBinding {
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
+            binding_type: golem_worker_binding.binding_type.clone(),
         })
     }
 }
@@ -137,6 +139,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             Some(x) => Some(RibInputTypeInfo::try_from(x)?),
             None => None,
         };
+        let binding_type = "file-server".to_string();
 
         let response_compiled = value
             .compiled_response_expr
@@ -183,6 +186,8 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
+            binding_type
+
         })
     }
 }
@@ -211,7 +216,7 @@ impl TryFrom<CompiledGolemWorkerBinding>
         let response = Some(value.response_compiled.response_rib_expr.into());
         let compiled_response_expr = Some(value.response_compiled.compiled_response.into());
         let response_rib_input = Some(value.response_compiled.rib_input.into());
-
+        let binding_type = 1;
         Ok(
             golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding {
                 component,
@@ -224,6 +229,7 @@ impl TryFrom<CompiledGolemWorkerBinding>
                 response,
                 compiled_response_expr,
                 response_rib_input,
+                binding_type
             },
         )
     }

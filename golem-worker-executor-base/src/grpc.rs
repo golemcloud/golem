@@ -19,7 +19,9 @@ use golem_wasm_rpc::protobuf::Val;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
+use std::future::Future;
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -35,12 +37,8 @@ use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
-use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, GetOplogRequest, GetOplogResponse,
-    GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest,
-    GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped,
-    InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest, UpdateWorkerResponse,
-};
+use golem_api_grpc::proto::golem::workerexecutor::v1::{ConnectWorkerRequest, DeleteWorkerRequest, FileNode, GetFilesRequest, GetFilesResponse, GetFilesSuccessResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, NodeType, UpdateWorkerRequest, UpdateWorkerResponse};
+use golem_api_grpc::proto::golem::workerexecutor::v1::get_files_response::Result::Failure;
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
     proto_promise_id_string, proto_target_worker_id_string, proto_worker_id_string,
@@ -53,17 +51,13 @@ use golem_common::model::{
     WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
-
 use crate::model::public_oplog::{find_component_version_at, get_public_oplog_chunk};
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
-use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService,
-    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
-    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
-};
+use crate::services::{All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasEvents, HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps};
+use crate::services::blob_store::{FileOrDirectoryResponse, Node};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 
@@ -1121,6 +1115,114 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         })
     }
 
+    async fn get_files_internal(
+        &self,
+        request: GetFilesRequest,
+    ) -> Result<GetFilesResponse, GolemError> {
+        let worker_id = request
+            .worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+
+        // path to get the metadata from
+
+        let account_id = request
+            .account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+
+        match self.services.blob_store_service().get_files_metadata(owned_worker_id.clone()).await {
+            Ok(files) => {
+                info!("Successfully retrieved file metadata for worker {:?}", owned_worker_id.clone().worker_id);
+
+                let response = GetFilesResponse {
+                    result: Some(golem::workerexecutor::v1::get_files_response::Result::Success(
+                        GetFilesSuccessResponse {
+                            files,
+                            file_content: None
+                        },
+                    )),
+                };
+                info!("response {:?}", response);
+                Ok(response)
+            },
+            Err(err) => {
+                error!("Failed to retrieve file metadata for worker {:?}: {:?}", owned_worker_id.worker_id, err);
+                Err(GolemError::unknown(format!("Failed to get files metadata: {:?}", err)))
+            }
+        }
+
+    }
+
+    async fn get_files_or_directory_internal(
+        &self,
+        request: GetFilesRequest
+    ) -> Result<GetFilesResponse, GolemError> {
+
+        let worker_id = request
+            .worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+
+        // path to get the metadata from
+
+        let account_id = request
+            .account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        match self.services.blob_store_service().get_file_or_directory(owned_worker_id.clone(), request.path.unwrap()).await {
+            Ok(FileOrDirectoryResponse::DirectoryListing(files)) => {
+                info!("Successfully retrieved directory listing for worker {:?}", owned_worker_id.worker_id);
+
+                // Create the response for a directory
+                let response = GetFilesResponse {
+                    result: Some(golem::workerexecutor::v1::get_files_response::Result::Success(
+                        GetFilesSuccessResponse {
+                            files,
+                            file_content: None, // No file content as it's a directory
+                        },
+                    )),
+                };
+                info!("response {:?}", response);
+                Ok(response)
+            },
+            Ok(FileOrDirectoryResponse::FileContent(file_content)) => {
+                info!("Successfully retrieved file content for worker {:?}", owned_worker_id.worker_id);
+
+                // Create the response for a file
+                let response = GetFilesResponse {
+                    result: Some(golem::workerexecutor::v1::get_files_response::Result::Success(
+                        GetFilesSuccessResponse {
+                            files: Vec::new(), // No directory listing as it's a file
+                            file_content: Some(file_content), // Include the file content
+                        },
+                    )),
+                };
+                info!("response {:?}", response);
+                Ok(response)
+            },
+            Err(err) => {
+                error!("Failed to retrieve file or directory for worker {:?}: {:?}", owned_worker_id.worker_id, err);
+                Err(GolemError::unknown(format!("Failed to get file or directory: {:?}", err)))
+            }
+        }
+
+
+
+
+    }
+
+
     fn create_proto_metadata(
         metadata: WorkerMetadata,
         latest_status: WorkerStatusRecord,
@@ -1832,6 +1934,83 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &err,
             ),
         }
+    }
+
+    async fn get_files(
+        &self,
+        request: Request<GetFilesRequest>,
+    ) -> Result<Response<GetFilesResponse>, Status> {
+        let request = request.into_inner();
+
+        // Ensure `worker_id` is provided
+        let worker_id = request.clone().worker_id.ok_or_else(|| {
+            error!("get_files: worker_id not found in request");
+            Status::invalid_argument("worker_id is required")
+        })?;
+
+        let record = recorded_grpc_api_request!(
+        "get_files",
+        worker_id = proto_worker_id_string(&Some(worker_id.clone())),
+    );
+
+        // Call the internal get_files function
+        let result = self.get_files_internal(request).instrument(record.span.clone()).await;
+
+        match result {
+            Ok(response) => {
+                info!("get_files: Successfully retrieved files for worker_id {:?}", worker_id);
+                info!(" from request handler response {:?}", response);
+                record.succeed(Ok(Response::new(response)))
+            },
+            Err(err) => {
+                error!("get_files: Failed to retrieve files for worker_id {:?}: {:?}", worker_id, err);
+                record.fail(
+                    Ok(Response::new(GetFilesResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::get_files_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    })),
+                    &err,
+                )
+            },
+        }
+    }
+
+    async fn get_files_or_directory(&self, request: Request<GetFilesRequest>) -> Result<Response<GetFilesResponse>, Status> {
+        let request = request.into_inner();
+
+        // Ensure `worker_id` is provided
+        let worker_id = request.clone().worker_id.ok_or_else(|| {
+            error!("get_files: worker_id not found in request");
+            Status::invalid_argument("worker_id is required")
+        })?;
+
+        let record = recorded_grpc_api_request!(
+        "get_files",
+        worker_id = proto_worker_id_string(&Some(worker_id.clone())),
+    );
+        let result = self.get_files_or_directory_internal(request).instrument(record.span.clone()).await;
+
+        match result {
+            Ok(fileResponse) => {
+                record.succeed(Ok(Response::new(fileResponse)))
+            }
+            Err(err) => {
+                record.fail(
+                    Ok(Response::new(GetFilesResponse {
+                        result: Some(
+                            Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    })),
+                    &err,
+                )
+            }
+        }
+
     }
 }
 

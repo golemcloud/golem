@@ -123,6 +123,10 @@ impl BlobStorage for SqliteBlobStorage {
             .map_err(|err| err.to_string())
     }
 
+    async fn get_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+        todo!()
+    }
+
     async fn create_dir(
         &self,
         target_label: &'static str,

@@ -547,6 +547,10 @@ impl BlobStorage for S3BlobStorage {
         Ok(())
     }
 
+    async fn get_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+        todo!()
+    }
+
     async fn delete_many(
         &self,
         target_label: &'static str,

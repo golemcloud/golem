@@ -77,6 +77,12 @@ pub trait BlobStorage: Debug {
         path: &Path,
     ) -> Result<(), String>;
 
+    async fn get_file(
+        &self,
+        path: &Path
+    ) -> Result<Vec<u8>, String>;
+
+
     async fn delete_many(
         &self,
         target_label: &'static str,
@@ -362,4 +368,9 @@ pub enum ExistsResult {
 pub struct BlobMetadata {
     pub last_modified_at: Timestamp,
     pub size: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileMetadata{
+
 }

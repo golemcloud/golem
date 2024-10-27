@@ -64,6 +64,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+chrono = "0.4.38"
 
 [dev-dependencies]
 test-r = { workspace = true }

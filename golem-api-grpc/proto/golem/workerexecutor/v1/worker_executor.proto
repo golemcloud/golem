@@ -42,6 +42,8 @@ service WorkerExecutor {
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
+  rpc GetFiles(GetFilesRequest) returns (GetFilesResponse);
+  rpc GetFilesOrDirectory(GetFilesRequest) returns (GetFilesResponse);
 }
 
 message InvokeWorkerResponse {
@@ -278,4 +280,35 @@ message GetOplogSuccessResponse {
   optional golem.worker.OplogCursor next = 2;
   uint64 first_index_in_chunk = 3;
   uint64 last_index = 5;
+}
+
+// New messages for GetFiles API
+message GetFilesRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  optional string path = 3; // Optional path within the worker’s file system to retrieve
+
+}
+
+message GetFilesResponse {
+  oneof result {
+    GetFilesSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetFilesSuccessResponse {
+  repeated FileNode files = 1;                    // Directory listing, if a directory is requested
+  optional bytes file_content = 2;                // File content, if a file is requested
+}
+
+message FileNode {
+  string name = 1;       // File or directory name
+  NodeType type = 2;     // Type (file or directory)
+  string permission = 3;
+}
+
+enum NodeType {
+  DIRECTORY = 0;
+  FILE = 1;
 }

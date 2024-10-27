@@ -3377,10 +3377,65 @@ components:
           type: string
         response:
           type: string
+
+        bindingType:
+          $ref: "#/components/schemas/BindingType"
       required:
       - componentId
       - workerName
       - response
+      - bindingType
+    BindingType:
+      type: string
+      enum:
+        - wit-worker
+        - file-server
+#        mapping:
+#          wit-worker: '#/components/schemas/BindingType_WitWorker'
+#          file-server: '#/components/schemas/BindingType_FileServer'
+#      type: object
+#      oneOf:
+#        - $ref: '#/components/schemas/BindingType_WitWorker'
+#        - $ref: '#/components/schemas/BindingType_FileServer'
+
+#    BindingType_WitWorker:
+#      allOf:
+#        - type: object
+#          properties:
+#            type:
+#              example: wit-worker
+#              type: string
+#              enum:
+#                - wit-worker
+#          required:
+#            - type
+#        - $ref: '#/components/schemas/WitWorkerBindingDetails'  # Additional properties specific to WitWorker, if needed
+#
+#    BindingType_FileServer:
+#      allOf:
+#        - type: object
+#          properties:
+#            type:
+#              example: file-server
+#              type: string
+#              enum:
+#                - file-server
+#          required:
+#            - type
+#        - $ref: '#/components/schemas/FileServerBindingDetails'  # Additional properties specific to FileServer, if needed
+#
+#    # Optionally, define these if each type has unique properties:
+#    WitWorkerBindingDetails:
+#      type: object
+#      properties:
+#        additionalPropertyWitWorker:
+#          type: string
+#
+#    FileServerBindingDetails:
+#      type: object
+#      properties:
+#        additionalPropertyFileServer:
+#          type: string
     GolemWorkerBindingWithTypeInfo:
       type: object
       properties:
@@ -3398,10 +3453,16 @@ components:
           $ref: '#/components/schemas/RibInputTypeInfo'
         idempotencyKeyInput:
           $ref: '#/components/schemas/RibInputTypeInfo'
+        bindingType:
+          type: string
+          enum:
+            - wit-worker
+            - file-server
       required:
       - componentId
       - workerName
       - response
+      - bindingType
     GrowMemoryParameters:
       type: object
       properties:

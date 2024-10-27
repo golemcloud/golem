@@ -76,7 +76,7 @@ impl ParseFromJSON for JsonOpenApiDefinition {
 
 mod internal {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+    use crate::worker_binding::{BindingType, GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use rib::Expr;
@@ -158,6 +158,7 @@ mod internal {
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
+            binding_type: "file-server".to_string(),
         };
 
         Ok(Route {
@@ -166,6 +167,8 @@ mod internal {
             binding,
         })
     }
+
+
 
     pub(crate) fn get_component_id(
         worker_bridge_info: &Value,
@@ -275,6 +278,7 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
+                    binding_type: "file-server".to_string(),
                     worker_name: Expr::multiple(vec![
                         Expr::let_binding_with_type(
                             "x",

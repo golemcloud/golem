@@ -12,14 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
+use std::future::Future;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-
-use golem_common::model::{AccountId, ComponentId, WorkerId};
+use futures_util::future::BoxFuture;
+use serde::{Deserialize, Serialize};
+use tokio::fs;
+use tokio_stream::StreamExt;
+use tonic::metadata::Binary;
+use tracing::{error, info};
+use golem_api_grpc::proto::golem::workerexecutor::v1::{FileNode, NodeType};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
 
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 
@@ -120,7 +129,175 @@ pub trait BlobStoreService {
         object_name: String,
         data: Vec<u8>,
     ) -> anyhow::Result<()>;
+
+    async fn get_files_metadata(
+        &self,
+        owned_worker_id: OwnedWorkerId
+    ) -> Result<Vec<FileNode>, String>;
+
+    async fn get_file_or_directory(
+        &self,
+        owned_worker_id: OwnedWorkerId,
+        path: String,
+    ) -> Result<FileOrDirectoryResponse, String>;
+
+    async fn get_file(
+        &self,
+        owned_worker_id: OwnedWorkerId,
+        path: PathBuf,
+    ) -> Result<Vec<u8>, String>;
+
+    async fn get_directory_metadata(
+        &self,
+        owned_worker_id: OwnedWorkerId,
+        path: PathBuf
+    ) -> Result<Vec<FileNode>, String>; // Helper method to determine if a path is a directory
+    async fn is_directory(&self, path: &PathBuf) -> Result<bool, String>;
 }
+
+pub enum FileOrDirectoryResponse {
+    FileContent(Vec<u8>),
+    DirectoryListing(Vec<FileNode>),
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeTypeSerializeable {
+    Directory,
+    File,
+}
+
+// Enum representing file permissions in kebab-case
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilePermission {
+    ReadWrite,
+    ReadOnly,
+}
+
+// Convert `FilePermission` to a kebab-case string
+impl ToString for FilePermission {
+    fn to_string(&self) -> String {
+        match self {
+            FilePermission::ReadWrite => "read-write".to_string(),
+            FilePermission::ReadOnly => "read-only".to_string(),
+        }
+    }
+}
+
+// Node Struct with Constructors
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Node {
+    node_type: NodeTypeSerializeable,
+    name: String,
+    full_path: PathBuf,
+    permission: FilePermission,
+    children: Vec<Node>,
+}
+
+impl Node {
+    pub async fn new_file(name: &str, full_path: &PathBuf) -> Self {
+        // Determine file permission based on read-only status
+
+
+
+        let permission = if let Ok(metadata) = fs::metadata(full_path).await {
+            if metadata.permissions().readonly() {
+                FilePermission::ReadOnly
+            } else {
+                FilePermission::ReadWrite
+            }
+        } else {
+            FilePermission::ReadOnly // Default to read-only on error
+        };
+
+        Node {
+            node_type: NodeTypeSerializeable::File,
+            name: name.to_string(),
+            full_path: full_path.clone(),
+            permission,
+            children: Vec::new(),
+        }
+    }
+
+    pub fn new_directory(name: &str, full_path: &PathBuf) -> Self {
+        Node {
+            node_type: NodeTypeSerializeable::Directory,
+            name: name.to_string(),
+            full_path: full_path.clone(),
+            permission: FilePermission::ReadWrite, // Directories are usually writable
+            children: Vec::new(),
+        }
+    }
+
+    pub fn add_child(&mut self, node: Node) -> &mut Self {
+        self.children.push(node);
+        self
+    }
+
+    pub fn display(&self, level: usize) {
+        let indent = "  ".repeat(level);
+        println!("{}{} ({:?})", indent, self.name, self.node_type);
+        for child in &self.children {
+            child.display(level + 1);
+        }
+    }
+}
+
+// Convert Node tree to a vector of FileNode structs for the response
+pub fn convert_to_file_nodes(node: &Node) -> Vec<FileNode> {
+    let mut files = Vec::new();
+
+    // Determine the node type based on the NodeTypeSerializeable
+    let node_type = match node.node_type {
+        NodeTypeSerializeable::Directory => NodeType::Directory as i32,
+        NodeTypeSerializeable::File => NodeType::File as i32,
+    };
+
+    // Push the current node as a FileNode with its full path as the name
+    files.push(FileNode {
+        name: node.full_path.to_str().unwrap().to_string(),
+        r#type: node_type,
+        permission: node.permission.to_string(),
+    });
+
+    // Recursively add child nodes if it's a directory
+    if node.node_type == NodeTypeSerializeable::Directory {
+        for child in &node.children {
+            files.extend(convert_to_file_nodes(child));
+        }
+    }
+
+    files
+}
+
+
+// pub fn convert_to_file_nodes(node: &Node) -> Vec<FileNode> {
+//     let mut files = Vec::new();
+//
+//     // Determine the node type based on the NodeTypeSerializeable
+//     let node_type = match node.node_type {
+//         NodeTypeSerializeable::Directory => NodeType::Directory as i32,
+//         NodeTypeSerializeable::File => NodeType::File as i32,
+//     };
+//
+//     // Push the current node as a FileNode with its full path as the name
+//     files.push(FileNode {
+//         name: node.full_path.to_str().unwrap().to_string(),
+//         r#type: node_type,
+//         permission: node.node_type.to_string(),
+//     });
+//
+//     // Recursively add child nodes if it's a directory
+//     if node.node_type == NodeTypeSerializeable::Directory {
+//         for child in &node.children {
+//             files.extend(convert_to_file_nodes(child));
+//         }
+//     }
+//
+//     files
+// }
+
+
 
 pub struct DefaultBlobStoreService {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
@@ -414,7 +591,131 @@ impl BlobStoreService for DefaultBlobStoreService {
             .map_err(|err| anyhow!(err))
     }
 
+    async fn get_files_metadata(&self, owned_worker_id: OwnedWorkerId) -> Result<Vec<FileNode>, String> {
+        let path = PathBuf::from(format!(
+            "/worker_executor_store/compressed_oplog/-1/{}/{}/{}",
+            owned_worker_id.worker_id.component_id,
+            owned_worker_id.worker_id.component_id,
+            owned_worker_id.worker_id.worker_name
+        ));
+        info!("--------------------------{}", path.display());
+
+        // Start building nodes from the root path
+
+        self.get_directory_metadata(owned_worker_id,path).await
+        // match build_node(path.file_name().unwrap().to_str().unwrap().to_string(), path).await {
+        //     Ok(root) => {
+        //         let files = convert_to_file_nodes(&root);
+        //         Ok(files)
+        //     }
+        //     Err(err) => {
+        //         error!("Failed to retrieve file metadata: {:?}", err);
+        //         Err(format!("Failed to get files metadata: {:?}", err))
+        //     }
+        // }
+    }
+
+    async fn get_file_or_directory(
+        &self,
+        owned_worker_id: OwnedWorkerId,
+        path: String,
+    ) -> Result<FileOrDirectoryResponse, String> {
+        let path = PathBuf::from(path);
+
+        // Check if the path is a directory asynchronously
+        if self.is_directory(&path).await? {
+            // If it's a directory, retrieve directory metadata
+            let directory_metadata = self.get_directory_metadata(owned_worker_id, path).await?;
+            Ok(FileOrDirectoryResponse::DirectoryListing(directory_metadata))
+        } else {
+            // If it's a file, retrieve file content
+            let file_content = self.get_file(owned_worker_id, path).await?;
+            Ok(FileOrDirectoryResponse::FileContent(file_content))
+        }
+    }
+
+    async fn get_file(
+        &self,
+        owned_worker_id: OwnedWorkerId,
+        path: PathBuf,
+    ) -> Result<Vec<u8>, String> {
+        let path = path.as_path();
+        let bytes = self
+            .blob_storage
+            .get_file(path)
+            .await
+            .map_err(|err| format!("Failed to retrieve file content for worker {:?} at path {:?}: {:?}", owned_worker_id, path, err))?;
+
+        Ok(bytes)
+    }
+
+    async fn get_directory_metadata(
+        &self,
+        owned_worker_id: OwnedWorkerId,
+        path: PathBuf,
+    ) -> Result<Vec<FileNode>, String> {
+        // Implement your logic here to fetch directory metadata
+        // let path = PathBuf::from(format!(
+        //     "/worker_executor_store/compressed_oplog/-1/{}/{}/{}",
+        //     owned_worker_id.worker_id.component_id,
+        //     owned_worker_id.worker_id.component_id,
+        //     owned_worker_id.worker_id.worker_name
+        // ));
+        // info!("--------------------------{}", path.display());
+
+        // Start building nodes from the root path
+        match build_node(path.file_name().unwrap().to_str().unwrap().to_string(), path).await {
+            Ok(root) => {
+                let files = convert_to_file_nodes(&root);
+                Ok(files)
+            }
+            Err(err) => {
+                error!("Failed to retrieve file metadata: {:?}", err);
+                Err(format!("Failed to get files metadata: {:?}", err))
+            }
+        }
+
+    }
+
+    // Helper method to determine if a path is a directory
+    async fn is_directory(&self, path: &PathBuf) -> Result<bool, String> {
+        tokio::fs::metadata(path)
+            .await
+            .map(|metadata| metadata.is_dir())
+            .map_err(|e| format!("Failed to check if path is directory: {:?}", e))
+    }
 }
+
+// Function to build the directory tree asynchronously
+pub fn build_node(name: String, path: PathBuf) -> BoxFuture<'static, io::Result<Node>> {
+    Box::pin(async move {
+        let metadata = fs::metadata(&path).await?;
+        let node_type = if metadata.is_dir() {
+            NodeTypeSerializeable::Directory
+        } else {
+            NodeTypeSerializeable::File
+        };
+
+        let node = match node_type {
+            NodeTypeSerializeable::Directory => {
+                let mut directory_node = Node::new_directory(&name, &path);
+
+                let mut read_dir = fs::read_dir(&path).await?;
+                while let Some(entry) = read_dir.next_entry().await? {
+                    let child_name = entry.file_name().into_string().unwrap_or_default();
+                    let child_path = entry.path();
+                    let child_node = build_node(child_name, child_path).await?;
+                    directory_node.add_child(child_node);
+                }
+                directory_node
+            }
+            NodeTypeSerializeable::File => Node::new_file(&name, &path).await,
+        };
+
+        Ok(node)
+    })
+}
+
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct ObjectMetadata {

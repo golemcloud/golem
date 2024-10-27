@@ -13,6 +13,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
         .extern_path(".wasm.ast", "::golem_wasm_ast::analysis::protobuf")
         .include_file("mod.rs")
+        // .type_attribute(
+        //     ".golem.workerexecutor.v1.GetFilesResponse",
+        //     "#[derive(serde::Serialize, serde::Deserialize)]"
+        // )
+        .type_attribute(
+            ".golem.workerexecutor.v1.GetFilesSuccessResponse",
+            "#[derive(serde::Serialize, serde::Deserialize)]"
+        )
+        .type_attribute(
+            ".golem.workerexecutor.v1.FileNode",
+            "#[derive(serde::Serialize, serde::Deserialize)]"
+        )
+        .type_attribute(
+            ".golem.workerexecutor.v1.NodeType",
+            "#[derive(serde::Serialize, serde::Deserialize)]"
+        )
         .compile(
             &[
                 "proto/golem/rib/function_name.proto",

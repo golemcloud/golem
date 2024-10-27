@@ -4209,6 +4209,7 @@ dependencies = [
  "async-trait",
  "bincode",
  "bytes 1.7.2",
+ "chrono",
  "console-subscriber",
  "derive_more 0.99.18",
  "figment",

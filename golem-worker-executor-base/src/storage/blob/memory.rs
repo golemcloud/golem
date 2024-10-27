@@ -153,6 +153,10 @@ impl BlobStorage for InMemoryBlobStorage {
         Ok(())
     }
 
+    async fn get_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+        todo!()
+    }
+
     async fn create_dir(
         &self,
         _target_label: &'static str,

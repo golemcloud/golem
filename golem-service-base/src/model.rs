@@ -21,10 +21,16 @@ use golem_common::model::{
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use poem_openapi::{Enum, NewType, Object, Union};
+use poem_openapi::{ApiResponse, Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
+use std::borrow::Cow;
+use poem_openapi::payload::{Binary, Json};
+use serde_json::Value;
+use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
+use thiserror::Error;
+use golem_api_grpc::proto::golem::workerexecutor::v1::FileNode;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct WorkerCreationRequest {
@@ -989,6 +995,7 @@ pub struct GetOplogResponse {
     pub last_index: u64,
 }
 
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
 pub enum WorkerUpdateMode {
     Automatic,
@@ -1684,4 +1691,85 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             max_memory_per_worker: value.max_memory_per_worker,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ApiGetFilesResponse {
+    pub files: Vec<ApiFileNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ApiFileNode {
+    pub name: String,       // File or directory name
+    pub node_type: ApiNodeType, // Type (file or directory)
+    pub permission: String, // Permissions as a string (e.g., "read-only" or "read-write")
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[oai(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ApiNodeType {
+    Directory,
+    File,
+}
+
+#[derive(Error, Debug)]
+pub enum ApiFileNodeConversionError {
+    #[error("Failed to convert FileNode")]
+    ConversionFailed,
+}
+
+
+impl TryFrom<FileNode> for ApiFileNode {
+    type Error = ApiFileNodeConversionError;
+
+    fn try_from(file_node: FileNode) -> Result<Self, Self::Error> {
+        let node_type = match file_node.r#type {
+            0 => ApiNodeType::Directory,  // Assuming 0 is Directory
+            1 => ApiNodeType::File,       // Assuming 1 is File
+            _ => return Err(ApiFileNodeConversionError::ConversionFailed),
+        };
+
+        Ok(ApiFileNode {
+            name: file_node.name,
+            node_type,
+            permission: file_node.permission,
+        })
+    }
+}
+
+#[derive(ApiResponse)]
+pub enum FileOrDirectoryResponse {
+    #[oai(status = 200)]
+    Directory(Json<GetFileOrDirectoryResponse>),
+    #[oai(status = 200)]
+    File(Binary<Vec<u8>>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct GetFileOrDirectoryResponse {
+    pub nodes: Vec<FileOrDirectoryNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct FileOrDirectoryNode {
+    pub name: String,
+    pub node_type: NodeType,
+    pub permission: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[oai(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NodeType {
+    Directory,
+    File,
 }

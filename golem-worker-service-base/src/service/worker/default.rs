@@ -18,6 +18,8 @@ use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use nom::combinator::into;
+use poem_openapi::payload::{Binary, Json};
 use tonic::transport::Channel;
 use tonic::Code;
 use tracing::{error, info};
@@ -26,10 +28,7 @@ use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, InterruptWorkerRequest,
-    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
-};
+use golem_api_grpc::proto::golem::workerexecutor::v1::{CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, GetFilesRequest, GetFilesResponse, GetFilesSuccessResponse, InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest};
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
@@ -38,9 +37,7 @@ use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
     ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
-use golem_service_base::model::{
-    GetOplogResponse, GolemErrorUnknown, ResourceLimits, WorkerMetadata,
-};
+use golem_service_base::model::{ApiFileNode, ApiFileNodeConversionError, ApiGetFilesResponse, FileOrDirectoryNode, FileOrDirectoryResponse, GetFileOrDirectoryResponse, GetOplogResponse, GolemErrorUnknown, NodeType, ResourceLimits, WorkerMetadata};
 use golem_service_base::routing_table::HasRoutingTableService;
 use golem_service_base::{
     model::{Component, GolemError},
@@ -236,6 +233,20 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
+
+    async fn get_files(
+        &self,
+        worker_id: WorkerId,
+        metadata: WorkerRequestMetadata
+    ) -> Result<ApiGetFilesResponse, WorkerServiceError>;
+
+    async fn get_files_or_directory(
+        &self,
+        worker_id: WorkerId,
+        path: String,
+        metadata: WorkerRequestMetadata,
+    ) -> Result<FileOrDirectoryResponse, WorkerServiceError>; // Directly return JSON or binary response
+
 }
 
 pub struct TypedResult {
@@ -893,6 +904,152 @@ where
         )
         .await
     }
+
+    async fn get_files(
+        &self,
+        worker_id: WorkerId,
+        metadata: WorkerRequestMetadata,
+    ) -> Result<ApiGetFilesResponse, WorkerServiceError> {
+        let worker_id = worker_id.clone();
+
+        self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                let worker_id_clone = worker_id.clone();
+                info!("Getting files metadata");
+
+                Box::pin(worker_executor_client.get_files(workerexecutor::v1::GetFilesRequest {
+                    worker_id: Some(worker_id_clone.into()),
+                    path: None, // No specific path provided; top-level directory requested
+                    account_id: metadata.account_id.clone().map(|id| id.into()),
+                }))
+            },
+            |response| match response.into_inner() {
+                // Handle success case: parse and map files to `GetFilesResponse`
+                workerexecutor::v1::GetFilesResponse {
+                    result: Some(workerexecutor::v1::get_files_response::Result::Success(
+                                     workerexecutor::v1::GetFilesSuccessResponse { files, .. },
+                                 )),
+                } => {
+                    // Attempt to convert each file entry
+                    let file_entries: Result<Vec<_>, _> = files
+                        .into_iter()
+                        .map(|file| file.try_into())
+                        .collect();
+
+                    match file_entries {
+                        Ok(entries) => Ok(ApiGetFilesResponse{
+                            files: entries
+                        }),
+                        Err(err) => Err(GolemError::Unknown(GolemErrorUnknown {
+                            details: format!("Unexpected file entries in error: {err}"),
+                        }).into()),
+                    }
+                },
+                // Handle failure case
+                workerexecutor::v1::GetFilesResponse {
+                    result: Some(workerexecutor::v1::get_files_response::Result::Failure(err)),
+                } => Err(GolemError::Unknown(
+                    GolemErrorUnknown {
+                        details:format!("Worker execution error : {:?}", err)
+                    }
+                ).into()),
+
+                // Handle empty response
+                _ => Err(GolemError::Unknown(GolemErrorUnknown {
+                    details: "Received empty GetFilesResponse".to_string(),
+                }).into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+            .await
+    }
+
+    async fn get_files_or_directory(
+        &self,
+        worker_id: WorkerId,
+        path: String,
+        metadata: WorkerRequestMetadata,
+    ) -> Result<FileOrDirectoryResponse, WorkerServiceError> {
+        let worker_id_clone = worker_id.clone();
+        let path_clone = path.clone(); // Clone the path to use in the move closure
+        // Call the gRPC method `get_files_or_directory`
+        self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                let worker_id_clone = worker_id.clone();
+                let path_clone = path_clone.clone(); // Clone path again for each closure invocation
+
+                info!("Getting files metadata");
+
+                Box::pin(worker_executor_client.get_files_or_directory(
+                    workerexecutor::v1::GetFilesRequest {
+                        worker_id: Some(worker_id_clone.into()),
+                        path: Some(path_clone),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                // Handle success case: either directory listing or file content
+                workerexecutor::v1::GetFilesResponse {
+                    result: Some(workerexecutor::v1::get_files_response::Result::Success(
+                                     workerexecutor::v1::GetFilesSuccessResponse {
+                                         files,
+                                         file_content,
+                                     },
+                                 )),
+                } => {
+                    match file_content {
+                        Some(content) => {
+                            // If file_content exists, it indicates a file, so return it as Binary
+                            Ok(FileOrDirectoryResponse::File(Binary(content)))
+                        }
+                        None => {
+                            // If file_content is None, it’s a directory, so convert `files` to `FileOrDirectoryNode`
+                            let nodes: Result<Vec<FileOrDirectoryNode>, _> = files
+                                .into_iter()
+                                .map(|file| {
+                                    Ok(FileOrDirectoryNode {
+                                        name: file.name,
+                                        node_type: match file.r#type {
+                                            0 => NodeType::Directory,
+                                            1 => NodeType::File,
+                                            _ => return Err(GolemError::Unknown(GolemErrorUnknown {
+                                                details: "Unknown node type".to_string(),
+                                            })),
+                                        },
+                                        permission: file.permission,
+                                    })
+                                })
+                                .collect();
+
+                            match nodes {
+                                Ok(nodes) => Ok(FileOrDirectoryResponse::Directory(Json(GetFileOrDirectoryResponse { nodes }))),
+                                Err(err) => Err(GolemError::Unknown(GolemErrorUnknown {
+                                                            details: format!("Unexpected file entries in error: {err}"),
+                                                        }).into()),
+                            }
+                        }
+                    }
+                }
+                // Handle failure case
+                workerexecutor::v1::GetFilesResponse {
+                    result: Some(workerexecutor::v1::get_files_response::Result::Failure(err)),
+                } => Err(GolemError::Unknown(GolemErrorUnknown {
+                    details: "Unexpected file entries in error".to_string(),
+                }).into()),
+
+                // Handle empty response
+                _ => Err(GolemError::Unknown(GolemErrorUnknown {
+                    details: "Unexpected file entries in error".to_string(),
+                }).into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+            .await
+    }
+
 }
 
 impl<AuthCtx> WorkerServiceDefault<AuthCtx>

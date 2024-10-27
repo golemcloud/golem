@@ -9,7 +9,7 @@ use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
 use poem_openapi::param::{Header, Path, Query};
-use poem_openapi::payload::Json;
+use poem_openapi::payload::{Binary, Json};
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
@@ -18,6 +18,8 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use tracing::Instrument;
 use tracing::log::info;
+use golem_api_grpc::proto::golem::workerexecutor::v1::GetFilesResponse;
+use golem_worker_service_base::service::worker::WorkerServiceError;
 
 pub struct WorkerApi {
     pub component_service: ComponentService,
@@ -95,6 +97,92 @@ impl WorkerApi {
 
         record.result(response)
     }
+
+    /// Get all the files of the worker
+    #[oai(
+        path = "/:component_id/workers/:worker_name/files/",
+        method = "get",
+        operation_id = "get_files"
+    )]
+    async fn get_files(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+    ) -> Result<Json<ApiGetFilesResponse>> {
+        // Create a WorkerId from component_id and worker_name
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        // Record the API request
+        let record = recorded_http_api_request!("get_files", worker_id = worker_id.to_string());
+
+        // Call the get_files method from the WorkerService
+        let response = self
+            .worker_service
+            .get_files(worker_id,empty_worker_metadata())
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        // Record and return the result
+        record.result(response)
+
+    }
+
+    // #[oai(
+    //     path = "/:component_id/workers/:worker_name/files/*path",
+    //     method = "get",
+    //     operation_id = "get_file_or_directory"
+    // )]
+    // async fn get_file_or_directory(
+    //     &self,
+    //     component_id: Path<ComponentId>,
+    //     worker_name: Path<String>,
+    //     path: Path<String>,
+    // ) -> Result<Json<FileOrDirectoryResponse>> {
+        // Create a WorkerId from component_id and worker_name
+        // let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        //
+        // // Record the API request
+        // let record = recorded_http_api_request!(
+        // "get_file_or_directory",
+        // worker_id = worker_id.to_string(),
+        // path = path.to_string()
+        // );
+
+        // // Call the get_files_or_directory method from WorkerService
+        // let response = self.worker_service
+        //     .get_files_or_directory(worker_id, path.0 , empty_worker_metadata())
+        //     .instrument(record.span.clone())
+        //     .await;
+
+        // Call the get_files method from the WorkerService
+        // let response = self
+        //     .worker_service
+        //     .get_files_or_directory(worker_id, Some(path) , empty_worker_metadata())
+        //     .instrument(record.span.clone())
+        //     .await
+        //     .map_err(|e| e.into())
+        //     .map(Json);
+        // record.result(response);
+        //
+        // match response {
+        //     Ok(FileOrDirectoryResponse::Directory(directory_listing)) => {
+        //         // If the response is a directory listing, return it
+        //         Ok(FileOrDirectoryResponse::Directory(directory_listing))
+        //     }
+        //     Ok(FileOrDirectoryResponse::File(file_content)) => {
+        //         // If the response is a file, return it as binary
+        //         record.result(Ok(file_content.clone())).expect("TODO: panic message");
+        //         Ok(FileOrDirectoryResponse::File(file_content))
+        //     }
+        //     Err(err) => {
+        //         // Handle errors by returning an empty FileOrDirectoryResponse
+        //         Ok(FileOrDirectoryResponse::Directory(Json(GetFileOrDirectoryResponse { nodes: vec![] })))
+        //     }
+        // }
+
+
 
     /// Delete a worker
     ///
@@ -650,18 +738,6 @@ impl WorkerApi {
         record.result(response)
     }
 
-    // #[oai(
-    //     path = "/:component_id/workers/:worker_name/files/"
-    //     method = "get",
-    //     operation_id = "get_files"
-    // )]
-    // async fn get_files(
-    //     &self,
-    //     component_id: Path<ComponentId>,
-    //     worker_name: Path<String>,
-    //     from: Query<u64>,
-    //     cursor: Query<Option<OplogCursor>>,
-    // )
 }
 
 fn make_worker_id(

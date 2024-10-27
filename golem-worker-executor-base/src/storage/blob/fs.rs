@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use tokio::fs::File;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -19,6 +20,7 @@ use golem_common::model::{ComponentId, Timestamp, WorkerId};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use anyhow::Error;
+use tokio::io::AsyncReadExt;
 use tokio_stream::StreamExt;
 use tracing::info;
 
@@ -195,6 +197,21 @@ impl BlobStorage for FileSystemBlobStorage {
         async_fs::remove_file(&full_path)
             .await
             .map_err(|err| format!("Failed to delete file at {full_path:?}: {err}"))
+    }
+
+    async fn get_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+        let mut file = File::open(path)
+            .await
+            .map_err(|err| format!("Failed to open file at {path:?}: {err}"))?;
+
+        let mut buffer = Vec::new();
+
+        file.read_to_end(&mut buffer)
+            .await
+            .map_err(|err| format!("Failed to read file at {path:?}: {err}"))?;
+
+        Ok(buffer)
+
     }
 
     async fn create_dir(
