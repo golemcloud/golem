@@ -19,26 +19,28 @@ pub use global_input_inference::*;
 pub use identifier_inference::*;
 pub use inference_fix_point::*;
 pub use inferred_expr::*;
-pub use name_binding::*;
-pub use pattern_match_binding::*;
 pub use rib_input_type::*;
 pub(crate) use type_binding::*;
 pub use type_pull_up::*;
 pub use type_push_down::*;
 pub use type_reset::*;
 pub use type_unification::*;
+pub use variable_binding_let_assignment::*;
+pub use variable_binding_list_comprehension::*;
+pub use variable_binding_list_reduce::*;
+pub use variable_binding_pattern_match::*;
 pub use variant_resolution::*;
 
 mod call_arguments_inference;
 mod expr_visitor;
 mod identifier_inference;
-mod name_binding;
-mod pattern_match_binding;
 mod rib_input_type;
 mod type_pull_up;
 mod type_push_down;
 mod type_reset;
 mod type_unification;
+mod variable_binding_let_assignment;
+mod variable_binding_pattern_match;
 mod variant_resolution;
 
 mod enum_resolution;
@@ -47,6 +49,8 @@ mod inference_fix_point;
 mod inferred_expr;
 pub(crate) mod kind;
 mod type_binding;
+mod variable_binding_list_comprehension;
+mod variable_binding_list_reduce;
 
 #[cfg(test)]
 mod type_inference_tests {
@@ -1828,6 +1832,135 @@ mod type_inference_tests {
             assert_eq!(expr, expected);
         }
     }
+
+    mod list_aggregation_tests {
+        use crate::{Expr, FunctionTypeRegistry, InferredExpr, InferredType, TypeName, VariableId};
+        use test_r::test;
+
+        #[test]
+        fn test_list_aggregation_type_inference() {
+            let rib_expr = r#"
+           let ages: list<u64> = [1, 2, 3];
+           reduce z, a in ages from 0u64 {
+              let result = z + a;
+              yield result;
+           }
+        "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let inferred_expr =
+                InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty()).unwrap();
+
+            let expected = Expr::ExprBlock(
+                vec![
+                    Expr::Let(
+                        VariableId::local("ages", 0),
+                        Some(TypeName::List(Box::new(TypeName::U64))),
+                        Box::new(Expr::Sequence(
+                            vec![
+                                Expr::number(1f64, InferredType::U64),
+                                Expr::number(2f64, InferredType::U64),
+                                Expr::number(3f64, InferredType::U64),
+                            ],
+                            InferredType::List(Box::new(InferredType::U64)),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::typed_list_reduce(
+                        VariableId::list_reduce_identifier("z"),
+                        VariableId::list_comprehension_identifier("a"),
+                        Expr::Identifier(
+                            VariableId::local("ages", 0),
+                            InferredType::List(Box::new(InferredType::U64)),
+                        ),
+                        Expr::number_with_type_name(0f64, TypeName::U64, InferredType::U64),
+                        Expr::ExprBlock(
+                            vec![
+                                Expr::Let(
+                                    VariableId::local("result", 0),
+                                    None,
+                                    Box::new(Expr::Plus(
+                                        Box::new(Expr::Identifier(
+                                            VariableId::list_reduce_identifier("z"),
+                                            InferredType::U64,
+                                        )),
+                                        Box::new(Expr::Identifier(
+                                            VariableId::list_comprehension_identifier("a"),
+                                            InferredType::U64,
+                                        )),
+                                        InferredType::U64,
+                                    )),
+                                    InferredType::Unknown,
+                                ),
+                                Expr::Identifier(VariableId::local("result", 0), InferredType::U64),
+                            ],
+                            InferredType::U64,
+                        ),
+                        InferredType::U64,
+                    ),
+                ],
+                InferredType::U64,
+            );
+
+            assert_eq!(Expr::from(inferred_expr), expected);
+        }
+    }
+
+    mod list_comprehension_tests {
+        use crate::{Expr, FunctionTypeRegistry, InferredExpr, InferredType, VariableId};
+        use test_r::test;
+
+        #[test]
+        fn test_list_comprehension_type_inference() {
+            let rib_expr = r#"
+          let x = ["foo", "bar"];
+
+          for i in x {
+            yield i;
+          }
+
+          "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let inferred_expr =
+                InferredExpr::from_expr(&expr, &FunctionTypeRegistry::empty()).unwrap();
+
+            let expected = Expr::ExprBlock(
+                vec![
+                    Expr::Let(
+                        VariableId::local("x", 0),
+                        None,
+                        Box::new(Expr::Sequence(
+                            vec![Expr::literal("foo"), Expr::literal("bar")],
+                            InferredType::List(Box::new(InferredType::Str)),
+                        )),
+                        InferredType::Unknown,
+                    ),
+                    Expr::typed_list_comprehension(
+                        VariableId::list_comprehension_identifier("i"),
+                        Expr::Identifier(
+                            VariableId::local("x", 0),
+                            InferredType::List(Box::new(InferredType::Str)),
+                        ),
+                        Expr::ExprBlock(
+                            vec![Expr::Identifier(
+                                VariableId::list_comprehension_identifier("i"),
+                                InferredType::Str,
+                            )],
+                            InferredType::Str,
+                        ),
+                        InferredType::List(Box::new(InferredType::Str)),
+                    ),
+                ],
+                InferredType::List(Box::new(InferredType::Str)),
+            );
+
+            assert_eq!(Expr::from(inferred_expr), expected);
+        }
+    }
+
     mod result_type_tests {
         use test_r::test;
 

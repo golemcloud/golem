@@ -133,7 +133,7 @@ mod tests {
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
     use http::{HeaderMap, HeaderValue, Method};
-    use rib::{GetLiteralValue, RibInterpreterResult};
+    use rib::{GetLiteralValue, RibResult};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -275,7 +275,7 @@ mod tests {
         }
     }
 
-    impl ToResponse<TestResponse> for RibInterpreterResult {
+    impl ToResponse<TestResponse> for RibResult {
         fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
             let function_name = self
                 .get_val()

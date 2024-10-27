@@ -7,12 +7,11 @@ use crate::worker_service_rib_interpreter::WorkerServiceRibInterpreter;
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
 use golem_service_base::model::VersionedComponentId;
-use rib::RibInterpreterResult;
+use rib::RibResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-
 use crate::worker_binding::rib_input_value_resolver::RibInputValueResolver;
 use crate::worker_binding::{RequestDetails, ResponseMappingCompiled, RibInputTypeMismatch};
 use crate::worker_bridge_execution::to_response::ToResponse;
@@ -84,7 +83,7 @@ impl ResolvedWorkerBindingFromRequest {
         evaluator: &Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
     ) -> R
     where
-        RibInterpreterResult: ToResponse<R>,
+        RibResult: ToResponse<R>,
         EvaluationError: ToResponse<R>,
         RibInputTypeMismatch: ToResponse<R>,
     {
@@ -162,33 +161,57 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
         )
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
-        let resolve_rib_input = http_request_details
-            .resolve_rib_input_value(&binding.worker_name_compiled.rib_input_type_info)
-            .map_err(|err| {
-                format!(
-                    "Failed to resolve rib input value from http request details {}",
-                    err
-                )
-            })?;
+        // Obtain the rib input from http request to resolve worker name
+        let rib_input_for_worker_name =
+            &binding.worker_name_compiled.clone().map(|w|http_request_details
+                .resolve_rib_input_value(&w.rib_input_type_info)
+                .map_err(|err| {
+                    format!(
+                        "Failed to resolve rib input value from http request details {} to form worker name",
+                        err
+                    )
+                })).transpose()?;
 
-        // To evaluate worker-name, most probably
-        let worker_name: String = rib::interpret_pure(
-            &binding.worker_name_compiled.compiled_worker_name,
-            &resolve_rib_input.value,
-        )
-        .await
-        .map_err(|err| format!("Failed to evaluate worker name rib expression. {}", err))?
-        .get_literal()
-        .ok_or("Worker name is not a Rib expression that resolves to String".to_string())?
-        .as_string();
+        let worker_name = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
+            let resolve_rib_input = http_request_details
+                .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
+                .map_err(|err| {
+                    format!(
+                        "Failed to resolve rib input value from http request details {}",
+                        err
+                    )
+                })?;
+
+            let worker_name = rib::interpret_pure(
+                &worker_name_compiled.compiled_worker_name,
+                &resolve_rib_input,
+            ).await
+                .map_err(|err| format!("Failed to evaluate worker name rib expression. {}", err))?
+                .get_literal()
+                .ok_or("Worker name is not a Rib expression that resolves to String".to_string())?
+                .as_string();
+
+            Some(worker_name)
+        } else {
+            None
+        };
 
         let component_id = &binding.component_id;
 
         let idempotency_key =
             if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
+                let resolve_rib_input = http_request_details
+                    .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+                    .map_err(|err| {
+                        format!(
+                            "Failed to resolve rib input value from http request details {} for idemptency key",
+                            err
+                        )
+                    })?;
+
                 let idempotency_key_value = rib::interpret_pure(
                     &idempotency_key_compiled.compiled_idempotency_key,
-                    &resolve_rib_input.value,
+                    &resolve_rib_input,
                 )
                 .await
                 .map_err(|err| err.to_string())?;

@@ -13,25 +13,28 @@
 // limitations under the License.
 
 pub use env::RibFunctionInvoke;
+pub use interpreter_input::*;
+pub use interpreter_result::*;
 pub use literal::*;
-pub use result::*;
-pub use rib_interpreter::*;
 
+use crate::interpreter::rib_interpreter::Interpreter;
 use crate::RibByteCode;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use std::collections::HashMap;
+
 mod env;
+mod instruction_cursor;
+mod interpreter_input;
+mod interpreter_result;
+mod interpreter_stack_value;
 mod literal;
-mod result;
 mod rib_interpreter;
 mod stack;
 mod tests;
 
 pub async fn interpret(
     rib: &RibByteCode,
-    rib_input: HashMap<String, TypeAnnotatedValue>,
+    rib_input: &RibInput,
     function_invoke: RibFunctionInvoke,
-) -> Result<RibInterpreterResult, String> {
+) -> Result<RibResult, String> {
     let mut interpreter = Interpreter::new(rib_input, function_invoke);
     interpreter.run(rib.clone()).await
 }
@@ -39,10 +42,7 @@ pub async fn interpret(
 // This function can be used for those the Rib Scripts
 // where there are no side effecting function calls.
 // It is recommended to use `interpret` over `interpret_pure` if you are unsure.
-pub async fn interpret_pure(
-    rib: &RibByteCode,
-    rib_input: &HashMap<String, TypeAnnotatedValue>,
-) -> Result<RibInterpreterResult, String> {
-    let mut interpreter = Interpreter::pure(rib_input.clone());
+pub async fn interpret_pure(rib: &RibByteCode, rib_input: &RibInput) -> Result<RibResult, String> {
+    let mut interpreter = Interpreter::pure(rib_input);
     interpreter.run(rib.clone()).await
 }

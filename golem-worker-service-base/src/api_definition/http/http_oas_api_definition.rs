@@ -212,14 +212,16 @@ mod internal {
         Ok(ResponseMapping(response.clone()))
     }
 
-    pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Expr, String> {
-        let worker_id = worker_bridge_info
+    pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
+        let worker_id_str_opt = worker_bridge_info
             .get("worker-name")
-            .ok_or("No worker-name found")?
-            .as_str()
-            .ok_or("worker-name is not a string")?;
+            .map(|json_value|  json_value.as_str().ok_or("worker-name is not a string")).transpose()?;
 
-        rib::from_string(worker_id).map_err(|err| err.to_string())
+        let worker_id_expr_opt =
+            worker_id_str_opt.map(|worker_id|
+                rib::from_string(worker_id).map_err(|err| err.to_string())).transpose()?;
+
+        Ok(worker_id_expr_opt)
     }
 
     pub(crate) fn get_idempotency_key(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
@@ -275,7 +277,7 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_name: Expr::multiple(vec![
+                    worker_name: Expr::expr_block(vec![
                         Expr::let_binding_with_type(
                             "x",
                             rib::TypeName::Str,
@@ -304,7 +306,7 @@ mod tests {
                                 "body".to_string(),
                                 Expr::select_field(Expr::identifier("worker"), "response",),
                             ),
-                            ("status".to_string(), Expr::number(200f64)),
+                            ("status".to_string(), Expr::untyped_number(200f64)),
                         ]
                         .into_iter()
                         .collect()

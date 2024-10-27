@@ -9,7 +9,7 @@ pub use worker_request_executor::*;
 #[derive(PartialEq, Debug, Clone)]
 pub struct WorkerRequest {
     pub component_id: ComponentId,
-    pub worker_name: String,
+    pub worker_name: Option<String>,
     pub function_name: String,
     pub function_params: Vec<TypeAnnotatedValue>,
     pub idempotency_key: Option<IdempotencyKey>,

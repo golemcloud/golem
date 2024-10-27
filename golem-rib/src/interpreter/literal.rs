@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::cmp::Ordering;
 use std::fmt::Display;
-
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use std::ops::{Add, Div, Mul, Sub};
 
 pub trait GetLiteralValue {
     fn get_literal(&self) -> Option<LiteralValue>;
@@ -61,6 +62,13 @@ impl LiteralValue {
         }
     }
 
+    pub fn get_number(&self) -> Option<CoercedNumericValue> {
+        match self {
+            LiteralValue::Num(num) => Some(num.clone()),
+            _ => None,
+        }
+    }
+
     pub fn as_string(&self) -> String {
         match self {
             LiteralValue::Num(number) => number.to_string(),
@@ -93,6 +101,100 @@ pub enum CoercedNumericValue {
     NegInt(i64),
     Float(f64),
 }
+
+impl CoercedNumericValue {
+    pub fn cast_to(&self, analysed_type: &AnalysedType) -> Option<TypeAnnotatedValue> {
+        match (self, analysed_type) {
+            (CoercedNumericValue::PosInt(val), AnalysedType::U64(_)) => {
+                Some(TypeAnnotatedValue::U64(*val))
+            }
+            (CoercedNumericValue::PosInt(val), AnalysedType::U32(_)) if *val <= u32::MAX as u64 => {
+                Some(TypeAnnotatedValue::U32(*val as u32))
+            }
+            (CoercedNumericValue::PosInt(val), AnalysedType::U16(_)) if *val <= u16::MAX as u64 => {
+                Some(TypeAnnotatedValue::U16(*val as u32))
+            }
+            (CoercedNumericValue::PosInt(val), AnalysedType::U8(_)) if *val <= u8::MAX as u64 => {
+                Some(TypeAnnotatedValue::U8(*val as u32))
+            }
+
+            (CoercedNumericValue::NegInt(val), AnalysedType::S64(_)) => {
+                Some(TypeAnnotatedValue::S64(*val))
+            }
+            (CoercedNumericValue::NegInt(val), AnalysedType::S32(_))
+                if *val >= i32::MIN as i64 && *val <= i32::MAX as i64 =>
+            {
+                Some(TypeAnnotatedValue::S32(*val as i32))
+            }
+            (CoercedNumericValue::NegInt(val), AnalysedType::S16(_))
+                if *val >= i16::MIN as i64 && *val <= i16::MAX as i64 =>
+            {
+                Some(TypeAnnotatedValue::S16(*val as i32))
+            }
+            (CoercedNumericValue::NegInt(val), AnalysedType::S8(_))
+                if *val >= i8::MIN as i64 && *val <= i8::MAX as i64 =>
+            {
+                Some(TypeAnnotatedValue::S8(*val as i32))
+            }
+
+            (CoercedNumericValue::Float(val), AnalysedType::F64(_)) => {
+                Some(TypeAnnotatedValue::F64(*val))
+            }
+            (CoercedNumericValue::Float(val), AnalysedType::F32(_))
+                if *val >= f32::MIN as f64 && *val <= f32::MAX as f64 =>
+            {
+                Some(TypeAnnotatedValue::F32(*val as f32))
+            }
+
+            _ => None,
+        }
+    }
+}
+
+macro_rules! impl_ops {
+    ($trait:ident, $method:ident) => {
+        impl $trait for CoercedNumericValue {
+            type Output = Self;
+
+            fn $method(self, rhs: Self) -> Self::Output {
+                match (self, rhs) {
+                    (CoercedNumericValue::Float(a), CoercedNumericValue::Float(b)) => {
+                        CoercedNumericValue::Float(a.$method(b))
+                    }
+                    (CoercedNumericValue::Float(a), CoercedNumericValue::PosInt(b)) => {
+                        CoercedNumericValue::Float(a.$method(b as f64))
+                    }
+                    (CoercedNumericValue::Float(a), CoercedNumericValue::NegInt(b)) => {
+                        CoercedNumericValue::Float(a.$method(b as f64))
+                    }
+                    (CoercedNumericValue::PosInt(a), CoercedNumericValue::Float(b)) => {
+                        CoercedNumericValue::Float((a as f64).$method(b))
+                    }
+                    (CoercedNumericValue::NegInt(a), CoercedNumericValue::Float(b)) => {
+                        CoercedNumericValue::Float((a as f64).$method(b))
+                    }
+                    (CoercedNumericValue::PosInt(a), CoercedNumericValue::PosInt(b)) => {
+                        CoercedNumericValue::PosInt(a.$method(b))
+                    }
+                    (CoercedNumericValue::NegInt(a), CoercedNumericValue::NegInt(b)) => {
+                        CoercedNumericValue::NegInt(a.$method(b))
+                    }
+                    (CoercedNumericValue::PosInt(a), CoercedNumericValue::NegInt(b)) => {
+                        CoercedNumericValue::NegInt((a as i64).$method(b))
+                    }
+                    (CoercedNumericValue::NegInt(a), CoercedNumericValue::PosInt(b)) => {
+                        CoercedNumericValue::NegInt(a.$method(b as i64))
+                    }
+                }
+            }
+        }
+    };
+}
+
+impl_ops!(Add, add);
+impl_ops!(Sub, sub);
+impl_ops!(Mul, mul);
+impl_ops!(Div, div);
 
 // Auto-derived PartialOrd fails if types don't match
 // and therefore custom impl.
