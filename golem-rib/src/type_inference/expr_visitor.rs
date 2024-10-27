@@ -31,6 +31,22 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
             queue.push_back(&mut *lhs);
             queue.push_back(&mut *rhs);
         }
+        Expr::Plus(lhs, rhs, _) => {
+            queue.push_back(&mut *lhs);
+            queue.push_back(&mut *rhs);
+        }
+        Expr::Minus(lhs, rhs, _) => {
+            queue.push_back(&mut *lhs);
+            queue.push_back(&mut *rhs);
+        }
+        Expr::Divide(lhs, rhs, _) => {
+            queue.push_back(&mut *lhs);
+            queue.push_back(&mut *rhs);
+        }
+        Expr::Multiply(lhs, rhs, _) => {
+            queue.push_back(&mut *lhs);
+            queue.push_back(&mut *rhs);
+        }
         Expr::LessThan(lhs, rhs, _) => {
             queue.push_back(&mut *lhs);
             queue.push_back(&mut *rhs);
@@ -67,6 +83,26 @@ pub fn visit_children_bottom_up_mut<'a>(expr: &'a mut Expr, queue: &mut VecDeque
         Expr::Or(expr1, expr2, _) => {
             queue.push_back(&mut *expr1);
             queue.push_back(&mut *expr2)
+        }
+
+        Expr::ListComprehension {
+            iterable_expr,
+            yield_expr,
+            ..
+        } => {
+            queue.push_back(&mut *iterable_expr);
+            queue.push_back(&mut *yield_expr);
+        }
+
+        Expr::ListReduce {
+            iterable_expr,
+            init_value_expr,
+            yield_expr,
+            ..
+        } => {
+            queue.push_back(iterable_expr);
+            queue.push_back(init_value_expr);
+            queue.push_back(yield_expr);
         }
 
         Expr::GetTag(exr, _) => {
@@ -110,6 +146,22 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
             queue.push_back(lhs);
             queue.push_back(rhs);
         }
+        Expr::Plus(lhs, rhs, _) => {
+            queue.push_back(lhs);
+            queue.push_back(rhs);
+        }
+        Expr::Minus(lhs, rhs, _) => {
+            queue.push_back(lhs);
+            queue.push_back(rhs);
+        }
+        Expr::Divide(lhs, rhs, _) => {
+            queue.push_back(lhs);
+            queue.push_back(rhs);
+        }
+        Expr::Multiply(lhs, rhs, _) => {
+            queue.push_back(lhs);
+            queue.push_back(rhs);
+        }
         Expr::LessThan(lhs, rhs, _) => {
             queue.push_back(lhs);
             queue.push_back(rhs);
@@ -146,6 +198,24 @@ pub fn visit_children_bottom_up<'a>(expr: &'a Expr, queue: &mut VecDeque<&'a Exp
         Expr::Or(expr1, expr2, _) => {
             queue.push_back(expr1);
             queue.push_back(expr2);
+        }
+        Expr::ListComprehension {
+            iterable_expr,
+            yield_expr,
+            ..
+        } => {
+            queue.push_back(iterable_expr);
+            queue.push_back(yield_expr)
+        }
+        Expr::ListReduce {
+            iterable_expr,
+            init_value_expr,
+            yield_expr,
+            ..
+        } => {
+            queue.push_back(iterable_expr);
+            queue.push_back(init_value_expr);
+            queue.push_back(yield_expr);
         }
         Expr::GetTag(expr, _) => {
             queue.push_back(expr);
@@ -209,6 +279,22 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
             queue.push_front(&mut *lhs);
             queue.push_front(&mut *rhs);
         }
+        Expr::Plus(lhs, rhs, _) => {
+            queue.push_front(&mut *lhs);
+            queue.push_front(&mut *rhs);
+        }
+        Expr::Minus(lhs, rhs, _) => {
+            queue.push_front(&mut *lhs);
+            queue.push_front(&mut *rhs);
+        }
+        Expr::Divide(lhs, rhs, _) => {
+            queue.push_front(&mut *lhs);
+            queue.push_front(&mut *rhs);
+        }
+        Expr::Multiply(lhs, rhs, _) => {
+            queue.push_front(&mut *lhs);
+            queue.push_front(&mut *rhs);
+        }
         Expr::LessThan(lhs, rhs, _) => {
             queue.push_front(&mut *lhs);
             queue.push_front(&mut *rhs);
@@ -250,6 +336,24 @@ pub fn visit_children_mut_top_down<'a>(expr: &'a mut Expr, queue: &mut VecDeque<
         }
         Expr::GetTag(expr, _) => {
             queue.push_front(&mut *expr);
+        }
+        Expr::ListComprehension {
+            iterable_expr,
+            yield_expr,
+            ..
+        } => {
+            queue.push_front(iterable_expr);
+            queue.push_front(yield_expr)
+        }
+        Expr::ListReduce {
+            iterable_expr,
+            init_value_expr,
+            yield_expr,
+            ..
+        } => {
+            queue.push_front(iterable_expr);
+            queue.push_front(init_value_expr);
+            queue.push_front(yield_expr);
         }
 
         Expr::Unwrap(expr, _) => queue.push_front(&mut *expr),

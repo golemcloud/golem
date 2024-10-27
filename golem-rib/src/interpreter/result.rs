@@ -13,16 +13,65 @@
 // limitations under the License.
 
 use crate::interpreter::literal::{GetLiteralValue, LiteralValue};
+use crate::CoercedNumericValue;
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
+use std::fmt;
 
-#[derive(Debug, Clone, PartialEq)]
+// A result of a function can be unit, which is not representable using type_annotated_value
+// A result can be a type_annotated_value
+// A result can be a sink where it collects only the required elements from a possible iterable
+// A result can also be stored as an iterator, that in the future, we rely on the same mechanism to support streams without change of code.
 pub enum RibInterpreterResult {
     Unit,
     Val(TypeAnnotatedValue),
+    Iterator(Box<dyn Iterator<Item = TypeAnnotatedValue>>),
+    Sink(Vec<TypeAnnotatedValue>, AnalysedType),
+}
+
+impl fmt::Debug for RibInterpreterResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RibInterpreterResult::Unit => write!(f, "Unit"),
+            RibInterpreterResult::Val(value) => write!(f, "val:{:?}", value),
+            RibInterpreterResult::Iterator(_) => write!(f, "Iterator:(...)"),
+            RibInterpreterResult::Sink(value, _) => write!(f, "sink:{}", value.len()),
+        }
+    }
 }
 
 impl RibInterpreterResult {
+    pub fn is_sink(&self) -> bool {
+        matches!(self, RibInterpreterResult::Sink(_, _))
+    }
+    pub fn is_iterator(&self) -> bool {
+        matches!(self, RibInterpreterResult::Iterator(_))
+    }
+
+    pub fn evaluate_math_op<F>(
+        &self,
+        right: &RibInterpreterResult,
+        op: F,
+    ) -> Result<CoercedNumericValue, String>
+    where
+        F: Fn(CoercedNumericValue, CoercedNumericValue) -> CoercedNumericValue,
+    {
+        match (self.get_val(), right.get_val()) {
+            (Some(left), Some(right)) => {
+                if let (Some(left_lit), Some(right_lit)) = (
+                    left.get_literal().and_then(|x| x.get_number()),
+                    right.get_literal().and_then(|x| x.get_number()),
+                ) {
+                    Ok(op(left_lit, right_lit))
+                } else {
+                    Err("Failed to perform math operation".to_string())
+                }
+            }
+            _ => Err("Unable to perform math op as the values are not numbers".to_string()),
+        }
+    }
+
     pub fn compare<F>(
         &self,
         right: &RibInterpreterResult,
@@ -49,12 +98,16 @@ impl RibInterpreterResult {
             RibInterpreterResult::Val(TypeAnnotatedValue::Bool(bool)) => Some(*bool),
             RibInterpreterResult::Val(_) => None,
             RibInterpreterResult::Unit => None,
+            RibInterpreterResult::Iterator(_) => None,
+            RibInterpreterResult::Sink(_, _) => None,
         }
     }
     pub fn get_val(&self) -> Option<TypeAnnotatedValue> {
         match self {
             RibInterpreterResult::Val(val) => Some(val.clone()),
             RibInterpreterResult::Unit => None,
+            RibInterpreterResult::Iterator(_) => None,
+            RibInterpreterResult::Sink(_, _) => None,
         }
     }
 
@@ -62,6 +115,8 @@ impl RibInterpreterResult {
         match self {
             RibInterpreterResult::Val(val) => val.get_literal(),
             RibInterpreterResult::Unit => None,
+            RibInterpreterResult::Iterator(_) => None,
+            RibInterpreterResult::Sink(_, _) => None,
         }
     }
 
@@ -73,7 +128,7 @@ impl RibInterpreterResult {
         RibInterpreterResult::Val(val)
     }
 
-    pub fn unwrap(self) -> Option<TypeAnnotatedValue> {
+    pub fn unwrap(&self) -> Option<TypeAnnotatedValue> {
         match self {
             RibInterpreterResult::Val(val) => match val {
                 TypeAnnotatedValue::Option(option) => option
@@ -81,9 +136,9 @@ impl RibInterpreterResult {
                     .as_deref()
                     .and_then(|x| x.type_annotated_value.clone()),
                 TypeAnnotatedValue::Result(result) => {
-                    let result = match result.result_value {
-                        Some(ResultValue::OkValue(ok)) => Some(*ok),
-                        Some(ResultValue::ErrorValue(err)) => Some(*err),
+                    let result = match &result.result_value {
+                        Some(ResultValue::OkValue(ok)) => Some(ok.clone()),
+                        Some(ResultValue::ErrorValue(err)) => Some(err.clone()),
                         None => None,
                     };
 
@@ -98,6 +153,8 @@ impl RibInterpreterResult {
                 _ => None,
             },
             RibInterpreterResult::Unit => None,
+            RibInterpreterResult::Iterator(_) => None,
+            RibInterpreterResult::Sink(_, _) => None,
         }
     }
 }
@@ -183,9 +240,9 @@ mod internal {
 
         match (left, right) {
             (Ok(left), Ok(right)) => {
-                format!("Unsupported type to compare {:?}, {:?}", left, right)
+                format!("Unsupported op {:?}, {:?}", left, right)
             }
-            _ => "Unsupported type to compare. Un-identified types".to_string(),
+            _ => "Unsupported types. Un-identified types".to_string(),
         }
     }
 }

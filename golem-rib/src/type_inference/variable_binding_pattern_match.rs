@@ -19,15 +19,15 @@ use crate::Expr;
 // we make sure to replace global variable or local variable identifiers with match-arm identifiers (VariableId enum)
 // to prevent conflicts with other local let bindings
 // or global variables, thereby maintaining clear variable scoping and avoiding unintended clashes.
-pub fn name_binding_pattern_matches(expr: &mut Expr) {
-    internal::pattern_match_name_binding(expr, 0, &mut []);
+pub fn bind_variables_of_pattern_match(expr: &mut Expr) {
+    internal::bind_variables(expr, 0, &mut []);
 }
 
 mod internal {
     use crate::{ArmPattern, Expr, MatchArm, MatchIdentifier, VariableId};
     use std::collections::VecDeque;
 
-    pub(crate) fn pattern_match_name_binding(
+    pub(crate) fn bind_variables(
         expr: &mut Expr,
         previous_index: usize,
         match_identifiers: &mut [MatchIdentifier],
@@ -131,7 +131,7 @@ mod internal {
 
         // Continue with original pattern_match_name_binding for resoution expressions
         // to target nested pattern matching.
-        pattern_match_name_binding(
+        bind_variables(
             resolution_expression,
             global_arm_index,
             &mut match_identifiers,
@@ -186,7 +186,7 @@ mod pattern_match_bindings {
 
         let mut expr = Expr::from_text(expr_string).unwrap();
 
-        expr.name_binding_pattern_match_variables();
+        expr.bind_variables_of_pattern_match();
 
         assert_eq!(expr, expected_match(1));
     }
@@ -206,7 +206,7 @@ mod pattern_match_bindings {
 
         let mut expr = Expr::from_text(expr_string).unwrap();
 
-        expr.name_binding_pattern_match_variables();
+        expr.bind_variables_of_pattern_match();
 
         assert_eq!(expr, expected_match_with_let_binding(1));
     }
@@ -228,7 +228,7 @@ mod pattern_match_bindings {
 
         let mut expr = Expr::from_text(expr_string).unwrap();
 
-        expr.name_binding_pattern_match_variables();
+        expr.bind_variables_of_pattern_match();
 
         let first_expr = expected_match(1);
         let second_expr = expected_match(3); // 3 because first block has 2 arms
@@ -252,7 +252,7 @@ mod pattern_match_bindings {
 
         let mut expr = Expr::from_text(expr_string).unwrap();
 
-        expr.name_binding_pattern_match_variables();
+        expr.bind_variables_of_pattern_match();
 
         assert_eq!(expr, expected_nested_match());
     }
@@ -291,7 +291,7 @@ mod pattern_match_bindings {
                     },
                     MatchArm {
                         arm_pattern: ArmPattern::constructor("none", vec![]),
-                        arm_resolution_expr: Box::new(Expr::number(0f64)),
+                        arm_resolution_expr: Box::new(Expr::untyped_number(0f64)),
                     },
                 ],
                 InferredType::Unknown,
@@ -299,7 +299,7 @@ mod pattern_match_bindings {
         }
 
         pub(crate) fn expected_match_with_let_binding(index: usize) -> Expr {
-            let let_binding = Expr::let_binding("x", Expr::number(1f64));
+            let let_binding = Expr::let_binding("x", Expr::untyped_number(1f64));
             let identifier_expr =
                 Expr::Identifier(VariableId::Global("x".to_string()), InferredType::Unknown);
             let block = Expr::ExprBlock(vec![let_binding, identifier_expr], InferredType::Unknown);
@@ -322,7 +322,7 @@ mod pattern_match_bindings {
                     },
                     MatchArm {
                         arm_pattern: ArmPattern::constructor("none", vec![]),
-                        arm_resolution_expr: Box::new(Expr::number(0f64)),
+                        arm_resolution_expr: Box::new(Expr::untyped_number(0f64)),
                     },
                 ],
                 InferredType::Unknown,
@@ -388,7 +388,7 @@ mod pattern_match_bindings {
                                 },
                                 MatchArm {
                                     arm_pattern: ArmPattern::constructor("none", vec![]),
-                                    arm_resolution_expr: Box::new(Expr::number(0f64)),
+                                    arm_resolution_expr: Box::new(Expr::untyped_number(0f64)),
                                 },
                             ],
                             InferredType::Unknown,
@@ -405,7 +405,7 @@ mod pattern_match_bindings {
                                 InferredType::Unknown,
                             ))],
                         ),
-                        arm_resolution_expr: Box::new(Expr::number(0f64)),
+                        arm_resolution_expr: Box::new(Expr::untyped_number(0f64)),
                     },
                 ],
                 InferredType::Unknown,

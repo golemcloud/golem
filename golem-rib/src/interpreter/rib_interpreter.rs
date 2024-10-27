@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use crate::interpreter::env::{EnvironmentKey, InterpreterEnv, RibFunctionInvoke};
+use crate::interpreter::instruction_cursor::RibByteCodeCursor;
 use crate::interpreter::result::RibInterpreterResult;
 use crate::interpreter::stack::InterpreterStack;
 use crate::{RibByteCode, RibIR};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub struct Interpreter {
@@ -63,10 +64,9 @@ impl Interpreter {
         &mut self,
         instructions0: RibByteCode,
     ) -> Result<RibInterpreterResult, String> {
-        // O(1) to do this
-        let mut instructions = VecDeque::from(instructions0.instructions);
+        let mut byte_code_cursor = RibByteCodeCursor::from_rib_byte_code(instructions0);
 
-        while let Some(instruction) = instructions.pop_front() {
+        while let Some(instruction) = byte_code_cursor.get_instruction() {
             match instruction {
                 RibIR::PushLit(val) => {
                     self.stack.push_val(val);
@@ -113,6 +113,34 @@ impl Interpreter {
                         left <= right
                     })?;
                 }
+                RibIR::Add(analysed_type) => {
+                    internal::run_math_instruction(
+                        &mut self.stack,
+                        |left, right| left + right,
+                        &analysed_type,
+                    )?;
+                }
+                RibIR::Subtract(analysed_type) => {
+                    internal::run_math_instruction(
+                        &mut self.stack,
+                        |left, right| left - right,
+                        &analysed_type,
+                    )?;
+                }
+                RibIR::Divide(analysed_type) => {
+                    internal::run_math_instruction(
+                        &mut self.stack,
+                        |left, right| left - right,
+                        &analysed_type,
+                    )?;
+                }
+                RibIR::Multiply(analysed_type) => {
+                    internal::run_math_instruction(
+                        &mut self.stack,
+                        |left, right| left * right,
+                        &analysed_type,
+                    )?;
+                }
 
                 RibIR::AssignVar(variable_id) => {
                     internal::run_assign_var_instruction(variable_id, self)?;
@@ -122,10 +150,14 @@ impl Interpreter {
                     internal::run_load_var_instruction(variable_id, self)?;
                 }
 
+                RibIR::IsEmpty => {
+                    internal::run_is_empty_instruction(&mut self.stack)?;
+                }
+
                 RibIR::JumpIfFalse(instruction_id) => {
                     internal::run_jump_if_false_instruction(
                         instruction_id,
-                        &mut instructions,
+                        &mut byte_code_cursor,
                         &mut self.stack,
                     )?;
                 }
@@ -171,8 +203,11 @@ impl Interpreter {
                     internal::run_deconstruct_instruction(&mut self.stack)?;
                 }
 
-                RibIR::Jump(instruction) => {
-                    internal::drain_instruction_stack_until_label(instruction, &mut instructions);
+                RibIR::Jump(instruction_id) => {
+                    byte_code_cursor.move_to(&instruction_id).ok_or(format!(
+                        "Internal error. Failed to move to label {}",
+                        instruction_id.index
+                    ))?;
                 }
 
                 RibIR::PushSome(analysed_type) => {
@@ -206,6 +241,21 @@ impl Interpreter {
                 RibIR::Or => {
                     internal::run_or_instruction(&mut self.stack)?;
                 }
+                RibIR::ListToIterator => {
+                    internal::run_list_to_iterator_instruction(&mut self.stack)?;
+                }
+                RibIR::CreateSink(analysed_type) => {
+                    internal::run_create_sink_instruction(&mut self.stack, &analysed_type)?
+                }
+                RibIR::AdvanceIterator => {
+                    internal::run_advance_iterator_instruction(&mut self.stack)?;
+                }
+                RibIR::PushToSink => {
+                    internal::run_push_to_sink_instruction(&mut self.stack)?;
+                }
+                RibIR::SinkToList => {
+                    internal::run_sink_to_list_instruction(&mut self.stack)?;
+                }
             }
         }
 
@@ -221,8 +271,8 @@ mod internal {
     use crate::interpreter::result::RibInterpreterResult;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        FunctionReferenceType, GetLiteralValue, InstructionId, Interpreter, ParsedFunctionName,
-        ParsedFunctionReference, ParsedFunctionSite, RibIR, VariableId,
+        CoercedNumericValue, FunctionReferenceType, GetLiteralValue, InstructionId, Interpreter,
+        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -231,8 +281,178 @@ mod internal {
     use golem_wasm_rpc::protobuf::{NameValuePair, TypedRecord, TypedTuple};
     use golem_wasm_rpc::type_annotated_value_to_string;
 
-    use std::collections::VecDeque;
+    use crate::interpreter::instruction_cursor::RibByteCodeCursor;
+    use golem_wasm_ast::analysis::analysed_type::str;
     use std::ops::Deref;
+
+    pub(crate) fn run_is_empty_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let rib_result = interpreter_stack
+            .pop()
+            .ok_or("Failed to get a value from the stack to do check is_empty".to_string())?;
+
+        let bool_opt = match rib_result {
+            RibInterpreterResult::Iterator(iter) => {
+                let mut peekable_iter = iter.peekable();
+                let result = peekable_iter.peek().is_some();
+                interpreter_stack.push(RibInterpreterResult::Iterator(Box::new(peekable_iter)));
+                Some(result)
+            }
+            RibInterpreterResult::Val(TypeAnnotatedValue::List(typed_list)) => {
+                Some(typed_list.values.is_empty())
+            }
+            RibInterpreterResult::Val(_) => None,
+            RibInterpreterResult::Unit => None,
+            RibInterpreterResult::Sink(values, analysed_type) => {
+                let possible_iterator = interpreter_stack
+                    .pop()
+                    .ok_or("Expecting an iterator to check is empty".to_string())?;
+
+                match possible_iterator {
+                    RibInterpreterResult::Iterator(iter) => {
+                        let mut peekable_iter = iter.peekable();
+                        let result = peekable_iter.peek().is_some();
+                        interpreter_stack
+                            .push(RibInterpreterResult::Iterator(Box::new(peekable_iter)));
+                        interpreter_stack.push(RibInterpreterResult::Sink(values, analysed_type));
+                        Some(result)
+                    }
+
+                    _ => None,
+                }
+            }
+        };
+
+        let bool = bool_opt.ok_or("Internal Error: Failed to run instruction is_empty")?;
+        interpreter_stack.push_val(TypeAnnotatedValue::Bool(bool));
+        Ok(())
+    }
+
+    pub(crate) fn run_jump_if_false_instruction(
+        instruction_id: InstructionId,
+        instruction_stack: &mut RibByteCodeCursor,
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let rib_result = interpreter_stack.pop().ok_or(
+            "Failed to get a value from the stack to do the comparison operation".to_string(),
+        )?;
+
+        let predicate_bool = rib_result
+            .get_bool()
+            .ok_or("Expecting a value that can be converted to bool".to_string())?;
+
+        if !predicate_bool {
+            instruction_stack.move_to(&instruction_id).ok_or(format!(
+                "Internal error: Failed to move to the instruction at {}",
+                instruction_id.index
+            ))?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn run_list_to_iterator_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        if let Some(RibInterpreterResult::Val(TypeAnnotatedValue::List(items))) =
+            interpreter_stack.pop()
+        {
+            let iter = items
+                .values
+                .into_iter()
+                .map(|x| x.clone().type_annotated_value.unwrap());
+
+            //   interpreter_stack.push(existing_sink);
+            interpreter_stack.push(RibInterpreterResult::Iterator(Box::new(iter)));
+
+            Ok(())
+        } else {
+            Err("Expected a List on the stack for ListToIterator".to_string())
+        }
+    }
+
+    pub(crate) fn run_create_sink_instruction(
+        interpreter_stack: &mut InterpreterStack,
+        analysed_type: &AnalysedType,
+    ) -> Result<(), String> {
+        let analysed_type = match analysed_type {
+            AnalysedType::List(type_list) => type_list.clone().inner,
+            _ => return Err("Expecting a list type to create sink".to_string()),
+        };
+        interpreter_stack.create_sink(analysed_type.deref());
+        Ok(())
+    }
+
+    pub(crate) fn run_advance_iterator_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let mut rib_result = interpreter_stack
+            .pop()
+            .ok_or("Internal Error: Failed to advance the iterator".to_string())?;
+
+        match &mut rib_result {
+            RibInterpreterResult::Sink(_, _) => {
+                let mut existing_iterator = interpreter_stack
+                    .pop()
+                    .ok_or("Internal Error: an iterator")?;
+
+                match &mut existing_iterator {
+                    RibInterpreterResult::Iterator(iter) => {
+                        if let Some(type_annotated_value) = iter.next() {
+                            interpreter_stack.push(existing_iterator);
+                            interpreter_stack.push(rib_result);
+                            interpreter_stack.push(RibInterpreterResult::Val(type_annotated_value));
+                            Ok(())
+                        } else {
+                            Err("Internal Error: Iterator has no more items".to_string())
+                        }
+                    }
+
+                    _ => Err(
+                        "Internal Error: A sink cannot exist without a corresponding iterator"
+                            .to_string(),
+                    ),
+                }
+            }
+
+            RibInterpreterResult::Iterator(iter) => {
+                if let Some(type_annotated_value) = iter.next() {
+                    interpreter_stack.push(rib_result);
+                    interpreter_stack.push(RibInterpreterResult::Val(type_annotated_value));
+                    Ok(())
+                } else {
+                    Err("Internal Error: Iterator has no more items".to_string())
+                }
+            }
+            _ => Err("Internal Error: Expected an Iterator on the stack".to_string()),
+        }
+    }
+
+    pub(crate) fn run_push_to_sink_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let last_value = interpreter_stack.pop_val();
+        match last_value {
+            Some(val) => {
+                interpreter_stack.push_to_sink(val)?;
+
+                Ok(())
+            }
+            _ => Err("Failed to push values to sink".to_string()),
+        }
+    }
+
+    pub(crate) fn run_sink_to_list_instruction(
+        interpreter_stack: &mut InterpreterStack,
+    ) -> Result<(), String> {
+        let result = interpreter_stack
+            .pop_sink()
+            .ok_or("Failed to retrieve items from sink")?;
+        interpreter_stack.push_list(result, &str());
+
+        Ok(())
+    }
 
     pub(crate) fn run_assign_var_instruction(
         variable_id: VariableId,
@@ -258,7 +478,19 @@ mod internal {
             variable_id
         ))?;
 
-        interpreter.stack.push(value);
+        match value {
+            RibInterpreterResult::Unit => {
+                interpreter.stack.push(RibInterpreterResult::Unit);
+            }
+            RibInterpreterResult::Val(val) => interpreter.stack.push_val(val.clone()),
+            RibInterpreterResult::Iterator(_) => {
+                return Err("Unable to assign an iterator to a variable".to_string())
+            }
+            RibInterpreterResult::Sink(_, _) => {
+                return Err("Unable to assign a sink to a variable".to_string())
+            }
+        }
+
         Ok(())
     }
 
@@ -439,6 +671,29 @@ mod internal {
         })?;
 
         interpreter_stack.push(result);
+
+        Ok(())
+    }
+
+    pub(crate) fn run_math_instruction(
+        interpreter_stack: &mut InterpreterStack,
+        compare_fn: fn(CoercedNumericValue, CoercedNumericValue) -> CoercedNumericValue,
+        target_numerical_type: &AnalysedType,
+    ) -> Result<(), String> {
+        let left = interpreter_stack.pop().ok_or(
+            "Empty stack and failed to get a value to do the comparison operation".to_string(),
+        )?;
+        let right = interpreter_stack.pop().ok_or(
+            "Failed to get a value from the stack to do the comparison operation".to_string(),
+        )?;
+
+        let result = left.evaluate_math_op(&right, compare_fn)?;
+        let numerical_type = result.cast_to(target_numerical_type).ok_or(format!(
+            "Failed to cast number {} to {:?}",
+            result, target_numerical_type
+        ))?;
+
+        interpreter_stack.push_val(numerical_type);
 
         Ok(())
     }
@@ -831,27 +1086,6 @@ mod internal {
 
         Ok(())
     }
-
-    pub(crate) fn run_jump_if_false_instruction(
-        instruction_id: InstructionId,
-        instruction_stack: &mut VecDeque<RibIR>,
-        interpreter_stack: &mut InterpreterStack,
-    ) -> Result<(), String> {
-        let condition = interpreter_stack.pop().ok_or(
-            "Failed to get a value from the stack to do the comparison operation".to_string(),
-        )?;
-
-        let predicate_bool = condition
-            .get_bool()
-            .ok_or("Expected a boolean value".to_string())?;
-
-        if !predicate_bool {
-            drain_instruction_stack_until_label(instruction_id, instruction_stack);
-        }
-
-        Ok(())
-    }
-
     pub(crate) fn run_deconstruct_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
@@ -860,7 +1094,6 @@ mod internal {
             .ok_or("Failed to get a value from the stack to unwrap".to_string())?;
 
         let unwrapped_value = value
-            .clone()
             .unwrap()
             .ok_or(format!("Failed to unwrap the value {:?}", value))?;
 
@@ -988,19 +1221,6 @@ mod internal {
                 Ok(())
             }
             _ => Err("Expected a Result type".to_string()),
-        }
-    }
-
-    pub(crate) fn drain_instruction_stack_until_label(
-        instruction_id: InstructionId,
-        instruction_stack: &mut VecDeque<RibIR>,
-    ) {
-        while let Some(instruction) = instruction_stack.pop_front() {
-            if let RibIR::Label(label_instruction_id) = instruction {
-                if label_instruction_id == instruction_id {
-                    break;
-                }
-            }
         }
     }
 }
@@ -1264,7 +1484,136 @@ mod interpreter_tests {
         assert_eq!(result.get_val().unwrap(), TypeAnnotatedValue::S32(2));
     }
 
-    mod pattern_match_tests {
+    mod list_reduce_interpreter_tests {
+        use test_r::test;
+
+        use crate::{compiler, Expr, Interpreter};
+        use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+
+        #[test]
+        async fn test_list_reduce() {
+            let mut interpreter = Interpreter::default();
+
+            let rib_expr = r#"
+          let x: list<u8> = [1, 2];
+
+          reduce z, a in x from 0u8 {
+            yield z + a;
+          }
+
+          "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+
+            let result = interpreter
+                .run(compiled.byte_code)
+                .await
+                .unwrap()
+                .get_val()
+                .unwrap();
+
+            assert_eq!(result, TypeAnnotatedValue::U8(3));
+        }
+
+        #[test]
+        async fn test_list_reduce_empty() {
+            let mut interpreter = Interpreter::default();
+
+            let rib_expr = r#"
+          let x: list<u8> = [];
+
+          reduce z, a in x from 0u8 {
+            yield z + a;
+          }
+
+          "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+
+            let result = interpreter
+                .run(compiled.byte_code)
+                .await
+                .unwrap()
+                .get_val()
+                .unwrap();
+
+            assert_eq!(result, TypeAnnotatedValue::U8(0));
+        }
+    }
+
+    mod list_comprehension_interpreter_tests {
+        use crate::{compiler, Expr, Interpreter};
+        use golem_wasm_ast::analysis::analysed_type::{list, str};
+        use test_r::test;
+
+        #[test]
+        async fn test_list_comprehension() {
+            let mut interpreter = Interpreter::default();
+
+            let rib_expr = r#"
+          let x = ["foo", "bar"];
+
+          for i in x {
+            yield i;
+          }
+
+          "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+
+            let result = interpreter
+                .run(compiled.byte_code)
+                .await
+                .unwrap()
+                .get_val()
+                .unwrap();
+
+            let expected = r#"["foo", "bar"]"#;
+            let expected_type_annotated_value =
+                golem_wasm_rpc::type_annotated_value_from_str(&list(str()), expected).unwrap();
+
+            assert_eq!(result, expected_type_annotated_value);
+        }
+
+        #[test]
+        async fn test_list_comprehension_empty() {
+            let mut interpreter = Interpreter::default();
+
+            let rib_expr = r#"
+          let x: list<str> = [];
+
+          for i in x {
+            yield i;
+          }
+
+          "#;
+
+            let expr = Expr::from_text(rib_expr).unwrap();
+
+            let compiled = compiler::compile(&expr, &vec![]).unwrap();
+
+            let result = interpreter
+                .run(compiled.byte_code)
+                .await
+                .unwrap()
+                .get_val()
+                .unwrap();
+
+            let expected = r#"[]"#;
+            let expected_type_annotated_value =
+                golem_wasm_rpc::type_annotated_value_from_str(&list(str()), expected).unwrap();
+
+            assert_eq!(result, expected_type_annotated_value);
+        }
+    }
+
+    mod pattern_match_interpreter_tests {
         use test_r::test;
 
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
@@ -1273,7 +1622,7 @@ mod interpreter_tests {
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
         #[test]
-        async fn test_interpreter_for_pattern_match_on_option_nested() {
+        async fn test_pattern_match_on_option_nested() {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
@@ -1296,7 +1645,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_interpreter_for_pattern_match_on_tuple() {
+        async fn test_pattern_match_on_tuple() {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
@@ -1319,7 +1668,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_interpreter_for_pattern_match_on_tuple_with_option_some() {
+        async fn test_pattern_match_on_tuple_with_option_some() {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
@@ -1344,7 +1693,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_interpreter_for_pattern_match_on_tuple_with_option_none() {
+        async fn test_pattern_match_on_tuple_with_option_none() {
             let mut interpreter = Interpreter::default();
 
             let expr = r#"
@@ -1367,7 +1716,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_interpreter_for_pattern_match_on_tuple_with_all_types() {
+        async fn test_pattern_match_on_tuple_with_all_types() {
             let mut interpreter = Interpreter::default();
 
             let tuple = internal::get_analysed_type_tuple();
@@ -1398,7 +1747,7 @@ mod interpreter_tests {
         }
 
         #[test]
-        async fn test_interpreter_for_pattern_match_on_tuple_with_wild_pattern() {
+        async fn test_pattern_match_on_tuple_with_wild_pattern() {
             let mut interpreter = Interpreter::default();
 
             let tuple = internal::get_analysed_type_tuple();

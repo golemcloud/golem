@@ -24,26 +24,18 @@ where
     >,
 {
     choice((
-        attempt(string(">=")),
-        attempt(string("<=")),
-        attempt(string("==")),
-        string("<"),
-        string(">"),
-        string("&&"),
-        string("||"),
+        attempt(string(">=")).map(|_| BinaryOp::GreaterThanOrEqualTo),
+        attempt(string("<=")).map(|_| BinaryOp::LessThanOrEqualTo),
+        attempt(string("==")).map(|_| BinaryOp::EqualTo),
+        string("<").map(|_| BinaryOp::LessThan),
+        string(">").map(|_| BinaryOp::GreaterThan),
+        string("&&").map(|_| BinaryOp::And),
+        string("||").map(|_| BinaryOp::Or),
+        string("+").map(|_| BinaryOp::Add),
+        string("-").map(|_| BinaryOp::Subtract),
+        string("*").map(|_| BinaryOp::Multiply),
+        string("/").map(|_| BinaryOp::Divide),
     ))
-    .and_then(|str| match str {
-        ">" => Ok(BinaryOp::GreaterThan),
-        "<" => Ok(BinaryOp::LessThan),
-        "==" => Ok(BinaryOp::EqualTo),
-        ">=" => Ok(BinaryOp::GreaterThanOrEqualTo),
-        "<=" => Ok(BinaryOp::LessThanOrEqualTo),
-        "&&" => Ok(BinaryOp::And),
-        "||" => Ok(BinaryOp::Or),
-        _ => Err(RibParseError::Message(
-            "Invalid binary operator".to_string(),
-        )),
-    })
 }
 
 pub enum BinaryOp {
@@ -54,6 +46,10 @@ pub enum BinaryOp {
     EqualTo,
     And,
     Or,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
 }
 
 #[cfg(test)]
@@ -172,8 +168,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::record(vec![("foo".to_string(), Expr::number(1f64))]),
-                    Expr::record(vec![("foo".to_string(), Expr::number(2f64))]),
+                    Expr::record(vec![("foo".to_string(), Expr::untyped_number(1f64))]),
+                    Expr::record(vec![("foo".to_string(), Expr::untyped_number(2f64))]),
                 ),
                 ""
             ))
@@ -188,8 +184,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::sequence(vec![Expr::number(1f64), Expr::number(2f64)]),
-                    Expr::sequence(vec![Expr::number(3f64), Expr::number(4f64)]),
+                    Expr::sequence(vec![Expr::untyped_number(1f64), Expr::untyped_number(2f64)]),
+                    Expr::sequence(vec![Expr::untyped_number(3f64), Expr::untyped_number(4f64)]),
                 ),
                 ""
             ))
@@ -204,8 +200,8 @@ mod test {
             result,
             Ok((
                 Expr::equal_to(
-                    Expr::tuple(vec![Expr::number(1f64), Expr::number(2f64)]),
-                    Expr::tuple(vec![Expr::number(3f64), Expr::number(4f64)]),
+                    Expr::tuple(vec![Expr::untyped_number(1f64), Expr::untyped_number(2f64)]),
+                    Expr::tuple(vec![Expr::untyped_number(3f64), Expr::untyped_number(4f64)]),
                 ),
                 ""
             ))

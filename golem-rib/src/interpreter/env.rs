@@ -29,7 +29,7 @@ pub struct InterpreterEnv {
 impl Debug for InterpreterEnv {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InterpreterEnv")
-            .field("env", &self.env)
+            .field("env", &self.env.iter())
             .finish()
     }
 }
@@ -96,8 +96,8 @@ impl InterpreterEnv {
         self.env.insert(key, value);
     }
 
-    pub fn lookup(&self, key: &EnvironmentKey) -> Option<RibInterpreterResult> {
-        self.env.get(key).cloned()
+    pub fn lookup(&self, key: &EnvironmentKey) -> Option<&RibInterpreterResult> {
+        self.env.get(key)
     }
 }
 

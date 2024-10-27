@@ -20,7 +20,7 @@ use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 
 const RESERVED_KEYWORDS: &[&str] = &[
-    "if", "then", "else", "match", "ok", "some", "err", "none", "let",
+    "if", "then", "else", "match", "ok", "some", "err", "none", "let", "for", "yield", "reduce",
 ];
 
 pub fn identifier<Input>() -> impl Parser<Input, Output = Expr>

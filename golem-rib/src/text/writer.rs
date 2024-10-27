@@ -182,6 +182,26 @@ impl<W: Write> Writer<W> {
                 self.write_str(" > ")?;
                 self.write_expr(right)
             }
+            Expr::Plus(left, right, _) => {
+                self.write_expr(left)?;
+                self.write_str(" + ")?;
+                self.write_expr(right)
+            }
+            Expr::Minus(left, right, _) => {
+                self.write_expr(left)?;
+                self.write_str(" - ")?;
+                self.write_expr(right)
+            }
+            Expr::Divide(left, right, _) => {
+                self.write_expr(left)?;
+                self.write_str(" / ")?;
+                self.write_expr(right)
+            }
+            Expr::Multiply(left, right, _) => {
+                self.write_expr(left)?;
+                self.write_str(" * ")?;
+                self.write_expr(right)
+            }
             Expr::GreaterThanOrEqualTo(left, right, _) => {
                 self.write_expr(left)?;
                 self.write_str(" >= ")?;
@@ -291,6 +311,44 @@ impl<W: Write> Writer<W> {
                 self.write_str(" || ")?;
                 self.write_expr(right)
             }
+            Expr::ListComprehension {
+                iterated_variable,
+                iterable_expr,
+                yield_expr,
+                ..
+            } => {
+                self.write_display("for")?;
+                self.write_display(iterated_variable.to_string())?;
+                self.write_display(" in ")?;
+                self.write_expr(iterable_expr)?;
+                self.write_display(" { ")?;
+                self.write_display("\n")?;
+                internal::write_yield_block(self, yield_expr)?;
+                self.write_display(";")?;
+                self.write_display(" } ")
+            }
+
+            Expr::ListReduce {
+                reduce_variable,
+                iterated_variable,
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+                ..
+            } => {
+                self.write_display("reduce ")?;
+                self.write_display(reduce_variable.to_string())?;
+                self.write_display(", ")?;
+                self.write_display(iterated_variable.to_string())?;
+                self.write_display(" in ")?;
+                self.write_expr(iterable_expr)?;
+                self.write_display(" from ")?;
+                self.write_expr(init_value_expr)?;
+                self.write_display(" { ")?;
+                self.write_display("\n")?;
+                internal::write_yield_block(self, yield_expr)?;
+                self.write_display(" } ")
+            }
         }
     }
 
@@ -313,6 +371,34 @@ mod internal {
         Code(&'a Expr),
         Text(&'a str),
         StringInterpolated,
+    }
+
+    pub(crate) fn write_yield_block<W>(
+        writer: &mut Writer<W>,
+        expr: &Expr,
+    ) -> Result<(), WriterError>
+    where
+        W: std::io::Write,
+    {
+        if let Expr::ExprBlock(yield_lines, _) = expr {
+            let last_line_index = yield_lines.len() - 1;
+
+            for (index, line) in yield_lines.iter().enumerate() {
+                if index == last_line_index {
+                    writer.write_display("yield ")?;
+                    writer.write_expr(line)?;
+                } else {
+                    writer.write_expr(line)?;
+                }
+
+                writer.write_display("\n")?;
+            }
+
+            Ok(())
+        } else {
+            writer.write_display("yield ")?;
+            writer.write_expr(expr)
+        }
     }
 
     pub(crate) fn get_expr_type(expr: &Expr) -> ExprType {

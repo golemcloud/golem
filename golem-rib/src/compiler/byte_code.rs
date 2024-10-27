@@ -86,7 +86,7 @@ mod internal {
     use crate::compiler::desugar::desugar_pattern_match;
     use crate::{
         AnalysedTypeWithUnit, DynamicParsedFunctionReference, Expr, FunctionReferenceType,
-        InferredType, InstructionId, RibIR,
+        InferredType, InstructionId, RibIR, VariableId,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -117,7 +117,7 @@ mod internal {
                 instructions.push(RibIR::PushLit(type_annotated_value));
             }
             Expr::Number(num, _, inferred_type) => {
-                let analysed_type = convert_to_analysed_type_for(expr, inferred_type)?;
+                let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
                 let type_annotated_value = num.to_val(&analysed_type).ok_or(format!(
                     "Internal error: convert a number to wasm value using {:?}",
@@ -150,6 +150,33 @@ mod internal {
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
                 instructions.push(RibIR::LessThanOrEqualTo);
+            }
+            Expr::Plus(lhs, rhs, inferred_type) => {
+                let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
+                stack.push(ExprState::from_expr(rhs.deref()));
+                stack.push(ExprState::from_expr(lhs.deref()));
+                instructions.push(RibIR::Add(analysed_type));
+            }
+            Expr::Minus(lhs, rhs, inferred_type) => {
+                let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
+
+                stack.push(ExprState::from_expr(rhs.deref()));
+                stack.push(ExprState::from_expr(lhs.deref()));
+                instructions.push(RibIR::Subtract(analysed_type));
+            }
+            Expr::Divide(lhs, rhs, inferred_type) => {
+                let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
+
+                stack.push(ExprState::from_expr(rhs.deref()));
+                stack.push(ExprState::from_expr(lhs.deref()));
+                instructions.push(RibIR::Divide(analysed_type));
+            }
+            Expr::Multiply(lhs, rhs, inferred_type) => {
+                let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
+
+                stack.push(ExprState::from_expr(rhs.deref()));
+                stack.push(ExprState::from_expr(lhs.deref()));
+                instructions.push(RibIR::Multiply(analysed_type));
             }
             Expr::And(lhs, rhs, _) => {
                 // This optimization isn't optional, it's required for the correct functioning of the interpreter
@@ -195,7 +222,7 @@ mod internal {
                     instructions.push(RibIR::UpdateRecord(field_name.clone()));
                 }
                 // Push record creation instruction
-                let analysed_type = convert_to_analysed_type_for(expr, inferred_type);
+                let analysed_type = convert_to_analysed_type(expr, inferred_type);
                 instructions.push(RibIR::CreateAndPushRecord(analysed_type?));
             }
             Expr::Sequence(exprs, inferred_type) => {
@@ -204,7 +231,7 @@ mod internal {
                     stack.push(ExprState::from_expr(expr));
                 }
 
-                let analysed_type = convert_to_analysed_type_for(expr, inferred_type)?;
+                let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
                 instructions.push(RibIR::PushList(analysed_type, exprs.len()));
             }
             Expr::ExprBlock(exprs, _) => {
@@ -243,20 +270,20 @@ mod internal {
             }
             Expr::Option(Some(inner_expr), inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
-                instructions.push(RibIR::PushSome(convert_to_analysed_type_for(
+                instructions.push(RibIR::PushSome(convert_to_analysed_type(
                     expr,
                     inferred_type,
                 )?));
             }
 
             Expr::Option(None, inferred_type) => {
-                let optional = convert_to_analysed_type_for(expr, inferred_type);
+                let optional = convert_to_analysed_type(expr, inferred_type);
                 instructions.push(RibIR::PushNone(optional.ok()));
             }
 
             Expr::Result(Ok(inner_expr), inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
-                instructions.push(RibIR::PushOkResult(convert_to_analysed_type_for(
+                instructions.push(RibIR::PushOkResult(convert_to_analysed_type(
                     expr,
                     inferred_type,
                 )?));
@@ -264,7 +291,7 @@ mod internal {
 
             Expr::Result(Err(inner_expr), inferred_type) => {
                 stack.push(ExprState::from_expr(inner_expr.deref()));
-                instructions.push(RibIR::PushErrResult(convert_to_analysed_type_for(
+                instructions.push(RibIR::PushErrResult(convert_to_analysed_type(
                     expr,
                     inferred_type,
                 )?));
@@ -280,7 +307,7 @@ mod internal {
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
                         } else {
-                            AnalysedTypeWithUnit::Type(convert_to_analysed_type_for(
+                            AnalysedTypeWithUnit::Type(convert_to_analysed_type(
                                 expr,
                                 inferred_type,
                             )?)
@@ -408,13 +435,13 @@ mod internal {
                     CallType::VariantConstructor(variant_name) => {
                         instructions.push(RibIR::PushVariant(
                             variant_name.clone(),
-                            convert_to_analysed_type_for(expr, inferred_type)?,
+                            convert_to_analysed_type(expr, inferred_type)?,
                         ));
                     }
                     CallType::EnumConstructor(enum_name) => {
                         instructions.push(RibIR::PushEnum(
                             enum_name.clone(),
-                            convert_to_analysed_type_for(expr, inferred_type)?,
+                            convert_to_analysed_type(expr, inferred_type)?,
                         ));
                     }
                 }
@@ -458,15 +485,50 @@ mod internal {
                 for expr in exprs.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
-                let analysed_type = convert_to_analysed_type_for(expr, analysed_type)?;
+                let analysed_type = convert_to_analysed_type(expr, analysed_type)?;
                 instructions.push(RibIR::PushTuple(analysed_type, exprs.len()));
             }
+
+            Expr::ListComprehension {
+                iterated_variable,
+                iterable_expr,
+                yield_expr,
+                inferred_type,
+                ..
+            } => {
+                let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
+                handle_list_comprehension(
+                    instruction_id,
+                    stack,
+                    iterable_expr,
+                    yield_expr,
+                    iterated_variable,
+                    &analysed_type,
+                )
+            }
+
+            Expr::ListReduce {
+                reduce_variable,
+                iterated_variable,
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+                ..
+            } => handle_list_reduce(
+                instruction_id,
+                stack,
+                reduce_variable,
+                iterated_variable,
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+            ),
         }
 
         Ok(())
     }
 
-    pub(crate) fn convert_to_analysed_type_for(
+    pub(crate) fn convert_to_analysed_type(
         expr: &Expr,
         inferred_type: &InferredType,
     ) -> Result<AnalysedType, String> {
@@ -496,6 +558,88 @@ mod internal {
         pub(crate) fn from_ir(ir: RibIR) -> Self {
             ExprState::Instruction(ir)
         }
+    }
+
+    fn handle_list_comprehension(
+        instruction_id: &mut InstructionId,
+        stack: &mut Vec<ExprState>,
+        iterable_expr: &Expr,
+        yield_expr: &Expr,
+        variable_id: &VariableId,
+        sink_type: &AnalysedType,
+    ) {
+        stack.push(ExprState::from_expr(iterable_expr));
+
+        stack.push(ExprState::from_ir(RibIR::ListToIterator));
+
+        stack.push(ExprState::from_ir(RibIR::CreateSink(sink_type.clone())));
+
+        let loop_start_label = instruction_id.increment_mut();
+
+        stack.push(ExprState::from_ir(RibIR::Label(loop_start_label.clone())));
+
+        let exit_label = instruction_id.increment_mut();
+
+        stack.push(ExprState::from_ir(RibIR::IsEmpty));
+
+        stack.push(ExprState::from_ir(RibIR::JumpIfFalse(exit_label.clone())));
+
+        stack.push(ExprState::from_ir(RibIR::AdvanceIterator));
+
+        stack.push(ExprState::from_ir(RibIR::AssignVar(variable_id.clone())));
+
+        stack.push(ExprState::from_expr(yield_expr));
+
+        stack.push(ExprState::from_ir(RibIR::PushToSink));
+
+        stack.push(ExprState::from_ir(RibIR::Jump(loop_start_label)));
+
+        stack.push(ExprState::from_ir(RibIR::Label(exit_label)));
+
+        stack.push(ExprState::from_ir(RibIR::SinkToList))
+    }
+
+    fn handle_list_reduce(
+        instruction_id: &mut InstructionId,
+        stack: &mut Vec<ExprState>,
+        reduce_variable: &VariableId,
+        iterated_variable: &VariableId,
+        iterable_expr: &Expr,
+        initial_value_expr: &Expr,
+        yield_expr: &Expr,
+    ) {
+        stack.push(ExprState::from_expr(iterable_expr));
+
+        stack.push(ExprState::from_expr(initial_value_expr));
+
+        stack.push(ExprState::from_ir(RibIR::AssignVar(
+            reduce_variable.clone(),
+        )));
+
+        stack.push(ExprState::from_ir(RibIR::ListToIterator));
+
+        let loop_start_label = instruction_id.increment_mut();
+        stack.push(ExprState::from_ir(RibIR::Label(loop_start_label.clone())));
+
+        let exit_label = instruction_id.increment_mut();
+        stack.push(ExprState::from_ir(RibIR::IsEmpty));
+        stack.push(ExprState::from_ir(RibIR::JumpIfFalse(exit_label.clone())));
+
+        stack.push(ExprState::from_ir(RibIR::AdvanceIterator));
+        stack.push(ExprState::from_ir(RibIR::AssignVar(
+            iterated_variable.clone(),
+        )));
+
+        stack.push(ExprState::from_expr(yield_expr));
+
+        stack.push(ExprState::from_ir(RibIR::AssignVar(
+            reduce_variable.clone(),
+        )));
+
+        stack.push(ExprState::from_ir(RibIR::Jump(loop_start_label)));
+
+        stack.push(ExprState::from_ir(RibIR::Label(exit_label)));
+        stack.push(ExprState::from_ir(RibIR::LoadVar(reduce_variable.clone())))
     }
 
     fn handle_if_condition(

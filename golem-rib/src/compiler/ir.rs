@@ -17,8 +17,9 @@ use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::rib_ir::Instruction;
 use golem_api_grpc::proto::golem::rib::{
     And, CallInstruction, ConcatInstruction, CreateFunctionNameInstruction, EqualTo, GetTag,
-    GreaterThan, GreaterThanOrEqualTo, JumpInstruction, LessThan, LessThanOrEqualTo, Negate, Or,
-    PushListInstruction, PushNoneInstruction, PushTupleInstruction, RibIr as ProtoRibIR,
+    GreaterThan, GreaterThanOrEqualTo, IsEmpty, JumpInstruction, LessThan, LessThanOrEqualTo,
+    Negate, Or, PushListInstruction, PushNoneInstruction, PushTupleInstruction,
+    RibIr as ProtoRibIR,
 };
 use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -48,6 +49,7 @@ pub enum RibIR {
     LessThan,
     GreaterThanOrEqualTo,
     LessThanOrEqualTo,
+    IsEmpty,
     JumpIfFalse(InstructionId),
     Jump(InstructionId),
     Label(InstructionId),
@@ -59,7 +61,25 @@ pub enum RibIR {
     Throw(String),
     GetTag,
     Concat(usize),
+    Add(AnalysedType),
+    Subtract(AnalysedType),
+    Divide(AnalysedType),
+    Multiply(AnalysedType),
     Negate,
+    ListToIterator,
+    CreateSink(AnalysedType),
+    AdvanceIterator,
+    PushToSink,
+    SinkToList,
+}
+
+impl RibIR {
+    pub fn get_instruction_id(&self) -> Option<InstructionId> {
+        match self {
+            RibIR::Label(id) => Some(id.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
@@ -276,6 +296,27 @@ impl TryFrom<ProtoRibIR> for RibIR {
                     |_| "Failed to convert CreateAndPushRecord".to_string(),
                 )?))
             }
+            Instruction::Add(value) => {
+                Ok(RibIR::Add((&value).try_into().map_err(|_| {
+                    "Failed to convert CreateAndPushRecord".to_string()
+                })?))
+            }
+            Instruction::Multiply(value) => {
+                Ok(RibIR::Multiply((&value).try_into().map_err(|_| {
+                    "Failed to convert CreateAndPushRecord".to_string()
+                })?))
+            }
+            Instruction::Subtract(value) => {
+                Ok(RibIR::Subtract((&value).try_into().map_err(|_| {
+                    "Failed to convert CreateAndPushRecord".to_string()
+                })?))
+            }
+            Instruction::Divide(value) => {
+                Ok(RibIR::Divide((&value).try_into().map_err(|_| {
+                    "Failed to convert CreateAndPushRecord".to_string()
+                })?))
+            }
+
             Instruction::UpdateRecord(value) => Ok(RibIR::UpdateRecord(value)),
             Instruction::PushList(value) => Ok(RibIR::PushList(
                 value
@@ -319,6 +360,7 @@ impl TryFrom<ProtoRibIR> for RibIR {
             Instruction::GreaterThanOrEqualTo(_) => Ok(RibIR::GreaterThanOrEqualTo),
             Instruction::LessThanOrEqualTo(_) => Ok(RibIR::LessThanOrEqualTo),
             Instruction::And(_) => Ok(RibIR::And),
+            Instruction::IsEmpty(_) => Ok(RibIR::IsEmpty),
             Instruction::Or(_) => Ok(RibIR::Or),
             Instruction::JumpIfFalse(value) => Ok(RibIR::JumpIfFalse(InstructionId::from(
                 value.instruction_id as usize,
@@ -413,6 +455,21 @@ impl TryFrom<ProtoRibIR> for RibIR {
                     function_reference_type,
                 ))
             }
+            Instruction::ListToIterator(_) => Ok(RibIR::ListToIterator),
+            Instruction::CreateSink(create_sink) => {
+                let result = create_sink
+                    .list_type
+                    .ok_or("Sink list type not present".to_string())
+                    .and_then(|t| {
+                        (&t).try_into()
+                            .map_err(|_| "Failed to convert AnalysedType".to_string())
+                    })?;
+
+                Ok(RibIR::CreateSink(result))
+            }
+            Instruction::AdvanceIterator(_) => Ok(RibIR::AdvanceIterator),
+            Instruction::SinkToList(_) => Ok(RibIR::SinkToList),
+            Instruction::PushToSink(_) => Ok(RibIR::PushToSink),
         }
     }
 }
@@ -426,10 +483,15 @@ impl From<RibIR> for ProtoRibIR {
                 })
             }
             RibIR::And => Instruction::And(And {}),
+            RibIR::IsEmpty => Instruction::IsEmpty(IsEmpty {}),
             RibIR::Or => Instruction::Or(Or {}),
             RibIR::AssignVar(value) => Instruction::AssignVar(value.into()),
             RibIR::LoadVar(value) => Instruction::LoadVar(value.into()),
             RibIR::CreateAndPushRecord(value) => Instruction::CreateAndPushRecord((&value).into()),
+            RibIR::Add(value) => Instruction::Add((&value).into()),
+            RibIR::Subtract(value) => Instruction::Subtract((&value).into()),
+            RibIR::Multiply(value) => Instruction::Multiply((&value).into()),
+            RibIR::Divide(value) => Instruction::Divide((&value).into()),
             RibIR::UpdateRecord(value) => Instruction::UpdateRecord(value),
             RibIR::PushList(value, arg_size) => Instruction::PushList(PushListInstruction {
                 list_type: Some((&value).into()),
@@ -521,6 +583,24 @@ impl From<RibIR> for ProtoRibIR {
                     site: Some(site.into()),
                     function_reference_details: Some(reference_type.into()),
                 })
+            }
+
+            RibIR::ListToIterator => {
+                Instruction::ListToIterator(golem_api_grpc::proto::golem::rib::ListToIterator {})
+            }
+            RibIR::CreateSink(analysed_type) => {
+                Instruction::CreateSink(golem_api_grpc::proto::golem::rib::CreateSink {
+                    list_type: Some((&analysed_type).into()),
+                })
+            }
+            RibIR::AdvanceIterator => {
+                Instruction::AdvanceIterator(golem_api_grpc::proto::golem::rib::AdvanceIterator {})
+            }
+            RibIR::PushToSink => {
+                Instruction::PushToSink(golem_api_grpc::proto::golem::rib::PushToSink {})
+            }
+            RibIR::SinkToList => {
+                Instruction::SinkToList(golem_api_grpc::proto::golem::rib::SinkToList {})
             }
         };
 

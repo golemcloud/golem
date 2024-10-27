@@ -32,6 +32,7 @@ use std::collections::VecDeque;
 use std::fmt::Display;
 use std::ops::Deref;
 
+// https://github.com/golemcloud/golem/issues/1035
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub enum Expr {
     Let(VariableId, Option<TypeName>, Box<Expr>, InferredType),
@@ -53,6 +54,10 @@ pub enum Expr {
     Or(Box<Expr>, Box<Expr>, InferredType),
     GreaterThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
     LessThanOrEqualTo(Box<Expr>, Box<Expr>, InferredType),
+    Plus(Box<Expr>, Box<Expr>, InferredType),
+    Multiply(Box<Expr>, Box<Expr>, InferredType),
+    Minus(Box<Expr>, Box<Expr>, InferredType),
+    Divide(Box<Expr>, Box<Expr>, InferredType),
     EqualTo(Box<Expr>, Box<Expr>, InferredType),
     LessThan(Box<Expr>, Box<Expr>, InferredType),
     Cond(Box<Expr>, Box<Expr>, Box<Expr>, InferredType),
@@ -63,6 +68,20 @@ pub enum Expr {
     Unwrap(Box<Expr>, InferredType),
     Throw(String, InferredType),
     GetTag(Box<Expr>, InferredType),
+    ListComprehension {
+        iterated_variable: VariableId,
+        iterable_expr: Box<Expr>,
+        yield_expr: Box<Expr>,
+        inferred_type: InferredType,
+    },
+    ListReduce {
+        reduce_variable: VariableId,
+        iterated_variable: VariableId,
+        iterable_expr: Box<Expr>,
+        yield_expr: Box<Expr>,
+        init_value_expr: Box<Expr>,
+        inferred_type: InferredType,
+    },
 }
 
 impl Expr {
@@ -200,6 +219,22 @@ impl Expr {
         Expr::And(Box::new(left), Box::new(right), InferredType::Bool)
     }
 
+    pub fn plus(left: Expr, right: Expr) -> Self {
+        Expr::Plus(Box::new(left), Box::new(right), InferredType::number())
+    }
+
+    pub fn minus(left: Expr, right: Expr) -> Self {
+        Expr::Minus(Box::new(left), Box::new(right), InferredType::number())
+    }
+
+    pub fn divide(left: Expr, right: Expr) -> Self {
+        Expr::Divide(Box::new(left), Box::new(right), InferredType::number())
+    }
+
+    pub fn multiply(left: Expr, right: Expr) -> Self {
+        Expr::Multiply(Box::new(left), Box::new(right), InferredType::number())
+    }
+
     pub fn and_combine(conditions: Vec<Expr>) -> Option<Expr> {
         let mut cond: Option<Expr> = None;
 
@@ -293,6 +328,68 @@ impl Expr {
         )
     }
 
+    pub fn typed_list_reduce(
+        reduce_variable: VariableId,
+        iterated_variable: VariableId,
+        iterable_expr: Expr,
+        init_value_expr: Expr,
+        yield_expr: Expr,
+        inferred_type: InferredType,
+    ) -> Self {
+        Expr::ListReduce {
+            reduce_variable,
+            iterated_variable,
+            iterable_expr: Box::new(iterable_expr),
+            yield_expr: Box::new(yield_expr),
+            init_value_expr: Box::new(init_value_expr),
+            inferred_type,
+        }
+    }
+
+    pub fn list_reduce(
+        reduce_variable: VariableId,
+        iterated_variable: VariableId,
+        iterable_expr: Expr,
+        init_value_expr: Expr,
+        yield_expr: Expr,
+    ) -> Self {
+        Expr::typed_list_reduce(
+            reduce_variable,
+            iterated_variable,
+            iterable_expr,
+            init_value_expr,
+            yield_expr,
+            InferredType::Unknown,
+        )
+    }
+
+    pub fn typed_list_comprehension(
+        iterated_variable: VariableId,
+        iterable_expr: Expr,
+        yield_expr: Expr,
+        inferred_type: InferredType,
+    ) -> Self {
+        Expr::ListComprehension {
+            iterated_variable,
+            iterable_expr: Box::new(iterable_expr),
+            yield_expr: Box::new(yield_expr),
+            inferred_type,
+        }
+    }
+
+    pub fn list_comprehension(
+        variable_id: VariableId,
+        iterable_expr: Expr,
+        yield_expr: Expr,
+    ) -> Self {
+        Expr::typed_list_comprehension(
+            variable_id,
+            iterable_expr,
+            yield_expr,
+            InferredType::List(Box::new(InferredType::Unknown)),
+        )
+    }
+
     pub fn literal(value: impl AsRef<str>) -> Self {
         Expr::Literal(value.as_ref().to_string(), InferredType::Str)
     }
@@ -301,7 +398,7 @@ impl Expr {
         Expr::literal("")
     }
 
-    pub fn multiple(expressions: Vec<Expr>) -> Self {
+    pub fn expr_block(expressions: Vec<Expr>) -> Self {
         let inferred_type = expressions
             .last()
             .map_or(InferredType::Unknown, |e| e.inferred_type());
@@ -419,6 +516,10 @@ impl Expr {
             | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
             | Expr::LessThanOrEqualTo(_, _, inferred_type)
             | Expr::EqualTo(_, _, inferred_type)
+            | Expr::Plus(_, _, inferred_type)
+            | Expr::Minus(_, _, inferred_type)
+            | Expr::Divide(_, _, inferred_type)
+            | Expr::Multiply(_, _, inferred_type)
             | Expr::LessThan(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
@@ -429,6 +530,8 @@ impl Expr {
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
             | Expr::Or(_, _, inferred_type)
+            | Expr::ListComprehension { inferred_type, .. }
+            | Expr::ListReduce { inferred_type, .. }
             | Expr::Call(_, _, inferred_type) => inferred_type.clone(),
         }
     }
@@ -454,8 +557,10 @@ impl Expr {
         function_type_registry: &FunctionTypeRegistry,
     ) -> Result<(), Vec<String>> {
         self.bind_types();
-        self.name_binding_pattern_match_variables();
-        self.name_binding_local_variables();
+        self.bind_variables_of_list_comprehension();
+        self.bind_variables_of_list_reduce();
+        self.bind_variables_of_pattern_match();
+        self.bind_variables_of_let_assignment();
         self.infer_variants(function_type_registry);
         self.infer_enums(function_type_registry);
 
@@ -477,15 +582,23 @@ impl Expr {
     // Make sure the bindings in the arm pattern of a pattern match are given variable-ids.
     // The same variable-ids will be tagged to the corresponding identifiers in the arm resolution
     // to avoid conflicts.
-    pub fn name_binding_pattern_match_variables(&mut self) {
-        type_inference::name_binding_pattern_matches(self);
+    pub fn bind_variables_of_pattern_match(&mut self) {
+        type_inference::bind_variables_of_pattern_match(self);
     }
 
     // Make sure the variable assignment (let binding) are given variable ids,
     // which will be tagged to the corresponding identifiers to avoid conflicts.
     // This is done only for local variables and not global variables
-    pub fn name_binding_local_variables(&mut self) {
-        type_inference::name_binding_local_variables(self);
+    pub fn bind_variables_of_let_assignment(&mut self) {
+        type_inference::bind_variables_of_let_assignment(self);
+    }
+
+    pub fn bind_variables_of_list_comprehension(&mut self) {
+        type_inference::bind_variables_of_list_comprehension(self);
+    }
+
+    pub fn bind_variables_of_list_reduce(&mut self) {
+        type_inference::bind_variables_of_list_reduce(self);
     }
 
     pub fn infer_call_arguments_type(
@@ -552,6 +665,10 @@ impl Expr {
             | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
             | Expr::LessThanOrEqualTo(_, _, inferred_type)
             | Expr::EqualTo(_, _, inferred_type)
+            | Expr::Plus(_, _, inferred_type)
+            | Expr::Minus(_, _, inferred_type)
+            | Expr::Divide(_, _, inferred_type)
+            | Expr::Multiply(_, _, inferred_type)
             | Expr::LessThan(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
@@ -562,6 +679,8 @@ impl Expr {
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
             | Expr::Or(_, _, inferred_type)
+            | Expr::ListComprehension { inferred_type, .. }
+            | Expr::ListReduce { inferred_type, .. }
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = inferred_type.merge(new_inferred_type);
@@ -595,6 +714,10 @@ impl Expr {
             | Expr::LessThanOrEqualTo(_, _, inferred_type)
             | Expr::EqualTo(_, _, inferred_type)
             | Expr::LessThan(_, _, inferred_type)
+            | Expr::Plus(_, _, inferred_type)
+            | Expr::Minus(_, _, inferred_type)
+            | Expr::Divide(_, _, inferred_type)
+            | Expr::Multiply(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
             | Expr::Option(_, inferred_type)
@@ -604,6 +727,8 @@ impl Expr {
             | Expr::And(_, _, inferred_type)
             | Expr::Or(_, _, inferred_type)
             | Expr::GetTag(_, inferred_type)
+            | Expr::ListComprehension { inferred_type, .. }
+            | Expr::ListReduce { inferred_type, .. }
             | Expr::Call(_, _, inferred_type) => {
                 if new_inferred_type != InferredType::Unknown {
                     *inferred_type = new_inferred_type;
@@ -632,43 +757,25 @@ impl Expr {
         type_inference::visit_children_bottom_up_mut(self, queue);
     }
 
-    pub fn number(f64: f64) -> Expr {
-        Expr::Number(
-            Number { value: f64 },
-            None,
-            InferredType::OneOf(vec![
-                InferredType::U64,
-                InferredType::U32,
-                InferredType::U8,
-                InferredType::U16,
-                InferredType::S64,
-                InferredType::S32,
-                InferredType::S8,
-                InferredType::S16,
-                InferredType::F64,
-                InferredType::F32,
-            ]),
-        )
+    pub fn number(f64: f64, inferred_type: InferredType) -> Expr {
+        Expr::Number(Number { value: f64 }, None, inferred_type)
+    }
+
+    pub fn number_with_type_name(
+        f64: f64,
+        type_name: TypeName,
+        inferred_type: InferredType,
+    ) -> Expr {
+        Expr::Number(Number { value: f64 }, Some(type_name), inferred_type)
+    }
+
+    pub fn untyped_number(f64: f64) -> Expr {
+        Expr::number(f64, InferredType::number())
     }
 
     // TODO; introduced to minimise the number of changes in tests.
-    pub fn number_with_type_name(f64: f64, type_name: TypeName) -> Expr {
-        Expr::Number(
-            Number { value: f64 },
-            Some(type_name),
-            InferredType::OneOf(vec![
-                InferredType::U64,
-                InferredType::U32,
-                InferredType::U8,
-                InferredType::U16,
-                InferredType::S64,
-                InferredType::S32,
-                InferredType::S8,
-                InferredType::S16,
-                InferredType::F64,
-                InferredType::F32,
-            ]),
-        )
+    pub fn untyped_number_with_type_name(f64: f64, type_name: TypeName) -> Expr {
+        Expr::number_with_type_name(f64, type_name, InferredType::number())
     }
 }
 
@@ -925,6 +1032,30 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 Expr::equal_to((*left).try_into()?, (*right).try_into()?)
             }
 
+            golem_api_grpc::proto::golem::rib::expr::Expr::Add(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::plus((*left).try_into()?, (*right).try_into()?)
+            }
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::Subtract(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::plus((*left).try_into()?, (*right).try_into()?)
+            }
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::Divide(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::plus((*left).try_into()?, (*right).try_into()?)
+            }
+
+            golem_api_grpc::proto::golem::rib::expr::Expr::Multiply(expr) => {
+                let left = expr.left.ok_or("Missing left expr")?;
+                let right = expr.right.ok_or("Missing right expr")?;
+                Expr::plus((*left).try_into()?, (*right).try_into()?)
+            }
+
             golem_api_grpc::proto::golem::rib::expr::Expr::Cond(expr) => {
                 let left = expr.left.ok_or("Missing left expr")?;
                 let cond = expr.cond.ok_or("Missing cond expr")?;
@@ -953,7 +1084,7 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     .into_iter()
                     .map(|expr| expr.try_into())
                     .collect::<Result<Vec<_>, _>>()?;
-                Expr::multiple(exprs)
+                Expr::expr_block(exprs)
             }
 
             golem_api_grpc::proto::golem::rib::expr::Expr::Sequence(
@@ -1034,9 +1165,9 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
             golem_api_grpc::proto::golem::rib::expr::Expr::Number(number) => {
                 let type_name = number.type_name.map(TypeName::try_from).transpose()?;
                 if let Some(type_name) = type_name {
-                    Expr::number_with_type_name(number.float, type_name.clone())
+                    Expr::untyped_number_with_type_name(number.float, type_name.clone())
                 } else {
-                    Expr::number(number.float)
+                    Expr::untyped_number(number.float)
                 }
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::SelectField(expr) => {
@@ -1077,6 +1208,36 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                     .collect::<Result<Vec<_>, _>>()?;
                 let expr = expr.expr.ok_or("Missing expr")?;
                 Expr::pattern_match((*expr).try_into()?, patterns)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::ListComprehension(
+                list_comprehension,
+            ) => {
+                let iterable_expr = list_comprehension.iterable_expr.ok_or("Missing expr")?;
+                let iterable_expr = (*iterable_expr).try_into()?;
+                let yield_expr = list_comprehension.yield_expr.ok_or("Missing list")?;
+                let yield_expr = (*yield_expr).try_into()?;
+                let variable_id =
+                    VariableId::list_comprehension_identifier(list_comprehension.iterated_variable);
+                Expr::list_comprehension(variable_id, iterable_expr, yield_expr)
+            }
+            golem_api_grpc::proto::golem::rib::expr::Expr::ListReduce(list_reduce) => {
+                let init_value_expr = list_reduce.init_value_expr.ok_or("Missing initial expr")?;
+                let init_value_expr = (*init_value_expr).try_into()?;
+                let iterable_expr = list_reduce.iterable_expr.ok_or("Missing expr")?;
+                let iterable_expr = (*iterable_expr).try_into()?;
+                let yield_expr = list_reduce.yield_expr.ok_or("Missing list")?;
+                let yield_expr = (*yield_expr).try_into()?;
+                let iterated_variable_id =
+                    VariableId::list_comprehension_identifier(list_reduce.iterated_variable);
+                let reduce_variable_id =
+                    VariableId::list_reduce_identifier(list_reduce.reduce_variable);
+                Expr::list_reduce(
+                    reduce_variable_id,
+                    iterated_variable_id,
+                    iterable_expr,
+                    init_value_expr,
+                    yield_expr,
+                )
             }
             golem_api_grpc::proto::golem::rib::expr::Expr::Call(expr) => {
                 let params: Vec<Expr> = expr
@@ -1250,6 +1411,36 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     }),
                 ))
             }
+            Expr::Plus(left, right, _) => Some(golem_api_grpc::proto::golem::rib::expr::Expr::Add(
+                Box::new(golem_api_grpc::proto::golem::rib::AddExpr {
+                    left: Some(Box::new((*left).into())),
+                    right: Some(Box::new((*right).into())),
+                }),
+            )),
+            Expr::Minus(left, right, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Subtract(
+                    Box::new(golem_api_grpc::proto::golem::rib::SubtractExpr {
+                        left: Some(Box::new((*left).into())),
+                        right: Some(Box::new((*right).into())),
+                    }),
+                ))
+            }
+            Expr::Divide(left, right, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Divide(
+                    Box::new(golem_api_grpc::proto::golem::rib::DivideExpr {
+                        left: Some(Box::new((*left).into())),
+                        right: Some(Box::new((*right).into())),
+                    }),
+                ))
+            }
+            Expr::Multiply(left, right, _) => {
+                Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiply(
+                    Box::new(golem_api_grpc::proto::golem::rib::MultiplyExpr {
+                        left: Some(Box::new((*left).into())),
+                        right: Some(Box::new((*right).into())),
+                    }),
+                ))
+            }
             Expr::LessThanOrEqualTo(left, right, _) => Some(
                 golem_api_grpc::proto::golem::rib::expr::Expr::LessThanOrEqual(Box::new(
                     golem_api_grpc::proto::golem::rib::LessThanOrEqualToExpr {
@@ -1337,6 +1528,37 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                 Box::new(golem_api_grpc::proto::golem::rib::OrExpr {
                     left: Some(Box::new((*left).into())),
                     right: Some(Box::new((*right).into())),
+                }),
+            )),
+            Expr::ListComprehension {
+                iterated_variable,
+                iterable_expr,
+                yield_expr,
+                ..
+            } => Some(
+                golem_api_grpc::proto::golem::rib::expr::Expr::ListComprehension(Box::new(
+                    golem_api_grpc::proto::golem::rib::ListComprehensionExpr {
+                        iterated_variable: iterated_variable.name(),
+                        iterable_expr: Some(Box::new((*iterable_expr).into())),
+                        yield_expr: Some(Box::new((*yield_expr).into())),
+                    },
+                )),
+            ),
+
+            Expr::ListReduce {
+                reduce_variable,
+                iterated_variable,
+                iterable_expr,
+                yield_expr,
+                init_value_expr,
+                ..
+            } => Some(golem_api_grpc::proto::golem::rib::expr::Expr::ListReduce(
+                Box::new(golem_api_grpc::proto::golem::rib::ListReduceExpr {
+                    reduce_variable: reduce_variable.name(),
+                    iterated_variable: iterated_variable.name(),
+                    iterable_expr: Some(Box::new((*iterable_expr).into())),
+                    init_value_expr: Some(Box::new((*init_value_expr).into())),
+                    yield_expr: Some(Box::new((*yield_expr).into())),
                 }),
             )),
         };
@@ -1605,9 +1827,9 @@ mod tests {
     }
 
     fn expected() -> Expr {
-        Expr::multiple(vec![
-            Expr::let_binding("x", Expr::number(1f64)),
-            Expr::let_binding("y", Expr::number(2f64)),
+        Expr::expr_block(vec![
+            Expr::let_binding("x", Expr::untyped_number(1f64)),
+            Expr::let_binding("y", Expr::untyped_number(2f64)),
             Expr::let_binding(
                 "result",
                 Expr::greater_than(Expr::identifier("x"), Expr::identifier("y")),

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod binary_comparison;
+mod binary_op;
 mod boolean;
 pub(crate) mod call;
 mod cond;
@@ -20,11 +20,14 @@ mod errors;
 mod flag;
 mod identifier;
 mod let_binding;
+mod list_aggregation;
+mod list_comprehension;
 pub(crate) mod literal;
 mod multi_line_code_block;
 mod not;
 mod number;
 mod optional;
+mod partial_block_expr;
 mod pattern_match;
 mod record;
 mod result;

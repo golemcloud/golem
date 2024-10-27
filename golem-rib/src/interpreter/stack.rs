@@ -20,7 +20,7 @@ use golem_wasm_rpc::protobuf::{
     TypedEnum, TypedList, TypedOption, TypedRecord, TypedTuple, TypedVariant,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct InterpreterStack {
     pub stack: Vec<RibInterpreterResult>,
 }
@@ -55,6 +55,20 @@ impl InterpreterStack {
         self.stack.pop()
     }
 
+    pub fn pop_iterator(&mut self) -> Option<Box<dyn Iterator<Item = TypeAnnotatedValue>>> {
+        match self.pop() {
+            Some(RibInterpreterResult::Iterator(iter)) => Some(iter),
+            _ => None,
+        }
+    }
+
+    pub fn pop_sink(&mut self) -> Option<Vec<TypeAnnotatedValue>> {
+        match self.pop() {
+            Some(RibInterpreterResult::Sink(vec, _)) => Some(vec.clone()),
+            _ => None,
+        }
+    }
+
     pub fn pop_n(&mut self, n: usize) -> Option<Vec<RibInterpreterResult>> {
         let mut results = Vec::new();
         for _ in 0..n {
@@ -78,8 +92,39 @@ impl InterpreterStack {
         self.stack.push(interpreter_result);
     }
 
+    pub fn create_sink(&mut self, analysed_type: &AnalysedType) {
+        self.stack
+            .push(RibInterpreterResult::Sink(vec![], analysed_type.clone()))
+    }
+
     pub fn push_val(&mut self, element: TypeAnnotatedValue) {
         self.stack.push(RibInterpreterResult::val(element));
+    }
+
+    pub fn push_to_sink(&mut self, type_annotated_value: TypeAnnotatedValue) -> Result<(), String> {
+        let sink = self.pop();
+        // sink always followed by an iterator
+        let possible_iterator = self
+            .pop()
+            .ok_or("Failed to get the iterator before pushing to the sink")?;
+
+        if !possible_iterator.is_iterator() {
+            return Err("Expecting an the iterator before pushing to the sink".to_string());
+        }
+
+        match sink {
+            Some(RibInterpreterResult::Sink(mut list, analysed_type)) => {
+                list.push(type_annotated_value);
+                self.push(possible_iterator);
+                self.push(RibInterpreterResult::Sink(list, analysed_type));
+                Ok(())
+            }
+
+            a => Err(format!(
+                "Internal error: Failed to push values to sink {:?}",
+                a
+            )),
+        }
     }
 
     pub fn push_variant(

@@ -275,7 +275,7 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_name: Expr::multiple(vec![
+                    worker_name: Expr::expr_block(vec![
                         Expr::let_binding_with_type(
                             "x",
                             rib::TypeName::Str,
@@ -304,7 +304,7 @@ mod tests {
                                 "body".to_string(),
                                 Expr::select_field(Expr::identifier("worker"), "response",),
                             ),
-                            ("status".to_string(), Expr::number(200f64)),
+                            ("status".to_string(), Expr::untyped_number(200f64)),
                         ]
                         .into_iter()
                         .collect()
