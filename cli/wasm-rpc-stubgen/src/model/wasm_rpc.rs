@@ -451,7 +451,7 @@ impl Application {
                 "Component Build is specified multiple times in sources: {}",
                 wasm_builds
                     .iter()
-                    .map(|c| format!("{} in {}", c.name, c.source.to_string_lossy()))
+                    .map(|c| format!("{} in {}", c.name, c.source.display()))
                     .join(", ")
             ));
         }

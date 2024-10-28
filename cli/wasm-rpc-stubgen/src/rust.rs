@@ -286,10 +286,7 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
 
     log_action(
         "Generating",
-        format!(
-            "stub source to {}",
-            def.target_rust_path().to_string_lossy()
-        ),
+        format!("stub source to {}", def.target_rust_path().display()),
     );
     fs::create_dir_all(def.target_rust_path().parent().unwrap())?;
     fs::write(def.target_rust_path(), src)?;

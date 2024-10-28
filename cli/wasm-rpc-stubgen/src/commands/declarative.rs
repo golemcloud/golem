@@ -239,8 +239,8 @@ pub async fn post_component_build_app(config: &Config, app: &Application) -> any
                 "Copying",
                 format!(
                     "(without composing) {} to {}, no wasm rpc dependencies defined",
-                    input_wasm.to_string_lossy(),
-                    output_wasm.to_string_lossy()
+                    input_wasm.display(),
+                    output_wasm.display()
                 ),
             );
             copy(&input_wasm, &output_wasm)?;
@@ -335,7 +335,7 @@ fn collect_sources(mode: &ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf
                                 format!(
                                     "Failed to compile glob pattern: {}, source: {}, error: {}",
                                     pattern,
-                                    source.to_string_lossy(),
+                                    source.display(),
                                     err
                                 )
                             })
@@ -344,7 +344,7 @@ fn collect_sources(mode: &ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf
                                     format!(
                                         "Failed to resolve glob pattern: {}, source: {}, error: {}",
                                         pattern,
-                                        source.to_string_lossy(),
+                                        source.display(),
                                         err
                                     )
                                 })
@@ -368,7 +368,7 @@ fn collect_sources(mode: &ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf
                 .map(|(source, count)| {
                     format!(
                         "Source added multiple times, source: {}, count: {}",
-                        source.to_string_lossy(),
+                        source.display(),
                         count
                     )
                 })
@@ -384,10 +384,7 @@ fn collect_sources(mode: &ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf
         } else {
             format!(
                 "sources: {}",
-                sources
-                    .iter()
-                    .map(|source| source.to_string_lossy())
-                    .join(", ")
+                sources.iter().map(|source| source.display()).join(", ")
             )
         }
     });

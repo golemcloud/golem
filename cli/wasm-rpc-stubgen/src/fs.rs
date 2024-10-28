@@ -12,13 +12,7 @@ pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> anyhow::Result<u6
     let from = from.as_ref();
     let to = to.as_ref();
 
-    let context = || {
-        format!(
-            "Failed to copy from {} to {}",
-            from.to_string_lossy(),
-            to.to_string_lossy()
-        )
-    };
+    let context = || format!("Failed to copy from {} to {}", from.display(), to.display());
 
     let target_parent = to
         .parent()
@@ -51,8 +45,8 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
     let context = || {
         format!(
             "Failed to copy (and transform) from {} to {}",
-            from.to_string_lossy(),
-            to.to_string_lossy()
+            from.display(),
+            to.display()
         )
     };
 
@@ -87,7 +81,7 @@ pub fn write_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Resu
     let path = path.as_ref();
     let str = str.as_ref();
 
-    let context = || format!("Failed to write string to {}", path.to_string_lossy());
+    let context = || format!("Failed to write string to {}", path.display());
 
     let target_parent = path
         .parent()
@@ -107,15 +101,10 @@ pub fn has_str_content<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow
     let path = path.as_ref();
     let str = str.as_ref();
 
-    let context = || {
-        format!(
-            "Failed to compare content to string for {}",
-            path.to_string_lossy()
-        )
-    };
+    let context = || format!("Failed to compare content to string for {}", path.display());
 
     let content = std::fs::read_to_string(path)
-        .with_context(|| anyhow!("Failed to read as string: {}", path.to_string_lossy()))
+        .with_context(|| anyhow!("Failed to read as string: {}", path.display()))
         .with_context(context)?;
 
     Ok(content == str)
@@ -128,17 +117,17 @@ pub fn has_same_string_content<P: AsRef<Path>, Q: AsRef<Path>>(a: P, b: Q) -> an
     let context = || {
         format!(
             "Failed to compare string contents of {} and {}",
-            a.to_string_lossy(),
-            b.to_string_lossy()
+            a.display(),
+            b.display()
         )
     };
 
     let content_a = std::fs::read_to_string(a)
-        .with_context(|| anyhow!("Failed to read as string: {}", a.to_string_lossy()))
+        .with_context(|| anyhow!("Failed to read as string: {}", a.display()))
         .with_context(context)?;
 
     let content_b = std::fs::read_to_string(b)
-        .with_context(|| anyhow!("Failed to read as string: {}", b.to_string_lossy()))
+        .with_context(|| anyhow!("Failed to read as string: {}", b.display()))
         .with_context(context)?;
 
     Ok(content_a == content_b)
@@ -147,20 +136,10 @@ pub fn has_same_string_content<P: AsRef<Path>, Q: AsRef<Path>>(a: P, b: Q) -> an
 pub fn get_file_name<P: AsRef<Path>>(path: P) -> anyhow::Result<String> {
     let path = path.as_ref();
     path.file_name()
-        .ok_or_else(|| {
-            anyhow!(
-                "Failed to get file name for path: {}",
-                path.to_string_lossy(),
-            )
-        })?
+        .ok_or_else(|| anyhow!("Failed to get file name for path: {}", path.display(),))?
         .to_os_string()
         .into_string()
-        .map_err(|_| {
-            anyhow!(
-                "Failed to convert filename for path: {}",
-                path.to_string_lossy()
-            )
-        })
+        .map_err(|_| anyhow!("Failed to convert filename for path: {}", path.display()))
 }
 
 pub fn strip_path_prefix<P: AsRef<Path>, Q: AsRef<Path>>(
@@ -175,8 +154,8 @@ pub fn strip_path_prefix<P: AsRef<Path>, Q: AsRef<Path>>(
         .with_context(|| {
             anyhow!(
                 "Failed to strip prefix from path, prefix: {}, path: {}",
-                prefix.to_string_lossy(),
-                path.to_string_lossy()
+                prefix.display(),
+                path.display()
             )
         })?
         .to_path_buf())
@@ -208,18 +187,11 @@ impl OverwriteSafeAction {
         F: FnOnce(String) -> anyhow::Result<String>,
     {
         let content = std::fs::read_to_string(&source).with_context(|| {
-            anyhow!(
-                "Failed to read file as string, path: {}",
-                source.to_string_lossy()
-            )
+            anyhow!("Failed to read file as string, path: {}", source.display())
         })?;
 
-        let source_transformed = transform(content).with_context(|| {
-            anyhow!(
-                "Failed to transform file, path: {}",
-                source.to_string_lossy()
-            )
-        })?;
+        let source_transformed = transform(content)
+            .with_context(|| anyhow!("Failed to transform file, path: {}", source.display()))?;
 
         Ok(OverwriteSafeAction::CopyFileTransformed {
             source,
