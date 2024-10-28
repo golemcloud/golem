@@ -43,6 +43,7 @@ sqlx = { workspace = true, features = [
     "migrate",
     "chrono",
 ] }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }

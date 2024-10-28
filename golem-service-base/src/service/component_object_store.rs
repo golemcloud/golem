@@ -17,11 +17,13 @@ use crate::stream::{ByteStream, LoggedByteStream};
 use anyhow::Error;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
-use futures::Stream;
-use std::fs;
+use futures::{Stream, StreamExt};
+use std::fs::{self, File};
+use std::io::Write;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use tempfile::NamedTempFile;
 use tracing::{debug, debug_span, error, info};
 use tracing_futures::Instrument;
 
@@ -35,6 +37,8 @@ pub trait ComponentObjectStore {
     ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>>;
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error>;
+
+    async fn put_stream(&self, object_key: &str, stream: ByteStream) -> Result<(), Error>;
 
     async fn delete(&self, object_key: &str) -> Result<(), Error>;
 }
@@ -90,6 +94,19 @@ impl<Store: ComponentObjectStore + Sync> ComponentObjectStore
             "Putting object",
             object_key,
             self.store.put(object_key, data).await,
+        )
+    }
+
+    async fn put_stream(&self, object_key: &str, stream: ByteStream) -> Result<(), Error> {
+        let span = debug_span!("Putting component stream", key = object_key);
+        let logging_stream = LoggedByteStream::new(stream);
+        let instrumented_stream = logging_stream.instrument(span);
+        self.logged(
+            "Putting object",
+            object_key,
+            self.store
+                .put_stream(object_key, ByteStream::new(instrumented_stream))
+                .await,
         )
     }
 
@@ -208,7 +225,29 @@ impl ComponentObjectStore for AwsS3ComponentObjectStore {
         Ok(())
     }
 
-    async fn delete(&self, object_key: &str) -> Result<(), Error> {
+    async fn put_stream(&self, object_key: &str, mut stream: ByteStream) -> Result<(), Error> {
+        let key = self.get_key(object_key);
+
+        info!("Putting object: {}/{}", self.bucket_name, key);
+
+        let mut file = NamedTempFile::with_prefix("golem")?;
+
+        while let Some(chunk) = stream.next().await {
+            file.write_all(&chunk?)?
+        }
+
+        self.client
+            .put_object()
+            .bucket(&self.bucket_name)
+            .key(key)
+            .body(aws_sdk_s3::primitives::ByteStream::from_path(file.path()).await?)
+            .send()
+            .await?;
+
+        Ok(())
+    }
+
+    async fn delete(&self, object_key: &str) -> Result<(), anyhow::Error> {
         let key = self.get_key(object_key);
 
         info!("Deleting object: {}/{}", self.bucket_name, key);
@@ -303,6 +342,29 @@ impl ComponentObjectStore for FsComponentObjectStore {
         let file_path = dir_path.join(object_key);
 
         fs::write(file_path, data).map_err(|e| e.into())
+    }
+
+    async fn put_stream(
+        &self,
+        object_key: &str,
+        mut stream: ByteStream,
+    ) -> Result<(), anyhow::Error> {
+        let dir_path = self.get_dir_path();
+
+        debug!("Putting object: {}/{}", dir_path.display(), object_key);
+
+        if !dir_path.exists() {
+            fs::create_dir_all(dir_path.clone())?;
+        }
+
+        let file_path = dir_path.join(object_key);
+        let mut file = File::create(file_path)?;
+
+        while let Some(chunk) = stream.next().await {
+            file.write_all(&chunk?)?
+        }
+
+        Ok(())
     }
 
     async fn delete(&self, object_key: &str) -> Result<(), Error> {

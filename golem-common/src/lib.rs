@@ -19,8 +19,10 @@ pub mod cache;
 pub mod client;
 pub mod config;
 
+pub mod app;
 pub mod golem_version;
 pub mod grpc;
+pub mod log;
 pub mod metrics;
 pub mod model;
 pub mod newtype;

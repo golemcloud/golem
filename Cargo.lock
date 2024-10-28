@@ -2531,6 +2531,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "displaydoc"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.85",
+]
+
+[[package]]
 name = "dlib"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3519,7 +3530,9 @@ dependencies = [
  "textwrap 0.16.1",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
  "tokio-tungstenite 0.20.1",
+ "tokio-util",
  "tonic",
  "tonic-health",
  "tower",
@@ -3531,6 +3544,7 @@ dependencies = [
  "version-compare",
  "walkdir",
  "wasm-wave",
+ "zip",
 ]
 
 [[package]]
@@ -3560,10 +3574,12 @@ name = "golem-common"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert2",
  "async-trait",
  "bincode",
  "bytes 1.8.0",
  "chrono",
+ "colored",
  "combine",
  "console-subscriber",
  "dashmap",
@@ -3572,6 +3588,7 @@ dependencies = [
  "fred",
  "futures-core",
  "git-version",
+ "glob",
  "golem-api-grpc",
  "golem-rib",
  "golem-wasm-ast",
@@ -3591,6 +3608,7 @@ dependencies = [
  "regex",
  "serde 1.0.213",
  "serde_json",
+ "serde_yaml",
  "test-r",
  "thiserror",
  "tokio",
@@ -3663,6 +3681,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tap",
+ "tempfile",
  "test-r",
  "thiserror",
  "tokio",
@@ -3799,6 +3818,7 @@ dependencies = [
  "serde 1.0.213",
  "serde_json",
  "sqlx",
+ "tempfile",
  "test-r",
  "thiserror",
  "tokio",
@@ -4079,6 +4099,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "sysinfo",
+ "system-interface",
  "tempfile",
  "test-r",
  "testcontainers",
@@ -4087,6 +4108,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.0",
  "tokio-stream",
+ "tokio-util",
  "tonic",
  "tonic-health",
  "tonic-reflection",
@@ -4099,6 +4121,7 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "windows-sys 0.52.0",
+ "zip",
  "zstd",
 ]
 
@@ -11338,6 +11361,23 @@ name = "zeroize"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ced3678a2879b30306d323f4542626697a464a97c0a07c9aebf7ebca65cd4dde"
+
+[[package]]
+name = "zip"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc5e4288ea4057ae23afc69a4472434a87a2495cafce6632fd1c4ec9f5cf3494"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "crossbeam-utils",
+ "displaydoc",
+ "flate2",
+ "indexmap 2.6.0",
+ "memchr",
+ "thiserror",
+ "time",
+]
 
 [[package]]
 name = "zstd"

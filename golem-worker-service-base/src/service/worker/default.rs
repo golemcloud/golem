@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::PathBuf;
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
@@ -27,8 +28,9 @@ use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, InterruptWorkerRequest,
-    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
+    CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, GetWorkerFilesRequest,
+    InterruptWorkerRequest, InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, SearchOplogResponse,
+    UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
@@ -38,7 +40,7 @@ use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
     ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
-use golem_service_base::model::{Component, GolemError};
+use golem_service_base::model::{Component, GolemError, GolemErrorInvalidRequest};
 use golem_service_base::model::{
     GetOplogResponse, GolemErrorUnknown, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
 };
@@ -182,6 +184,14 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
+
+    async fn get_file_or_dir_contents(
+        &self,
+        worker_id: &WorkerId,
+        path: PathBuf,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<String>;
 
     async fn get_metadata(
         &self,
@@ -694,6 +704,50 @@ where
         .await?;
 
         Ok(())
+    }
+
+    async fn get_file_or_dir_contents(
+        &self,
+        worker_id: &WorkerId,
+        path: PathBuf,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<String> {
+        let worker_id = worker_id.clone();
+        let path = path.into_os_string().into_string().map_err(|os_string| {
+            WorkerServiceError::Golem(GolemError::InvalidRequest(GolemErrorInvalidRequest {
+                details: format!("Path contains invalid Unicode data, path: {os_string:?}"),
+            }))
+        })?;
+        let file_or_dir_contents = self.call_worker_executor(
+            worker_id.clone(),
+            "get_files",
+            move |worker_executor_client| {
+                info!("Get files");
+                let worker_id = worker_id.clone();
+                Box::pin(
+                    worker_executor_client.get_worker_files(GetWorkerFilesRequest {
+                        worker_id: Some(worker_id.into()),
+                        path: path.clone(),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::GetWorkerFilesResponse {
+                    result: Some(workerexecutor::v1::get_worker_files_response::Result::DirContents(file_or_dir_contents)),
+                } => Ok(file_or_dir_contents),
+                workerexecutor::v1::GetWorkerFilesResponse {
+                    result:
+                        Some(workerexecutor::v1::get_worker_files_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::GetWorkerFilesResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await?;
+
+        Ok(file_or_dir_contents)
     }
 
     async fn get_metadata(

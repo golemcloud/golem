@@ -11,6 +11,7 @@ use golem_worker_service_base::api::WorkerApiBaseError;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::path::PathBuf;
 use std::str::FromStr;
 use tap::TapFallible;
 
@@ -368,6 +369,51 @@ impl WorkerApi {
             .await
             .map_err(|e| e.into())
             .map(|_| Json(InterruptResponse {}));
+
+        record.result(response)
+    }
+
+    /// Get files of a worker
+    ///
+    /// `.../{worker_name}/files` retrieves the top-level listing of nodes in the worker’s file system.
+    ///
+    /// The listing contains information on the type of each node, as well as other metadata:
+    /// ```json
+    /// [{"type": "directory", "name": "foo"}, {"type": "file", "name": "bar.txt"}, ...]`
+    /// ``````
+    ///
+    /// `.../{worker_name}/files?path=/root_in_worker/my_file.txt` retrieves the file at the specified path or lists the contents of the directory
+    /// at the specified path, depending on whether or not the path points to a file node or a directory node.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/files",
+        method = "get",
+        operation_id = "get_worker_files"
+    )]
+    async fn get_worker_file_or_dir_contents(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        path: Query<Option<String>>,
+    ) -> Result<Json<String>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record =
+            recorded_http_api_request!("get_worker_files", worker_id = worker_id.to_string());
+
+        let path = PathBuf::from(path.0.unwrap_or_default());
+
+        let response = self
+            .worker_service
+            .get_file_or_dir_contents(
+                &worker_id,
+                path,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
 
         record.result(response)
     }

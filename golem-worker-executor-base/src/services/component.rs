@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use crate::error::GolemError;
 use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError, UriBackConversion};
 use crate::metrics::component::record_compilation_time;
+use crate::model::PathHandle;
 use crate::services::compiled_component;
 use crate::services::compiled_component::CompiledComponentService;
 use crate::services::golem_config::{
@@ -29,8 +30,10 @@ use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
-    download_component_response, get_component_metadata_response, ComponentError,
-    DownloadComponentRequest, GetLatestComponentRequest, GetVersionedComponentRequest,
+    download_component_files_response, download_component_response,
+    get_component_metadata_response, ComponentError, DownloadComponentFilesRequest,
+    DownloadComponentFilesResponse, DownloadComponentRequest, GetLatestComponentRequest,
+    GetVersionedComponentRequest,
 };
 use golem_api_grpc::proto::golem::component::LinearMemory;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
@@ -43,6 +46,9 @@ use golem_common::retries::with_retries;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use prost::Message;
+use tempfile::NamedTempFile;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -75,6 +81,12 @@ pub trait ComponentService {
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
     ) -> Result<ComponentMetadata, GolemError>;
+
+    async fn get_initial_fs_archive(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Option<Arc<PathHandle>>, GolemError>;
 }
 
 pub async fn configured(
@@ -95,6 +107,7 @@ pub async fn configured(
                     .expect("Access token must be an UUID"),
                 cache_config.max_capacity,
                 cache_config.max_metadata_capacity,
+                cache_config.max_files_capacity,
                 cache_config.time_to_idle,
                 config.retries.clone(),
                 compiled_component_service,
@@ -120,6 +133,7 @@ struct ComponentKey {
 pub struct ComponentServiceGrpc {
     component_cache: Cache<ComponentKey, (), Component, GolemError>,
     component_metadata_cache: Cache<ComponentKey, (), ComponentMetadata, GolemError>,
+    initial_fs_archive_cache: Cache<ComponentKey, (), Option<Arc<PathHandle>>, GolemError>,
     access_token: Uuid,
     retry_config: RetryConfig,
     compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
@@ -132,6 +146,7 @@ impl ComponentServiceGrpc {
         access_token: Uuid,
         max_capacity: usize,
         max_metadata_capacity: usize,
+        max_files_capacity: usize,
         time_to_idle: Duration,
         retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
@@ -141,6 +156,10 @@ impl ComponentServiceGrpc {
             component_cache: create_component_cache(max_capacity, time_to_idle),
             component_metadata_cache: create_component_metadata_cache(
                 max_metadata_capacity,
+                time_to_idle,
+            ),
+            initial_fs_archive_cache: create_initial_fs_archive_cache(
+                max_files_capacity,
                 time_to_idle,
             ),
             access_token,
@@ -313,6 +332,37 @@ impl ComponentService for ComponentServiceGrpc {
             }
         }
     }
+
+    async fn get_initial_fs_archive(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Option<Arc<PathHandle>>, GolemError> {
+        let client = self.client.clone();
+        let access_token = self.access_token;
+        let retry_config = self.retry_config.clone();
+        let component_id = component_id.clone();
+        self.initial_fs_archive_cache
+            .get_or_insert_simple(
+                &ComponentKey {
+                    component_id: component_id.clone(),
+                    component_version,
+                },
+                || {
+                    Box::pin(async move {
+                        download_initial_fs_archive_via_grpc(
+                            &client,
+                            &access_token,
+                            &retry_config,
+                            &component_id,
+                            component_version,
+                        )
+                        .await
+                    })
+                },
+            )
+            .await
+    }
 }
 
 async fn download_via_grpc(
@@ -365,6 +415,82 @@ async fn download_via_grpc(
                 record_external_call_response_size_bytes("components", "download", bytes.len());
 
                 Ok(bytes)
+            })
+        },
+        is_grpc_retriable::<ComponentError>,
+    )
+    .await
+    .map_err(|error| grpc_component_download_error(error, component_id, component_version))
+}
+
+async fn download_initial_fs_archive_via_grpc(
+    client: &GrpcClient<ComponentServiceClient<Channel>>,
+    access_token: &Uuid,
+    retry_config: &RetryConfig,
+    component_id: &ComponentId,
+    component_version: ComponentVersion,
+) -> Result<Option<Arc<PathHandle>>, GolemError> {
+    with_retries(
+        "components",
+        "download_files",
+        Some(component_id.to_string()),
+        retry_config,
+        &(
+            client.clone(),
+            component_id.clone(),
+            access_token.to_owned(),
+        ),
+        |(client, component_id, access_token)| {
+            Box::pin(async move {
+                let mut response = client
+                    .call("download_component_files", move |client| {
+                        let request = authorised_grpc_request(
+                            DownloadComponentFilesRequest {
+                                component_id: Some(component_id.clone().into()),
+                                version: Some(component_version),
+                            },
+                            access_token,
+                        );
+                        Box::pin(client.download_component_files(request))
+                    })
+                    .await?
+                    .into_inner();
+
+                let archive_temp_path = NamedTempFile::with_prefix("golem")
+                    .map_err(|error| format!("Failed to create a temp file: {error}"))?
+                    .into_temp_path();
+
+                let mut archive = File::create(&archive_temp_path)
+                    .await
+                    .map_err(|error| format!("Failed to open a temp file: {error}"))?;
+
+                let mut archive_byte_count = 0;
+
+                while let Some(DownloadComponentFilesResponse {
+                    result: Some(result),
+                }) = response.message().await?
+                {
+                    match result {
+                        download_component_files_response::Result::SuccessChunk(chunk) => {
+                            archive.write_all(&chunk).await.map_err(|error| {
+                                format!("Failed to write to an archive: {error}")
+                            })?;
+                            archive_byte_count += chunk.len();
+                        }
+                        download_component_files_response::Result::Error(error) => {
+                            Err(GrpcError::Domain(error))?;
+                        }
+                    }
+                }
+
+                record_external_call_response_size_bytes(
+                    "components",
+                    "download_files",
+                    archive_byte_count,
+                );
+
+                Ok((archive_byte_count != 0)
+                    .then(move || Arc::new(PathHandle::TemporaryPath(archive_temp_path))))
             })
         },
         is_grpc_retriable::<ComponentError>,
@@ -523,6 +649,21 @@ fn create_component_metadata_cache(
             period: Duration::from_secs(60),
         },
         "component_metadata",
+    )
+}
+
+fn create_initial_fs_archive_cache(
+    max_capacity: usize,
+    time_to_idle: Duration,
+) -> Cache<ComponentKey, (), Option<Arc<PathHandle>>, GolemError> {
+    Cache::new(
+        Some(max_capacity),
+        FullCacheEvictionMode::LeastRecentlyUsed(1),
+        BackgroundEvictionMode::OlderThan {
+            ttl: time_to_idle,
+            period: Duration::from_secs(60),
+        },
+        "files",
     )
 }
 
@@ -802,6 +943,19 @@ impl ComponentService for ComponentServiceLocalFileSystem {
                 .await?,
             metadata,
         ))
+    }
+
+    async fn get_initial_fs_archive(
+        &self,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Option<Arc<PathHandle>>, GolemError> {
+        let path = self
+            .root
+            .join(format!("{}-{}-files.zip", component_id, component_version));
+        Ok(path
+            .is_file()
+            .then(move || Arc::new(PathHandle::StandardPath(path))))
     }
 
     async fn get_metadata(

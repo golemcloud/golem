@@ -16,11 +16,13 @@ pub mod public_oplog;
 
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bincode::{Decode, Encode};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
+use tempfile::TempPath;
 use wasmtime::Trap;
 
 use golem_common::model::oplog::WorkerError;
@@ -340,6 +342,20 @@ pub enum LookupResult {
     Pending,
     Interrupted,
     Complete(Result<TypeAnnotatedValue, GolemError>),
+}
+
+pub enum PathHandle {
+    TemporaryPath(TempPath),
+    StandardPath(PathBuf),
+}
+
+impl PathHandle {
+    pub fn as_path(&self) -> &Path {
+        match self {
+            Self::TemporaryPath(path) => path.as_ref(),
+            Self::StandardPath(path) => path.as_ref(),
+        }
+    }
 }
 
 #[cfg(test)]

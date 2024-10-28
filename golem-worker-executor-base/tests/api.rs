@@ -18,7 +18,6 @@ use std::collections::HashMap;
 use std::env;
 use std::io::Write;
 use std::net::SocketAddr;
-use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -46,6 +45,7 @@ use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
     worker_error_message, TestDslUnsafe,
 };
+use system_interface::fs::FileIoExt;
 use tokio::time::sleep;
 use tonic::transport::Body;
 use tracing::{debug, info};

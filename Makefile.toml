@@ -384,9 +384,9 @@ description = "Publishes packages to crates.io"
 dependencies = [
     "build-release",
     "publish-golem-api-grpc",
-    "publish-golem-rib",
     "publish-golem-common",
     "publish-golem-client",
+    "publish-golem-rib",
     "publish-golem-service-base",
     "publish-golem-test-framework",
     "publish-golem-cli",
@@ -547,6 +547,8 @@ condition = { fail_message = "Requires lnav, nginx and redis on path. Install th
 condition_script = ["nginx -v", "lnav --version", "redis-server --version"]
 
 script = '''
+#!/bin/bash
+
 mkdir -pv data logs
 
 redis-server --port 6380 --save "" --appendonly no &> logs/redis.log &

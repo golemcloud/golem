@@ -21,6 +21,7 @@ use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 use golem_client::model::ComponentType;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Subcommand, Debug)]
@@ -44,6 +45,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// The component type. If none specified, the command creates a Durable component.
         #[command(flatten)]
         component_type: ComponentTypeArg,
+
+        /// List of application manifests, can be defined multiple times
+        #[arg(long, short)]
+        app: Vec<PathBuf>,
 
         /// Do not ask for confirmation for performing an update in case the component already exists
         #[arg(short = 'y', long)]
@@ -72,6 +77,10 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         /// Update mode - auto or manual
         #[arg(long, default_value = "auto", requires = "try_update_workers")]
         update_mode: WorkerUpdateMode,
+
+        /// List of application manifests, can be defined multiple times
+        #[arg(long, short)]
+        app: Vec<PathBuf>,
 
         /// Do not ask for confirmation for creating a new component in case it does not exist
         #[arg(short = 'y', long)]
@@ -188,6 +197,7 @@ impl<
                 component_name,
                 component_file,
                 component_type,
+                app,
                 non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
@@ -197,6 +207,7 @@ impl<
                         component_file,
                         component_type.component_type(),
                         Some(project_id),
+                        app,
                         non_interactive,
                         format,
                     )
@@ -208,6 +219,7 @@ impl<
                 component_type,
                 try_update_workers,
                 update_mode,
+                app,
                 non_interactive,
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
@@ -218,6 +230,7 @@ impl<
                         component_file,
                         component_type.optional_component_type(),
                         project_id.clone(),
+                        app,
                         non_interactive,
                         format,
                     )

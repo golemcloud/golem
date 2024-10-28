@@ -501,6 +501,43 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         Ok(())
     }
 
+    async fn get_worker_files_internal(
+        &self,
+        request: golem::workerexecutor::v1::GetWorkerFilesRequest,
+    ) -> Result<String, GolemError> {
+        let worker_id = request
+            .worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+
+        let account_id = request
+            .account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        let metadata = self.worker_service().get(&owned_worker_id).await;
+        self.validate_worker_status(&owned_worker_id, &metadata)
+            .await?;
+
+        // @TODO continue with implementation
+        let root_dir_path = worker_id.to_root_dir_path();
+        let mut file_or_dir_contents = String::from("worker root contents: [");
+        if root_dir_path.is_dir() {
+            if let Ok(mut dir) = tokio::fs::read_dir(root_dir_path).await {
+                while let Ok(Some(entry)) = dir.next_entry().await {
+                    file_or_dir_contents.push_str(&entry.file_name().to_string_lossy());
+                    file_or_dir_contents.push(',');
+                }
+            }
+        }
+        file_or_dir_contents.push(']');
+
+        Ok(file_or_dir_contents)
+    }
+
     async fn resume_worker_internal(
         &self,
         request: golem::workerexecutor::v1::ResumeWorkerRequest,
@@ -1603,6 +1640,45 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     golem::workerexecutor::v1::InterruptWorkerResponse {
                         result: Some(
                             golem::workerexecutor::v1::interrupt_worker_response::Result::Failure(
+                                err.clone().into(),
+                            ),
+                        ),
+                    },
+                )),
+                &err,
+            ),
+        }
+    }
+
+    async fn get_worker_files(
+        &self,
+        request: Request<golem::workerexecutor::v1::GetWorkerFilesRequest>,
+    ) -> Result<Response<golem::workerexecutor::v1::GetWorkerFilesResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_worker_files",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        match self
+            .get_worker_files_internal(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(dir_contents) => record.succeed(Ok(Response::new(
+                golem::workerexecutor::v1::GetWorkerFilesResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::get_worker_files_response::Result::DirContents(
+                            dir_contents,
+                        ),
+                    ),
+                },
+            ))),
+            Err(err) => record.fail(
+                Ok(Response::new(
+                    golem::workerexecutor::v1::GetWorkerFilesResponse {
+                        result: Some(
+                            golem::workerexecutor::v1::get_worker_files_response::Result::Failure(
                                 err.clone().into(),
                             ),
                         ),

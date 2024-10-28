@@ -179,7 +179,7 @@ tokio = { version = "1.0", features = [
 tokio-postgres = "0.7.10"
 tokio-rustls = { version = "0.26.0" }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tokio-util = "0.7.10"
+tokio-util = { version = "0.7.10", features = ["io-util"] }
 toml = "0.8.14"
 tonic = { version = "0.11.0", features = ["gzip"] }
 tonic-reflection = "0.11.0"
@@ -194,7 +194,7 @@ tracing-subscriber = { version = "0.3.18", features = [
     "json",
 ] }
 tracing-test = "0.2.5"
-url = "2.5.0"
+url = { version = "2.5.0", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
 warp = "0.3.6"
 wasm-wave = "=0.6.0"
@@ -202,6 +202,7 @@ wasmtime = { version = "=21.0.1", features = ["component-model"] }
 wasmtime-wasi = { version = "=21.0.1" }
 wasmtime-wasi-http = { version = "=21.0.1" }
 webpki-roots = { version = "0.26.0" }
+zip = { version = "2.2.0", default-features = false, features = ["deflate-flate2", "time"] }
 
 [patch.crates-io]
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v21.0.1" }

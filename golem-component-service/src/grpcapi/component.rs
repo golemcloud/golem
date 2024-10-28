@@ -12,28 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Not;
 use std::pin::Pin;
 use std::sync::Arc;
 use tracing::Instrument;
 
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
-use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_constraints_response, create_component_request,
-    create_component_response, download_component_response,
+    create_component_response, download_component_files_response, download_component_response,
     get_component_metadata_all_versions_response, get_component_metadata_response,
     get_components_response, update_component_request, update_component_response, ComponentError,
     CreateComponentConstraintsRequest, CreateComponentConstraintsResponse,
     CreateComponentConstraintsSuccessResponse, CreateComponentRequest,
-    CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentRequest,
-    DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
-    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest,
-    GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse,
-    GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
-    UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
+    CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentFilesRequest,
+    DownloadComponentFilesResponse, DownloadComponentRequest, DownloadComponentResponse,
+    GetComponentMetadataAllVersionsResponse, GetComponentMetadataResponse,
+    GetComponentMetadataSuccessResponse, GetComponentRequest, GetComponentSuccessResponse,
+    GetComponentsRequest, GetComponentsResponse, GetComponentsSuccessResponse,
+    GetLatestComponentRequest, GetVersionedComponentRequest, UpdateComponentRequest,
+    UpdateComponentRequestHeader, UpdateComponentResponse,
 };
 use golem_api_grpc::proto::golem::component::Component;
 use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
@@ -46,6 +47,9 @@ use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::ComponentConstraints;
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
+use golem_service_base::stream::ByteStream;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -160,11 +164,28 @@ impl ComponentGrpcApi {
         Ok(result)
     }
 
+    async fn download_files(
+        &self,
+        request: DownloadComponentFilesRequest,
+    ) -> Result<ByteStream, ComponentError> {
+        let id: ComponentId = request
+            .component_id
+            .and_then(|id| id.try_into().ok())
+            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let version = request.version;
+        let result = self
+            .component_service
+            .download_files_stream(&id, version, &DefaultNamespace::default())
+            .await?;
+        Ok(result)
+    }
+
     async fn create(
         &self,
         component_id: ComponentId,
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
+        initial_fs_archive: Option<File>,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let result = self
@@ -174,6 +195,7 @@ impl ComponentGrpcApi {
                 &name,
                 request.component_type().into(),
                 data,
+                initial_fs_archive,
                 &DefaultNamespace::default(),
             )
             .await?;
@@ -184,6 +206,7 @@ impl ComponentGrpcApi {
         &self,
         request: UpdateComponentRequestHeader,
         data: Vec<u8>,
+        initial_fs_archive: Option<File>,
     ) -> Result<Component, ComponentError> {
         let id: ComponentId = request
             .component_id
@@ -198,7 +221,13 @@ impl ComponentGrpcApi {
         };
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultNamespace::default())
+            .update(
+                &id,
+                data,
+                component_type,
+                initial_fs_archive,
+                &DefaultNamespace::default(),
+            )
             .await?;
         Ok(result.into())
     }
@@ -248,45 +277,60 @@ impl ComponentService for ComponentGrpcApi {
         &self,
         request: Request<Streaming<CreateComponentRequest>>,
     ) -> Result<Response<CreateComponentResponse>, Status> {
-        let chunks: Vec<CreateComponentRequest> =
-            request.into_inner().into_stream().try_collect().await?;
-        let header = chunks.iter().find_map(|c| {
-            c.clone().data.and_then(|d| match d {
-                create_component_request::Data::Header(d) => Some(d),
-                _ => None,
-            })
-        });
+        let mut maybe_header = None;
+        let mut component_data = Vec::new();
+
+        let temp_dir = tempfile::Builder::new().prefix("golem").tempdir()?;
+        let mut initial_fs_archive =
+            File::create_new(temp_dir.path().join("initial_fs_archive.zip")).await?;
+        let mut initial_fs_archive_is_empty = true;
+
+        let mut request_stream = request.into_inner();
+        while let Some(CreateComponentRequest { data: Some(data) }) =
+            request_stream.message().await?
+        {
+            match data {
+                create_component_request::Data::Header(header) => {
+                    maybe_header = Some(header);
+                }
+                create_component_request::Data::Chunk(mut component_chunk) => {
+                    component_data.append(&mut component_chunk.component_chunk);
+                }
+                create_component_request::Data::FilesChunk(files_chunk) => {
+                    initial_fs_archive
+                        .write_all(&files_chunk.files_chunk)
+                        .await?;
+                    initial_fs_archive_is_empty = false;
+                }
+            }
+        }
 
         let component_id = ComponentId::new_v4();
         let record = recorded_grpc_api_request!(
             "create_component",
-            component_name = header.as_ref().map(|r| r.component_name.clone()),
+            component_name = maybe_header
+                .as_ref()
+                .map(|header| header.component_name.clone()),
             component_id = component_id.to_string(),
         );
 
-        let result = match header {
-            Some(request) => {
-                let data: Vec<u8> = chunks
-                    .iter()
-                    .flat_map(|c| {
-                        c.clone()
-                            .data
-                            .map(|d| match d {
-                                create_component_request::Data::Chunk(d) => d.component_chunk,
-                                _ => vec![],
-                            })
-                            .unwrap_or_default()
-                    })
-                    .collect();
-                self.create(component_id, request, data)
-                    .instrument(record.span.clone())
-                    .await
-            }
-            None => Err(bad_request_error("Missing request")),
+        let result = if let Some(request_header) = maybe_header {
+            self.create(
+                component_id,
+                request_header,
+                component_data,
+                initial_fs_archive_is_empty
+                    .not()
+                    .then_some(initial_fs_archive),
+            )
+            .instrument(record.span.clone())
+            .await
+        } else {
+            Err(bad_request_error("Missing request header"))
         };
 
         let result = match result {
-            Ok(v) => record.succeed(create_component_response::Result::Success(v)),
+            Ok(component) => record.succeed(create_component_response::Result::Success(component)),
             Err(error) => record.fail(
                 create_component_response::Result::Error(error.clone()),
                 &ComponentTraceErrorKind(&error),
@@ -341,6 +385,58 @@ impl ComponentService for ComponentGrpcApi {
                     record.fail(stream, &ComponentTraceErrorKind(&err))
                 }
             };
+
+        Ok(Response::new(stream))
+    }
+
+    type DownloadComponentFilesStream =
+        BoxStream<'static, Result<DownloadComponentFilesResponse, Status>>;
+
+    async fn download_component_files(
+        &self,
+        request: Request<DownloadComponentFilesRequest>,
+    ) -> Result<Response<Self::DownloadComponentFilesStream>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "download_component_files",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+        let stream: Self::DownloadComponentFilesStream = match self
+            .download_files(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(response) => {
+                let stream = response.map(|content| {
+                    let res = match content {
+                        Ok(content) => DownloadComponentFilesResponse {
+                            result: Some(download_component_files_response::Result::SuccessChunk(
+                                content,
+                            )),
+                        },
+                        Err(_) => DownloadComponentFilesResponse {
+                            result: Some(download_component_files_response::Result::Error(
+                                internal_error("Internal error"),
+                            )),
+                        },
+                    };
+                    Ok(res)
+                });
+                let stream: Self::DownloadComponentFilesStream = Box::pin(stream);
+                record.succeed(stream)
+            }
+            Err(err) => {
+                let res = DownloadComponentFilesResponse {
+                    result: Some(download_component_files_response::Result::Error(
+                        err.clone(),
+                    )),
+                };
+
+                let stream: Self::DownloadComponentFilesStream =
+                    Box::pin(tokio_stream::iter([Ok(res)]));
+                record.fail(stream, &ComponentTraceErrorKind(&err))
+            }
+        };
 
         Ok(Response::new(stream))
     }
@@ -407,45 +503,59 @@ impl ComponentService for ComponentGrpcApi {
         &self,
         request: Request<Streaming<UpdateComponentRequest>>,
     ) -> Result<Response<UpdateComponentResponse>, Status> {
-        let chunks: Vec<UpdateComponentRequest> =
-            request.into_inner().into_stream().try_collect().await?;
+        let mut maybe_header = None;
+        let mut component_data = Vec::new();
 
-        let header = chunks.iter().find_map(|c| {
-            c.clone().data.and_then(|d| match d {
-                update_component_request::Data::Header(d) => Some(d),
-                _ => None,
-            })
-        });
+        let temp_dir = tempfile::Builder::new().prefix("golem").tempdir()?;
+        let mut initial_fs_archive =
+            File::create_new(temp_dir.path().join("initial_fs_archive.zip")).await?;
+        let mut initial_fs_archive_is_empty = true;
+
+        let mut request_stream = request.into_inner();
+        while let Some(UpdateComponentRequest { data: Some(data) }) =
+            request_stream.message().await?
+        {
+            match data {
+                update_component_request::Data::Header(header) => {
+                    maybe_header = Some(header);
+                }
+                update_component_request::Data::Chunk(mut component_chunk) => {
+                    component_data.append(&mut component_chunk.component_chunk);
+                }
+                update_component_request::Data::FilesChunk(files_chunk) => {
+                    initial_fs_archive
+                        .write_all(&files_chunk.files_chunk)
+                        .await?;
+                    initial_fs_archive_is_empty = false;
+                }
+            }
+        }
 
         let record = recorded_grpc_api_request!(
             "update_component",
-            component_id =
-                proto_component_id_string(&header.as_ref().and_then(|r| r.component_id.clone()))
+            component_id = proto_component_id_string(
+                &maybe_header
+                    .as_ref()
+                    .and_then(|header| header.component_id.clone())
+            )
         );
 
-        let result = match header {
-            Some(request) => {
-                let data: Vec<u8> = chunks
-                    .iter()
-                    .flat_map(|c| {
-                        c.clone()
-                            .data
-                            .map(|d| match d {
-                                update_component_request::Data::Chunk(d) => d.component_chunk,
-                                _ => vec![],
-                            })
-                            .unwrap_or_default()
-                    })
-                    .collect();
-                self.update(request, data)
-                    .instrument(record.span.clone())
-                    .await
-            }
-            None => Err(bad_request_error("Missing request")),
+        let result = if let Some(request_header) = maybe_header {
+            self.update(
+                request_header,
+                component_data,
+                initial_fs_archive_is_empty
+                    .not()
+                    .then_some(initial_fs_archive),
+            )
+            .instrument(record.span.clone())
+            .await
+        } else {
+            Err(bad_request_error("Missing request"))
         };
 
         let result = match result {
-            Ok(v) => record.succeed(update_component_response::Result::Success(v)),
+            Ok(component) => record.succeed(update_component_response::Result::Success(component)),
             Err(error) => record.fail(
                 update_component_response::Result::Error(error.clone()),
                 &ComponentTraceErrorKind(&error),

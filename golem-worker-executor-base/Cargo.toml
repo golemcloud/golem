@@ -70,12 +70,14 @@ ringbuf = "0.4.1"
 rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
 sysinfo = "0.30.12"
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }
@@ -87,8 +89,8 @@ wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
 windows-sys = "0.52.0"
+zip = { workspace = true }
 zstd = "0.13"
-sqlx = { workspace = true }
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
@@ -102,6 +104,7 @@ proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
 serde_json = { workspace = true }
+system-interface = "0.27.2"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }

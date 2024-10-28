@@ -834,6 +834,90 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/files:
+    get:
+      tags:
+      - Worker
+      summary: Get files of a worker
+      description: |-
+        `.../{worker_name}/files` retrieves the top-level listing of nodes in the worker’s file system.
+
+        The listing contains information on the type of each node, as well as other metadata:
+        ```json
+        [{"type": "directory", "name": "foo"}, {"type": "file", "name": "bar.txt"}, ...]`
+        ``````
+
+        `.../{worker_name}/files?path=/root_in_worker/my_file.txt` retrieves the file at the specified path or lists the contents of the directory
+        at the specified path, depending on whether or not the path points to a file node or a directory node.
+      operationId: get_worker_files
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: path
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/components/{component_id}/workers/find:
     post:
       tags:
@@ -1879,6 +1963,9 @@ paths:
                 component:
                   type: string
                   format: binary
+                files:
+                  type: string
+                  format: binary
               required:
               - name
               - component
@@ -1958,6 +2045,91 @@ paths:
             schema:
               type: string
               format: binary
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      deprecated: true
+  /v1/components/{component_id}/upload_v2:
+    put:
+      tags:
+      - Component
+      summary: Update a component v2
+      operationId: update_component_v2
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: query
+        name: component_type
+        description: |-
+          Type of the new version of the component - if not specified, the type of the previous version
+          is used.
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/ComponentType'
+        explode: true
+        style: form
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                component:
+                  type: string
+                  format: binary
+                files:
+                  type: string
+                  format: binary
+              required:
+              - component
         required: true
       responses:
         '200':

@@ -4,6 +4,7 @@ target/
 **/*.rs.bk
 *.pdb
 .idea/
+.vscode/
 golem-worker-executor/data/
 golem-worker-executor-base/data/
 golem-worker-executor-base/golem-wit/

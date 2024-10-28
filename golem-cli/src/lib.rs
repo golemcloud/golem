@@ -29,6 +29,7 @@ use std::process::ExitCode;
 use tracing::{info, warn};
 use tracing_subscriber::FmtSubscriber;
 
+pub mod async_zip_writer;
 pub mod clients;
 pub mod cloud;
 pub mod command;
@@ -39,10 +40,12 @@ pub mod diagnose;
 pub mod examples;
 pub mod factory;
 pub mod init;
+pub mod initial_fs;
 pub mod model;
 pub mod oss;
 pub mod service;
 pub mod stubgen;
+pub mod temp_dir;
 
 #[cfg(test)]
 test_r::enable!();

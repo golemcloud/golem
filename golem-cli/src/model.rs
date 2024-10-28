@@ -46,7 +46,7 @@ use strum_macros::EnumIter;
 use uuid::Uuid;
 
 pub enum GolemResult {
-    Ok(Box<dyn PrintRes>),
+    Ok(Box<dyn PrintRes + Send>),
     Json(serde_json::value::Value),
     Str(String),
 }
@@ -137,6 +137,12 @@ where
 #[derive(Clone, PartialEq, Eq)]
 pub struct GolemError(pub String);
 
+impl From<String> for GolemError {
+    fn from(error: String) -> Self {
+        GolemError(error)
+    }
+}
+
 impl From<reqwest::Error> for GolemError {
     fn from(error: reqwest::Error) -> Self {
         GolemError(format!("Unexpected client error: {error}"))
@@ -146,6 +152,24 @@ impl From<reqwest::Error> for GolemError {
 impl From<reqwest::header::InvalidHeaderValue> for GolemError {
     fn from(value: reqwest::header::InvalidHeaderValue) -> Self {
         GolemError(format!("Invalid request header: {value}"))
+    }
+}
+
+impl From<tokio::task::JoinError> for GolemError {
+    fn from(error: tokio::task::JoinError) -> Self {
+        GolemError(format!("Task failed to execute to completion: {error}"))
+    }
+}
+
+impl From<std::io::Error> for GolemError {
+    fn from(error: std::io::Error) -> Self {
+        GolemError(format!("I/O operation failed: {error}"))
+    }
+}
+
+impl From<zip::result::ZipError> for GolemError {
+    fn from(error: zip::result::ZipError) -> Self {
+        GolemError(format!("Zip operation failed: {error}"))
     }
 }
 

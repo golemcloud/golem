@@ -13,18 +13,23 @@
 // limitations under the License.
 
 use crate::clients::component::ComponentClient;
+use crate::initial_fs;
 use crate::model::component::{Component, ComponentView};
 use crate::model::text::component::{ComponentAddView, ComponentGetView, ComponentUpdateView};
 use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
+use crate::temp_dir::TempDir;
 use async_trait::async_trait;
 use golem_client::model::ComponentType;
+use golem_common::app;
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_common::uri::oss::urn::ComponentUrn;
+use golem_common::uri::TypedGolemUrn;
 use indoc::formatdoc;
 use itertools::Itertools;
 use std::fmt::Display;
+use std::path::PathBuf;
 
 #[async_trait]
 pub trait ComponentService {
@@ -36,6 +41,7 @@ pub trait ComponentService {
         component_file: PathBufOrStdin,
         component_type: ComponentType,
         project: Option<Self::ProjectContext>,
+        app_manifests: Vec<PathBuf>,
         non_interactive: bool,
         format: Format,
     ) -> Result<GolemResult, GolemError>;
@@ -45,6 +51,7 @@ pub trait ComponentService {
         component_file: PathBufOrStdin,
         component_type: Option<ComponentType>,
         project: Option<Self::ProjectContext>,
+        app_manifests: Vec<PathBuf>,
         non_interactive: bool,
         format: Format,
     ) -> Result<GolemResult, GolemError>;
@@ -91,9 +98,25 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         component_file: PathBufOrStdin,
         component_type: ComponentType,
         project: Option<Self::ProjectContext>,
+        app_manifests: Vec<PathBuf>,
         non_interactive: bool,
         format: Format,
     ) -> Result<GolemResult, GolemError> {
+        let mut app = app::load(app_manifests).map_err(|error| error.to_string())?;
+
+        let temp_dir = TempDir::create_new()
+            .await
+            .map_err(|error| format!("Failed to create a temporary dir: {error}"))?;
+
+        let initial_fs_archive_path =
+            if let Some(wasm_component) = app.wasm_components_by_name.remove(&component_name.0) {
+                initial_fs::create_archive(wasm_component, &temp_dir)
+                    .await?
+                    .map(|(_file, path)| path)
+            } else {
+                None
+            };
+
         let result = self
             .client
             .add(
@@ -101,6 +124,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                 component_file.clone(),
                 &project,
                 component_type,
+                &initial_fs_archive_path,
             )
             .await;
 
@@ -126,7 +150,12 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                             name: component_name.0.clone(),
                         });
                         let urn = self.resolve_uri(component_uri, &project).await?;
-                        self.client.update(urn, component_file, Some(component_type)).await.map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into()))))
+                        self.client.update(
+                            urn,
+                            component_file,
+                            Some(component_type),
+                            &initial_fs_archive_path
+                        ).await.map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into()))))
 
                     }
                     Ok(false) => Err(GolemError(message)),
@@ -139,6 +168,10 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
             )))),
         }?;
 
+        temp_dir
+            .remove()
+            .await
+            .map_err(|error| format!("Failed to remove a temporary dir: {error}"))?;
         Ok(result)
     }
 
@@ -148,9 +181,16 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         component_file: PathBufOrStdin,
         component_type: Option<ComponentType>,
         project: Option<Self::ProjectContext>,
+        app_manifests: Vec<PathBuf>,
         non_interactive: bool,
         format: Format,
     ) -> Result<GolemResult, GolemError> {
+        let mut app = app::load(app_manifests).map_err(|error| error.to_string())?;
+
+        let temp_dir = TempDir::create_new()
+            .await
+            .map_err(|error| format!("Failed to create a temporary dir: {error}"))?;
+
         let result = self.resolve_uri(component_uri.clone(), &project).await;
 
         let can_fallback =
@@ -176,7 +216,18 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                                 ComponentUri::URL(ComponentUrl { name }) => ComponentName(name.clone()),
                                 _ => unreachable!(),
                             };
-                            self.client.add(component_name, component_file, &project, component_type.unwrap_or(ComponentType::Durable)).await.map(|component| {
+                            let initial_fs_archive_path = if let Some(wasm_component) = app.wasm_components_by_name.remove(&component_name.0) {
+                                initial_fs::create_archive(wasm_component, &temp_dir).await?.map(|(_file, path)| path)
+                            } else {
+                                None
+                            };
+                            self.client.add(
+                                component_name,
+                                component_file,
+                                &project,
+                                component_type.unwrap_or(ComponentType::Durable),
+                                &initial_fs_archive_path,
+                            ).await.map(|component| {
                                 GolemResult::Ok(Box::new(ComponentAddView(component.into())))
                             })
 
@@ -186,13 +237,35 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                     }
             }
             Err(other) => Err(other),
-            Ok(urn) => self
-                .client
-                .update(urn, component_file.clone(), component_type)
-                .await
-                .map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into())))),
+            Ok(urn) => {
+                let component_name = urn.to_name();
+                let initial_fs_archive_path = if let Some(wasm_component) =
+                    app.wasm_components_by_name.remove(&component_name)
+                {
+                    initial_fs::create_archive(wasm_component, &temp_dir)
+                        .await?
+                        .map(|(_file, path)| path)
+                } else {
+                    None
+                };
+                self.client
+                    .update(
+                        urn,
+                        component_file.clone(),
+                        component_type,
+                        &initial_fs_archive_path,
+                    )
+                    .await
+                    .map(|component| {
+                        GolemResult::Ok(Box::new(ComponentUpdateView(component.into())))
+                    })
+            }
         }?;
 
+        temp_dir
+            .remove()
+            .await
+            .map_err(|error| format!("Failed to remove a temporary dir: {error}"))?;
         Ok(result)
     }
 

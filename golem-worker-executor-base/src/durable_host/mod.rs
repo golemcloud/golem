@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::fs::File;
 use std::ops::Add;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
@@ -57,7 +58,7 @@ use golem_common::model::{
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
-use tempfile::TempDir;
+use tokio::{fs, task};
 use tracing::{debug, info, span, warn, Instrument, Level};
 use wasmtime::component::{Instance, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
@@ -67,6 +68,7 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
+use zip::read::ZipArchive;
 
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::wasm_rpc::UrnExtensions;
@@ -115,7 +117,6 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    _temp_dir: Arc<TempDir>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
@@ -142,13 +143,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
     ) -> Result<Self, GolemError> {
-        let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
-            |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
-        )?);
-        debug!(
-            "Created temporary file system root at {:?}",
-            temp_dir.path()
-        );
+        let root_dir_path = Arc::new(owned_worker_id.worker_id.to_root_dir_path());
+
+        if !root_dir_path.is_dir() {
+            fs::create_dir_all(root_dir_path.as_ref()).await?;
+
+            let maybe_archive_path = component_service
+                .get_initial_fs_archive(&owned_worker_id.component_id(), component_metadata.version)
+                .await?;
+
+            if let Some(archive_path) = maybe_archive_path {
+                let root_dir_path = Arc::clone(&root_dir_path);
+                task::spawn_blocking(move || {
+                    let mut archive = ZipArchive::new(File::open(archive_path.as_path())?)?;
+                    archive.extract(root_dir_path.as_ref())?;
+                    Ok::<(), anyhow::Error>(())
+                })
+                .await
+                .map_err(|error| anyhow::format_err!("Task to extract files failed: {error}"))??;
+            };
+        }
 
         debug!(
             "Worker {} initialized with deleted regions {}",
@@ -164,7 +178,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let (wasi, table) = wasi_host::create_context(
             &worker_config.args,
             &worker_config.env,
-            temp_dir.path().to_path_buf(),
+            &root_dir_path,
             stdin,
             stdout,
             stderr,
@@ -204,7 +218,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.total_linear_memory_size,
             )
             .await,
-            _temp_dir: temp_dir,
             execution_status,
         })
     }

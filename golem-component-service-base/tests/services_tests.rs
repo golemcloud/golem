@@ -148,6 +148,7 @@ async fn test_component_constraint_incompatible_updates(
             &component_name,
             ComponentType::Durable,
             get_component_data("shopping-cart"),
+            None,
             &DefaultNamespace::default(),
         )
         .await
@@ -178,6 +179,7 @@ async fn test_component_constraint_incompatible_updates(
         .update(
             &component_id,
             get_component_data("shopping-cart"),
+            None,
             None,
             &DefaultNamespace::default(),
         )
@@ -232,6 +234,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             &component_name1,
             ComponentType::Durable,
             get_component_data("shopping-cart"),
+            None,
             &DefaultNamespace::default(),
         )
         .await
@@ -243,6 +246,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             &component_name2,
             ComponentType::Durable,
             get_component_data("rust-echo"),
+            None,
             &DefaultNamespace::default(),
         )
         .await
@@ -329,6 +333,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
         .update(
             &component1.versioned_component_id.component_id,
             get_component_data("shopping-cart"),
+            None,
             None,
             &DefaultNamespace::default(),
         )

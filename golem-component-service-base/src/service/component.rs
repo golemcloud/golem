@@ -31,10 +31,14 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
+use golem_service_base::stream::ByteStream;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use tap::TapFallible;
+use tokio::fs::File;
 use tokio_stream::Stream;
+use tokio_stream::StreamExt;
+use tokio_util::io::ReaderStream;
 use tracing::{error, info};
 
 #[derive(Debug, thiserror::Error)]
@@ -152,6 +156,7 @@ pub trait ComponentService<Namespace> {
         component_name: &ComponentName,
         component_type: ComponentType,
         data: Vec<u8>,
+        initial_fs_archive: Option<File>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError>;
 
@@ -160,6 +165,7 @@ pub trait ComponentService<Namespace> {
         component_id: &ComponentId,
         data: Vec<u8>,
         component_type: Option<ComponentType>,
+        initial_fs_archive: Option<File>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError>;
 
@@ -179,6 +185,13 @@ pub trait ComponentService<Namespace> {
         Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
         ComponentError,
     >;
+
+    async fn download_files_stream(
+        &self,
+        component_id: &ComponentId,
+        version: Option<u64>,
+        namespace: &Namespace,
+    ) -> Result<ByteStream, ComponentError>;
 
     async fn get_protected_data(
         &self,
@@ -396,6 +409,7 @@ where
         component_name: &ComponentName,
         component_type: ComponentType,
         data: Vec<u8>,
+        initial_fs_archive: Option<File>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Create component");
@@ -416,7 +430,8 @@ where
         );
         tokio::try_join!(
             self.upload_user_component(&component.versioned_component_id, data.clone()),
-            self.upload_protected_component(&component.versioned_component_id, data)
+            self.upload_protected_component(&component.versioned_component_id, data),
+            self.upload_initial_fs_archive(&component.versioned_component_id, initial_fs_archive)
         )?;
 
         let record = component
@@ -441,6 +456,7 @@ where
         component_id: &ComponentId,
         data: Vec<u8>,
         component_type: Option<ComponentType>,
+        initial_fs_archive: Option<File>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
@@ -482,7 +498,11 @@ where
 
         tokio::try_join!(
             self.upload_user_component(&next_component.versioned_component_id, data.clone()),
-            self.upload_protected_component(&next_component.versioned_component_id, data)
+            self.upload_protected_component(&next_component.versioned_component_id, data),
+            self.upload_initial_fs_archive(
+                &next_component.versioned_component_id,
+                initial_fs_archive
+            )
         )?;
 
         let component = Component {
@@ -550,6 +570,27 @@ where
             .await;
 
         Ok(stream)
+    }
+
+    async fn download_files_stream(
+        &self,
+        component_id: &ComponentId,
+        version: Option<u64>,
+        namespace: &Namespace,
+    ) -> Result<ByteStream, ComponentError> {
+        let versioned_component_id = self
+            .get_versioned_component_id(component_id, version, namespace)
+            .await?
+            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
+
+        info!(namespace = %namespace, "Download component files as stream");
+
+        let stream = self
+            .object_store
+            .get_stream(&self.get_initial_fs_archive_key(&versioned_component_id))
+            .await;
+
+        Ok(ByteStream::new(stream))
     }
 
     async fn get_protected_data(
@@ -734,6 +775,12 @@ where
                     .map_err(|e| {
                         ComponentError::component_store_error("Failed to delete component", e)
                     })?;
+                self.object_store
+                    .delete(&self.get_initial_fs_archive_key(&versioned_component_id))
+                    .await
+                    .map_err(|e| {
+                        ComponentError::component_store_error("Failed to delete component files", e)
+                    })?;
             }
             self.component_repo
                 .delete(namespace.to_string().as_str(), &component_id.0)
@@ -792,6 +839,10 @@ impl ComponentServiceDefault {
         format!("{id}:protected")
     }
 
+    fn get_initial_fs_archive_key(&self, id: &VersionedComponentId) -> String {
+        format!("{id}:files")
+    }
+
     async fn upload_user_component(
         &self,
         user_component_id: &VersionedComponentId,
@@ -819,6 +870,19 @@ impl ComponentServiceDefault {
             .map_err(|e| {
                 ComponentError::component_store_error("Failed to upload protected component", e)
             })
+    }
+
+    async fn upload_initial_fs_archive(
+        &self,
+        component_id: &VersionedComponentId,
+        file: Option<File>,
+    ) -> Result<(), ComponentError> {
+        let Some(file) = file else { return Ok(()) };
+        let stream = ByteStream::new(ReaderStream::new(file).map(|bytes| Ok(bytes?.into())));
+        self.object_store
+            .put_stream(&self.get_initial_fs_archive_key(component_id), stream)
+            .await
+            .map_err(|e| ComponentError::component_store_error("Failed to upload files", e))
     }
 
     async fn get_versioned_component_id<Namespace: Display + Clone>(

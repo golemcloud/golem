@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Duration;
 
 use crate::durable_host::DurableWorkerCtx;
@@ -87,7 +87,7 @@ where
 pub fn create_context(
     args: &[impl AsRef<str>],
     env: &[(impl AsRef<str>, impl AsRef<str>)],
-    root_dir: PathBuf,
+    root_dir: &Path,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
     stderr: impl StdoutStream + Sized + 'static,
@@ -102,7 +102,7 @@ pub fn create_context(
         .stdout(stdout)
         .stderr(stderr)
         .monotonic_clock(helpers::clocks::monotonic_clock())
-        .preopened_dir(root_dir.clone(), "/", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(root_dir, "/", DirPerms::all(), FilePerms::all())?
         .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?
         .set_suspend(suspend_threshold, suspend_signal)
         .allow_ip_name_lookup(true)

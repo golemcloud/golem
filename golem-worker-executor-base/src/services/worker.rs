@@ -20,6 +20,7 @@ use golem_common::model::{
     ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
+use tokio::fs;
 use tracing::{debug, warn};
 
 use crate::error::GolemError;
@@ -299,6 +300,13 @@ impl WorkerService for DefaultWorkerService {
                     "failed to remove worker from the set of running worker ids per shard in KV storage: {err}"
                 )
             });
+
+        let root_dir_path = owned_worker_id.worker_id.to_root_dir_path();
+        if root_dir_path.is_dir() {
+            fs::remove_dir_all(root_dir_path)
+                .await
+                .unwrap_or_else(|error| panic!("failed to remove worker root dir: {error}"));
+        }
     }
 
     async fn remove_cached_status(&self, owned_worker_id: &OwnedWorkerId) {

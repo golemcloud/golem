@@ -67,6 +67,13 @@ pub struct UploadPayload {
     name: ComponentName,
     component_type: Option<ComponentType>,
     component: Upload,
+    files: Option<Upload>,
+}
+
+#[derive(Multipart)]
+pub struct UploadPayloadForUpdate {
+    component: Upload,
+    files: Option<Upload>,
 }
 
 type Result<T> = std::result::Result<T, ComponentError>;
@@ -156,12 +163,14 @@ impl ComponentApi {
         let response = {
             let data = payload.component.into_vec().await?;
             let component_name = payload.name;
+            let initial_fs_archive = payload.files.map(|archive| archive.into_file());
             self.component_service
                 .create(
                     &component_id,
                     &component_name,
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
+                    initial_fs_archive,
                     &DefaultNamespace::default(),
                 )
                 .instrument(record.span.clone())
@@ -174,6 +183,7 @@ impl ComponentApi {
 
     /// Update a component
     #[oai(
+        deprecated = true,
         path = "/:component_id/upload",
         method = "put",
         operation_id = "update_component"
@@ -182,7 +192,6 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         wasm: Binary<Body>,
-
         /// Type of the new version of the component - if not specified, the type of the previous version
         /// is used.
         component_type: Query<Option<ComponentType>>,
@@ -198,6 +207,46 @@ impl ComponentApi {
                     &component_id.0,
                     data,
                     component_type.0,
+                    None,
+                    &DefaultNamespace::default(),
+                )
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(|response| Json(response.into()))
+        };
+        record.result(response)
+    }
+
+    /// Update a component v2
+    #[oai(
+        path = "/:component_id/upload_v2",
+        method = "put",
+        operation_id = "update_component_v2"
+    )]
+    async fn update_component_v2(
+        &self,
+        component_id: Path<ComponentId>,
+        payload: UploadPayloadForUpdate,
+        /// Type of the new version of the component - if not specified, the type of the previous version
+        /// is used.
+        component_type: Query<Option<ComponentType>>,
+    ) -> Result<Json<Component>> {
+        let UploadPayloadForUpdate { component, files } = payload;
+
+        let record = recorded_http_api_request!(
+            "update_component",
+            component_id = component_id.0.to_string()
+        );
+        let response = {
+            let data = component.into_vec().await?;
+            let initial_fs_archive = files.map(|archive| archive.into_file());
+            self.component_service
+                .update(
+                    &component_id.0,
+                    data,
+                    component_type.0,
+                    initial_fs_archive,
                     &DefaultNamespace::default(),
                 )
                 .instrument(record.span.clone())

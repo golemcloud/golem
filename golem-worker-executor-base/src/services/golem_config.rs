@@ -71,6 +71,7 @@ pub struct Limits {
 pub struct ComponentCacheConfig {
     pub max_capacity: usize,
     pub max_metadata_capacity: usize,
+    pub max_files_capacity: usize,
     #[serde(with = "humantime_serde")]
     pub time_to_idle: Duration,
 }
@@ -399,6 +400,7 @@ impl Default for ComponentCacheConfig {
         Self {
             max_capacity: 32,
             max_metadata_capacity: 16384,
+            max_files_capacity: 32,
             time_to_idle: Duration::from_secs(12 * 60 * 60),
         }
     }

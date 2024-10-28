@@ -17,6 +17,7 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -47,14 +48,18 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::{uuid, Uuid};
 
+pub mod application;
 pub mod component_constraint;
 pub mod component_metadata;
 pub mod exports;
 pub mod lucene;
+pub mod oam;
 pub mod oplog;
 pub mod public_oplog;
 pub mod regions;
 pub mod trim_date;
+pub mod unknown_properties;
+pub mod validation;
 
 use crate::uri::oss::urn::WorkerUrn;
 use golem_api_grpc::proto::golem::shardmanager::{
@@ -262,6 +267,14 @@ impl WorkerId {
             component_id: self.component_id,
             worker_name: Some(self.worker_name),
         }
+    }
+
+    pub fn to_root_dir_path(&self) -> PathBuf {
+        format!(
+            "data/workers/root_dir__{}__{}",
+            self.component_id.0, self.worker_name
+        )
+        .into()
     }
 }
 

@@ -34,6 +34,7 @@ service WorkerExecutor {
   rpc DeleteWorker(DeleteWorkerRequest) returns (DeleteWorkerResponse);
   rpc CompletePromise(CompletePromiseRequest) returns (CompletePromiseResponse);
   rpc InterruptWorker(InterruptWorkerRequest) returns (InterruptWorkerResponse);
+  rpc GetWorkerFiles(GetWorkerFilesRequest) returns (GetWorkerFilesResponse);
   rpc RevokeShards(RevokeShardsRequest) returns (RevokeShardsResponse);
   rpc AssignShards(AssignShardsRequest) returns (AssignShardsResponse);
   rpc GetWorkerMetadata(GetWorkerMetadataRequest) returns (GetWorkerMetadataResponse);
@@ -84,6 +85,13 @@ message CompletePromiseSuccess {
 message InterruptWorkerResponse {
   oneof result {
     golem.common.Empty success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message GetWorkerFilesResponse {
+  oneof result {
+    string dir_contents = 3;
     golem.worker.v1.WorkerExecutionError failure = 2;
   }
 }
@@ -159,6 +167,12 @@ message InterruptWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   bool recover_immediately = 2;
   golem.common.AccountId account_id = 3;
+}
+
+message GetWorkerFilesRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string path = 2;
+  golem.common.AccountId account_id = 5;
 }
 
 message RevokeShardsRequest {
