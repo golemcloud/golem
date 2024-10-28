@@ -258,8 +258,6 @@ mod internal {
         instruction_stack: &mut RibByteCodeCursor,
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        dbg!("call");
-
         let rib_result = interpreter_stack.pop().ok_or(
             "Failed to get a value from the stack to do the comparison operation".to_string(),
         )?;
@@ -355,8 +353,6 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
         let last_value = interpreter_stack.pop_val();
-        dbg!(&last_value);
-
         match last_value {
             Some(val) => {
                 let iterator = interpreter_stack
@@ -1415,8 +1411,6 @@ mod interpreter_tests {
             let expr = Expr::from_text(rib_expr).unwrap();
 
             let compiled = compiler::compile(&expr, &vec![]).unwrap();
-
-            dbg!(compiled.byte_code.clone());
 
             let result = interpreter
                 .run(compiled.byte_code)
