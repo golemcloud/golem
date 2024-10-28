@@ -1082,6 +1082,72 @@ pub struct GetOplogResponse {
     pub last_index: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Enum)]
+pub enum FileNodeType {
+    File,
+    Directory,
+}
+
+impl TryFrom<i32> for FileNodeType {
+    type Error = String;
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(FileNodeType::File),
+            1 => Ok(FileNodeType::Directory),
+            _ => Err(format!("Unknown FileNodeType: {}", value)),
+        }
+    }
+}
+
+impl From<FileNodeType> for i32 {
+    fn from(value: FileNodeType) -> Self {
+        match value {
+            FileNodeType::File => 0,
+            FileNodeType::Directory => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+pub struct FileNode {
+    pub name: String,
+    pub file_type: FileNodeType,
+    pub size: u64,
+    pub permission: FilePermission,
+    pub last_modified: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<FileNode> for golem_api_grpc::proto::golem::common::FileSystemNode {
+    fn from(value: FileNode) -> Self {
+        Self {
+            name: value.name,
+            r#type: value.file_type.into(),
+            size: value.size,
+            permissions: value.permission.into(),
+            last_modified: Some(prost_types::Timestamp::from(SystemTime::from(
+                value.last_modified,
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+pub enum ListDirectoryOrFileContent {
+    Directory(ListDirectoryResponse),
+    File(GetFileContentResponse),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+pub struct ListDirectoryResponse {
+    pub nodes: Vec<FileNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+pub struct GetFileContentResponse {
+    pub content: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
 pub enum WorkerUpdateMode {
     Automatic,
@@ -1377,6 +1443,15 @@ impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::Index
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct InvokeResult {
     pub result: TypeAnnotatedValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct InitialFileMetadata {
+    file_path: String,
+    file_name: String,
+    file_permission: FilePermission,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Union, thiserror::Error)]
@@ -1798,7 +1873,7 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-pub struct InitialFile {
+pub struct InitialFileData {
     pub file_path: String,
     pub file_permission: FilePermission,
     pub file_content: Vec<u8>,

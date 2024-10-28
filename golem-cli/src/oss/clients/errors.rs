@@ -193,6 +193,12 @@ fn display_golem_error(error: GolemError) -> String {
         }
         GolemError::InvalidAccount(_) => "Invalid account".to_string(),
         GolemError::ShardingNotReady(_) => "Sharding not ready".to_string(),
+        GolemError::ComponentInitialFileDownloadFailed(_) => {
+            "Component's initial file download failed".to_string()
+        }
+        GolemError::GetComponentLatestInitialFilesFailed(_) => {
+            "Get component's latest initial files failed".to_string()
+        }
     }
 }
 

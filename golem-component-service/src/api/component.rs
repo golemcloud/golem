@@ -62,18 +62,23 @@ impl TraceErrorKind for ComponentError {
     }
 }
 
+#[derive(Object)]
+pub struct InitialFileDataPayload {
+    files: Vec<InitialFileData>,
+}
+
 #[derive(Multipart)]
 pub struct UploadPayload {
     name: ComponentName,
     component_type: Option<ComponentType>,
     component: Upload,
-    initial_files: Option<JsonField<Vec<InitialFile>>>,
+    initial_files: Option<JsonField<InitialFileDataPayload>>,
 }
 
 #[derive(Multipart)]
 pub struct UpdateMultipartPayload {
     component: Upload,
-    initial_files: Option<JsonField<Vec<InitialFile>>>,
+    initial_files: Option<JsonField<InitialFileDataPayload>>,
 }
 
 type Result<T> = std::result::Result<T, ComponentError>;
@@ -151,7 +156,7 @@ impl ComponentApi {
             let component_name = payload.name;
             let initial_files = payload
                 .initial_files
-                .map_or(Vec::new(), |initial_files_json| initial_files_json.0);
+                .map_or(Vec::new(), |initial_files_json| initial_files_json.0.files);
             self.component_service
                 .create(
                     &ComponentId::new_v4(),
@@ -192,7 +197,7 @@ impl ComponentApi {
             let data = payload.component.into_vec().await?;
             let initial_files = payload
                 .initial_files
-                .map_or(Vec::new(), |initial_files_json| initial_files_json.0);
+                .map_or(Vec::new(), |initial_files_json| initial_files_json.0.files);
             self.component_service
                 .update(
                     &component_id.0,

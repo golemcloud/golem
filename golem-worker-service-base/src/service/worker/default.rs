@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::{collections::HashMap, sync::Arc};
-
 use async_trait::async_trait;
+use futures_util::StreamExt;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use std::time::SystemTime;
+use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
 use tonic::Code;
 use tracing::{error, info};
 
+use crate::service::component::ComponentService;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
@@ -39,15 +41,14 @@ use golem_common::model::{
     ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::model::{
-    GetOplogResponse, GolemErrorUnknown, ResourceLimits, WorkerMetadata,
+    FileNode, GetFileContentResponse, GetOplogResponse, GolemErrorUnknown,
+    ListDirectoryOrFileContent, ListDirectoryResponse, ResourceLimits, WorkerMetadata,
 };
 use golem_service_base::routing_table::HasRoutingTableService;
 use golem_service_base::{
     model::{Component, GolemError},
     routing_table::RoutingTableService,
 };
-
-use crate::service::component::ComponentService;
 
 use super::{
     AllExecutors, CallWorkerExecutorError, ConnectWorkerStream, HasWorkerExecutorClients,
@@ -236,6 +237,21 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
+
+    async fn list_root_directory(
+        &self,
+        worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> Result<ListDirectoryResponse, WorkerServiceError>;
+
+    async fn get_file_or_list_directory(
+        &self,
+        worker_id: &WorkerId,
+        path: &str,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> Result<ListDirectoryOrFileContent, WorkerServiceError>;
 }
 
 pub struct TypedResult {
@@ -892,6 +908,228 @@ where
             WorkerServiceError::InternalCallError,
         )
         .await
+    }
+
+    async fn list_root_directory(
+        &self,
+        worker_id: &WorkerId,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<ListDirectoryResponse, WorkerServiceError> {
+        let path = String::from("/");
+        let worker_id = worker_id.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                info!("List files");
+                Box::pin(worker_executor_client.list_directory(
+                    workerexecutor::v1::ListDirectoryRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        path: path.clone(),
+                    },
+                ))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::ListDirectoryResponse {
+                    result:
+                        Some(workerexecutor::v1::list_directory_response::Result::Success(
+                            workerexecutor::v1::ListDirectorySuccessResponse { nodes },
+                        )),
+                } => {
+                    let nodes = nodes
+                        .into_iter()
+                        .try_fold(vec![], |mut acc, file_system_node| {
+                            let file_node = FileNode {
+                                name: file_system_node.name,
+                                file_type: file_system_node.r#type.try_into()?,
+                                size: file_system_node.size,
+                                permission: file_system_node.permissions.try_into()?,
+                                last_modified: SystemTime::try_from(
+                                    file_system_node
+                                        .last_modified
+                                        .ok_or("last modified not found".to_string())?,
+                                )
+                                .map_err(|e| e.to_string())?
+                                .into(),
+                            };
+                            acc.push(file_node);
+                            Ok(acc)
+                        })
+                        .map_err(|e| ResponseMapResult::Other(WorkerServiceError::Internal(e)))?;
+                    Ok(ListDirectoryResponse { nodes })
+                }
+                workerexecutor::v1::ListDirectoryResponse {
+                    result: Some(workerexecutor::v1::list_directory_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::ListDirectoryResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
+    async fn get_file_or_list_directory(
+        &self,
+        worker_id: &WorkerId,
+        path: &str,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<ListDirectoryOrFileContent, WorkerServiceError> {
+        let worker_id_1 = worker_id.clone();
+        let worker_id_2 = worker_id.clone();
+        let worker_id_3 = worker_id.clone();
+        let metadata_1 = metadata.clone();
+        let metadata_2 = metadata.clone();
+        let metadata_3 = metadata.clone();
+        let path_1 = path.to_string();
+        let path_2 = path.to_string();
+        let path_3 = path.to_string();
+        let path_4 = path.to_string();
+        let is_file = self.call_worker_executor(
+            worker_id.clone(),
+            move |worker_executor_client| {
+                info!("Checking file or directory");
+                Box::pin(worker_executor_client.check_file_or_directory(
+                workerexecutor::v1::CheckFileOrDirectoryRequest {
+                    worker_id: Some(worker_id_1.clone().into()),
+                    account_id: metadata_1.account_id.clone().map(|id| id.into()),
+                    path: path_1.clone(),
+                }))
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::CheckFileOrDirectoryResponse {
+                    result:
+                    Some(workerexecutor::v1::check_file_or_directory_response::Result::FileOrDirectory(file_or_directory)),
+                } => {
+                    let is_file = match file_or_directory {
+                        0 => Ok(true),
+                        1 => Ok(false),
+                        _ => Err(
+                            ResponseMapResult::Other(WorkerServiceError::Internal(
+                                format!("{} is not a file or directory", path_2.clone())
+                            ))
+                        ),
+                    }?;
+                    Ok(is_file)
+                }
+                workerexecutor::v1::CheckFileOrDirectoryResponse {
+                    result: Some(workerexecutor::v1::check_file_or_directory_response::Result::Error(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::CheckFileOrDirectoryResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+            .await?;
+        if is_file {
+            self.call_worker_executor(
+                worker_id.clone(),
+                move |worker_executor_client| {
+                    info!("Get file content");
+                    Box::pin(worker_executor_client.get_file_contents(
+                        workerexecutor::v1::GetFileContentsRequest {
+                            worker_id: Some(worker_id_2.clone().into()),
+                            account_id: metadata_2.account_id.clone().map(|id| id.into()),
+                            file_path: path_3.clone(),
+                        },
+                    ))
+                },
+                |response| {
+                    let stream = response.into_inner();
+                    let mut content = vec![];
+                    let mut stream_err = None;
+                    let _ = stream.map(|resp| match resp {
+                        Ok(workerexecutor::v1::GetFileContentsResponse {
+                            result:
+                            Some(workerexecutor::v1::get_file_contents_response::Result::ContentChunk(bytes))
+                        }) => {
+                            content.push(bytes);
+                        },
+                        Ok(workerexecutor::v1::GetFileContentsResponse {
+                            result:
+                            Some(workerexecutor::v1::get_file_contents_response::Result::Error(err))
+                        }) => {
+                            stream_err = Some(ResponseMapResult::from(err));
+                        },
+                        Ok(workerexecutor::v1::GetFileContentsResponse {
+                            result: None
+                        }) => {
+                            stream_err = Some(ResponseMapResult::from("Empty response"));
+                        },
+                        Err(err) => {
+                            stream_err = Some(ResponseMapResult::Other(WorkerServiceError::Internal(err.to_string())));
+                        }
+                    });
+                    match stream_err {
+                        None => Ok(GetFileContentResponse {
+                            content: content.into_iter().flatten().collect()
+                        }),
+                        Some(err) => Err(err),
+                    }
+                },
+                WorkerServiceError::InternalCallError,
+            )
+                .await
+                .map(|resp| {
+                    ListDirectoryOrFileContent::File(resp)
+                })
+        } else {
+            self.call_worker_executor(
+                worker_id.clone(),
+                move |worker_executor_client| {
+                    info!("List files");
+                    Box::pin(worker_executor_client.list_directory(
+                        workerexecutor::v1::ListDirectoryRequest {
+                            worker_id: Some(worker_id_3.clone().into()),
+                            account_id: metadata_3.account_id.clone().map(|id| id.into()),
+                            path: path_4.clone(),
+                        },
+                    ))
+                },
+                |response| match response.into_inner() {
+                    workerexecutor::v1::ListDirectoryResponse {
+                        result:
+                            Some(workerexecutor::v1::list_directory_response::Result::Success(
+                                workerexecutor::v1::ListDirectorySuccessResponse { nodes },
+                            )),
+                    } => {
+                        let nodes = nodes
+                            .into_iter()
+                            .try_fold(vec![], |mut acc, file_system_node| {
+                                let file_node = FileNode {
+                                    name: file_system_node.name,
+                                    file_type: file_system_node.r#type.try_into()?,
+                                    size: file_system_node.size,
+                                    permission: file_system_node.permissions.try_into()?,
+                                    last_modified: SystemTime::try_from(
+                                        file_system_node
+                                            .last_modified
+                                            .ok_or("last modified not found".to_string())?,
+                                    )
+                                    .map_err(|e| e.to_string())?
+                                    .into(),
+                                };
+                                acc.push(file_node);
+                                Ok(acc)
+                            })
+                            .map_err(|e| {
+                                ResponseMapResult::Other(WorkerServiceError::Internal(e))
+                            })?;
+                        Ok(ListDirectoryResponse { nodes })
+                    }
+                    workerexecutor::v1::ListDirectoryResponse {
+                        result:
+                            Some(workerexecutor::v1::list_directory_response::Result::Failure(err)),
+                    } => Err(err.into()),
+                    workerexecutor::v1::ListDirectoryResponse { .. } => {
+                        Err("Empty response".into())
+                    }
+                },
+                WorkerServiceError::InternalCallError,
+            )
+            .await
+            .map(ListDirectoryOrFileContent::Directory)
+        }
     }
 }
 

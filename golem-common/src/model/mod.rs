@@ -2468,7 +2468,7 @@ impl FromStr for ComponentType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Enum)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Enum)]
 pub enum FilePermission {
     ReadOnly,
     ReadWrite,
@@ -2498,6 +2498,17 @@ impl TryFrom<i32> for FilePermission {
         match value {
             0 => Ok(Self::ReadOnly),
             1 => Ok(Self::ReadWrite),
+            _ => Err(format!("Invalid permission: {}", value)),
+        }
+    }
+}
+
+impl TryFrom<String> for FilePermission {
+    type Error = String;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "read_only" => Ok(Self::ReadOnly),
+            "read_write" => Ok(Self::ReadWrite),
             _ => Err(format!("Invalid permission: {}", value)),
         }
     }

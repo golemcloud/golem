@@ -645,6 +645,68 @@ impl WorkerApi {
 
         record.result(response)
     }
+
+    /// List worker's root directory.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/files/",
+        method = "get",
+        operation_id = "list_root_files"
+    )]
+    async fn list_root_files(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+    ) -> Result<Json<ListDirectoryResponse>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .list_root_directory(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
+    }
+
+    /// List worker's directory from path.
+    #[oai(
+        path = "/:component_id/workers/:worker_name/files/:path",
+        method = "get",
+        operation_id = "list_path_files"
+    )]
+    async fn list_path_files(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        path: Path<String>,
+    ) -> Result<Json<ListDirectoryOrFileContent>> {
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_file_or_list_directory(
+                &worker_id,
+                &path.0,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
+    }
 }
 
 fn make_worker_id(

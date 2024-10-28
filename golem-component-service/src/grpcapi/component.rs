@@ -45,7 +45,7 @@ use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
-use golem_service_base::model::InitialFile;
+use golem_service_base::model::InitialFileData;
 use golem_service_base::stream::ByteStream;
 use tap::TapFallible;
 use tonic::{Request, Response, Status, Streaming};
@@ -162,7 +162,7 @@ impl ComponentGrpcApi {
         &self,
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
-        initial_files: Vec<InitialFile>,
+        initial_files: Vec<InitialFileData>,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let result = self
@@ -183,7 +183,7 @@ impl ComponentGrpcApi {
         &self,
         request: UpdateComponentRequestHeader,
         data: Vec<u8>,
-        initial_files: Vec<InitialFile>,
+        initial_files: Vec<InitialFileData>,
     ) -> Result<Component, ComponentError> {
         let id: ComponentId = request
             .component_id
@@ -357,7 +357,7 @@ impl ComponentService for ComponentGrpcApi {
                             } else {
                                 acc_map.insert(
                                     d.file_path.clone(),
-                                    InitialFile {
+                                    InitialFileData {
                                         file_path: d.file_path.clone(),
                                         file_permission: d
                                             .file_permission
@@ -559,7 +559,7 @@ impl ComponentService for ComponentGrpcApi {
                             } else {
                                 acc_map.insert(
                                     d.file_path.clone(),
-                                    InitialFile {
+                                    InitialFileData {
                                         file_path: d.file_path.clone(),
                                         file_permission: d
                                             .file_permission

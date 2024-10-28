@@ -2,6 +2,7 @@ syntax = "proto3";
 
 import public "golem/common/account_id.proto";
 import public "golem/common/empty.proto";
+import public "golem/common/file_system_node.proto";
 import public "golem/worker/idempotency_key.proto";
 import public "golem/worker/invocation_context.proto";
 import public "golem/worker/log_event.proto";
@@ -22,8 +23,6 @@ import public "golem/worker/v1/worker_execution_error.proto";
 
 import public "wasm/rpc/val.proto";
 import public "wasm/rpc/type_annotated_value.proto";
-
-import "google/protobuf/timestamp.proto";
 
 package golem.workerexecutor.v1;
 
@@ -46,6 +45,7 @@ service WorkerExecutor {
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
+  rpc CheckFileOrDirectory(CheckFileOrDirectoryRequest) returns (CheckFileOrDirectoryResponse);
 }
 
 message InvokeWorkerResponse {
@@ -298,20 +298,7 @@ message ListDirectoryResponse {
 }
 
 message ListDirectorySuccessResponse {
-  repeated FileSystemNode nodes = 1;
-}
-
-message FileSystemNode {
-  string name = 1;
-  NodeType type = 2;
-  uint64 size = 3;  // Size in bytes, applicable for files
-  string permissions = 4;  // String representation of file permissions
-  google.protobuf.Timestamp last_modified = 5;
-}
-
-enum NodeType {
-  FILE = 0;
-  DIRECTORY = 1;
+  repeated golem.common.FileSystemNode nodes = 1;
 }
 
 message GetFileContentsRequest {
@@ -325,4 +312,22 @@ message GetFileContentsResponse {
     bytes contentChunk = 1;
     golem.worker.v1.WorkerExecutionError error = 2;
   }
+}
+
+message CheckFileOrDirectoryRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  string path = 3;
+}
+
+message CheckFileOrDirectoryResponse {
+  oneof result {
+    CheckFileOrDirectoryEnum file_or_directory = 1;
+    golem.worker.v1.WorkerExecutionError error = 2;
+  }
+}
+
+enum CheckFileOrDirectoryEnum {
+  FILE = 0;
+  DIRECTORY = 1;
 }

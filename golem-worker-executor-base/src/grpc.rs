@@ -38,11 +38,12 @@ use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    get_file_contents_response, ConnectWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest,
-    GetFileContentsResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
-    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess,
-    ListDirectoryRequest, ListDirectoryResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    CheckFileOrDirectoryRequest, CheckFileOrDirectoryResponse, ConnectWorkerRequest,
+    DeleteWorkerRequest, GetFileContentsRequest, GetFileContentsResponse, GetOplogRequest,
+    GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse,
+    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest,
+    InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, ListDirectoryRequest,
+    ListDirectoryResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -1273,6 +1274,37 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         Ok(result)
     }
+
+    async fn check_file_or_directory_internal(
+        &self,
+        request: CheckFileOrDirectoryRequest,
+    ) -> Result<CheckFileOrDirectoryResponse, GolemError> {
+        let worker_id = request
+            .worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+
+        let account_id = request
+            .account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+
+        let result = self
+            .services
+            .worker_file_service()
+            .check_file_or_directory(&owned_worker_id, PathBuf::from(request.path).as_path())
+            .await?;
+
+        Ok(CheckFileOrDirectoryResponse {
+            result: Some(
+                golem::workerexecutor::v1::check_file_or_directory_response::Result::FileOrDirectory(result.into())
+            ),
+        })
+    }
 }
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static> UsesAllDeps
@@ -1945,10 +1977,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let stream = stream.map(|content| {
                     let res = match content {
                         Ok(content) => GetFileContentsResponse {
-                            result: Some(get_file_contents_response::Result::ContentChunk(content)),
+                            result: Some(golem::workerexecutor::v1::get_file_contents_response::Result::ContentChunk(content)),
                         },
                         Err(err) => GetFileContentsResponse {
-                            result: Some(get_file_contents_response::Result::Error(
+                            result: Some(golem::workerexecutor::v1::get_file_contents_response::Result::Error(
                                 GolemError::runtime(err.to_string()).into(),
                             )),
                         },
@@ -1960,14 +1992,46 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
             Err(err) => {
                 let res = GetFileContentsResponse {
-                    result: Some(get_file_contents_response::Result::Error(
-                        err.clone().into(),
-                    )),
+                    result: Some(
+                        golem::workerexecutor::v1::get_file_contents_response::Result::Error(
+                            err.clone().into(),
+                        ),
+                    ),
                 };
 
                 let stream: Self::GetFileContentsStream = Box::pin(tokio_stream::iter([Ok(res)]));
                 record.fail(Ok(Response::new(stream)), &err)
             }
+        }
+    }
+
+    async fn check_file_or_directory(
+        &self,
+        request: Request<CheckFileOrDirectoryRequest>,
+    ) -> Result<Response<CheckFileOrDirectoryResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_file_contents",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let result = self
+            .check_file_or_directory_internal(request)
+            .instrument(record.span.clone())
+            .await;
+
+        match result {
+            Ok(response) => record.succeed(Ok(Response::new(response))),
+            Err(err) => record.fail(
+                Ok(Response::new(CheckFileOrDirectoryResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::check_file_or_directory_response::Result::Error(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
         }
     }
 }

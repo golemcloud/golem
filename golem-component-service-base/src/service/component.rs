@@ -22,9 +22,7 @@ use chrono::Utc;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
-use golem_service_base::model::{
-    ComponentName, InitialFile as ServiceInitialFile, VersionedComponentId,
-};
+use golem_service_base::model::{ComponentName, InitialFileData, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
@@ -126,7 +124,7 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
-        initial_files: Vec<ServiceInitialFile>,
+        initial_files: Vec<InitialFileData>,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
@@ -135,7 +133,7 @@ pub trait ComponentService<Namespace> {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
-        initial_files: Vec<ServiceInitialFile>,
+        initial_files: Vec<InitialFileData>,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
@@ -254,7 +252,7 @@ where
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
-        initial_files: Vec<ServiceInitialFile>,
+        initial_files: Vec<InitialFileData>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Create component");
 
@@ -338,7 +336,7 @@ where
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
-        initial_files: Vec<ServiceInitialFile>,
+        initial_files: Vec<InitialFileData>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
         let created_at = Utc::now();

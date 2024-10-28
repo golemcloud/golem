@@ -1151,6 +1151,148 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/files:
+    get:
+      tags:
+      - Worker
+      summary: List worker's root directory.
+      operationId: list_root_files
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ListDirectoryResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/files/{path}:
+    get:
+      tags:
+      - Worker
+      summary: List worker's directory from path.
+      operationId: list_path_files
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: path
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ListDirectoryOrFileContent'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -1874,9 +2016,7 @@ paths:
                   type: string
                   format: binary
                 initial_files:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/InitialFile'
+                  $ref: '#/components/schemas/InitialFileDataPayload'
               required:
               - name
               - component
@@ -1960,9 +2100,7 @@ paths:
                   type: string
                   format: binary
                 initial_files:
-                  type: array
-                  items:
-                    $ref: '#/components/schemas/InitialFile'
+                  $ref: '#/components/schemas/InitialFileDataPayload'
               required:
               - component
         required: true
@@ -2846,6 +2984,37 @@ components:
       required:
       - timestamp
       - target_version
+    FileNode:
+      type: object
+      properties:
+        name:
+          type: string
+        file_type:
+          $ref: '#/components/schemas/FileNodeType'
+        size:
+          type: integer
+          format: uint64
+        permission:
+          $ref: '#/components/schemas/FilePermission'
+        last_modified:
+          type: string
+          format: date-time
+      required:
+      - name
+      - file_type
+      - size
+      - permission
+      - last_modified
+    FileNodeType:
+      type: string
+      enum:
+      - File
+      - Directory
+    FilePermission:
+      type: string
+      enum:
+      - ReadOnly
+      - ReadWrite
     FilterComparator:
       type: string
       enum:
@@ -2855,6 +3024,16 @@ components:
       - Greater
       - LessEqual
       - Less
+    GetFileContentResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            type: integer
+            format: uint8
+      required:
+      - content
     GetOplogResponse:
       type: object
       properties:
@@ -2901,6 +3080,8 @@ components:
           Unknown: '#/components/schemas/GolemError_GolemErrorUnknown'
           InvalidAccount: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
           ShardingNotReady: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
+          ComponentInitialFileDownloadFailed: '#/components/schemas/GolemError_GolemErrorComponentInitialFileDownloadFailed'
+          GetComponentLatestInitialFilesFailed: '#/components/schemas/GolemError_GolemErrorGetComponentLatestInitialFilesFailed'
       type: object
       oneOf:
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
@@ -2926,6 +3107,8 @@ components:
       - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
       - $ref: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
+      - $ref: '#/components/schemas/GolemError_GolemErrorComponentInitialFileDownloadFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorGetComponentLatestInitialFilesFailed'
     GolemErrorBody:
       type: object
       properties:
@@ -2934,6 +3117,16 @@ components:
       required:
       - golemError
     GolemErrorComponentDownloadFailed:
+      type: object
+      properties:
+        componentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        reason:
+          type: string
+      required:
+      - componentId
+      - reason
+    GolemErrorComponentInitialFileDownloadFailed:
       type: object
       properties:
         componentId:
@@ -2962,6 +3155,17 @@ components:
           $ref: '#/components/schemas/GolemError'
       required:
       - workerId
+      - reason
+    GolemErrorGetComponentLatestInitialFilesFailed:
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        reason:
+          type: string
+      required:
+      - componentId
       - reason
     GolemErrorGetLatestVersionOfComponentFailed:
       type: object
@@ -3110,6 +3314,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorComponentDownloadFailed'
+    GolemError_GolemErrorComponentInitialFileDownloadFailed:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentInitialFileDownloadFailed
+            type: string
+            enum:
+            - ComponentInitialFileDownloadFailed
+        required:
+        - type
+      - $ref: '#/components/schemas/GolemErrorComponentInitialFileDownloadFailed'
     GolemError_GolemErrorComponentParseFailed:
       allOf:
       - type: object
@@ -3134,6 +3350,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
+    GolemError_GolemErrorGetComponentLatestInitialFilesFailed:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: GetComponentLatestInitialFilesFailed
+            type: string
+            enum:
+            - GetComponentLatestInitialFilesFailed
+        required:
+        - type
+      - $ref: '#/components/schemas/GolemErrorGetComponentLatestInitialFilesFailed'
     GolemError_GolemErrorGetLatestVersionOfComponentFailed:
       allOf:
       - type: object
@@ -3526,6 +3754,49 @@ components:
       required:
       - timestamp
       - jump
+    ListDirectoryOrFileContent:
+      discriminator:
+        propertyName: type
+        mapping:
+          Directory: '#/components/schemas/ListDirectoryOrFileContent_ListDirectoryResponse'
+          File: '#/components/schemas/ListDirectoryOrFileContent_GetFileContentResponse'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ListDirectoryOrFileContent_ListDirectoryResponse'
+      - $ref: '#/components/schemas/ListDirectoryOrFileContent_GetFileContentResponse'
+    ListDirectoryOrFileContent_GetFileContentResponse:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: File
+            type: string
+            enum:
+            - File
+        required:
+        - type
+      - $ref: '#/components/schemas/GetFileContentResponse'
+    ListDirectoryOrFileContent_ListDirectoryResponse:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Directory
+            type: string
+            enum:
+            - Directory
+        required:
+        - type
+      - $ref: '#/components/schemas/ListDirectoryResponse'
+    ListDirectoryResponse:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileNode'
+      required:
+      - nodes
     LogLevel:
       description: Worker log levels including the special stdout and stderr channels
       type: string
@@ -4938,13 +5209,13 @@ components:
       enum:
       - Durable
       - Ephemeral
-    InitialFile:
+    InitialFileData:
       type: object
       properties:
         file_path:
           type: string
         file_permission:
-          $ref: '#/components/schemas/InitialFilePermission'
+          $ref: '#/components/schemas/FilePermission'
         file_content:
           type: array
           items:
@@ -4954,11 +5225,15 @@ components:
       - file_path
       - file_permission
       - file_content
-    InitialFilePermission:
-      type: string
-      enum:
-      - ReadOnly
-      - ReadWrite
+    InitialFileDataPayload:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialFileData'
+      required:
+      - files
     LinearMemory:
       type: object
       properties:

@@ -23,17 +23,19 @@ use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, delete_worker_response, get_oplog_response,
     get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
     invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
-    worker_error, worker_execution_error, CompletePromiseRequest, CompletePromiseResponse,
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest,
-    GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
-    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, UnknownError, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
+    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
+    update_worker_response, worker_error, worker_execution_error, CompletePromiseRequest,
+    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
+    InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest,
+    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse,
+    ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, UnknownError,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
 use golem_common::grpc::{
@@ -496,6 +498,33 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
+
+    async fn list_directory(
+        &self,
+        request: Request<ListDirectoryRequest>,
+    ) -> Result<Response<ListDirectoryResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "list_directory",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .list_directory(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(response) => record.succeed(list_directory_response::Result::Success(response)),
+            Err(error) => record.fail(
+                list_directory_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(ListDirectoryResponse {
+            result: Some(response),
+        }))
+    }
 }
 
 impl WorkerGrpcApi {
@@ -871,6 +900,25 @@ impl WorkerGrpcApi {
             next: result.next.map(|c| c.into()),
             first_index_in_chunk: result.first_index_in_chunk,
             last_index: result.last_index,
+        })
+    }
+
+    async fn list_directory(
+        &self,
+        request: ListDirectoryRequest,
+    ) -> Result<ListDirectorySuccessResponse, GrpcWorkerError> {
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let result = self
+            .worker_service
+            .list_root_directory(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        Ok(ListDirectorySuccessResponse {
+            nodes: result.nodes.into_iter().map(|f| f.into()).collect(),
         })
     }
 }

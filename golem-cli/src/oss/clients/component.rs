@@ -92,7 +92,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client
-                    .create_component(&name.0, Some(&component_type), file)
+                    .create_component(&name.0, Some(&component_type), file, None)
                     .await?
             }
             PathBufOrStdin::Stdin => {
@@ -103,7 +103,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .create_component(&name.0, Some(&component_type), bytes)
+                    .create_component(&name.0, Some(&component_type), bytes, None)
                     .await?
             }
         };
@@ -126,7 +126,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client
-                    .update_component(&urn.id.0, component_type.as_ref(), file)
+                    .update_component(&urn.id.0, component_type.as_ref(), file, None)
                     .await?
             }
             PathBufOrStdin::Stdin => {
@@ -137,7 +137,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .update_component(&urn.id.0, component_type.as_ref(), bytes)
+                    .update_component(&urn.id.0, component_type.as_ref(), bytes, None)
                     .await?
             }
         };

@@ -54,9 +54,7 @@ pub struct WorkerFileSystemNode {
     pub last_modified: chrono::DateTime<chrono::Utc>,
 }
 
-impl From<WorkerFileSystemNode>
-    for golem_api_grpc::proto::golem::workerexecutor::v1::FileSystemNode
-{
+impl From<WorkerFileSystemNode> for golem_api_grpc::proto::golem::common::FileSystemNode {
     fn from(value: WorkerFileSystemNode) -> Self {
         Self {
             name: value.name,
@@ -92,6 +90,20 @@ impl Stream for WorkerFileContentStream {
     }
 }
 
+pub enum DirectoryOrFile {
+    Dir,
+    File,
+}
+
+impl From<DirectoryOrFile> for i32 {
+    fn from(dir_or_file: DirectoryOrFile) -> Self {
+        match dir_or_file {
+            DirectoryOrFile::Dir => 0,
+            DirectoryOrFile::File => 1,
+        }
+    }
+}
+
 #[async_trait]
 pub trait WorkerFileService {
     async fn get_worker_read_only_dir(
@@ -115,6 +127,12 @@ pub trait WorkerFileService {
         owned_worker_id: &OwnedWorkerId,
         file_path: &Path,
     ) -> Result<WorkerFileContentStream, GolemError>;
+
+    async fn check_file_or_directory(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        file_path: &Path,
+    ) -> Result<DirectoryOrFile, GolemError>;
 }
 
 pub struct DefaultWorkerFileService {
@@ -395,5 +413,32 @@ impl WorkerFileService for DefaultWorkerFileService {
         WorkerFileContentStream::from_path(absolute_path.as_path())
             .await
             .map_err(|e| GolemError::runtime(e.to_string()))
+    }
+
+    async fn check_file_or_directory(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        path: &Path,
+    ) -> Result<DirectoryOrFile, GolemError> {
+        let worker_temp_dir = self.get_worker_dir(owned_worker_id).await?;
+        let mut absolute_path = worker_temp_dir.path().to_path_buf();
+        for path_component in path.components() {
+            absolute_path.push(path_component);
+        }
+        while absolute_path.is_symlink() {
+            absolute_path = tokio::fs::read_link(absolute_path)
+                .await
+                .map_err(|e| GolemError::runtime(e.to_string()))?;
+        }
+        if absolute_path.is_dir() {
+            return Ok(DirectoryOrFile::Dir);
+        }
+        if absolute_path.is_file() {
+            return Ok(DirectoryOrFile::File);
+        }
+        Err(GolemError::runtime(format!(
+            "{} is not a file nor directory",
+            path.to_string_lossy()
+        )))
     }
 }

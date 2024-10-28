@@ -74,20 +74,17 @@ impl TestHttpServer {
                         debug!("f1: {body}");
 
                         let mut guard = f1_blocker_clone.lock().await;
-                        match &*guard {
-                            Some(blocker) => {
-                                if blocker.value == body {
-                                    let F1Blocker {
-                                        reached, resume, ..
-                                    } = guard.take().unwrap();
-                                    debug!("Reached f1 blocking point");
-                                    reached.send(()).unwrap();
-                                    debug!("Awaiting resume at f1 blocking point");
-                                    resume.await.unwrap();
-                                    debug!("Resuming from f1 blocking point");
-                                }
+                        if let Some(blocker) = &*guard {
+                            if blocker.value == body {
+                                let F1Blocker {
+                                    reached, resume, ..
+                                } = guard.take().unwrap();
+                                debug!("Reached f1 blocking point");
+                                reached.send(()).unwrap();
+                                debug!("Awaiting resume at f1 blocking point");
+                                resume.await.unwrap();
+                                debug!("Resuming from f1 blocking point");
                             }
-                            None => {}
                         }
 
                         Response::builder()
