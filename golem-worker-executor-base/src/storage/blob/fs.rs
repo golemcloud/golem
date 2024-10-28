@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::{fs, io};
+use std::fs::ReadDir;
 use tokio::fs::File;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
@@ -23,6 +25,7 @@ use anyhow::Error;
 use tokio::io::AsyncReadExt;
 use tokio_stream::StreamExt;
 use tracing::info;
+use crate::services::blob_store::FileOrDirectoryResponse;
 
 #[derive(Debug)]
 pub struct FileSystemBlobStorage {
@@ -199,7 +202,7 @@ impl BlobStorage for FileSystemBlobStorage {
             .map_err(|err| format!("Failed to delete file at {full_path:?}: {err}"))
     }
 
-    async fn get_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+    async fn get_file(&self, path: &Path) -> Result<io::Result<Vec<u8>>, String> {
         let mut file = File::open(path)
             .await
             .map_err(|err| format!("Failed to open file at {path:?}: {err}"))?;
@@ -210,9 +213,44 @@ impl BlobStorage for FileSystemBlobStorage {
             .await
             .map_err(|err| format!("Failed to read file at {path:?}: {err}"))?;
 
-        Ok(buffer)
+        Ok(Ok(buffer))
 
     }
+
+    async fn get_directory_entries(&self, root_path: &Path, path: &Path) -> Result<io::Result<Vec<(String, bool)>>, String> {
+
+        let mut entries = Vec::new();
+        let mut dir_entries = tokio::fs::read_dir(path).await.unwrap();
+
+        while let Some(entry) = dir_entries.next_entry().await.unwrap() {
+            let path = entry.path();
+            let is_directory = path.is_dir();
+            let relative_path = path.strip_prefix(root_path).ok().map(|p| p.display().to_string());
+            if let Some(relative_path) = relative_path {
+                entries.push((relative_path, is_directory));
+            }
+        }
+
+        Ok(Ok(entries))
+
+    }
+
+    async fn get_file_or_directory(&self, base_path: &Path,path: &Path) -> Result<FileOrDirectoryResponse, String> {
+        info!("++++++++++++++++++path is {}", path.display());
+        if path.is_dir() {
+            info!("-------------------------directory");
+            let directory_metadata = self
+                .get_directory_entries(&base_path, path)  // Pass base_path here
+                .await
+                .map_err(|err| format!("Failed to get directory entries: {err}"))?;
+            Ok(FileOrDirectoryResponse::DirectoryListing(directory_metadata.unwrap()))
+        } else {
+            info!("Not a directory");
+            let file_content = self.get_file(path).await.map_err(|err| format!("Failed to get file content: {err}"))?;
+            Ok(FileOrDirectoryResponse::FileContent(file_content.unwrap()))
+        }
+    }
+
 
     async fn create_dir(
         &self,

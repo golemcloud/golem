@@ -26,8 +26,10 @@ use bytes::Bytes;
 use golem_common::model::{Timestamp, WorkerId};
 use golem_common::retries::with_retries_customized;
 use std::error::Error;
+use std::io;
 use std::path::{Path, PathBuf};
 use tracing::info;
+use crate::services::blob_store::FileOrDirectoryResponse;
 
 #[derive(Debug)]
 pub struct S3BlobStorage {
@@ -547,9 +549,18 @@ impl BlobStorage for S3BlobStorage {
         Ok(())
     }
 
-    async fn get_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+    async fn get_file(&self, path: &Path) -> Result<io::Result<Vec<u8>>, String> {
         todo!()
     }
+
+    async fn get_directory_entries(&self, root_path: &Path, path: &Path) -> Result<io::Result<Vec<(String, bool)>>, String> {
+        todo!()
+    }
+
+    async fn get_file_or_directory(&self, base_path: &Path, path: &Path) -> Result<FileOrDirectoryResponse, String> {
+        todo!()
+    }
+
 
     async fn delete_many(
         &self,

@@ -13,13 +13,14 @@
 // limitations under the License.
 
 use std::{collections::HashMap, sync::Arc};
-
+use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use nom::combinator::into;
-use poem_openapi::payload::{Binary, Json};
+use poem_openapi::payload::{Binary, Json, PlainText};
 use tonic::transport::Channel;
 use tonic::Code;
 use tracing::{error, info};
@@ -973,25 +974,29 @@ where
     ) -> Result<FileOrDirectoryResponse, WorkerServiceError> {
         let worker_id_clone = worker_id.clone();
         let path_clone = path.clone(); // Clone the path to use in the move closure
+        let path_clone_response = path_clone.clone();
+        let worker_id_response = worker_id.clone();
+
         // Call the gRPC method `get_files_or_directory`
         self.call_worker_executor(
             worker_id.clone(),
             move |worker_executor_client| {
-                let worker_id_clone = worker_id.clone();
-                let path_clone = path_clone.clone(); // Clone path again for each closure invocation
+                let worker_id_clone = worker_id_clone.clone();
+                let path_clone1 = path_clone.clone(); // Clone path again for each closure invocation
 
                 info!("Getting files metadata");
 
                 Box::pin(worker_executor_client.get_files_or_directory(
                     workerexecutor::v1::GetFilesRequest {
                         worker_id: Some(worker_id_clone.into()),
-                        path: Some(path_clone),
+                        path: Some(path_clone1),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
                     },
                 ))
             },
-            |response| match response.into_inner() {
+            move |response| match response.into_inner() {
                 // Handle success case: either directory listing or file content
+
                 workerexecutor::v1::GetFilesResponse {
                     result: Some(workerexecutor::v1::get_files_response::Result::Success(
                                      workerexecutor::v1::GetFilesSuccessResponse {
@@ -1023,13 +1028,7 @@ where
                                     })
                                 })
                                 .collect();
-
-                            match nodes {
-                                Ok(nodes) => Ok(FileOrDirectoryResponse::Directory(Json(GetFileOrDirectoryResponse { nodes }))),
-                                Err(err) => Err(GolemError::Unknown(GolemErrorUnknown {
-                                                            details: format!("Unexpected file entries in error: {err}"),
-                                                        }).into()),
-                            }
+                            Ok(FileOrDirectoryResponse::Html(PlainText(generate_html_response(worker_id_response.clone(),path_clone_response.to_string(),nodes? ))))
                         }
                     }
                 }
@@ -1052,6 +1051,46 @@ where
 
 }
 
+fn generate_html_response(worker_id: WorkerId, base_path: String, entries: Vec<FileOrDirectoryNode>) -> String {
+    info!("Base path for directory listing: {}", base_path);
+
+    let mut html = String::new();
+    html.push_str("<html><body><h1>Directory Listing</h1><ul>");
+
+    // Generate HTML for each directory entry
+    for entry in entries {
+        let link_path = generate_link_path(&worker_id, &entry);
+        let display_name = format_display_name(&entry);
+        html.push_str(&format!(
+            r#"<li><a href="{}">{}</a> - {}</li>"#,
+            link_path, display_name, entry.permission
+        ));
+    }
+
+    html.push_str("</ul></body></html>");
+    html
+}
+
+// Helper function to generate a link path based on the base URL format
+fn generate_link_path(worker_id: &WorkerId, entry: &FileOrDirectoryNode) -> String {
+    let base_url = format!("/v1/components/{}/workers/{}/files/", worker_id.component_id, worker_id.worker_name);
+    let full_path = format!("{}{}", base_url, entry.name);
+
+    if entry.node_type == NodeType::Directory {
+        full_path + "/"
+    } else {
+        full_path
+    }
+}
+
+// Helper function to format the display name for an entry
+fn format_display_name(entry: &FileOrDirectoryNode) -> String {
+    if entry.node_type == NodeType::Directory {
+        format!("{}/", entry.name)
+    } else {
+        entry.name.clone()
+    }
+}
 impl<AuthCtx> WorkerServiceDefault<AuthCtx>
 where
     AuthCtx: Send + Sync,

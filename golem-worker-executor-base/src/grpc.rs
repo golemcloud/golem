@@ -1183,12 +1183,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match self.services.blob_store_service().get_file_or_directory(owned_worker_id.clone(), request.path.unwrap()).await {
             Ok(FileOrDirectoryResponse::DirectoryListing(files)) => {
                 info!("Successfully retrieved directory listing for worker {:?}", owned_worker_id.worker_id);
-
+                let files_response = files.into_iter().map(|(name, is_directory)|FileNode{
+                    name,
+                    permission: "rw".to_string(),
+                    r#type: if is_directory { NodeType::Directory as i32 } else{
+                        NodeType::File as i32
+                    }
+                }).collect() ;
                 // Create the response for a directory
                 let response = GetFilesResponse {
                     result: Some(golem::workerexecutor::v1::get_files_response::Result::Success(
                         GetFilesSuccessResponse {
-                            files,
+                            files: files_response,
                             file_content: None, // No file content as it's a directory
                         },
                     )),
@@ -1988,7 +1994,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         })?;
 
         let record = recorded_grpc_api_request!(
-        "get_files",
+        "get_files_or_dir",
         worker_id = proto_worker_id_string(&Some(worker_id.clone())),
     );
         let result = self.get_files_or_directory_internal(request).instrument(record.span.clone()).await;

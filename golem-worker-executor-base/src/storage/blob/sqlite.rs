@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use anyhow::Error;
 use crate::storage::{
@@ -21,6 +22,7 @@ use crate::storage::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::WorkerId;
+use crate::services::blob_store::FileOrDirectoryResponse;
 
 #[derive(Debug)]
 pub struct SqliteBlobStorage {
@@ -123,9 +125,18 @@ impl BlobStorage for SqliteBlobStorage {
             .map_err(|err| err.to_string())
     }
 
-    async fn get_file(&self, path: &Path) -> Result<Vec<u8>, String> {
+    async fn get_file(&self, path: &Path) -> Result<io::Result<Vec<u8>>, String> {
         todo!()
     }
+
+    async fn get_directory_entries(&self, root_path: &Path, path: &Path) -> Result<io::Result<Vec<(String, bool)>> , String> {
+        todo!()
+    }
+
+    async fn get_file_or_directory(&self, base_path: &Path, path: &Path) -> Result<FileOrDirectoryResponse, String> {
+        todo!()
+    }
+
 
     async fn create_dir(
         &self,

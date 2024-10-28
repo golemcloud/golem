@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 use std::borrow::Cow;
-use poem_openapi::payload::{Binary, Json};
+use poem_openapi::payload::{Binary, Json, PlainText};
 use serde_json::Value;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use thiserror::Error;
@@ -1744,9 +1744,11 @@ impl TryFrom<FileNode> for ApiFileNode {
 
 #[derive(ApiResponse)]
 pub enum FileOrDirectoryResponse {
-    #[oai(status = 200)]
-    Directory(Json<GetFileOrDirectoryResponse>),
-    #[oai(status = 200)]
+
+    #[oai(status = 200, content_type = "text/html")]
+    Html(PlainText<String>),
+    /// File download response
+    #[oai(status = 200, content_type = "application/octet-stream")]
     File(Binary<Vec<u8>>),
 }
 

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use crate::empty_worker_metadata;
 use crate::service::{component::ComponentService, worker::WorkerService};
 use golem_common::model::{
@@ -49,8 +50,6 @@ impl WorkerApi {
         request: Json<WorkerCreationRequest>,
     ) -> Result<Json<WorkerCreationResponse>> {
 
-        info!("-------------------------------------------");
-        println!("********************************************");
         let record = recorded_http_api_request!(
             "launch_new_worker",
             component_id = component_id.0.to_string(),
@@ -126,62 +125,42 @@ impl WorkerApi {
 
         // Record and return the result
         record.result(response)
-
     }
 
-    // #[oai(
-    //     path = "/:component_id/workers/:worker_name/files/*path",
-    //     method = "get",
-    //     operation_id = "get_file_or_directory"
-    // )]
-    // async fn get_file_or_directory(
-    //     &self,
-    //     component_id: Path<ComponentId>,
-    //     worker_name: Path<String>,
-    //     path: Path<String>,
-    // ) -> Result<Json<FileOrDirectoryResponse>> {
-        // Create a WorkerId from component_id and worker_name
-        // let worker_id = make_worker_id(component_id.0, worker_name.0)?;
-        //
-        // // Record the API request
-        // let record = recorded_http_api_request!(
-        // "get_file_or_directory",
-        // worker_id = worker_id.to_string(),
-        // path = path.to_string()
-        // );
 
-        // // Call the get_files_or_directory method from WorkerService
-        // let response = self.worker_service
-        //     .get_files_or_directory(worker_id, path.0 , empty_worker_metadata())
-        //     .instrument(record.span.clone())
-        //     .await;
+    #[oai(
+        path = "/:component_id/workers/:worker_name/files/*path",
+        method = "get",
+        operation_id = "get_file_or_directory"
+    )]
+    async fn get_file_or_directory(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        path: Path<Vec<String>>,
+    ) -> Result<FileOrDirectoryResponse> {
 
-        // Call the get_files method from the WorkerService
-        // let response = self
-        //     .worker_service
-        //     .get_files_or_directory(worker_id, Some(path) , empty_worker_metadata())
-        //     .instrument(record.span.clone())
-        //     .await
-        //     .map_err(|e| e.into())
-        //     .map(Json);
-        // record.result(response);
-        //
-        // match response {
-        //     Ok(FileOrDirectoryResponse::Directory(directory_listing)) => {
-        //         // If the response is a directory listing, return it
-        //         Ok(FileOrDirectoryResponse::Directory(directory_listing))
-        //     }
-        //     Ok(FileOrDirectoryResponse::File(file_content)) => {
-        //         // If the response is a file, return it as binary
-        //         record.result(Ok(file_content.clone())).expect("TODO: panic message");
-        //         Ok(FileOrDirectoryResponse::File(file_content))
-        //     }
-        //     Err(err) => {
-        //         // Handle errors by returning an empty FileOrDirectoryResponse
-        //         Ok(FileOrDirectoryResponse::Directory(Json(GetFileOrDirectoryResponse { nodes: vec![] })))
-        //     }
-        // }
+        let full_path: PathBuf= path.0.iter().collect();
 
+
+        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+
+        // Record the API request
+        let record = recorded_http_api_request!(
+        "get_file_or_directory at path",
+        worker_id = worker_id.to_string()
+        );
+
+        let p1 = full_path.to_str().unwrap().to_string();
+
+        // Call the get_files_or_directory method from WorkerService
+        let response = self.worker_service
+            .get_files_or_directory(worker_id, p1, empty_worker_metadata())
+            .instrument(record.span.clone())
+            .await.map_err(|e| e.into());
+
+        record.result(response)
+    }
 
 
     /// Delete a worker

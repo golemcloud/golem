@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use std::fmt::Debug;
+use std::io;
 use std::path::{Path, PathBuf};
 use anyhow::Error;
 use async_trait::async_trait;
@@ -21,6 +22,7 @@ use bytes::Bytes;
 
 use golem_common::model::{AccountId, ComponentId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
+use crate::services::blob_store::FileOrDirectoryResponse;
 
 pub mod fs;
 pub mod memory;
@@ -80,7 +82,11 @@ pub trait BlobStorage: Debug {
     async fn get_file(
         &self,
         path: &Path
-    ) -> Result<Vec<u8>, String>;
+    ) -> Result<io::Result<Vec<u8>>, String>;
+
+    async fn get_directory_entries(&self, root_path: &Path, path: &Path) -> Result<io::Result<Vec<(String, bool)>> , String>;
+
+    async fn get_file_or_directory(&self, base_path : &Path, path: &Path) -> Result<FileOrDirectoryResponse, String>;
 
 
     async fn delete_many(

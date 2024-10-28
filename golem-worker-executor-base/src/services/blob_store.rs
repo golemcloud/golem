@@ -145,19 +145,18 @@ pub trait BlobStoreService {
         &self,
         owned_worker_id: OwnedWorkerId,
         path: PathBuf,
-    ) -> Result<Vec<u8>, String>;
+    ) -> Result<io::Result<Vec<u8>>, String>;
 
     async fn get_directory_metadata(
         &self,
         owned_worker_id: OwnedWorkerId,
         path: PathBuf
-    ) -> Result<Vec<FileNode>, String>; // Helper method to determine if a path is a directory
-    async fn is_directory(&self, path: &PathBuf) -> Result<bool, String>;
+    ) -> Result<Vec<FileNode>, String>;
 }
 
 pub enum FileOrDirectoryResponse {
     FileContent(Vec<u8>),
-    DirectoryListing(Vec<FileNode>),
+    DirectoryListing(Vec<(String, bool)>),
 }
 
 
@@ -620,32 +619,35 @@ impl BlobStoreService for DefaultBlobStoreService {
         owned_worker_id: OwnedWorkerId,
         path: String,
     ) -> Result<FileOrDirectoryResponse, String> {
-        let path = PathBuf::from(path);
 
-        // Check if the path is a directory asynchronously
-        if self.is_directory(&path).await? {
-            // If it's a directory, retrieve directory metadata
-            let directory_metadata = self.get_directory_metadata(owned_worker_id, path).await?;
-            Ok(FileOrDirectoryResponse::DirectoryListing(directory_metadata))
-        } else {
-            // If it's a file, retrieve file content
-            let file_content = self.get_file(owned_worker_id, path).await?;
-            Ok(FileOrDirectoryResponse::FileContent(file_content))
-        }
+        let path = PathBuf::from(path.clone());
+        // root folder path
+        let base_path = PathBuf::from(format!(
+            "/worker_executor_store/compressed_oplog/-1/{}/{}/{}",
+            owned_worker_id.worker_id.component_id,
+            owned_worker_id.worker_id.component_id,
+            owned_worker_id.worker_id.worker_name
+        ));
+
+        let target_path = base_path.join(path.clone());
+
+        info!("complete path is {}", target_path.display());
+
+        self.blob_storage.get_file_or_directory(base_path.as_path(), target_path.as_path()).await
     }
+
 
     async fn get_file(
         &self,
         owned_worker_id: OwnedWorkerId,
         path: PathBuf,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<io::Result<Vec<u8>>, String> {
         let path = path.as_path();
         let bytes = self
             .blob_storage
             .get_file(path)
             .await
             .map_err(|err| format!("Failed to retrieve file content for worker {:?} at path {:?}: {:?}", owned_worker_id, path, err))?;
-
         Ok(bytes)
     }
 
@@ -654,16 +656,6 @@ impl BlobStoreService for DefaultBlobStoreService {
         owned_worker_id: OwnedWorkerId,
         path: PathBuf,
     ) -> Result<Vec<FileNode>, String> {
-        // Implement your logic here to fetch directory metadata
-        // let path = PathBuf::from(format!(
-        //     "/worker_executor_store/compressed_oplog/-1/{}/{}/{}",
-        //     owned_worker_id.worker_id.component_id,
-        //     owned_worker_id.worker_id.component_id,
-        //     owned_worker_id.worker_id.worker_name
-        // ));
-        // info!("--------------------------{}", path.display());
-
-        // Start building nodes from the root path
         match build_node(path.file_name().unwrap().to_str().unwrap().to_string(), path).await {
             Ok(root) => {
                 let files = convert_to_file_nodes(&root);
@@ -677,13 +669,6 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     }
 
-    // Helper method to determine if a path is a directory
-    async fn is_directory(&self, path: &PathBuf) -> Result<bool, String> {
-        tokio::fs::metadata(path)
-            .await
-            .map(|metadata| metadata.is_dir())
-            .map_err(|e| format!("Failed to check if path is directory: {:?}", e))
-    }
 }
 
 // Function to build the directory tree asynchronously
