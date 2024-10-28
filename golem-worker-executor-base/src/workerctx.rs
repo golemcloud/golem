@@ -35,6 +35,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
+use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
@@ -111,6 +112,7 @@ pub trait WorkerCtx:
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         active_workers: Arc<ActiveWorkers<Self>>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,

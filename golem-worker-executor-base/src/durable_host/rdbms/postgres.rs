@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-use wasmtime::component::Resource;
-use wasmtime_wasi::WasiView;
-use golem_common::model::oplog::WrappedFunctionType;
-use crate::durable_host::{Durability, DurableWorkerCtx};
-use crate::durable_host::rdbms::RdbmsType;
 use crate::durable_host::rdbms::types::DbResultSetEntry;
+use crate::durable_host::rdbms::RdbmsType;
 use crate::durable_host::serialized::SerializableError;
+use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
-use crate::preview2::wasi::rdbms::postgres::{HostDbConnection};
+use crate::preview2::wasi::rdbms::postgres::HostDbConnection;
 use crate::preview2::wasi::rdbms::types::{DbResultSet, DbValue, Error};
 use crate::workerctx::WorkerCtx;
+use async_trait::async_trait;
+use golem_common::model::oplog::WrappedFunctionType;
+use wasmtime::component::Resource;
+use wasmtime_wasi::WasiView;
 
 pub struct PostgresDbConnection {
     pub address: String,
@@ -35,10 +35,12 @@ impl PostgresDbConnection {
     }
 }
 
-
 #[async_trait]
 impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
-    async fn open(&mut self, address: String) -> anyhow::Result<Result<Resource<PostgresDbConnection>, Error>> {
+    async fn open(
+        &mut self,
+        address: String,
+    ) -> anyhow::Result<Result<Resource<PostgresDbConnection>, Error>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "open");
         let entry = PostgresDbConnection::new(address);
@@ -46,7 +48,12 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
         Ok(Ok(resource))
     }
 
-    async fn query(&mut self, self_: Resource<PostgresDbConnection>, statement: String, params: Vec<DbValue>) -> anyhow::Result<Result<Resource<DbResultSet>, Error>> {
+    async fn query(
+        &mut self,
+        self_: Resource<PostgresDbConnection>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<Resource<DbResultSet>, Error>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "query");
         // let address = self
@@ -74,14 +81,22 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
         //     Err(e) => Ok(Err(Error::Error(format!("{:?}", e)))),
         // }
 
-        let db_result_set = self
-            .as_wasi_view()
-            .table()
-            .push(DbResultSetEntry::new(RdbmsType::Postgres, statement.clone(), params, vec![], None))?;
+        let db_result_set = self.as_wasi_view().table().push(DbResultSetEntry::new(
+            RdbmsType::Postgres,
+            statement.clone(),
+            params,
+            vec![],
+            None,
+        ))?;
         Ok(Ok(db_result_set))
     }
 
-    async fn execute(&mut self, self_: Resource<PostgresDbConnection>, statement: String, params: Vec<DbValue>) -> anyhow::Result<Result<u64, Error>> {
+    async fn execute(
+        &mut self,
+        self_: Resource<PostgresDbConnection>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<u64, Error>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "execute");
         // let address = self
@@ -95,7 +110,9 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::db-connection", "drop");
-        self.as_wasi_view().table().delete::<PostgresDbConnection>(rep)?;
+        self.as_wasi_view()
+            .table()
+            .delete::<PostgresDbConnection>(rep)?;
         Ok(())
     }
 }

@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use async_trait::async_trait;
-use wasmtime::component::Resource;
-use wasmtime_wasi::WasiView;
-use crate::durable_host::DurableWorkerCtx;
 use crate::durable_host::rdbms::RdbmsType;
+use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::types::{DbColumnTypeMeta, DbRow, DbValue, HostDbResultSet};
 use crate::workerctx::WorkerCtx;
+use async_trait::async_trait;
+use wasmtime::component::Resource;
+use wasmtime_wasi::WasiView;
 
 pub struct DbResultSetEntry {
     pub rdbms_type: RdbmsType,
@@ -30,44 +30,60 @@ pub struct DbResultSetEntry {
 }
 
 impl DbResultSetEntry {
-    pub fn new(rdbms_type: RdbmsType, statement: String, params: Vec<DbValue>, columns: Vec<DbColumnTypeMeta>, rows: Option<Vec<DbRow>>) -> Self {
-        Self { rdbms_type, statement, params, columns, rows }
+    pub fn new(
+        rdbms_type: RdbmsType,
+        statement: String,
+        params: Vec<DbValue>,
+        columns: Vec<DbColumnTypeMeta>,
+        rows: Option<Vec<DbRow>>,
+    ) -> Self {
+        Self {
+            rdbms_type,
+            statement,
+            params,
+            columns,
+            rows,
+        }
     }
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> HostDbResultSet  for &mut DurableWorkerCtx<Ctx> {
-    async fn get_column_metadata(&mut self, self_: Resource<DbResultSetEntry>) -> anyhow::Result<Vec<DbColumnTypeMeta>> {
+impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
+    async fn get_column_metadata(
+        &mut self,
+        self_: Resource<DbResultSetEntry>,
+    ) -> anyhow::Result<Vec<DbColumnTypeMeta>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::types::db-result-set", "get-column-metadata");
         let columns = self
             .as_wasi_view()
             .table()
             .get::<DbResultSetEntry>(&self_)
-            .map(|e| {
-                e.columns.clone()
-            })?;
+            .map(|e| e.columns.clone())?;
 
         Ok(columns)
     }
 
-    async fn get_next(&mut self, self_: Resource<DbResultSetEntry>) -> anyhow::Result<Option<Vec<DbRow>>> {
+    async fn get_next(
+        &mut self,
+        self_: Resource<DbResultSetEntry>,
+    ) -> anyhow::Result<Option<Vec<DbRow>>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::types::db-result-set", "get-next");
         let rows = self
             .as_wasi_view()
             .table()
             .get::<DbResultSetEntry>(&self_)
-            .map(|e| {
-                e.rows.clone()
-            })?;
+            .map(|e| e.rows.clone())?;
 
         Ok(rows)
     }
 
     fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::types::db-result-set", "drop");
-        self.as_wasi_view().table().delete::<DbResultSetEntry>(rep)?;
+        self.as_wasi_view()
+            .table()
+            .delete::<DbResultSetEntry>(rep)?;
         Ok(())
     }
 }

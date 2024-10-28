@@ -37,6 +37,7 @@ use crate::services::plugins::Plugins;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
+use crate::services::rdbms::RdbmsService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_proxy::WorkerProxy;
@@ -147,6 +148,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService + Send + Sync>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         oplog_service: Arc<dyn OplogService + Send + Sync>,
         oplog: Arc<dyn Oplog + Send + Sync>,
@@ -224,6 +226,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_enumeration_service,
                 key_value_service,
                 blob_store_service,
+                rdbms_service,
                 component_service,
                 plugins,
                 config.clone(),
@@ -1760,6 +1763,7 @@ pub struct PrivateDurableWorkerState<Owner: PluginOwner, Scope: PluginScope> {
     worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService + Send + Sync>,
     key_value_service: Arc<dyn KeyValueService + Send + Sync>,
     blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+    rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
     component_service: Arc<dyn ComponentService + Send + Sync>,
     plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
     config: Arc<GolemConfig>,
@@ -1798,6 +1802,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
         >,
         key_value_service: Arc<dyn KeyValueService + Send + Sync>,
         blob_store_service: Arc<dyn BlobStoreService + Send + Sync>,
+        rdbms_service: Arc<dyn RdbmsService + Send + Sync>,
         component_service: Arc<dyn ComponentService + Send + Sync>,
         plugins: Arc<dyn Plugins<Owner, Scope> + Send + Sync>,
         config: Arc<GolemConfig>,
@@ -1826,6 +1831,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PrivateDurableWorkerState<Owner, Sc
             worker_enumeration_service,
             key_value_service,
             blob_store_service,
+            rdbms_service,
             component_service,
             plugins,
             config,

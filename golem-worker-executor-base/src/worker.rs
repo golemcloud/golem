@@ -34,7 +34,7 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins,
-    HasPromiseService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker,
+    HasPromiseService, HasRdbmsService, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker,
     HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
@@ -1325,6 +1325,7 @@ impl RunningWorker {
             parent.worker_enumeration_service(),
             parent.key_value_service(),
             parent.blob_store_service(),
+            parent.rdbms_service(),
             parent.event_service.clone(),
             parent.active_workers(),
             parent.oplog_service(),
