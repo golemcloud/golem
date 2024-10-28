@@ -47,6 +47,7 @@ message RibIR {
         CreateSink create_sink = 35;
         AdvanceIterator advance_iterator = 36;
         SinkToList sink_to_list = 37;
+        PushToSink push_to_sink = 38;
     }
 }
 
@@ -179,10 +180,13 @@ message IndexedResourceDrop {
   uint32 arg_size = 2;
 }
 
-message SinkToList {
-   wasm.ast.Type list_type = 1;
-}
+message SinkToList {}
+
+message PushToSink {}
 
 message AdvanceIterator {}
-message CreateSink {}
+
+message CreateSink {
+   wasm.ast.Type list_type = 1;
+}
 message ListToIterator {}

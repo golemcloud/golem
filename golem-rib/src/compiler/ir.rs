@@ -428,6 +428,21 @@ impl TryFrom<ProtoRibIR> for RibIR {
                     function_reference_type,
                 ))
             }
+            Instruction::ListToIterator(_) => Ok(RibIR::ListToIterator),
+            Instruction::CreateSink(create_sink) => {
+                let result = create_sink
+                    .list_type
+                    .ok_or("Sink list type not present".to_string())
+                    .and_then(|t| {
+                        (&t).try_into()
+                            .map_err(|_| "Failed to convert AnalysedType".to_string())
+                    })?;
+
+                Ok(RibIR::CreateSink(result))
+            }
+            Instruction::AdvanceIterator(_) => Ok(RibIR::AdvanceIterator),
+            Instruction::SinkToList(_) => Ok(RibIR::SinkToList),
+            Instruction::PushToSink(_) => Ok(RibIR::PushToSink),
         }
     }
 }
@@ -538,11 +553,23 @@ impl From<RibIR> for ProtoRibIR {
                 })
             }
 
-            RibIR::ListToIterator => todo!(),
-            RibIR::CreateSink(_) => todo!(),
-            RibIR::AdvanceIterator => todo!(),
-            RibIR::PushToSink => todo!(),
-            RibIR::SinkToList => todo!(),
+            RibIR::ListToIterator => {
+                Instruction::ListToIterator(golem_api_grpc::proto::golem::rib::ListToIterator {})
+            }
+            RibIR::CreateSink(analysed_type) => {
+                Instruction::CreateSink(golem_api_grpc::proto::golem::rib::CreateSink {
+                    list_type: Some((&analysed_type).into()),
+                })
+            }
+            RibIR::AdvanceIterator => {
+                Instruction::AdvanceIterator(golem_api_grpc::proto::golem::rib::AdvanceIterator {})
+            }
+            RibIR::PushToSink => {
+                Instruction::PushToSink(golem_api_grpc::proto::golem::rib::PushToSink {})
+            }
+            RibIR::SinkToList => {
+                Instruction::SinkToList(golem_api_grpc::proto::golem::rib::SinkToList {})
+            }
         };
 
         ProtoRibIR {
