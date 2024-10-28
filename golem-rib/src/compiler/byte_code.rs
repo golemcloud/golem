@@ -24,10 +24,6 @@ pub struct RibByteCode {
 }
 
 impl RibByteCode {
-    pub fn len(&self) -> usize {
-        self.instructions.len()
-    }
-
     // Convert expression to bytecode instructions
     pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibByteCode, String> {
         let expr = Expr::from(inferred_expr.clone());

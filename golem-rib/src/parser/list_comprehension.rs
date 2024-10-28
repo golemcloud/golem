@@ -81,7 +81,7 @@ mod tests {
         assert_eq!(
             result,
             Expr::list_comprehension(
-                VariableId::list_comprehension_identifier("x".to_string()),
+                VariableId::list_comprehension_identifier("x"),
                 Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")]),
                 Expr::expr_block(vec![Expr::identifier("x")]),
             )
@@ -106,7 +106,7 @@ mod tests {
                     Expr::sequence(vec![Expr::literal("foo"), Expr::literal("bar")])
                 ),
                 Expr::list_comprehension(
-                    VariableId::list_comprehension_identifier("p".to_string()),
+                    VariableId::list_comprehension_identifier("p"),
                     Expr::identifier("x"),
                     Expr::expr_block(vec![Expr::identifier("p")]),
                 )
