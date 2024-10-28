@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::wit_resolve::ResolvedWitDir;
+use crate::wit_resolve::{PackageSource, ResolvedWitDir};
 use crate::{naming, WasmRpcOverride};
 use anyhow::anyhow;
 use indexmap::IndexMap;
@@ -28,7 +28,7 @@ use wit_parser::{
 pub struct StubDefinition {
     resolve: Resolve,
     source_world_id: WorldId,
-    sources: IndexMap<PackageId, (PathBuf, Vec<PathBuf>)>,
+    package_sources: IndexMap<PackageId, PackageSource>,
 
     stub_imported_interfaces: OnceCell<Vec<InterfaceStub>>,
     stub_imports: OnceCell<IndexMap<InterfaceStubImport, InterfaceStubTypeDef>>,
@@ -74,7 +74,7 @@ impl StubDefinition {
         Ok(Self {
             resolve: resolved_source.resolve,
             source_world_id,
-            sources: resolved_source.sources,
+            package_sources: resolved_source.package_sources,
             stub_imported_interfaces: OnceCell::new(),
             stub_imports: OnceCell::new(),
             stub_dep_package_ids: OnceCell::new(),
@@ -100,7 +100,7 @@ impl StubDefinition {
 
     pub fn packages_with_wit_sources(
         &self,
-    ) -> impl Iterator<Item = (PackageId, &Package, &(PathBuf, Vec<PathBuf>))> {
+    ) -> impl Iterator<Item = (PackageId, &Package, &PackageSource)> {
         self.resolve
             .topological_packages()
             .into_iter()
@@ -111,7 +111,7 @@ impl StubDefinition {
                         .packages
                         .get(package_id)
                         .unwrap_or_else(|| panic!("package not found")),
-                    self.sources
+                    self.package_sources
                         .get(&package_id)
                         .unwrap_or_else(|| panic!("sources for package not found")),
                 )

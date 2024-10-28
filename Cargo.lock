@@ -5386,7 +5386,7 @@ dependencies = [
 [[package]]
 name = "wasmparser"
 version = "0.219.1"
-source = "git+https://github.com/golemcloud/wasm-tools.git?rev=46b168c169dc28d169d60e60ddbe4eed20f905b3#46b168c169dc28d169d60e60ddbe4eed20f905b3"
+source = "git+https://github.com/golemcloud/wasm-tools.git#3458fe1e6f965420e69e1e09885d864dc49b343a"
 dependencies = [
  "ahash",
  "bitflags 2.6.0",
@@ -6175,7 +6175,7 @@ dependencies = [
 [[package]]
 name = "wit-encoder"
 version = "0.219.1"
-source = "git+https://github.com/golemcloud/wasm-tools.git?rev=46b168c169dc28d169d60e60ddbe4eed20f905b3#46b168c169dc28d169d60e60ddbe4eed20f905b3"
+source = "git+https://github.com/golemcloud/wasm-tools.git#3458fe1e6f965420e69e1e09885d864dc49b343a"
 dependencies = [
  "id-arena",
  "pretty_assertions",
@@ -6241,7 +6241,7 @@ dependencies = [
 [[package]]
 name = "wit-parser"
 version = "0.219.1"
-source = "git+https://github.com/golemcloud/wasm-tools.git?rev=46b168c169dc28d169d60e60ddbe4eed20f905b3#46b168c169dc28d169d60e60ddbe4eed20f905b3"
+source = "git+https://github.com/golemcloud/wasm-tools.git#3458fe1e6f965420e69e1e09885d864dc49b343a"
 dependencies = [
  "anyhow",
  "id-arena",
@@ -6252,7 +6252,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "unicode-xid",
- "wasmparser 0.219.1 (git+https://github.com/golemcloud/wasm-tools.git?rev=46b168c169dc28d169d60e60ddbe4eed20f905b3)",
+ "wasmparser 0.219.1 (git+https://github.com/golemcloud/wasm-tools.git)",
 ]
 
 [[package]]

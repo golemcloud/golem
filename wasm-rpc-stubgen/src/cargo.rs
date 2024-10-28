@@ -88,7 +88,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
     );
 
     let stub_package_name = def.stub_package_name();
-    for (_, dep_package, (dep_package_path, _)) in def.packages_with_wit_sources() {
+    for (_, dep_package, dep_package_sources) in def.packages_with_wit_sources() {
         if dep_package.name == stub_package_name {
             continue;
         }
@@ -109,7 +109,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
                 format_package_name_without_version(&dep_package.name),
                 WitDependency {
                     path: naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(
-                        dep_package_path,
+                        &dep_package_sources.dir,
                     )?)
                     .to_string_lossy()
                     .to_string(),

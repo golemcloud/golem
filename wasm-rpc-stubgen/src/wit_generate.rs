@@ -506,7 +506,7 @@ pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
     let target_deps = target_wit_root.join(naming::wit::DEPS_DIR);
 
     let _indent = LogIndent::new();
-    for (package_id, package, (_, sources)) in def.packages_with_wit_sources() {
+    for (package_id, package, package_sources) in def.packages_with_wit_sources() {
         if !stub_dep_packages.contains(&package_id) {
             log_warn_action(
                 "Skipping",
@@ -523,7 +523,7 @@ pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
         log_action("Copying", format!("package dependency {}", package.name));
 
         let _indent = LogIndent::new();
-        for source in sources {
+        for source in &package_sources.files {
             if is_source_package {
                 let dest = target_deps
                     .join(naming::wit::package_dep_dir_name(&def.source_package_name))

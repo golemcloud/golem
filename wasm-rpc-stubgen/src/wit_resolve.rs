@@ -1,14 +1,18 @@
-use crate::fs::strip_path_prefix;
 use anyhow::{anyhow, bail, Context};
 use indexmap::IndexMap;
 use std::path::{Path, PathBuf};
-use wit_parser::{Package, PackageId, Resolve, UnresolvedPackageGroup};
+use wit_parser::{Package, PackageId, PackageSourceMap, Resolve};
+
+pub struct PackageSource {
+    pub dir: PathBuf,
+    pub files: Vec<PathBuf>,
+}
 
 pub struct ResolvedWitDir {
     pub path: PathBuf,
     pub resolve: Resolve,
     pub package_id: PackageId,
-    pub sources: IndexMap<PackageId, (PathBuf, Vec<PathBuf>)>,
+    pub package_sources: IndexMap<PackageId, PackageSource>,
 }
 
 impl ResolvedWitDir {
@@ -37,40 +41,27 @@ fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
 
     let mut resolve = Resolve::new();
 
-    let (package_id, sources) = resolve
+    let (package_id, package_source_map) = resolve
         .push_dir(path)
         .with_context(|| anyhow!("Failed to resolve wit dir: {}", path.to_string_lossy()))?;
 
-    let sources = partition_sources_by_package_ids(path, &resolve, package_id, sources)?;
+    let package_sources = collect_package_sources(path, &resolve, package_id, &package_source_map)?;
 
     Ok(ResolvedWitDir {
         path: path.to_path_buf(),
         resolve,
         package_id,
-        sources,
+        package_sources,
     })
 }
 
-// Currently Resolve::push_dir does return the source that were used during resolution,
-// but they are not partitioned by packages, and the source info is not kept inside Resolve
-// (it is lost during resolution).
-//
-// To solve this (until we can get a better API upstream) we could extract and replicate the logic used
-// there, but that would require many code duplication, as many functions and types are not public.
-//
-// Instead of that, we partition the returned sources by following the accepted file and directory structure.
-//
-// Unfortunately we still have some duplication of performed operations: during partitioning we partially parse
-// the dependencies again - as UnresolvedPackageGroups - but similar partial "peeks" into deps already happened
-// in stubgen steps before. This way we try to pull and concentrate them here, so they only happen when creating
-// a new ResolvedWitDir, and parsing should only happen twice: while using Resolve::push_dir above, and here.
-fn partition_sources_by_package_ids(
+fn collect_package_sources(
     path: &Path,
     resolve: &Resolve,
     root_package_id: PackageId,
-    sources: Vec<PathBuf>,
-) -> anyhow::Result<IndexMap<PackageId, (PathBuf, Vec<PathBuf>)>> {
-    // Based on Resolve::push_dir ():
+    package_source_map: &PackageSourceMap,
+) -> anyhow::Result<IndexMap<PackageId, PackageSource>> {
+    // Based on Resolve::push_dir:
     //
     // The deps folder may contain:
     //   $path/ deps/ my-package/*.wit: a directory that may contain multiple WIT files
@@ -80,67 +71,68 @@ fn partition_sources_by_package_ids(
     // Disabling "wasm" and "wat" sources could be done by disabling default features, but they are also required through other dependencies,
     // so we filter out currently not supported path patterns here, including the single file format (for now).
 
-    let mut partitioned_sources = IndexMap::<PackageId, (PathBuf, Vec<PathBuf>)>::new();
-    let mut dep_package_path_to_package_id = IndexMap::<PathBuf, PackageId>::new();
+    let deps_dir = path.join("deps");
+    let mut package_dir_paths = IndexMap::<PackageId, PackageSource>::new();
+    for (package_id, package) in &resolve.packages {
+        let sources = package_source_map
+            .package_paths(package_id)
+            .ok_or_else(|| {
+                anyhow!(
+                    "Failed to get package source map for package {}",
+                    package.name
+                )
+            })?
+            .map(|path| path.to_path_buf())
+            .collect::<Vec<_>>();
 
-    for source in sources {
-        let relative_source = strip_path_prefix(path, &source)?;
+        if package_id == root_package_id {
+            package_dir_paths.insert(
+                package_id,
+                PackageSource {
+                    dir: path.to_path_buf(),
+                    files: sources,
+                },
+            );
+        } else {
+            if sources.len() == 0 {
+                bail!("Expected at least one source for package: {}", package.name);
+            };
 
-        let segments = relative_source.iter().collect::<Vec<_>>();
+            let source = &sources[0];
 
-        let (package_path, package_id) = match segments.len() {
-            1 => (path, root_package_id),
-            2 => {
+            let extension = source.extension().ok_or_else(|| {
+                anyhow!(
+                    "Failed to get extension for wit source: {}",
+                    source.display()
+                )
+            })?;
+
+            if extension != "wit" {
                 bail!(
-                    "Single file with packages not supported, source: {}",
-                    source.to_string_lossy()
+                    "Only wit sources are supported, source: {}",
+                    source.display()
                 );
             }
-            3 => {
-                let dep_package_path = source.parent().ok_or_else(|| {
-                    anyhow!(
-                        "Failed to get source parent, source: {}",
-                        source.to_string_lossy()
-                    )
-                })?;
 
-                match dep_package_path_to_package_id.get(dep_package_path) {
-                    Some(package_id) => (dep_package_path, *package_id),
-                    None => {
-                        let package_id = *resolve
-                            .package_names
-                            .get(
-                                &UnresolvedPackageGroup::parse_dir(dep_package_path)?
-                                    .main
-                                    .name,
-                            )
-                            .ok_or_else(|| {
-                                anyhow!(
-                                    "Failed to get package id for source: {}",
-                                    source.to_string_lossy(),
-                                )
-                            })?;
+            let parent = source.parent().ok_or_else(|| {
+                anyhow!("Failed to get parent for wit source: {}", source.display())
+            })?;
 
-                        dep_package_path_to_package_id
-                            .insert(dep_package_path.to_path_buf(), package_id);
-
-                        (dep_package_path, package_id)
-                    }
-                }
-            }
-            _ => {
+            if parent == deps_dir {
                 bail!(
-                    "Unexpected source path, source: {}",
-                    source.to_string_lossy()
+                    "Single-file wit packages without folder are not supported, source: {}",
+                    source.display()
                 );
             }
-        };
 
-        partitioned_sources
-            .entry(package_id)
-            .and_modify(|(_, sources)| sources.push(source.to_path_buf()))
-            .or_insert_with(|| (package_path.to_path_buf(), vec![source.to_path_buf()]));
+            package_dir_paths.insert(
+                package_id,
+                PackageSource {
+                    dir: parent.to_path_buf(),
+                    files: sources,
+                },
+            );
+        }
     }
-
-    Ok(partitioned_sources)
+    Ok(package_dir_paths)
 }

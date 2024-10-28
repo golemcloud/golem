@@ -79,12 +79,13 @@ pub fn add_stub_dependency(
     let mut package_names_to_package_path = BTreeMap::<PackageName, PathBuf>::new();
 
     for (package_name, package_id) in &stub_resolved_wit_root.resolve.package_names {
-        let (package_path, package_sources) = stub_resolved_wit_root
-            .sources
+        let package_sources = stub_resolved_wit_root
+            .package_sources
             .get(package_id)
             .ok_or_else(|| anyhow!("Failed to get package sources for {}", package_name))?;
-        let package_path =
-            naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(package_path)?);
+        let package_path = naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(
+            &package_sources.dir,
+        )?);
 
         let is_stub_main_package = *package_id == stub_resolved_wit_root.package_id;
         let is_dest_package = *package_name == dest_package.name;
@@ -112,7 +113,7 @@ pub fn add_stub_dependency(
                 });
             // Non-self stub package has to be copied into target deps
             } else {
-                for source in package_sources {
+                for source in &package_sources.files {
                     actions.add(OverwriteSafeAction::CopyFile {
                         source: source.clone(),
                         target: dest_deps_dir
@@ -131,7 +132,7 @@ pub fn add_stub_dependency(
             stub_transformer
                 .remove_imports_from_package_all_worlds(*package_id, &dest_package_import_prefix)?;
             let content = stub_transformer.render_package(*package_id)?;
-            let first_source = package_sources.iter().next().ok_or_else(|| {
+            let first_source = package_sources.files.iter().next().ok_or_else(|| {
                 anyhow!(
                     "Expected at least one source for stub package: {}",
                     package_name
@@ -139,7 +140,7 @@ pub fn add_stub_dependency(
             })?;
             let first_source_relative_path = strip_path_prefix(stub_wit_root, first_source)?;
             let target = {
-                if package_sources.len() == 1 {
+                if package_sources.files.len() == 1 {
                     dest_wit_root.join(first_source_relative_path)
                 } else {
                     dest_wit_root
@@ -156,7 +157,7 @@ pub fn add_stub_dependency(
             actions.add(OverwriteSafeAction::WriteFile { content, target });
 
             // TODO: still output old ones while experimenting
-            for source in package_sources {
+            for source in &package_sources.files {
                 actions.add(OverwriteSafeAction::CopyFile {
                     source: source.clone(),
                     target: dest_wit_root.join(format!(
@@ -172,15 +173,15 @@ pub fn add_stub_dependency(
     if overwrite {
         let dest_main_package_id = dest_resolved_wit_root.package_id;
 
-        let (_, dest_main_sources) = dest_resolved_wit_root
-            .sources
+        let dest_main_package_sources = dest_resolved_wit_root
+            .package_sources
             .get(&dest_main_package_id)
             .ok_or_else(|| anyhow!("Failed to get dest main package sources"))?;
 
-        if dest_main_sources.len() != 1 {
+        if dest_main_package_sources.files.len() != 1 {
             bail!(
                 "Expected exactly one dest main package source, got sources: {:?}",
-                dest_main_sources
+                dest_main_package_sources.files
             );
         }
 
@@ -192,7 +193,7 @@ pub fn add_stub_dependency(
 
         actions.add(OverwriteSafeAction::WriteFile {
             content,
-            target: dest_main_sources[0].clone(),
+            target: dest_main_package_sources.files[0].clone(),
         });
     }
 
