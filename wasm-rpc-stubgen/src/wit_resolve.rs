@@ -25,7 +25,7 @@ impl ResolvedWitDir {
             anyhow!(
                 "Failed to get package by id: {:?}, wit dir: {}",
                 package_id,
-                self.path.to_string_lossy()
+                self.path.display()
             )
         })
     }
@@ -43,7 +43,7 @@ fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
 
     let (package_id, package_source_map) = resolve
         .push_dir(path)
-        .with_context(|| anyhow!("Failed to resolve wit dir: {}", path.to_string_lossy()))?;
+        .with_context(|| anyhow!("Failed to resolve wit dir: {}", path.display()))?;
 
     let package_sources = collect_package_sources(path, &resolve, package_id, &package_source_map)?;
 
@@ -94,7 +94,7 @@ fn collect_package_sources(
                 },
             );
         } else {
-            if sources.len() == 0 {
+            if sources.is_empty() {
                 bail!("Expected at least one source for package: {}", package.name);
             };
 
