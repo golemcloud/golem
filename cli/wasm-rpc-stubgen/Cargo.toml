@@ -61,13 +61,8 @@ toml = "0.8.14"
 walkdir = "2.5.0"
 wac-graph = "=0.6.0"
 wit-bindgen-rust = "=0.26.0"
-# wit-encoder = "=0.219.0"
-wit-encoder = { git = "https://github.com/golemcloud/wasm-tools.git", rev = "46b168c169dc28d169d60e60ddbe4eed20f905b3"}
-# wit-encoder = { path = "../../wasm-tools/crates/wit-encoder"}
-# wit-parser = "=0.219.0"
-wit-parser = { git = "https://github.com/golemcloud/wasm-tools.git", rev = "46b168c169dc28d169d60e60ddbe4eed20f905b3"}
-
-# wit-parser = { path = "../../wasm-tools/crates/wit-parser"}
+wit-encoder = { git = "https://github.com/golemcloud/wasm-tools.git" }
+wit-parser = { git = "https://github.com/golemcloud/wasm-tools.git" }
 
 
 [dev-dependencies]
