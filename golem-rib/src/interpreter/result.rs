@@ -42,11 +42,9 @@ impl fmt::Debug for RibInterpreterResult {
 
 impl RibInterpreterResult {
     pub fn is_sink(&self) -> bool {
-        match self {
-            RibInterpreterResult::Sink(_, _) => true,
-            _ => false,
-        }
+        matches!(self, RibInterpreterResult::Sink(_, _))
     }
+    
     pub fn compare<F>(
         &self,
         right: &RibInterpreterResult,

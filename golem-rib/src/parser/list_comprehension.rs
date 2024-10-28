@@ -22,7 +22,7 @@ where
         ),
         identifier_text()
             .skip(spaces())
-            .map(|name| VariableId::list_comprehension_identifier(name)),
+            .map(VariableId::list_comprehension_identifier),
         string("in").skip(spaces()),
         expr().skip(spaces()),
         char('{').skip(spaces()),

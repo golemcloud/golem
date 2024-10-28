@@ -335,8 +335,6 @@ mod internal {
 
         match &mut possible_iterator {
             RibInterpreterResult::Iterator(iter) => {
-                let iter = iter;
-
                 if let Some(type_annotated_value) = iter.next() {
                     interpreter_stack.push(possible_iterator);
                     interpreter_stack.push(RibInterpreterResult::Val(type_annotated_value));
