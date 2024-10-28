@@ -43,8 +43,38 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Resource<PostgresDbConnection>, Error>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "open");
+
+        let worker_id = self.state.owned_worker_id.clone();
+        // let result = Durability::<Ctx, String, String, SerializableError>::wrap(
+        //     self,
+        //     WrappedFunctionType::ReadRemote,
+        //     "golem rdbms::postgres::db-connection::open",
+        //     address.clone(),
+        //     |ctx| ctx.state.rdbms_service.postgres().create(address.clone().as_str()),
+        // )
+        //     .await;
+        // match result {
+        //     Ok(_) => {
+        //         let entry = PostgresDbConnection::new(address);
+        //         let resource = self.as_wasi_view().table().push(entry)?;
+        //
+        //
+        //         Ok(Ok(resource))
+        //     },
+        //     Err(e) => Ok(Err(Error::Error(format!("{:?}", e)))),
+        // }
+
+        let _ = self
+            .state
+            .rdbms_service
+            .postgres()
+            .create(&worker_id, &address)
+            .await
+            .map_err(Error::Error)?;
+
         let entry = PostgresDbConnection::new(address);
         let resource = self.as_wasi_view().table().push(entry)?;
+
         Ok(Ok(resource))
     }
 
@@ -110,6 +140,20 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
 
     fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::db-connection", "drop");
+
+        // let worker_id = self.state.owned_worker_id.clone();
+        // let address = self
+        //     .as_wasi_view()
+        //     .table()
+        //     .get::<PostgresDbConnection>(&rep)?
+        //     .address
+        //     .clone();
+        //
+        // let _ = self.state
+        //     .rdbms_service
+        //     .postgres()
+        //     .drop(&worker_id, &address).await.map_err(Error::Error)?;
+
         self.as_wasi_view()
             .table()
             .delete::<PostgresDbConnection>(rep)?;
