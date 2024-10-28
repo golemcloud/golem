@@ -1,4 +1,4 @@
-use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+use crate::worker_binding::{GolemWorkerBinding, GolemWorkerBindingType, ResponseMapping};
 use crate::worker_service_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
@@ -6,11 +6,47 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo};
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
+pub enum CompiledGolemWorkerBindingType {
+    WitWorker,
+    FileServer,
+}
+
+impl TryFrom<i32> for CompiledGolemWorkerBindingType {
+    type Error = String;
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(CompiledGolemWorkerBindingType::WitWorker),
+            1 => Ok(CompiledGolemWorkerBindingType::FileServer),
+            _ => Err(format!("Unknown compiled worker binding type: {}", value)),
+        }
+    }
+}
+
+impl From<CompiledGolemWorkerBindingType> for i32 {
+    fn from(value: CompiledGolemWorkerBindingType) -> Self {
+        match value {
+            CompiledGolemWorkerBindingType::WitWorker => 0,
+            CompiledGolemWorkerBindingType::FileServer => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub struct CompiledGolemWorkerBinding {
+    pub r#type: CompiledGolemWorkerBindingType,
     pub component_id: VersionedComponentId,
     pub worker_name_compiled: WorkerNameCompiled,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub response_compiled: ResponseMappingCompiled,
+}
+
+impl From<GolemWorkerBindingType> for CompiledGolemWorkerBindingType {
+    fn from(value: GolemWorkerBindingType) -> Self {
+        match value {
+            GolemWorkerBindingType::WitWorker => CompiledGolemWorkerBindingType::WitWorker,
+            GolemWorkerBindingType::FileServer => CompiledGolemWorkerBindingType::FileServer,
+        }
+    }
 }
 
 impl CompiledGolemWorkerBinding {
@@ -35,6 +71,7 @@ impl CompiledGolemWorkerBinding {
         )?;
 
         Ok(CompiledGolemWorkerBinding {
+            r#type: golem_worker_binding.r#type.clone().into(),
             component_id: golem_worker_binding.component_id.clone(),
             worker_name_compiled,
             idempotency_key_compiled,
@@ -178,7 +215,10 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             rib_input: response_input,
         };
 
+        let r#type = value.r#type.try_into()?;
+
         Ok(CompiledGolemWorkerBinding {
+            r#type,
             component_id,
             worker_name_compiled,
             idempotency_key_compiled,
@@ -211,9 +251,11 @@ impl TryFrom<CompiledGolemWorkerBinding>
         let response = Some(value.response_compiled.response_rib_expr.into());
         let compiled_response_expr = Some(value.response_compiled.compiled_response.into());
         let response_rib_input = Some(value.response_compiled.rib_input.into());
+        let r#type = value.r#type.into();
 
         Ok(
             golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding {
+                r#type,
                 component,
                 worker_name,
                 compiled_worker_name_expr,

@@ -120,10 +120,106 @@ impl From<CompiledRoute> for RouteWithTypeInfo {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "kebab-case")]
+pub enum GolemWorkerBindingType {
+    WitWorker,
+    FileServer,
+}
+
+impl From<crate::worker_binding::GolemWorkerBindingType> for GolemWorkerBindingType {
+    fn from(value: crate::worker_binding::GolemWorkerBindingType) -> Self {
+        match value {
+            crate::worker_binding::GolemWorkerBindingType::WitWorker => {
+                GolemWorkerBindingType::WitWorker
+            }
+            crate::worker_binding::GolemWorkerBindingType::FileServer => {
+                GolemWorkerBindingType::FileServer
+            }
+        }
+    }
+}
+
+impl From<GolemWorkerBindingType> for crate::worker_binding::GolemWorkerBindingType {
+    fn from(val: GolemWorkerBindingType) -> Self {
+        match val {
+            GolemWorkerBindingType::WitWorker => {
+                crate::worker_binding::GolemWorkerBindingType::WitWorker
+            }
+            GolemWorkerBindingType::FileServer => {
+                crate::worker_binding::GolemWorkerBindingType::FileServer
+            }
+        }
+    }
+}
+
+impl From<crate::worker_binding::CompiledGolemWorkerBindingType> for GolemWorkerBindingType {
+    fn from(value: crate::worker_binding::CompiledGolemWorkerBindingType) -> Self {
+        match value {
+            crate::worker_binding::CompiledGolemWorkerBindingType::WitWorker => {
+                GolemWorkerBindingType::WitWorker
+            }
+            crate::worker_binding::CompiledGolemWorkerBindingType::FileServer => {
+                GolemWorkerBindingType::FileServer
+            }
+        }
+    }
+}
+
+impl From<GolemWorkerBindingType> for crate::worker_binding::CompiledGolemWorkerBindingType {
+    fn from(val: GolemWorkerBindingType) -> Self {
+        match val {
+            GolemWorkerBindingType::WitWorker => {
+                crate::worker_binding::CompiledGolemWorkerBindingType::WitWorker
+            }
+            GolemWorkerBindingType::FileServer => {
+                crate::worker_binding::CompiledGolemWorkerBindingType::FileServer
+            }
+        }
+    }
+}
+
+impl TryFrom<i32> for GolemWorkerBindingType {
+    type Error = String;
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(GolemWorkerBindingType::WitWorker),
+            1 => Ok(GolemWorkerBindingType::FileServer),
+            _ => Err(format!("Unknown GolemWorkerBindingType: {}", value)),
+        }
+    }
+}
+
+impl From<GolemWorkerBindingType> for i32 {
+    fn from(val: GolemWorkerBindingType) -> Self {
+        match val {
+            GolemWorkerBindingType::WitWorker => 0,
+            GolemWorkerBindingType::FileServer => 1,
+        }
+    }
+}
+
+impl From<crate::worker_binding::CompiledGolemWorkerBindingType>
+    for grpc_apidefinition::WorkerBindingType
+{
+    fn from(value: crate::worker_binding::CompiledGolemWorkerBindingType) -> Self {
+        match value {
+            crate::worker_binding::CompiledGolemWorkerBindingType::WitWorker => {
+                grpc_apidefinition::WorkerBindingType::WitWorker
+            }
+            crate::worker_binding::CompiledGolemWorkerBindingType::FileServer => {
+                grpc_apidefinition::WorkerBindingType::FileServer
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
+    pub r#type: GolemWorkerBindingType,
     pub component_id: VersionedComponentId,
     pub worker_name: String,
     pub idempotency_key: Option<String>,
@@ -134,6 +230,7 @@ pub struct GolemWorkerBinding {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBindingWithTypeInfo {
+    pub r#type: GolemWorkerBindingType,
     pub component_id: VersionedComponentId,
     pub worker_name: String,
     pub idempotency_key: Option<String>,
@@ -148,6 +245,7 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
         let worker_binding = value.clone();
 
         GolemWorkerBindingWithTypeInfo {
+            r#type: GolemWorkerBindingType::from(worker_binding.r#type),
             component_id: worker_binding.component_id,
             worker_name: worker_binding.worker_name_compiled.worker_name.to_string(),
             idempotency_key: worker_binding.idempotency_key_compiled.map(
@@ -275,6 +373,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         };
 
         Ok(Self {
+            r#type: value.r#type.into(),
             component_id: value.component_id,
             worker_name: worker_id,
             idempotency_key,
@@ -302,6 +401,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
         };
 
         Ok(crate::worker_binding::GolemWorkerBinding {
+            r#type: self.r#type.into(),
             component_id: self.component_id,
             worker_name,
             idempotency_key,
@@ -496,6 +596,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
         let idempotency_key = value.idempotency_key.map(|key| key.into());
 
         let result = grpc_apidefinition::WorkerBinding {
+            r#type: Some(value.r#type.into()),
             component: Some(value.component_id.into()),
             worker_name,
             idempotency_key,
@@ -515,6 +616,12 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             crate::worker_binding::ResponseMapping(r)
         };
 
+        let r#type = match value.r#type {
+            None => Ok(GolemWorkerBindingType::WitWorker),
+            Some(value) => value.try_into(),
+        }?
+        .into();
+
         let worker_name = value
             .worker_name
             .ok_or("worker name is missing")?
@@ -529,6 +636,7 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
         };
 
         let result = crate::worker_binding::GolemWorkerBinding {
+            r#type,
             component_id,
             worker_name,
             idempotency_key,

@@ -115,6 +115,7 @@ mod tests {
                 method,
                 path: crate::api_definition::http::AllPathPatterns::parse(path).unwrap(),
                 binding: crate::worker_binding::GolemWorkerBinding {
+                    r#type: crate::worker_binding::GolemWorkerBindingType::WitWorker,
                     component_id: VersionedComponentId {
                         component_id: ComponentId::new_v4(),
                         version: 1,

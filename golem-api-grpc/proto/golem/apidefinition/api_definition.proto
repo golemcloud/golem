@@ -59,11 +59,17 @@ enum HttpMethod {
   HEAD = 8;
 }
 
+enum WorkerBindingType {
+  WIT_WORKER = 0;
+  FILE_SERVER = 1;
+}
+
 message WorkerBinding {
   golem.component.VersionedComponentId component = 1;
   golem.rib.Expr worker_name = 2;
   golem.rib.Expr response = 3;
   optional golem.rib.Expr idempotency_key = 4;
+  optional WorkerBindingType type = 5;
 }
 
 message CompiledWorkerBinding {
@@ -77,4 +83,5 @@ message CompiledWorkerBinding {
   optional golem.rib.Expr idempotency_key = 8;
   optional golem.rib.RibByteCode compiled_idempotency_key_expr = 9;
   optional golem.rib.RibInputType idempotency_key_rib_input = 10;
+  WorkerBindingType type = 11;
 }

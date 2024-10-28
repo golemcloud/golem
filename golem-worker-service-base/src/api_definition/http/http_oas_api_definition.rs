@@ -76,7 +76,7 @@ impl ParseFromJSON for JsonOpenApiDefinition {
 
 mod internal {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+    use crate::worker_binding::{GolemWorkerBinding, GolemWorkerBindingType, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use rib::Expr;
@@ -154,6 +154,7 @@ mod internal {
             ))?;
 
         let binding = GolemWorkerBinding {
+            r#type: get_type(worker_bridge_info)?,
             worker_name: get_worker_id_expr(worker_bridge_info)?,
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
@@ -165,6 +166,17 @@ mod internal {
             method,
             binding,
         })
+    }
+
+    pub(crate) fn get_type(worker_bridge_info: &Value) -> Result<GolemWorkerBindingType, String> {
+        let type_str = match worker_bridge_info.get("type") {
+            Some(type_str) => type_str.as_str().ok_or("type is not a string"),
+            None => Ok("wit-worker"),
+        }?;
+
+        let r#type = type_str.try_into()?;
+
+        Ok(r#type)
     }
 
     pub(crate) fn get_component_id(
@@ -242,7 +254,7 @@ mod internal {
 mod tests {
     use super::*;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+    use crate::worker_binding::{GolemWorkerBinding, GolemWorkerBindingType, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::PathItem;
     use rib::Expr;
@@ -273,6 +285,7 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
+                    r#type: GolemWorkerBindingType::WitWorker,
                     worker_name: Expr::multiple(vec![
                         Expr::let_binding_with_type(
                             "x",
