@@ -16,7 +16,6 @@ use crate::call_type::CallType;
 use crate::parser::rib_expr::rib_program;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
-use crate::Expr::ListComprehension;
 use crate::{
     from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType,
     ParsedFunctionName, VariableId,
@@ -300,7 +299,7 @@ impl Expr {
         iterable_expr: Expr,
         yield_expr: Expr,
     ) -> Self {
-        ListComprehension(
+        Expr::ListComprehension(
             variable_id,
             Box::new(iterable_expr),
             Box::new(yield_expr),
@@ -1101,6 +1100,14 @@ impl TryFrom<golem_api_grpc::proto::golem::rib::Expr> for Expr {
                 let expr = expr.expr.ok_or("Missing expr")?;
                 Expr::pattern_match((*expr).try_into()?, patterns)
             }
+            golem_api_grpc::proto::golem::rib::expr::Expr::ListComprehension(expr) => {
+                let iterable_expr = expr.iterable.ok_or("Missing expr")?;
+                let iterable_expr = (*iterable_expr).try_into()?;
+                let yield_expr = expr.yield_expr.ok_or("Missing list")?;
+                let yield_expr = (*yield_expr).try_into()?;
+                let variable_id = VariableId::list_comprehension_identifier(expr.variable);
+                Expr::list_comprehension(variable_id, iterable_expr, yield_expr)
+            }
             golem_api_grpc::proto::golem::rib::expr::Expr::Call(expr) => {
                 let params: Vec<Expr> = expr
                     .params
@@ -1362,7 +1369,15 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     right: Some(Box::new((*right).into())),
                 }),
             )),
-            Expr::ListComprehension(_, _, _, _) => todo!(),
+            Expr::ListComprehension(variable, iterable, yield_expr, _) => Some(
+                golem_api_grpc::proto::golem::rib::expr::Expr::ListComprehension(Box::new(
+                    golem_api_grpc::proto::golem::rib::ListComprehensionExpr {
+                        variable: variable.name(),
+                        iterable: Some(Box::new((*iterable).into())),
+                        yield_expr: Some(Box::new((*yield_expr).into())),
+                    },
+                )),
+            ),
         };
 
         golem_api_grpc::proto::golem::rib::Expr { expr }

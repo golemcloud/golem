@@ -36,6 +36,7 @@ message Expr {
     UnwrapExpr unwrap = 27;
     ThrowExpr throw = 28;
     OrExpr or = 29;
+    ListComprehensionExpr list_comprehension = 30;
   }
 }
 
@@ -289,4 +290,10 @@ message DynamicIndexedResourceStaticMethodFunctionReference {
 message DynamicIndexedResourceDropFunctionReference {
   string resource = 1;
   repeated golem.rib.Expr resource_params = 2;
+}
+
+message ListComprehensionExpr {
+  string variable = 1;
+  Expr iterable = 2;
+  Expr yield_expr = 3;
 }
