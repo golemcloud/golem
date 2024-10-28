@@ -100,50 +100,34 @@ pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPl
             OverwriteSafeAction::CopyFile { source, target } => {
                 log_action(
                     "Copying",
-                    format!(
-                        "{} to {}",
-                        source.to_string_lossy(),
-                        target.to_string_lossy()
-                    ),
+                    format!("{} to {}", source.display(), target.display()),
                 );
             }
             OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
                 log_action(
                     "Copying",
-                    format!(
-                        "{} to {} transformed",
-                        source.to_string_lossy(),
-                        target.to_string_lossy()
-                    ),
+                    format!("{} to {} transformed", source.display(), target.display()),
                 );
             }
             OverwriteSafeAction::WriteFile { target, .. } => {
-                log_action("Creating", format!("{}", target.to_string_lossy()));
+                log_action("Creating", format!("{}", target.display()));
             }
         },
         OverwriteSafeActionPlan::Overwrite => match action {
             OverwriteSafeAction::CopyFile { source, target } => {
                 log_warn_action(
                     "Overwriting",
-                    format!(
-                        "{} with {}",
-                        target.to_string_lossy(),
-                        source.to_string_lossy()
-                    ),
+                    format!("{} with {}", target.display(), source.display()),
                 );
             }
             OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
                 log_warn_action(
                     "Overwriting",
-                    format!(
-                        "{} with {} transformed",
-                        target.to_string_lossy(),
-                        source.to_string_lossy()
-                    ),
+                    format!("{} with {} transformed", target.display(), source.display()),
                 );
             }
             OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action("Overwriting", format!("{}", target.to_string_lossy()));
+                log_warn_action("Overwriting", format!("{}", target.display()));
             }
         },
         OverwriteSafeActionPlan::SkipSameContent => match action {
@@ -152,8 +136,8 @@ pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPl
                     "Skipping",
                     format!(
                         "copying {} to {}, content already up-to-date",
-                        source.to_string_lossy(),
-                        target.to_string_lossy(),
+                        source.display(),
+                        target.display(),
                     ),
                 );
             }
@@ -162,8 +146,8 @@ pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPl
                     "Skipping",
                     format!(
                         "copying {} to {} transformed, content already up-to-date",
-                        source.to_string_lossy(),
-                        target.to_string_lossy()
+                        source.display(),
+                        target.display()
                     ),
                 );
             }
@@ -172,7 +156,7 @@ pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPl
                     "Skipping",
                     format!(
                         "generating {}, content already up-to-date",
-                        target.to_string_lossy()
+                        target.display()
                     ),
                 );
             }

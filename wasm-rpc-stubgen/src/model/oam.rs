@@ -18,7 +18,7 @@ pub struct ApplicationWithSource {
 impl ApplicationWithSource {
     pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(file.as_path())
-            .with_context(|| format!("Failed to load file: {}", file.to_string_lossy()))?;
+            .with_context(|| format!("Failed to load file: {}", file.display()))?;
 
         Ok(Self::from_yaml_string(file, content)?)
     }

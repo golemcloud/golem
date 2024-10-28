@@ -19,7 +19,7 @@ pub async fn compose(
     let socket = std::fs::read(source_wasm).with_context(|| {
         format!(
             "failed to read socket component `{socket}`",
-            socket = source_wasm.to_string_lossy()
+            socket = source_wasm.display()
         )
     })?;
 

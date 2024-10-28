@@ -532,8 +532,8 @@ pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
                     "  Copying",
                     format!(
                         "(with source imports removed) {} to {}",
-                        source.to_string_lossy(),
-                        dest.to_string_lossy()
+                        source.display(),
+                        dest.display()
                     ),
                 );
                 copy_transformed(source, &dest, &remove_stub_imports)?;
@@ -542,7 +542,7 @@ pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
                 let dest = target_wit_root.join(relative);
                 log_action(
                     "  Copying",
-                    format!("{} to {}", source.to_string_lossy(), dest.to_string_lossy()),
+                    format!("{} to {}", source.display(), dest.display()),
                 );
                 copy(source, &dest)?;
             }
@@ -569,7 +569,7 @@ fn write_embedded_source(target_dir: &Path, file_name: &str, content: &str) -> a
 
     log_action(
         "Writing",
-        format!("{} to {}", file_name, target_dir.to_string_lossy()),
+        format!("{} to {}", file_name, target_dir.display()),
     );
 
     fs::write(target_dir.join(file_name), content)?;

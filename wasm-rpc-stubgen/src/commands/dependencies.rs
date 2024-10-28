@@ -132,7 +132,7 @@ pub fn add_stub_dependency(
             stub_transformer
                 .remove_imports_from_package_all_worlds(*package_id, &dest_package_import_prefix)?;
             let content = stub_transformer.render_package(*package_id)?;
-            let first_source = package_sources.files.iter().next().ok_or_else(|| {
+            let first_source = package_sources.files.first().ok_or_else(|| {
                 anyhow!(
                     "Expected at least one source for stub package: {}",
                     package_name
@@ -147,7 +147,7 @@ pub fn add_stub_dependency(
                         .join(first_source_relative_path.parent().ok_or_else(|| {
                             anyhow!(
                                 "Failed to get parent of stub source: {}",
-                                first_source_relative_path.to_string_lossy()
+                                first_source_relative_path.display()
                             )
                         })?)
                         .join(naming::wit::package_merged_wit_name(package_name))
@@ -201,7 +201,7 @@ pub fn add_stub_dependency(
     if !forbidden_overwrites.is_empty() {
         eprintln!("The following files would have been overwritten with new content:");
         for action in forbidden_overwrites {
-            eprintln!("  {}", action.target().to_string_lossy());
+            eprintln!("  {}", action.target().display());
         }
         eprintln!();
         eprintln!("Use --overwrite to force overwrite.");
@@ -211,7 +211,7 @@ pub fn add_stub_dependency(
         let target_cargo_toml = target_parent.join("Cargo.toml");
         if target_cargo_toml.exists() && target_cargo_toml.is_file() {
             if update_cargo_toml == UpdateCargoToml::NoUpdate {
-                eprintln!("Warning: the newly copied dependencies have to be added to {}. Use the --update-cargo-toml flag to update it automatically.", target_cargo_toml.to_string_lossy());
+                eprintln!("Warning: the newly copied dependencies have to be added to {}. Use the --update-cargo-toml flag to update it automatically.", target_cargo_toml.display());
             } else {
                 cargo::is_cargo_component_toml(&target_cargo_toml).context(format!(
                     "The file {target_cargo_toml:?} is not a valid cargo-component project"
