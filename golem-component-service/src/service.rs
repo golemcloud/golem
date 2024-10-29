@@ -22,7 +22,6 @@ use golem_service_base::config::{ComponentStoreConfig, IFSStoreConfig};
 use golem_service_base::db;
 use golem_service_base::service::{component_object_store, ifs_object_store};
 use std::sync::Arc;
-use tracing::log::info;
 use crate::config::ComponentServiceConfig;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,

@@ -210,8 +210,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             &component1.versioned_component_id.component_id,
             get_component_data("shopping-cart"),
             None,
-            &DefaultNamespace::default(),
-            config
+            &DefaultNamespace::default()
 
         )
         .await
