@@ -9,7 +9,7 @@ spec:
     properties:
       files:
       - sourcePath: "test-components/file-initial/resources/readonly"
-        targetPath: "/static/"
+        targetPath: "/ro/"
         permission: readOnly
       - sourcePath: "test-components/file-initial/resources/readwrite"
         targetPath: "/"

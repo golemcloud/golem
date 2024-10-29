@@ -110,8 +110,8 @@ pub fn create_context(
         .allow_ip_name_lookup(true);
 
     if let Some(read_only_dir) = read_only_dir {
-        wasi_builder.preopened_dir(&read_only_dir, "/", DirPerms::all(), FilePerms::READ)?;
-        wasi_builder.preopened_dir(&read_only_dir, ".", DirPerms::all(), FilePerms::READ)?;
+        wasi_builder.preopened_dir(&read_only_dir, "/static", DirPerms::READ, FilePerms::READ)?;
+        wasi_builder.preopened_dir(&read_only_dir, "./static", DirPerms::READ, FilePerms::READ)?;
     }
 
     let wasi = wasi_builder.build();

@@ -188,7 +188,7 @@ async fn file_initial() {
         files: vec![
             InitialFile {
                 source_path: "../test-components/file-initial/resources/readonly/".into(),
-                target_path: "./static/".into(),
+                target_path: "./ro/".into(),
                 permission: FileSystemPermission::ReadOnly,
             },
             InitialFile {
@@ -198,7 +198,7 @@ async fn file_initial() {
             },
             InitialFile {
                 source_path: "https://raw.githubusercontent.com/golemcloud/golem/refs/heads/main/golem-logo-black.jpg".into(),
-                target_path: "./static/logo.jpg".into(),
+                target_path: "./ro/logo.jpg".into(),
                 permission: FileSystemPermission::ReadOnly,
             },
         ]
@@ -219,16 +219,20 @@ async fn file_initial() {
 
     drop(executor);
 
-    let view = result.pop().unwrap();
+    let Some(Value::Tuple(mut results)) = result.pop() else {
+        unreachable!("Expected a tuple")
+    };
+
+    let view = results.pop().unwrap();
 
     tracing::debug!("{:?}", view);
 
     check!(
-        result
-            == vec![Value::Tuple(vec![
-                Value::Result(Ok(Some(Box::new(Value::String("".to_string()))))),
-                Value::Result(Err(Some(Box::new(Value::String("".to_string()))))),
-            ])]
+        results
+            == vec![
+                Value::Result(Ok(Some(Box::new(Value::String("THE QUICK BROWN FOX JUMPS OVER T".to_string()))))),
+                Value::Result(Err(Some(Box::new(Value::String("Write /static/ro/lorem.txt: Operation not permitted (os error 63)".to_string()))))),
+            ]
     );
 
     // Copied from golem-cli for now

@@ -4,29 +4,22 @@ use crate::bindings::Guest;
 
 struct Component;
 
-fn transpose(res: Result<String, String>) -> Result<String, String> {
-    match res {
-        Ok(ok) => Err(ok),
-        Err(err) => Ok(err),
-    }
-}
-
 fn read_and_write(path: &str) -> Result<String, String> {
     println!("Reading '{path}'...");
     let mut contents = std::fs::read_to_string(path)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("Read {path}: {e}"))?;
     println!("Reading '{path}' succeeded");
     
     contents.make_ascii_uppercase();
     
     println!("Writing '{path}'...");
     std::fs::write(path, &contents)
-        .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("Write {path}: {e}"))?;
     println!("Writing '{path}' succeeded");
     
     println!("Reading '{path}' back...");
     let mut new_contents = std::fs::read_to_string(path)
-        .map_err(|e| e.to_string())?;
+    .map_err(|e| format!("Read2 {path}: {e}"))?;
     println!("Reading '{path}' back succeeded...");
 
     if contents == new_contents {
@@ -39,10 +32,10 @@ fn read_and_write(path: &str) -> Result<String, String> {
     }
 }
 
-fn view() -> String {
+fn view(dir: &str) -> String {
     let mut output = String::new();
 
-    let mut paths = vec!["/".to_string()];
+    let mut paths = vec![dir.to_string()];
 
     while let Some(path) = paths.pop() {
         output = format!("{output}{path}\n");
@@ -59,18 +52,18 @@ fn view() -> String {
 
 impl Guest for Component {
     fn run() -> (Result<String, String>, Result<String, String>, String) {
+        let view = view("/");
+
         let quick_fox = read_and_write("/quick_fox.txt");
         println!("{quick_fox:?}");
 
         // read-only files should fail
-        let lorem_ipsum = transpose(read_and_write("/static/lorem_ipsum.txt"));
-        println!("{lorem_ipsum:?}");
-
-        let view = view();
+        let lorem = read_and_write("/static/ro/lorem.txt");
+        println!("{lorem:?}");
 
         (
             quick_fox,
-            lorem_ipsum,
+            lorem,
             view,
         )
     }

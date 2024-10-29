@@ -1064,7 +1064,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         };
         
         let path = path.to_path_buf();
-        debug!("Loading file from {}", path.canonicalize().unwrap().display());
+        debug!("Loading file from {}", path.display());
         let files = self.initial_files_ro_cache.get_or_insert_simple(&key, || Box::pin(async move { 
             match tokio::fs::read(path).await {
                 Ok(data) => {
@@ -1078,17 +1078,12 @@ impl ComponentService for ComponentServiceLocalFileSystem {
                         Ok(None)
                     }
                 }
-                Err(e) => {
-                    debug!("fs::read: {e}");
-                    match e.kind() {
+                Err(e) => match e.kind() {
                     std::io::ErrorKind::NotFound => Ok(None),
                     _ => Err(GolemError::runtime(e.to_string())),
                 }
-                }
             }
         })).await?;
-
-        debug!("we made it");
 
         Ok(files)
     }
@@ -1117,7 +1112,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         };
         
         let path = path.to_path_buf();
-        debug!("Loading file from {}", path.canonicalize().unwrap().display());
+        debug!("Loading file from {}", path.display());
         let files = self.initial_files_rw_cache.get_or_insert_simple(&key, || Box::pin(async move { 
             match tokio::fs::read(path).await {
                 Ok(data) => Ok(PackagedFiles::from_vec(data)),
