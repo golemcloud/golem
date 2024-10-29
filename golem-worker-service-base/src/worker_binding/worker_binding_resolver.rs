@@ -174,7 +174,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
         // To evaluate worker-name, most probably
         let worker_name: String = rib::interpret_pure(
             &binding.worker_name_compiled.compiled_worker_name,
-            &resolve_rib_input.value,
+            &resolve_rib_input,
         )
         .await
         .map_err(|err| format!("Failed to evaluate worker name rib expression. {}", err))?
@@ -188,7 +188,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
             if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
                 let idempotency_key_value = rib::interpret_pure(
                     &idempotency_key_compiled.compiled_idempotency_key,
-                    &resolve_rib_input.value,
+                    &resolve_rib_input,
                 )
                 .await
                 .map_err(|err| err.to_string())?;

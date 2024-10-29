@@ -2078,7 +2078,7 @@ mod comprehensive_test {
     mod mock_interpreter {
         use crate::interpreter::rib_interpreter::Interpreter;
         use crate::interpreter::tests::comprehensive_test::{mock_data, test_utils};
-        use crate::{RibFunctionInvoke, RibInterpreterInput};
+        use crate::{RibFunctionInvoke, RibInput};
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use golem_wasm_rpc::protobuf::TypedTuple;
@@ -2273,7 +2273,7 @@ mod comprehensive_test {
             interpreter_env_input: HashMap<String, TypeAnnotatedValue>,
         ) -> Interpreter {
             Interpreter::new(
-                RibInterpreterInput::new(interpreter_env_input),
+                RibInput::new(interpreter_env_input),
                 dynamic_worker_invoke(functions_and_result),
             )
         }

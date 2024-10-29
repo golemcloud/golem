@@ -15,34 +15,32 @@
 use crate::interpreter::env::{InterpreterEnv, RibFunctionInvoke};
 use crate::interpreter::instruction_cursor::RibByteCodeCursor;
 use crate::interpreter::stack::InterpreterStack;
-use crate::{RibByteCode, RibIR, RibInterpreterInput, RibResult};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use std::collections::HashMap;
+use crate::{RibByteCode, RibIR, RibInput, RibResult};
 
 pub struct Interpreter {
-    pub input: RibInterpreterInput,
+    pub input: RibInput,
     pub invoke: RibFunctionInvoke,
 }
 
 impl Default for Interpreter {
     fn default() -> Self {
         Interpreter {
-            input: RibInterpreterInput::default(),
+            input: RibInput::default(),
             invoke: internal::default_worker_invoke_async(),
         }
     }
 }
 
 impl Interpreter {
-    pub fn new(input: RibInterpreterInput, invoke: RibFunctionInvoke) -> Self {
-        Interpreter { input, invoke }
+    pub fn new(input: &RibInput, invoke: RibFunctionInvoke) -> Self {
+        Interpreter { input: input.clone(), invoke }
     }
 
     // Interpreter that's not expected to call a side-effecting function call.
     // All it needs is environment with the required variables to evaluate the Rib script
-    pub fn pure(env: HashMap<String, TypeAnnotatedValue>) -> Self {
+    pub fn pure(input: &RibInput) -> Self {
         Interpreter {
-            input: RibInterpreterInput::new(env),
+            input: input.clone(),
             invoke: internal::default_worker_invoke_async(),
         }
     }
@@ -2152,7 +2150,7 @@ mod interpreter_tests {
 
     mod internal {
         use crate::interpreter::rib_interpreter::Interpreter;
-        use crate::{RibFunctionInvoke, RibInterpreterInput};
+        use crate::{RibFunctionInvoke, RibInput};
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, r#enum, record, result, str, tuple, u32, u64,
             unit_case, variant,
@@ -2392,7 +2390,7 @@ mod interpreter_tests {
             result_value: &TypeAnnotatedValue,
         ) -> Interpreter {
             Interpreter {
-                input: RibInterpreterInput::default(),
+                input: RibInput::default(),
                 invoke: static_worker_invoke(result_type, result_value),
             }
         }

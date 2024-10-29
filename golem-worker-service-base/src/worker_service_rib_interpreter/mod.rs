@@ -7,8 +7,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
 
-use crate::worker_binding::RibInputValue;
-use rib::{RibByteCode, RibFunctionInvoke, RibInterpreterInput, RibResult};
+use rib::{RibByteCode, RibFunctionInvoke, RibInput, RibResult};
 
 use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutor};
 
@@ -24,7 +23,7 @@ pub trait WorkerServiceRibInterpreter {
         component_id: &ComponentId,
         idempotency_key: &Option<IdempotencyKey>,
         rib_byte_code: &RibByteCode,
-        rib_input: &RibInputValue,
+        rib_input: &RibInput,
     ) -> Result<RibResult, EvaluationError>;
 }
 
@@ -65,7 +64,7 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
         component_id: &ComponentId,
         idempotency_key: &Option<IdempotencyKey>,
         expr: &RibByteCode,
-        rib_input: &RibInputValue,
+        rib_input: &RibInput,
     ) -> Result<RibResult, EvaluationError> {
         let executor = self.worker_request_executor.clone();
 
@@ -99,12 +98,8 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
                 .boxed() // This ensures the future is boxed with the correct type
             },
         );
-        rib::interpret(
-            expr,
-            RibInterpreterInput::new(rib_input.value.clone()),
-            worker_invoke_function,
-        )
-        .await
-        .map_err(EvaluationError)
+        rib::interpret(expr, rib_input, worker_invoke_function)
+            .await
+            .map_err(EvaluationError)
     }
 }

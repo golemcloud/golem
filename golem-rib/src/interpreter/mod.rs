@@ -19,8 +19,6 @@ pub use literal::*;
 
 use crate::interpreter::rib_interpreter::Interpreter;
 use crate::RibByteCode;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use std::collections::HashMap;
 
 mod env;
 mod instruction_cursor;
@@ -34,7 +32,7 @@ mod tests;
 
 pub async fn interpret(
     rib: &RibByteCode,
-    rib_input: RibInterpreterInput,
+    rib_input: &RibInput,
     function_invoke: RibFunctionInvoke,
 ) -> Result<RibResult, String> {
     let mut interpreter = Interpreter::new(rib_input, function_invoke);
@@ -46,8 +44,8 @@ pub async fn interpret(
 // It is recommended to use `interpret` over `interpret_pure` if you are unsure.
 pub async fn interpret_pure(
     rib: &RibByteCode,
-    rib_input: &HashMap<String, TypeAnnotatedValue>,
+    rib_input: &RibInput,
 ) -> Result<RibResult, String> {
-    let mut interpreter = Interpreter::pure(rib_input.clone());
+    let mut interpreter = Interpreter::pure(rib_input);
     interpreter.run(rib.clone()).await
 }
