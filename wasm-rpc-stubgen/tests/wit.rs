@@ -237,6 +237,8 @@ fn many_ways_to_export_inlined() {
     assert_has_stub_function(&resolve, "stub-api", "iface4", "func5", false);
 
     assert_defines_enum(&resolve, "stub-api", "color");
+
+    // TODO: add asserts for non-unique types
 }
 
 fn assert_has_package_name(resolve: &Resolve, package_name: &str) {
