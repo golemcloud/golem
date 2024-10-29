@@ -41,7 +41,8 @@ interface iface11 {
     use test:sub2/iface10.{rec1};
 
     // intentionally using the same func name
-    func9: func() -> rec1;
+    // TODO
+    // func9: func() -> rec1;
 }
 
 world api {

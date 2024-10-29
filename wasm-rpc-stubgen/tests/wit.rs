@@ -206,6 +206,8 @@ fn many_ways_to_export() {
     assert_has_stub_function(&resolve, "stub-api", "iface2", "func3", true);
     assert_has_stub_function(&resolve, "stub-api", "inline-iface", "func4", false);
     assert_has_stub_function(&resolve, "stub-api", "iface4", "func5", false);
+
+    // TODO: add asserts for non-unique types
 }
 
 #[test]
