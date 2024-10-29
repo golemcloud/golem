@@ -288,26 +288,24 @@ mod internal {
     pub(crate) fn run_is_empty_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let rib_result = interpreter_stack
-            .pop()
-            .ok_or("Failed to get a value from the stack to do check is_empty".to_string())?;
+        let rib_result = interpreter_stack.pop().ok_or(
+            "Internal Error: Failed to get a value from the stack to do check is_empty".to_string(),
+        )?;
 
         let bool_opt = match rib_result {
+            RibInterpreterResult::Val(TypeAnnotatedValue::List(typed_list)) => {
+                Some(typed_list.values.is_empty())
+            }
             RibInterpreterResult::Iterator(iter) => {
                 let mut peekable_iter = iter.peekable();
                 let result = peekable_iter.peek().is_some();
                 interpreter_stack.push(RibInterpreterResult::Iterator(Box::new(peekable_iter)));
                 Some(result)
             }
-            RibInterpreterResult::Val(TypeAnnotatedValue::List(typed_list)) => {
-                Some(typed_list.values.is_empty())
-            }
-            RibInterpreterResult::Val(_) => None,
-            RibInterpreterResult::Unit => None,
             RibInterpreterResult::Sink(values, analysed_type) => {
                 let possible_iterator = interpreter_stack
                     .pop()
-                    .ok_or("Expecting an iterator to check is empty".to_string())?;
+                    .ok_or("Internal Error: Expecting an iterator to check is empty".to_string())?;
 
                 match possible_iterator {
                     RibInterpreterResult::Iterator(iter) => {
@@ -322,6 +320,8 @@ mod internal {
                     _ => None,
                 }
             }
+            RibInterpreterResult::Val(_) => None,
+            RibInterpreterResult::Unit => None,
         };
 
         let bool = bool_opt.ok_or("Internal Error: Failed to run instruction is_empty")?;
@@ -335,16 +335,17 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
         let rib_result = interpreter_stack.pop().ok_or(
-            "Failed to get a value from the stack to do the comparison operation".to_string(),
+            "Internal Error: Failed to get a value from the stack to do the comparison operation"
+                .to_string(),
         )?;
 
         let predicate_bool = rib_result
             .get_bool()
-            .ok_or("Expecting a value that can be converted to bool".to_string())?;
+            .ok_or("Internal Error: Expecting a value that can be converted to bool".to_string())?;
 
         if !predicate_bool {
             instruction_stack.move_to(&instruction_id).ok_or(format!(
-                "Internal error: Failed to move to the instruction at {}",
+                "Internal Error: Failed to move to the instruction at {}",
                 instruction_id.index
             ))?;
         }
@@ -363,12 +364,11 @@ mod internal {
                 .into_iter()
                 .map(|x| x.clone().type_annotated_value.unwrap());
 
-            //   interpreter_stack.push(existing_sink);
             interpreter_stack.push(RibInterpreterResult::Iterator(Box::new(iter)));
 
             Ok(())
         } else {
-            Err("Expected a List on the stack for ListToIterator".to_string())
+            Err("Internal Error: Expected a List on the stack for ListToIterator".to_string())
         }
     }
 

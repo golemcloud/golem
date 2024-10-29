@@ -619,13 +619,17 @@ mod internal {
         stack.push(ExprState::from_ir(RibIR::ListToIterator));
 
         let loop_start_label = instruction_id.increment_mut();
+
         stack.push(ExprState::from_ir(RibIR::Label(loop_start_label.clone())));
 
         let exit_label = instruction_id.increment_mut();
+
         stack.push(ExprState::from_ir(RibIR::IsEmpty));
+
         stack.push(ExprState::from_ir(RibIR::JumpIfFalse(exit_label.clone())));
 
         stack.push(ExprState::from_ir(RibIR::AdvanceIterator));
+
         stack.push(ExprState::from_ir(RibIR::AssignVar(
             iterated_variable.clone(),
         )));
@@ -639,6 +643,7 @@ mod internal {
         stack.push(ExprState::from_ir(RibIR::Jump(loop_start_label)));
 
         stack.push(ExprState::from_ir(RibIR::Label(exit_label)));
+
         stack.push(ExprState::from_ir(RibIR::LoadVar(reduce_variable.clone())))
     }
 
