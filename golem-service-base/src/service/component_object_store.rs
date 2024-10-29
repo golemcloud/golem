@@ -122,7 +122,6 @@ impl ComponentObjectStore for AwsS3ComponentObjectStore {
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error> {
         let key = self.get_key(object_key);
-        info!("Aws object stor ---------------------------");
         info!("Putting object: {}/{}", self.bucket_name, key);
 
         self.client
@@ -216,19 +215,16 @@ impl ComponentObjectStore for FsComponentObjectStore {
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error> {
         let dir_path = self.get_dir_path();
-        info!("-----------------Fs component object store");
         info!("Putting object: {}/{}", dir_path.display(), object_key);
         debug!("Putting object: {}/{}", dir_path.display(), object_key);
-        info!("Directory path : {}", dir_path.display());
-        info!("object key: {}", object_key);
+        debug!("Directory path : {}", dir_path.display());
+        debug!("object key: {}", object_key);
         if !dir_path.exists() {
             fs::create_dir_all(dir_path.clone())?;
         }
 
         let file_path = dir_path.join(object_key);
         info!("Full file path: {:?}", file_path.display());
-        // let file_path = "/component_store/ifs/c814/read-only//file1.txt";
-
         if let Some(parent_dir) = file_path.parent() {
             if !parent_dir.exists() {
                 info!("Creating directory: {}", parent_dir.display());

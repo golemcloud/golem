@@ -117,7 +117,6 @@ impl WorkerService for DefaultWorkerService {
     ) -> Result<(), GolemError> {
         record_worker_call("add");
 
-        info!("Adding the worker ---------------------------------");
 
         let worker_id = &worker_metadata.worker_id;
         let owned_worker_id = OwnedWorkerId::new(&worker_metadata.account_id, worker_id);

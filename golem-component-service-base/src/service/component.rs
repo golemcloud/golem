@@ -141,8 +141,7 @@ pub trait ComponentService<Namespace> {
         component_id: &ComponentId,
         data: Vec<u8>,
         component_type: Option<ComponentType>,
-        namespace: &Namespace,
-        config: Configuration
+        namespace: &Namespace
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
@@ -310,7 +309,6 @@ where
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
-        config: Configuration
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
         let created_at = Utc::now();
@@ -356,7 +354,7 @@ where
 
         let ifs_data = vec![];
         self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data, config)
+            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data, Configuration("".to_owned()))
             .await;
 
         Ok(component)
@@ -612,7 +610,6 @@ impl ComponentServiceDefault {
         user_component_id: &VersionedComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
-        info!("Uploading use content --------------------------------------------------");
         self.object_store
             .put(&self.get_user_object_store_key(user_component_id), data)
             .await
@@ -626,7 +623,6 @@ impl ComponentServiceDefault {
         protected_component_id: &VersionedComponentId,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
-        info!("Uploading protected component  ------------------------------------");
         self.object_store
             .put(
                 &self.get_protected_object_store_key(protected_component_id),
@@ -652,7 +648,6 @@ impl ComponentServiceDefault {
         };
 
         let object_key = format!("{}.zip",component_id);
-        info!("(99999999999999999999999999999999999999999999999999)");
         self.ifs_store.put(
             &object_key,ifs_data
         ).await.map_err(|e| {

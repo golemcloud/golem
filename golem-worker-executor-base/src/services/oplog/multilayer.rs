@@ -248,7 +248,6 @@ impl OplogService for MultiLayerOplogService {
         initial_entry: OplogEntry,
         component_type: ComponentType,
     ) -> Arc<dyn Oplog + Send + Sync> {
-        info!("mutlilayer ---------------------");
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,

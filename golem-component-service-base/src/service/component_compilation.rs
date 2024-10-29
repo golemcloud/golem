@@ -62,7 +62,6 @@ impl ComponentCompilationService for ComponentCompilationServiceDefault {
                         component_id: Some(component_id_clone.into()),
                         component_version,
                         ifs_data: ifs_data_clone,
-                        config: config.0
 
                     };
 

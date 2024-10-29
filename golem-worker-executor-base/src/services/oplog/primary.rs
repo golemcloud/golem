@@ -159,7 +159,6 @@ impl OplogService for PrimaryOplogService {
         component_type: ComponentType,
     ) -> Arc<dyn Oplog + Send + Sync> {
         record_oplog_call("create");
-        info!("-----------------------------------------primary -----------------------");
         let key = Self::oplog_key(&owned_worker_id.worker_id);
         let already_exists: bool = self
             .indexed_storage

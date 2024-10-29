@@ -61,7 +61,6 @@ impl UploadWorker {
         mut recv: mpsc::Receiver<CompiledComponent>,
         ifs_tx: mpsc::Sender<InitialFileSystemToUpload>,
     ) {
-        info!("Uploader started -------------------------------------------");
         let worker = Self {
             compiled_component_service,
             access_token,
@@ -95,8 +94,6 @@ impl UploadWorker {
             component,
         } = compiled_component;
 
-        info!("Uploading the worker content -------------------");
-
 
 
         let upload_result = self
@@ -116,7 +113,6 @@ impl UploadWorker {
             if let Err(err) = self.download_and_process_ifs(&component_and_version).await {
                 tracing::error!("Failed to process IFS for component {component_and_version}: {err:?}");
             }
-            //     Now I want to download the ifs system
         }
     }
 
@@ -125,8 +121,6 @@ impl UploadWorker {
         &self,
         component_and_version: &ComponentWithVersion
     ) -> Result<(), ComponentError> {
-
-        info!("Triggered initial sending -----------------------------------");
 
         let ifs_data = Self::download_ifs_via_grpc(
             &self.client,
@@ -160,7 +154,6 @@ impl UploadWorker {
         component_id: &ComponentId,
         component_version: u64,
     ) -> Result<Vec<u8>, CompilationError>{
-        info!("downloading ifs via grpc --------------------------------------");
         with_retries(
             "ifs",
             "download",
@@ -185,17 +178,13 @@ impl UploadWorker {
                             &access_token,
                         );
 
-                        info!("&&&&&&&&&&&&&&&&&&&&&& Authorized --------------");
                         let t = Box::pin(client.download_ifs(request));
-                        info!("&&&&&&&&&&&&&&&&&&&&&& download ifs --------------");
                         t
                     })
                         .await?.into_inner();
 
 
                     let chunks = response.into_stream().try_collect::<Vec<_>>().await?;
-                    info!("Chunks -----------------------");
-
                     let bytes = chunks
                         .into_iter()
                         .map(|chunk| match chunk.result {
@@ -206,13 +195,10 @@ impl UploadWorker {
                             }
                         })
                         .collect::<Result<Vec<Vec<u8>>, GrpcError<ComponentError>>>()?;
-                    info!("vbyte Chunks -----------------------");
 
                     let bytes = bytes.into_iter().flatten().collect::<Vec<u8>>();
 
-                    info!("bytes collected  -----------------------");
                     record_external_call_response_size_bytes("components","download",bytes.len());
-                    info!("{:?}", bytes);
                     Ok(bytes)
 
                 })

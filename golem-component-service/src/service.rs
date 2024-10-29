@@ -41,7 +41,6 @@ pub struct Services {
 impl Services {
     pub async fn new(config: &ComponentServiceConfig) -> Result<Services, String> {
 
-        info!("-------------------- {:?}", config);
 
         let component_repo: Arc<dyn ComponentRepo + Sync + Send> = match config.db.clone() {
             DbConfig::Postgres(c) => {

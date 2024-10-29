@@ -597,21 +597,8 @@ impl BlobStoreService for DefaultBlobStoreService {
             owned_worker_id.worker_id.component_id,
             owned_worker_id.worker_id.worker_name
         ));
-        info!("--------------------------{}", path.display());
-
-        // Start building nodes from the root path
 
         self.get_directory_metadata(owned_worker_id,path).await
-        // match build_node(path.file_name().unwrap().to_str().unwrap().to_string(), path).await {
-        //     Ok(root) => {
-        //         let files = convert_to_file_nodes(&root);
-        //         Ok(files)
-        //     }
-        //     Err(err) => {
-        //         error!("Failed to retrieve file metadata: {:?}", err);
-        //         Err(format!("Failed to get files metadata: {:?}", err))
-        //     }
-        // }
     }
 
     async fn get_file_or_directory(

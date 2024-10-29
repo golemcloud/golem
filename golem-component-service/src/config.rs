@@ -75,7 +75,6 @@ impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
 }
 
 pub fn make_config_loader() -> ConfigLoader<ComponentServiceConfig> {
-    info!("getting from ---------------------------- service.toml");
     ConfigLoader::new_with_examples(Path::new("config/component-service.toml"))
 }
 

@@ -174,7 +174,6 @@ impl<Repo: ComponentRepo> LoggedComponentRepo<Repo> {
 #[async_trait]
 impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Repo> {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
-        info!("-----------------in component Repo ------------");
         let result = self.repo.create(component).await;
         Self::logged_with_id("create", &component.component_id, result)
     }
@@ -235,7 +234,6 @@ impl<Repo: ComponentRepo + Send + Sync> ComponentRepo for LoggedComponentRepo<Re
 #[async_trait]
 impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
-        info!("in postgress somsoidjfjkfgdlkjdf -------------------------");
         let mut transaction = self.db_pool.begin().await?;
 
         let result = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")

@@ -169,7 +169,6 @@ impl ComponentGrpcApi {
         &self,
         request: UpdateComponentRequestHeader,
         data: Vec<u8>,
-        config: Configuration
     ) -> Result<Component, ComponentError> {
         let id: ComponentId = request
             .component_id
@@ -184,7 +183,7 @@ impl ComponentGrpcApi {
         };
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultNamespace::default(), config)
+            .update(&id, data, component_type, &DefaultNamespace::default())
             .await?;
         Ok(result.into())
     }
@@ -404,7 +403,7 @@ impl ComponentService for ComponentGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                self.update(request, data, Configuration("".to_string()))
+                self.update(request, data)
                     .instrument(record.span.clone())
                     .await
             }

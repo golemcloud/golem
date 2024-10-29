@@ -366,7 +366,6 @@ impl OpenOplogs {
         constructor: impl OplogConstructor + Send + 'static,
     ) -> Arc<dyn Oplog + Send + Sync> {
 
-        info!("------------------------------------------------getting and oopen -");
 
         loop {
             let constructor_clone = constructor.clone();

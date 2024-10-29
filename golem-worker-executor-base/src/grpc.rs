@@ -1340,8 +1340,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<Response<golem::workerexecutor::v1::CreateWorkerResponse>, Status> {
         let request = request.into_inner();
 
-        info!("Creating the worker----------------");
-
         let record = recorded_grpc_api_request!(
             "create_worker",
             worker_id = proto_worker_id_string(&request.worker_id),

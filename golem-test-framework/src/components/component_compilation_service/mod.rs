@@ -48,6 +48,7 @@ pub trait ComponentCompilationService {
             .enqueue_compilation(ComponentCompilationRequest {
                 component_id: Some(component_id.clone().into()),
                 component_version,
+                ifs_data: vec![],
             })
             .await
             .expect("Failed to enqueue component compilation")

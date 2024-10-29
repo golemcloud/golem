@@ -118,16 +118,12 @@ impl IFSObjectStore for FsIFSObjectStore {
         let dir_path  = self.get_dir_path();
 
 
-        info!("Getting the stream -----------------------");
-
         info!("Getting object: {}/{}", dir_path.display(), object_key);
         info!("object {}", object_key);
         info!("dir_path {}", dir_path.display());
 
-        // let object_key = PathBuf::from("/data/ifs/sample.txt");
 
         let file_path = dir_path.join(object_key);
-        // let file_path = PathBuf::from("/data/ifs/sample.txt");
         info!("Getting file: {}", file_path.display());
 
 
@@ -140,7 +136,6 @@ impl IFSObjectStore for FsIFSObjectStore {
     }
 
     async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error> {
-        info!("----------___Fs ifs object store is used");
         let dir_path  = self.get_dir_path();
         info!("Putting object: {}/{}", dir_path.display(), object_key);
         debug!("Putting object: {}/{}", dir_path.display(), object_key);

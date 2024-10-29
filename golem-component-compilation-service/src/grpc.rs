@@ -51,7 +51,6 @@ impl GrpcCompilationServer for CompileGrpcService {
         request: Request<ComponentCompilationRequest>,
     ) -> Result<tonic::Response<ComponentCompilationResponse>, Status> {
         let request = request.into_inner();
-        // info!("------------------------------------------{:?}", request.ifs_data);
         info!("Enqueue compilation");
         let record = recorded_grpc_api_request!(
             "enqueue_compilation",

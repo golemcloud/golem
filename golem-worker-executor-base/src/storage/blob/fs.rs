@@ -85,7 +85,6 @@ impl FileSystemBlobStorage {
                 component_id,
                 level,
             } => {
-                info!("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^");
                 result.push("compressed_oplog");
                 result.push(account_id.to_string());
                 result.push(component_id.to_string());
@@ -168,12 +167,7 @@ impl BlobStorage for FileSystemBlobStorage {
     ) -> Result<(), String> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
-        info!("In the file system ---------------------------------------------------");
 
-        info!("The path is {}", path.display());
-        info!("The full path is {},", full_path.display());
-
-        info!("In the file system ---------------------------------------------------");
 
         if let Some(parent) = full_path.parent() {
             if async_fs::metadata(parent).await.is_err() {
@@ -284,9 +278,7 @@ impl BlobStorage for FileSystemBlobStorage {
     }
 
     async fn get_file_or_directory(&self, base_path: &Path,path: &Path) -> Result<FileOrDirectoryResponse, String> {
-        info!("++++++++++++++++++path is {}", path.display());
         if path.is_dir() {
-            info!("-------------------------directory");
             let directory_metadata = self
                 .get_directory_entries(&base_path, path)  // Pass base_path here
                 .await
@@ -309,8 +301,7 @@ impl BlobStorage for FileSystemBlobStorage {
     ) -> Result<(), String> {
         let full_path = self.path_of(&namespace, path);
         self.ensure_path_is_inside_root(&full_path)?;
-        info!("Creating the dir -----------------------------------------((9099009090909");
-        info!("{}",full_path.display());
+        info!("creating dir at {}",full_path.display());
 
         async_fs::create_dir_all(&full_path)
             .await

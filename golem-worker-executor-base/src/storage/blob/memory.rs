@@ -104,7 +104,6 @@ impl BlobStorage for InMemoryBlobStorage {
         path: &Path,
         data: &[u8],
     ) -> Result<(), String> {
-        info!("--------------------In memory -----------------");
         let dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())

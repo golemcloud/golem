@@ -114,8 +114,6 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         component: &Component,
     ) -> Result<(), GolemError> {
 
-        info!("-------------------------------------putting something --------");
-
         let bytes = component
             .serialize()
             .expect("Could not serialize component");

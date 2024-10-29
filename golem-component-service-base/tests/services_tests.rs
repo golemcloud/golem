@@ -14,13 +14,14 @@ use golem_component_service_base::service::component::{
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
 };
-use golem_service_base::model::ComponentName;
+use golem_service_base::model::{ComponentName, Configuration};
 use golem_service_base::service::component_object_store;
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
+use golem_service_base::service::ifs_object_store::{FsIFSObjectStore, IFSObjectStore};
 
 test_r::enable!();
 
@@ -111,257 +112,266 @@ fn get_component_data(name: &str) -> Vec<u8> {
     std::fs::read(path).unwrap()
 }
 
-// async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
-//     let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
-//         Arc::new(
-//             component_object_store::FsComponentObjectStore::new(&ComponentStoreLocalConfig {
-//                 root_path: "/tmp/component".to_string(),
-//                 object_prefix: Uuid::new_v4().to_string(),
-//             })
-//             .unwrap(),
-//         );
-//
-//     let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
-//         Arc::new(ComponentCompilationServiceDisabled);
-//
-//     let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
-//         Arc::new(ComponentServiceDefault::new(
-//             component_repo.clone(),
-//             object_store.clone(),
-//             compilation_service.clone(),
-//             ,
-//         ));
-//
-//     let component_name1 = ComponentName("shopping-cart".to_string());
-//     let component_name2 = ComponentName("rust-echo".to_string());
-//
-//     let component1 = component_service
-//         .create(
-//             &ComponentId::new_v4(),
-//             &component_name1,
-//             ComponentType::Durable,
-//             get_component_data("shopping-cart"),
-//             &DefaultNamespace::default(),
-//             ,
-//         )
-//         .await
-//         .unwrap();
-//
-//     let component2 = component_service
-//         .create(
-//             &ComponentId::new_v4(),
-//             &component_name2,
-//             ComponentType::Durable,
-//             get_component_data("rust-echo"),
-//             &DefaultNamespace::default(),
-//             ,
-//         )
-//         .await
-//         .unwrap();
-//
-//     let component1_result = component_service
-//         .get_by_version(
-//             &component1.versioned_component_id,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(component1_result.is_some());
-//
-//     let component2_result = component_service
-//         .get_by_version(
-//             &component2.versioned_component_id,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(component2_result.is_some());
-//     assert_eq!(component2_result.unwrap(), component2);
-//
-//     let component1_result = component_service
-//         .get_latest_version(
-//             &component1.versioned_component_id.component_id,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(component1_result.is_some());
-//     assert_eq!(component1_result.unwrap(), component1);
-//
-//     let component1_result = component_service
-//         .get(
-//             &component1.versioned_component_id.component_id,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert_eq!(component1_result.len(), 1);
-//
-//     let component1v2 = component_service
-//         .update(
-//             &component1.versioned_component_id.component_id,
-//             get_component_data("shopping-cart"),
-//             None,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//
-//     let component1_result = component_service
-//         .get_latest_version(
-//             &component1.versioned_component_id.component_id,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(component1_result.is_some());
-//     assert_eq!(component1_result.unwrap(), component1v2);
-//
-//     let component1_result = component_service
-//         .get(
-//             &component1.versioned_component_id.component_id,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert_eq!(component1_result.len(), 2);
-//
-//     let component1_result = component_service
-//         .get_namespace(&component1.versioned_component_id.component_id)
-//         .await
-//         .unwrap();
-//     assert!(component1_result.is_some());
-//     assert_eq!(component1_result.unwrap(), DefaultNamespace::default());
-//
-//     let component2_result = component_service
-//         .get_namespace(&component2.versioned_component_id.component_id)
-//         .await
-//         .unwrap();
-//     assert!(component2_result.is_some());
-//     assert_eq!(component2_result.unwrap(), DefaultNamespace::default());
-//
-//     let component1_result = component_service
-//         .download(
-//             &component1v2.versioned_component_id.component_id,
-//             Some(component1v2.versioned_component_id.version),
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(!component1_result.is_empty());
-//
-//     let component2_result = component_service
-//         .download(
-//             &component2.versioned_component_id.component_id,
-//             None,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(!component2_result.is_empty());
-//
-//     let component1_result = component_service
-//         .get_protected_data(
-//             &component1v2.versioned_component_id.component_id,
-//             Some(component1v2.versioned_component_id.version),
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(component1_result.is_some());
-//
-//     let component1_result = component_service
-//         .get_protected_data(
-//             &component1v2.versioned_component_id.component_id,
-//             Some(10000000),
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(component1_result.is_none());
-//
-//     let component2_result = component_service
-//         .get_protected_data(
-//             &component1v2.versioned_component_id.component_id,
-//             None,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(component2_result.is_some());
-//
-//     let component1_result = component_service
-//         .find_id_by_name(&component1.component_name, &DefaultNamespace::default())
-//         .await
-//         .unwrap();
-//     assert_eq!(
-//         component1_result,
-//         Some(component1.versioned_component_id.component_id.clone())
-//     );
-//
-//     let component2_result = component_service
-//         .find_id_by_name(&component2.component_name, &DefaultNamespace::default())
-//         .await
-//         .unwrap();
-//     assert_eq!(
-//         component2_result,
-//         Some(component2.versioned_component_id.component_id.clone())
-//     );
-//
-//     let component1_result = component_service
-//         .find_by_name(
-//             Some(component1.component_name.clone()),
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert_eq!(
-//         component1_result,
-//         vec![component1.clone(), component1v2.clone()]
-//     );
-//
-//     let component2_result = component_service
-//         .find_by_name(
-//             Some(component2.component_name.clone()),
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert_eq!(component2_result, vec![component2.clone()]);
-//
-//     let component_result = component_service
-//         .find_by_name(None, &DefaultNamespace::default())
-//         .await
-//         .unwrap();
-//     assert_eq!(component_result.len(), 3);
-//
-//     component_service
-//         .delete(
-//             &component1v2.versioned_component_id.component_id,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//
-//     let component1_result = component_service
-//         .get(
-//             &component1.versioned_component_id.component_id,
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(component1_result.is_empty());
-//
-//     let component1_result = component_service
-//         .get_protected_data(
-//             &component1v2.versioned_component_id.component_id,
-//             Some(component1v2.versioned_component_id.version),
-//             &DefaultNamespace::default(),
-//         )
-//         .await
-//         .unwrap();
-//     assert!(component1_result.is_none());
-// }
+async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+    let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
+        Arc::new(
+            component_object_store::FsComponentObjectStore::new(&ComponentStoreLocalConfig {
+                root_path: "/tmp/component".to_string(),
+                object_prefix: Uuid::new_v4().to_string(),
+            })
+            .unwrap(),
+        );
+
+    let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
+        Arc::new(ComponentCompilationServiceDisabled);
+
+    let ifs_object_store: Arc<dyn IFSObjectStore + Sync + Send> = Arc::new(FsIFSObjectStore::new(&object_store).unwrap());
+
+
+
+    let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
+        Arc::new(ComponentServiceDefault::new(
+            component_repo.clone(),
+            object_store.clone(),
+            compilation_service.clone(),
+            ifs_object_store.clone(),
+        ));
+
+    let component_name1 = ComponentName("shopping-cart".to_string());
+    let component_name2 = ComponentName("rust-echo".to_string());
+    let config = Configuration("yaml-configuration".to_string());
+    let component1 = component_service
+        .create(
+            &ComponentId::new_v4(),
+            &component_name1,
+            ComponentType::Durable,
+            get_component_data("shopping-cart"),
+            &DefaultNamespace::default(),
+            vec![],
+            config
+        )
+        .await
+        .unwrap();
+
+    let component2 = component_service
+        .create(
+            &ComponentId::new_v4(),
+            &component_name2,
+            ComponentType::Durable,
+            get_component_data("rust-echo"),
+            &DefaultNamespace::default(),
+            vec![],
+            config
+            ,
+        )
+        .await
+        .unwrap();
+
+    let component1_result = component_service
+        .get_by_version(
+            &component1.versioned_component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(component1_result.is_some());
+
+    let component2_result = component_service
+        .get_by_version(
+            &component2.versioned_component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(component2_result.is_some());
+    assert_eq!(component2_result.unwrap(), component2);
+
+    let component1_result = component_service
+        .get_latest_version(
+            &component1.versioned_component_id.component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(component1_result.is_some());
+    assert_eq!(component1_result.unwrap(), component1);
+
+    let component1_result = component_service
+        .get(
+            &component1.versioned_component_id.component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(component1_result.len(), 1);
+
+    let component1v2 = component_service
+        .update(
+            &component1.versioned_component_id.component_id,
+            get_component_data("shopping-cart"),
+            None,
+            &DefaultNamespace::default(),
+            config
+
+        )
+        .await
+        .unwrap();
+
+    let component1_result = component_service
+        .get_latest_version(
+            &component1.versioned_component_id.component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(component1_result.is_some());
+    assert_eq!(component1_result.unwrap(), component1v2);
+
+    let component1_result = component_service
+        .get(
+            &component1.versioned_component_id.component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(component1_result.len(), 2);
+
+    let component1_result = component_service
+        .get_namespace(&component1.versioned_component_id.component_id)
+        .await
+        .unwrap();
+    assert!(component1_result.is_some());
+    assert_eq!(component1_result.unwrap(), DefaultNamespace::default());
+
+    let component2_result = component_service
+        .get_namespace(&component2.versioned_component_id.component_id)
+        .await
+        .unwrap();
+    assert!(component2_result.is_some());
+    assert_eq!(component2_result.unwrap(), DefaultNamespace::default());
+
+    let component1_result = component_service
+        .download(
+            &component1v2.versioned_component_id.component_id,
+            Some(component1v2.versioned_component_id.version),
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(!component1_result.is_empty());
+
+    let component2_result = component_service
+        .download(
+            &component2.versioned_component_id.component_id,
+            None,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(!component2_result.is_empty());
+
+    let component1_result = component_service
+        .get_protected_data(
+            &component1v2.versioned_component_id.component_id,
+            Some(component1v2.versioned_component_id.version),
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(component1_result.is_some());
+
+    let component1_result = component_service
+        .get_protected_data(
+            &component1v2.versioned_component_id.component_id,
+            Some(10000000),
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(component1_result.is_none());
+
+    let component2_result = component_service
+        .get_protected_data(
+            &component1v2.versioned_component_id.component_id,
+            None,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(component2_result.is_some());
+
+    let component1_result = component_service
+        .find_id_by_name(&component1.component_name, &DefaultNamespace::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        component1_result,
+        Some(component1.versioned_component_id.component_id.clone())
+    );
+
+    let component2_result = component_service
+        .find_id_by_name(&component2.component_name, &DefaultNamespace::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        component2_result,
+        Some(component2.versioned_component_id.component_id.clone())
+    );
+
+    let component1_result = component_service
+        .find_by_name(
+            Some(component1.component_name.clone()),
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        component1_result,
+        vec![component1.clone(), component1v2.clone()]
+    );
+
+    let component2_result = component_service
+        .find_by_name(
+            Some(component2.component_name.clone()),
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(component2_result, vec![component2.clone()]);
+
+    let component_result = component_service
+        .find_by_name(None, &DefaultNamespace::default())
+        .await
+        .unwrap();
+    assert_eq!(component_result.len(), 3);
+
+    component_service
+        .delete(
+            &component1v2.versioned_component_id.component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+
+    let component1_result = component_service
+        .get(
+            &component1.versioned_component_id.component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(component1_result.is_empty());
+
+    let component1_result = component_service
+        .get_protected_data(
+            &component1v2.versioned_component_id.component_id,
+            Some(component1v2.versioned_component_id.version),
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
+    assert!(component1_result.is_none());
+}
 
 async fn test_repo(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     test_repo_component_id_unique(component_repo.clone()).await;

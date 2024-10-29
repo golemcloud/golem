@@ -272,7 +272,6 @@ impl OplogArchive for CompressedOplogArchive {
     }
 
     async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) {
-        info!("-----------------------appending -----------------------------------");
         if !chunk.is_empty() {
             let worker_id = &self.worker_id;
 

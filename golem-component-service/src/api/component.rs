@@ -149,13 +149,6 @@ impl ComponentApi {
             recorded_http_api_request!("create_component", component_name = payload.name.0);
 
         let ifs_data = payload.ifs.into_vec().await?;
-        info!("------------------------------------");
-        // info!("{:?}",payload.file_permissions);
-        info!("{:?}", payload.component.file_name());
-        // info!("{:?}", payload.ifs.file_name());
-        info!("{:?}", payload.config);
-        info!("{:?}", ifs_data);
-        info!("------------------------------------");
         let response = {
             let data = payload.component.into_vec().await?;
             let component_name = payload.name;
@@ -167,7 +160,7 @@ impl ComponentApi {
                     data,
                     &DefaultNamespace::default(),
                     ifs_data,
-                    config
+                    payload.config
                 )
                 .instrument(record.span.clone())
                 .await
@@ -203,7 +196,7 @@ impl ComponentApi {
                     &component_id.0,
                     data,
                     component_type.0,
-                    &DefaultNamespace::default(),
+                    &DefaultNamespace::default()
                 )
                 .instrument(record.span.clone())
                 .await
