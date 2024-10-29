@@ -8,7 +8,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_common::model::{ComponentId, IdempotencyKey};
 
 use crate::worker_binding::RibInputValue;
-use rib::{RibByteCode, RibFunctionInvoke, RibResult};
+use rib::{RibByteCode, RibFunctionInvoke, RibInterpreterInput, RibResult};
 
 use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutor};
 
@@ -99,8 +99,12 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
                 .boxed() // This ensures the future is boxed with the correct type
             },
         );
-        rib::interpret(expr, rib_input.value.clone(), worker_invoke_function)
-            .await
-            .map_err(EvaluationError)
+        rib::interpret(
+            expr,
+            RibInterpreterInput::new(rib_input.value.clone()),
+            worker_invoke_function,
+        )
+        .await
+        .map_err(EvaluationError)
     }
 }

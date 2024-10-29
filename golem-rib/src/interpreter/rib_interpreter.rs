@@ -12,185 +12,176 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::interpreter::env::{EnvironmentKey, InterpreterEnv, RibFunctionInvoke};
+use crate::interpreter::env::{InterpreterEnv, RibFunctionInvoke};
 use crate::interpreter::instruction_cursor::RibByteCodeCursor;
-use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::interpreter::stack::InterpreterStack;
-use crate::{RibByteCode, RibIR, RibResult};
+use crate::{RibByteCode, RibIR, RibInterpreterInput, RibResult};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
 
-#[derive(Debug)]
 pub struct Interpreter {
-    pub stack: InterpreterStack,
-    pub env: InterpreterEnv,
+    pub input: RibInterpreterInput,
+    pub invoke: RibFunctionInvoke,
 }
 
 impl Default for Interpreter {
     fn default() -> Self {
         Interpreter {
-            stack: InterpreterStack::new(),
-            env: InterpreterEnv::default(),
+            input: RibInterpreterInput::default(),
+            invoke: internal::default_worker_invoke_async(),
         }
     }
 }
 
 impl Interpreter {
-    pub fn new(
-        input: HashMap<String, TypeAnnotatedValue>,
-        function_invoke: RibFunctionInvoke,
-    ) -> Self {
-        let input = input
-            .into_iter()
-            .map(|(k, v)| {
-                (
-                    EnvironmentKey::from_global(k),
-                    RibInterpreterStackValue::Val(v),
-                )
-            })
-            .collect();
-
-        Interpreter {
-            stack: InterpreterStack::new(),
-            env: InterpreterEnv::new(input, function_invoke),
-        }
+    pub fn new(input: RibInterpreterInput, invoke: RibFunctionInvoke) -> Self {
+        Interpreter { input, invoke }
     }
 
     // Interpreter that's not expected to call a side-effecting function call.
     // All it needs is environment with the required variables to evaluate the Rib script
     pub fn pure(env: HashMap<String, TypeAnnotatedValue>) -> Self {
         Interpreter {
-            stack: InterpreterStack::new(),
-            env: InterpreterEnv::from_input(env),
+            input: RibInterpreterInput::new(env),
+            invoke: internal::default_worker_invoke_async(),
         }
     }
 
     pub async fn run(&mut self, instructions0: RibByteCode) -> Result<RibResult, String> {
         let mut byte_code_cursor = RibByteCodeCursor::from_rib_byte_code(instructions0);
+        let mut stack = InterpreterStack::new();
+        let mut interpreter_env = InterpreterEnv::from(&self.input, &self.invoke);
 
         while let Some(instruction) = byte_code_cursor.get_instruction() {
             match instruction {
                 RibIR::PushLit(val) => {
-                    self.stack.push_val(val);
+                    stack.push_val(val);
                 }
 
                 RibIR::PushFlag(val) => {
-                    self.stack.push_val(val);
+                    stack.push_val(val);
                 }
 
                 RibIR::CreateAndPushRecord(analysed_type) => {
-                    internal::run_create_record_instruction(analysed_type, &mut self.stack)?;
+                    internal::run_create_record_instruction(analysed_type, &mut stack)?;
                 }
 
                 RibIR::UpdateRecord(field_name) => {
-                    internal::run_update_record_instruction(field_name, &mut self.stack)?;
+                    internal::run_update_record_instruction(field_name, &mut stack)?;
                 }
 
                 RibIR::PushList(analysed_type, arg_size) => {
-                    internal::run_push_list_instruction(arg_size, analysed_type, &mut self.stack)?;
+                    internal::run_push_list_instruction(arg_size, analysed_type, &mut stack)?;
                 }
 
                 RibIR::EqualTo => {
-                    internal::run_compare_instruction(&mut self.stack, |left, right| {
-                        left == right
-                    })?;
+                    internal::run_compare_instruction(&mut stack, |left, right| left == right)?;
                 }
 
                 RibIR::GreaterThan => {
-                    internal::run_compare_instruction(&mut self.stack, |left, right| left > right)?;
+                    internal::run_compare_instruction(&mut stack, |left, right| left > right)?;
                 }
 
                 RibIR::LessThan => {
-                    internal::run_compare_instruction(&mut self.stack, |left, right| left < right)?;
+                    internal::run_compare_instruction(&mut stack, |left, right| left < right)?;
                 }
 
                 RibIR::GreaterThanOrEqualTo => {
-                    internal::run_compare_instruction(&mut self.stack, |left, right| {
-                        left >= right
-                    })?;
+                    internal::run_compare_instruction(&mut stack, |left, right| left >= right)?;
                 }
 
                 RibIR::LessThanOrEqualTo => {
-                    internal::run_compare_instruction(&mut self.stack, |left, right| {
-                        left <= right
-                    })?;
+                    internal::run_compare_instruction(&mut stack, |left, right| left <= right)?;
                 }
                 RibIR::Add(analysed_type) => {
                     internal::run_math_instruction(
-                        &mut self.stack,
+                        &mut stack,
                         |left, right| left + right,
                         &analysed_type,
                     )?;
                 }
                 RibIR::Subtract(analysed_type) => {
                     internal::run_math_instruction(
-                        &mut self.stack,
+                        &mut stack,
                         |left, right| left - right,
                         &analysed_type,
                     )?;
                 }
                 RibIR::Divide(analysed_type) => {
                     internal::run_math_instruction(
-                        &mut self.stack,
+                        &mut stack,
                         |left, right| left - right,
                         &analysed_type,
                     )?;
                 }
                 RibIR::Multiply(analysed_type) => {
                     internal::run_math_instruction(
-                        &mut self.stack,
+                        &mut stack,
                         |left, right| left * right,
                         &analysed_type,
                     )?;
                 }
 
                 RibIR::AssignVar(variable_id) => {
-                    internal::run_assign_var_instruction(variable_id, self)?;
+                    internal::run_assign_var_instruction(
+                        variable_id,
+                        &mut stack,
+                        &mut interpreter_env,
+                    )?;
                 }
 
                 RibIR::LoadVar(variable_id) => {
-                    internal::run_load_var_instruction(variable_id, self)?;
+                    internal::run_load_var_instruction(
+                        variable_id,
+                        &mut stack,
+                        &mut interpreter_env,
+                    )?;
                 }
 
                 RibIR::IsEmpty => {
-                    internal::run_is_empty_instruction(&mut self.stack)?;
+                    internal::run_is_empty_instruction(&mut stack)?;
                 }
 
                 RibIR::JumpIfFalse(instruction_id) => {
                     internal::run_jump_if_false_instruction(
                         instruction_id,
                         &mut byte_code_cursor,
-                        &mut self.stack,
+                        &mut stack,
                     )?;
                 }
 
                 RibIR::SelectField(field_name) => {
-                    internal::run_select_field_instruction(field_name, &mut self.stack)?;
+                    internal::run_select_field_instruction(field_name, &mut stack)?;
                 }
 
                 RibIR::SelectIndex(index) => {
-                    internal::run_select_index_instruction(&mut self.stack, index)?;
+                    internal::run_select_index_instruction(&mut stack, index)?;
                 }
 
                 RibIR::CreateFunctionName(site, function_type) => {
-                    internal::run_create_function_name_instruction(site, function_type, self)?;
+                    internal::run_create_function_name_instruction(
+                        site,
+                        function_type,
+                        &mut stack,
+                    )?;
                 }
 
                 RibIR::InvokeFunction(arg_size, _) => {
-                    internal::run_call_instruction(arg_size, self).await?;
+                    internal::run_call_instruction(arg_size, &mut stack, &mut interpreter_env)
+                        .await?;
                 }
 
                 RibIR::PushVariant(variant_name, analysed_type) => {
                     internal::run_variant_construction_instruction(
                         variant_name,
                         analysed_type,
-                        self,
+                        &mut stack,
                     )
                     .await?;
                 }
 
                 RibIR::PushEnum(enum_name, analysed_type) => {
-                    internal::run_push_enum_instruction(&mut self.stack, enum_name, analysed_type)?;
+                    internal::run_push_enum_instruction(&mut stack, enum_name, analysed_type)?;
                 }
 
                 RibIR::Throw(message) => {
@@ -198,11 +189,11 @@ impl Interpreter {
                 }
 
                 RibIR::GetTag => {
-                    internal::run_get_tag_instruction(&mut self.stack)?;
+                    internal::run_get_tag_instruction(&mut stack)?;
                 }
 
                 RibIR::Deconstruct => {
-                    internal::run_deconstruct_instruction(&mut self.stack)?;
+                    internal::run_deconstruct_instruction(&mut stack)?;
                 }
 
                 RibIR::Jump(instruction_id) => {
@@ -213,56 +204,55 @@ impl Interpreter {
                 }
 
                 RibIR::PushSome(analysed_type) => {
-                    internal::run_create_some_instruction(&mut self.stack, analysed_type)?;
+                    internal::run_create_some_instruction(&mut stack, analysed_type)?;
                 }
                 RibIR::PushNone(analysed_type) => {
-                    internal::run_create_none_instruction(&mut self.stack, analysed_type)?;
+                    internal::run_create_none_instruction(&mut stack, analysed_type)?;
                 }
                 RibIR::PushOkResult(analysed_type) => {
-                    internal::run_create_ok_instruction(&mut self.stack, analysed_type)?;
+                    internal::run_create_ok_instruction(&mut stack, analysed_type)?;
                 }
                 RibIR::PushErrResult(analysed_type) => {
-                    internal::run_create_err_instruction(&mut self.stack, analysed_type)?;
+                    internal::run_create_err_instruction(&mut stack, analysed_type)?;
                 }
                 RibIR::Concat(arg_size) => {
-                    internal::run_concat_instruction(&mut self.stack, arg_size)?;
+                    internal::run_concat_instruction(&mut stack, arg_size)?;
                 }
                 RibIR::PushTuple(analysed_type, arg_size) => {
-                    internal::run_push_tuple_instruction(arg_size, analysed_type, &mut self.stack)?;
+                    internal::run_push_tuple_instruction(arg_size, analysed_type, &mut stack)?;
                 }
                 RibIR::Negate => {
-                    internal::run_negate_instruction(&mut self.stack)?;
+                    internal::run_negate_instruction(&mut stack)?;
                 }
 
                 RibIR::Label(_) => {}
 
                 RibIR::And => {
-                    internal::run_and_instruction(&mut self.stack)?;
+                    internal::run_and_instruction(&mut stack)?;
                 }
 
                 RibIR::Or => {
-                    internal::run_or_instruction(&mut self.stack)?;
+                    internal::run_or_instruction(&mut stack)?;
                 }
                 RibIR::ListToIterator => {
-                    internal::run_list_to_iterator_instruction(&mut self.stack)?;
+                    internal::run_list_to_iterator_instruction(&mut stack)?;
                 }
                 RibIR::CreateSink(analysed_type) => {
-                    internal::run_create_sink_instruction(&mut self.stack, &analysed_type)?
+                    internal::run_create_sink_instruction(&mut stack, &analysed_type)?
                 }
                 RibIR::AdvanceIterator => {
-                    internal::run_advance_iterator_instruction(&mut self.stack)?;
+                    internal::run_advance_iterator_instruction(&mut stack)?;
                 }
                 RibIR::PushToSink => {
-                    internal::run_push_to_sink_instruction(&mut self.stack)?;
+                    internal::run_push_to_sink_instruction(&mut stack)?;
                 }
                 RibIR::SinkToList => {
-                    internal::run_sink_to_list_instruction(&mut self.stack)?;
+                    internal::run_sink_to_list_instruction(&mut stack)?;
                 }
             }
         }
 
-        let stack_value = self
-            .stack
+        let stack_value = stack
             .pop()
             .ok_or("Empty stack after running the instructions".to_string())?;
 
@@ -274,13 +264,14 @@ impl Interpreter {
 }
 
 mod internal {
-    use crate::interpreter::env::EnvironmentKey;
+    use crate::interpreter::env::{EnvironmentKey, InterpreterEnv};
     use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        CoercedNumericValue, FunctionReferenceType, GetLiteralValue, InstructionId, Interpreter,
-        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, VariableId,
+        CoercedNumericValue, FunctionReferenceType, GetLiteralValue, InstructionId,
+        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke,
+        VariableId,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -292,6 +283,18 @@ mod internal {
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use golem_wasm_ast::analysis::analysed_type::str;
     use std::ops::Deref;
+    use std::sync::Arc;
+
+    pub(crate) fn default_worker_invoke_async() -> RibFunctionInvoke {
+        Arc::new(|_, _| {
+            Box::pin(async {
+                Ok(TypeAnnotatedValue::Tuple(TypedTuple {
+                    typ: vec![],
+                    value: vec![],
+                }))
+            })
+        })
+    }
 
     pub(crate) fn run_is_empty_instruction(
         interpreter_stack: &mut InterpreterStack,
@@ -466,33 +469,34 @@ mod internal {
 
     pub(crate) fn run_assign_var_instruction(
         variable_id: VariableId,
-        interpreter: &mut Interpreter,
+        interpreter_stack: &mut InterpreterStack,
+        interpreter_env: &mut InterpreterEnv,
     ) -> Result<(), String> {
-        let value = interpreter
-            .stack
+        let value = interpreter_stack
             .pop()
             .ok_or("Expected a value on the stack before assigning a variable".to_string())?;
         let env_key = EnvironmentKey::from(variable_id);
 
-        interpreter.env.insert(env_key, value);
+        interpreter_env.insert(env_key, value);
         Ok(())
     }
 
     pub(crate) fn run_load_var_instruction(
         variable_id: VariableId,
-        interpreter: &mut Interpreter,
+        interpreter_stack: &mut InterpreterStack,
+        interpreter_env: &mut InterpreterEnv,
     ) -> Result<(), String> {
         let env_key = EnvironmentKey::from(variable_id.clone());
-        let value = interpreter.env.lookup(&env_key).ok_or(format!(
+        let value = interpreter_env.lookup(&env_key).ok_or(format!(
             "Variable `{}` not found during evaluation of expression",
             variable_id
         ))?;
 
         match value {
             RibInterpreterStackValue::Unit => {
-                interpreter.stack.push(RibInterpreterStackValue::Unit);
+                interpreter_stack.push(RibInterpreterStackValue::Unit);
             }
-            RibInterpreterStackValue::Val(val) => interpreter.stack.push_val(val.clone()),
+            RibInterpreterStackValue::Val(val) => interpreter_stack.push_val(val.clone()),
             RibInterpreterStackValue::Iterator(_) => {
                 return Err("Unable to assign an iterator to a variable".to_string())
             }
@@ -822,7 +826,7 @@ mod internal {
     pub(crate) async fn run_variant_construction_instruction(
         variant_name: String,
         analysed_type: AnalysedType,
-        interpreter: &mut Interpreter,
+        interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
         match analysed_type {
             AnalysedType::Variant(variants) => {
@@ -836,13 +840,13 @@ mod internal {
 
                 let arg_value =
                     match variant_arg_typ {
-                        Some(_) => Some(interpreter.stack.pop_val().ok_or(
+                        Some(_) => Some(interpreter_stack.pop_val().ok_or(
                             "Failed to get the variant argument from the stack".to_string(),
                         )?),
                         None => None,
                     };
 
-                interpreter.stack.push_variant(
+                interpreter_stack.push_variant(
                     variant_name.clone(),
                     arg_value,
                     variants.cases.clone(),
@@ -860,7 +864,7 @@ mod internal {
     pub(crate) fn run_create_function_name_instruction(
         site: ParsedFunctionSite,
         function_type: FunctionReferenceType,
-        interpreter: &mut Interpreter,
+        interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
         match function_type {
             FunctionReferenceType::Function { function } => {
@@ -869,8 +873,7 @@ mod internal {
                     function: ParsedFunctionReference::Function { function },
                 };
 
-                interpreter
-                    .stack
+                interpreter_stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
 
@@ -880,8 +883,7 @@ mod internal {
                     function: ParsedFunctionReference::RawResourceConstructor { resource },
                 };
 
-                interpreter
-                    .stack
+                interpreter_stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
             FunctionReferenceType::RawResourceDrop { resource } => {
@@ -890,8 +892,7 @@ mod internal {
                     function: ParsedFunctionReference::RawResourceDrop { resource },
                 };
 
-                interpreter
-                    .stack
+                interpreter_stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
             FunctionReferenceType::RawResourceMethod { resource, method } => {
@@ -900,8 +901,7 @@ mod internal {
                     function: ParsedFunctionReference::RawResourceMethod { resource, method },
                 };
 
-                interpreter
-                    .stack
+                interpreter_stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
             FunctionReferenceType::RawResourceStaticMethod { resource, method } => {
@@ -910,13 +910,11 @@ mod internal {
                     function: ParsedFunctionReference::RawResourceStaticMethod { resource, method },
                 };
 
-                interpreter
-                    .stack
+                interpreter_stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
             FunctionReferenceType::IndexedResourceConstructor { resource, arg_size } => {
-                let last_n_elements = interpreter
-                    .stack
+                let last_n_elements = interpreter_stack
                     .pop_n(arg_size)
                     .ok_or("Failed to get values from the stack".to_string())?;
 
@@ -940,8 +938,7 @@ mod internal {
                     },
                 };
 
-                interpreter
-                    .stack
+                interpreter_stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
             FunctionReferenceType::IndexedResourceMethod {
@@ -949,8 +946,7 @@ mod internal {
                 arg_size,
                 method,
             } => {
-                let last_n_elements = interpreter
-                    .stack
+                let last_n_elements = interpreter_stack
                     .pop_n(arg_size)
                     .ok_or("Failed to get values from the stack".to_string())?;
 
@@ -975,8 +971,7 @@ mod internal {
                     },
                 };
 
-                interpreter
-                    .stack
+                interpreter_stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
             FunctionReferenceType::IndexedResourceStaticMethod {
@@ -984,7 +979,7 @@ mod internal {
                 arg_size,
                 method,
             } => {
-                let last_n_elements = interpreter.stack.pop_n(arg_size).ok_or(
+                let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or(
                     "Internal error: Failed to get arguments for static resource method"
                         .to_string(),
                 )?;
@@ -1010,12 +1005,11 @@ mod internal {
                     },
                 };
 
-                interpreter
-                    .stack
+                interpreter_stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
             FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => {
-                let last_n_elements = interpreter.stack.pop_n(arg_size).ok_or(
+                let last_n_elements = interpreter_stack.pop_n(arg_size).ok_or(
                     "Internal Error: Failed to get resource parameters for indexed resource drop"
                         .to_string(),
                 )?;
@@ -1040,8 +1034,7 @@ mod internal {
                     },
                 };
 
-                interpreter
-                    .stack
+                interpreter_stack
                     .push_val(TypeAnnotatedValue::Str(parsed_function_name.to_string()));
             }
         }
@@ -1051,15 +1044,14 @@ mod internal {
 
     pub(crate) async fn run_call_instruction(
         arg_size: usize,
-        interpreter: &mut Interpreter,
+        interpreter_stack: &mut InterpreterStack,
+        interpreter_env: &mut InterpreterEnv,
     ) -> Result<(), String> {
-        let function_name = interpreter
-            .stack
+        let function_name = interpreter_stack
             .pop_str()
             .ok_or("Internal Error: Failed to get a function name".to_string())?;
 
-        let last_n_elements = interpreter
-            .stack
+        let last_n_elements = interpreter_stack
             .pop_n(arg_size)
             .ok_or("Internal Error: Failed to get arguments for the function call".to_string())?;
 
@@ -1073,8 +1065,7 @@ mod internal {
             })
             .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
-        let result = interpreter
-            .env
+        let result = interpreter_env
             .invoke_worker_function_async(function_name, type_anntoated_values)
             .await?;
 
@@ -1092,7 +1083,7 @@ mod internal {
             _ => Err("Named multiple results are not supported yet".to_string()),
         };
 
-        interpreter.stack.push(interpreter_result?);
+        interpreter_stack.push(interpreter_result?);
 
         Ok(())
     }
@@ -1497,7 +1488,8 @@ mod interpreter_tests {
     mod list_reduce_interpreter_tests {
         use test_r::test;
 
-        use crate::{compiler, Expr, Interpreter};
+        use crate::interpreter::rib_interpreter::Interpreter;
+        use crate::{compiler, Expr};
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
         #[test]
@@ -1556,7 +1548,8 @@ mod interpreter_tests {
     }
 
     mod list_comprehension_interpreter_tests {
-        use crate::{compiler, Expr, Interpreter};
+        use crate::interpreter::rib_interpreter::Interpreter;
+        use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::analysed_type::{list, str};
         use test_r::test;
 
@@ -1627,7 +1620,8 @@ mod interpreter_tests {
         use test_r::test;
 
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
-        use crate::{compiler, Expr, FunctionTypeRegistry, Interpreter};
+        use crate::interpreter::rib_interpreter::Interpreter;
+        use crate::{compiler, Expr, FunctionTypeRegistry};
         use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple, u16, u64};
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
@@ -1869,7 +1863,8 @@ mod interpreter_tests {
         use test_r::test;
 
         use crate::interpreter::rib_interpreter::interpreter_tests::internal;
-        use crate::{compiler, Expr, Interpreter};
+        use crate::interpreter::rib_interpreter::Interpreter;
+        use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, list, record, str, u32, variant,
         };
@@ -2156,9 +2151,8 @@ mod interpreter_tests {
     }
 
     mod internal {
-        use crate::interpreter::env::InterpreterEnv;
-        use crate::interpreter::stack::InterpreterStack;
-        use crate::{Interpreter, RibFunctionInvoke};
+        use crate::interpreter::rib_interpreter::Interpreter;
+        use crate::{RibFunctionInvoke, RibInterpreterInput};
         use golem_wasm_ast::analysis::analysed_type::{
             case, f32, field, handle, list, r#enum, record, result, str, tuple, u32, u64,
             unit_case, variant,
@@ -2169,7 +2163,6 @@ mod interpreter_tests {
         };
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use golem_wasm_rpc::protobuf::TypedTuple;
-        use std::collections::HashMap;
         use std::sync::Arc;
 
         pub(crate) fn get_analysed_type_variant() -> AnalysedType {
@@ -2399,11 +2392,8 @@ mod interpreter_tests {
             result_value: &TypeAnnotatedValue,
         ) -> Interpreter {
             Interpreter {
-                stack: InterpreterStack::default(),
-                env: InterpreterEnv {
-                    env: HashMap::new(),
-                    call_worker_function_async: static_worker_invoke(result_type, result_value),
-                },
+                input: RibInterpreterInput::default(),
+                invoke: static_worker_invoke(result_type, result_value),
             }
         }
 

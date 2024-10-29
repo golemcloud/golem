@@ -2076,10 +2076,9 @@ mod comprehensive_test {
     }
 
     mod mock_interpreter {
-        use crate::interpreter::env::InterpreterEnv;
-        use crate::interpreter::stack::InterpreterStack;
+        use crate::interpreter::rib_interpreter::Interpreter;
         use crate::interpreter::tests::comprehensive_test::{mock_data, test_utils};
-        use crate::{Interpreter, RibFunctionInvoke};
+        use crate::{RibFunctionInvoke, RibInterpreterInput};
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
         use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
         use golem_wasm_rpc::protobuf::TypedTuple;
@@ -2273,13 +2272,10 @@ mod comprehensive_test {
             functions_and_result: HashMap<FunctionName, Option<TypeAnnotatedValue>>,
             interpreter_env_input: HashMap<String, TypeAnnotatedValue>,
         ) -> Interpreter {
-            Interpreter {
-                stack: InterpreterStack::default(),
-                env: InterpreterEnv::from(
-                    interpreter_env_input,
-                    dynamic_worker_invoke(functions_and_result),
-                ),
-            }
+            Interpreter::new(
+                RibInterpreterInput::new(interpreter_env_input),
+                dynamic_worker_invoke(functions_and_result),
+            )
         }
 
         fn dynamic_worker_invoke(

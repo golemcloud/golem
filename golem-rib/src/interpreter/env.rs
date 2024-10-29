@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
-use crate::VariableId;
+use crate::{RibInterpreterInput, VariableId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -53,16 +53,6 @@ impl Default for InterpreterEnv {
 }
 
 impl InterpreterEnv {
-    pub fn new(
-        env: HashMap<EnvironmentKey, RibInterpreterStackValue>,
-        call_worker_function_async: RibFunctionInvoke,
-    ) -> Self {
-        InterpreterEnv {
-            env,
-            call_worker_function_async,
-        }
-    }
-
     pub fn invoke_worker_function_async(
         &self,
         function_name: String,
@@ -71,8 +61,10 @@ impl InterpreterEnv {
         (self.call_worker_function_async)(function_name, args)
     }
 
-    pub fn from_input(env: HashMap<String, TypeAnnotatedValue>) -> Self {
+    pub fn from_input(env: &RibInterpreterInput) -> Self {
         let env = env
+            .input
+            .clone()
             .into_iter()
             .map(|(k, v)| {
                 (
@@ -89,11 +81,11 @@ impl InterpreterEnv {
     }
 
     pub fn from(
-        input: HashMap<String, TypeAnnotatedValue>,
-        call_worker_function_async: RibFunctionInvoke,
+        input: &RibInterpreterInput,
+        call_worker_function_async: &RibFunctionInvoke,
     ) -> Self {
         let mut env = Self::from_input(input);
-        env.call_worker_function_async = call_worker_function_async;
+        env.call_worker_function_async = call_worker_function_async.clone();
         env
     }
 

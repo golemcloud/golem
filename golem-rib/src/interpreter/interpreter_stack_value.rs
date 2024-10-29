@@ -26,7 +26,7 @@ use std::fmt;
 pub enum RibInterpreterStackValue {
     Unit,
     Val(TypeAnnotatedValue),
-    Iterator(Box<dyn Iterator<Item = TypeAnnotatedValue>>),
+    Iterator(Box<dyn Iterator<Item = TypeAnnotatedValue> + Send>),
     Sink(Vec<TypeAnnotatedValue>, AnalysedType),
 }
 

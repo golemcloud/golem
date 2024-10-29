@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
-use golem_wasm_ast::analysis::protobuf::{NameTypePair, Type};
+use golem_wasm_ast::analysis::protobuf::NameTypePair;
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{
@@ -44,22 +44,8 @@ impl InterpreterStack {
         }));
     }
 
-    pub fn create_list(&mut self, analysed_type: AnalysedType) {
-        self.push_val(TypeAnnotatedValue::List(TypedList {
-            values: vec![],
-            typ: Some(Type::from(&analysed_type)),
-        }));
-    }
-
     pub fn pop(&mut self) -> Option<RibInterpreterStackValue> {
         self.stack.pop()
-    }
-
-    pub fn pop_iterator(&mut self) -> Option<Box<dyn Iterator<Item = TypeAnnotatedValue>>> {
-        match self.pop() {
-            Some(RibInterpreterStackValue::Iterator(iter)) => Some(iter),
-            _ => None,
-        }
     }
 
     pub fn pop_sink(&mut self) -> Option<Vec<TypeAnnotatedValue>> {

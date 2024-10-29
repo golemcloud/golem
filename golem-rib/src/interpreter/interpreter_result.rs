@@ -1,4 +1,5 @@
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
+use crate::{GetLiteralValue, LiteralValue};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 pub enum RibResult {
@@ -32,5 +33,9 @@ impl RibResult {
             RibResult::Val(val) => Some(val.clone()),
             RibResult::Unit => None,
         }
+    }
+
+    pub fn get_literal(&self) -> Option<LiteralValue> {
+        self.get_val().and_then(|x| x.get_literal())
     }
 }

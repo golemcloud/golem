@@ -13,15 +13,18 @@
 // limitations under the License.
 
 pub use env::RibFunctionInvoke;
+pub use interpreter_input::*;
 pub use interpreter_result::*;
 pub use literal::*;
-pub use rib_interpreter::*;
 
+use crate::interpreter::rib_interpreter::Interpreter;
 use crate::RibByteCode;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
+
 mod env;
 mod instruction_cursor;
+mod interpreter_input;
 mod interpreter_result;
 mod interpreter_stack_value;
 mod literal;
@@ -31,7 +34,7 @@ mod tests;
 
 pub async fn interpret(
     rib: &RibByteCode,
-    rib_input: HashMap<String, TypeAnnotatedValue>,
+    rib_input: RibInterpreterInput,
     function_invoke: RibFunctionInvoke,
 ) -> Result<RibResult, String> {
     let mut interpreter = Interpreter::new(rib_input, function_invoke);
