@@ -314,9 +314,15 @@ impl StubDefinition {
                                         panic!("Failed to get type def for inlining")
                                     })
                                     .clone();
-                                type_def.name =
-                                    type_name_alias.clone().or_else(|| Some(type_name.clone()));
-                                Some(type_def)
+
+                                // Alias to alias does not need inlining
+                                if let TypeDefKind::Type(Type::Id(_)) = type_def.kind {
+                                    None
+                                } else {
+                                    type_def.name =
+                                        type_name_alias.clone().or_else(|| Some(type_name.clone()));
+                                    Some(type_def)
+                                }
                             }
                             _ => None,
                         };
