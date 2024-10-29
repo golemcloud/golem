@@ -277,7 +277,7 @@ impl StubDefinition {
                             panic!("Missing interface name, interface id: {:?}", interface_id)
                         });
 
-                        let package = interface.package.clone().map(|package_id| {
+                        let package = interface.package.map(|package_id| {
                             self.resolve.packages.get(package_id).unwrap_or_else(|| {
                                 panic!(
                             "Missing package for interface, package id: {:?}, interface id: {:?}",
