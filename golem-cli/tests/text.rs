@@ -12,150 +12,182 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
+
 use crate::api_definition::{
     golem_def, make_golem_file, make_open_api_file, make_shopping_cart_component,
 };
 use crate::cli::{Cli, CliLive};
 use crate::worker::add_environment_service_component;
+use crate::Tracing;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::Format;
 use golem_client::model::{ApiDeployment, HttpApiDefinitionWithTypeInfo};
 use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
-use golem_test_framework::config::TestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use indoc::formatdoc;
-use libtest_mimic::{Failed, Trial};
 use regex::Regex;
 use std::sync::Arc;
+use test_r::core::{DynamicTestRegistration, TestType};
 
-fn make(
-    suffix: &str,
-    name: &str,
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-) -> Vec<Trial> {
-    let ctx = (deps, name.to_string(), cli);
-    vec![
-        Trial::test_in_context(
-            format!("text_component_add{suffix}"),
-            ctx.clone(),
-            text_component_add,
-        ),
-        Trial::test_in_context(
-            format!("text_component_update{suffix}"),
-            ctx.clone(),
-            text_component_update,
-        ),
-        Trial::test_in_context(
-            format!("text_component_get{suffix}"),
-            ctx.clone(),
-            text_component_get,
-        ),
-        Trial::test_in_context(
-            format!("text_component_list{suffix}"),
-            ctx.clone(),
-            text_component_list,
-        ),
-        Trial::test_in_context(
-            format!("text_worker_add{suffix}"),
-            ctx.clone(),
-            text_worker_add,
-        ),
-        Trial::test_in_context(
-            format!("text_worker_invoke_and_await{suffix}"),
-            ctx.clone(),
-            text_worker_invoke_and_await,
-        ),
-        Trial::test_in_context(
-            format!("text_worker_get{suffix}"),
-            ctx.clone(),
-            text_worker_get,
-        ),
-        Trial::test_in_context(
-            format!("text_worker_list{suffix}"),
-            ctx.clone(),
-            text_worker_list,
-        ),
-        Trial::test_in_context(
-            format!("text_example_list{suffix}"),
-            ctx.clone(),
-            text_example_list,
-        ),
-        Trial::test_in_context(
-            format!("text_api_definition_import{suffix}"),
-            ctx.clone(),
-            text_api_definition_import,
-        ),
-        Trial::test_in_context(
-            format!("text_api_definition_add{suffix}"),
-            ctx.clone(),
-            text_api_definition_add,
-        ),
-        Trial::test_in_context(
-            format!("text_api_definition_update{suffix}"),
-            ctx.clone(),
-            text_api_definition_update,
-        ),
-        Trial::test_in_context(
-            format!("text_api_definition_list{suffix}"),
-            ctx.clone(),
-            text_api_definition_list,
-        ),
-        Trial::test_in_context(
-            format!("text_api_definition_get{suffix}"),
-            ctx.clone(),
-            text_api_definition_get,
-        ),
-        Trial::test_in_context(
-            format!("text_api_deployment_deploy{suffix}"),
-            ctx.clone(),
-            text_api_deployment_deploy,
-        ),
-        Trial::test_in_context(
-            format!("text_api_deployment_get{suffix}"),
-            ctx.clone(),
-            text_api_deployment_get,
-        ),
-        Trial::test_in_context(
-            format!("text_api_deployment_list{suffix}"),
-            ctx.clone(),
-            text_api_deployment_list,
-        ),
-    ]
+inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
+
+#[test_dep]
+fn cli(deps: &EnvBasedTestDependencies) -> CliLive {
+    CliLive::make("text", Arc::new(deps.clone())).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(
-        "_short",
-        "CLI_short",
-        CliLive::make("text_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        deps.clone(),
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_short", "CLI_short", true);
+    make(r, "_long", "CLI_long", false);
+}
+
+fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static str, short: bool) {
+    add_test!(
+        r,
+        format!("text_component_add{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_component_add((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    let mut long_args = make(
-        "_long",
-        "CLI_long",
-        CliLive::make("text_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-        deps,
+    add_test!(
+        r,
+        format!("text_component_update{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_component_update((deps, name.to_string(), cli.with_args(short)))
+        }
     );
-
-    short_args.append(&mut long_args);
-
-    short_args
+    add_test!(
+        r,
+        format!("text_component_get{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_component_get((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_component_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_component_list((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_worker_add{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_worker_add((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_worker_invoke_and_await{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_worker_invoke_and_await((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_worker_get{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_worker_get((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_worker_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_worker_list((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_example_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_example_list((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_api_definition_import{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_api_definition_import((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_api_definition_add{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_api_definition_add((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_api_definition_update{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_api_definition_update((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_api_definition_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_api_definition_list((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_api_definition_get{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_api_definition_get((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_api_deployment_deploy{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_api_deployment_deploy((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_api_deployment_get{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_api_deployment_get((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("text_api_deployment_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            text_api_deployment_list((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
 }
 
 fn text_component_add(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} text component add");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -177,12 +209,8 @@ fn text_component_add(
 }
 
 fn text_component_update(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} text component update");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -217,12 +245,8 @@ fn text_component_update(
 }
 
 fn text_component_get(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name} text component get");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -256,12 +280,8 @@ fn text_component_get(
 }
 
 fn text_component_list(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_name = format!("{name: <9} text component list");
     let env_service = deps.component_directory().join("environment-service.wasm");
     let cfg = &cli.config;
@@ -298,12 +318,8 @@ fn text_component_list(
 }
 
 fn text_worker_add(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_urn =
         add_environment_service_component(deps, &format!("{name} text worker add"), &cli)?
             .component_urn;
@@ -348,12 +364,8 @@ fn text_worker_add(
 }
 
 fn text_worker_invoke_and_await(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_urn = add_environment_service_component(
         deps,
         &format!("{name} text worker_invoke_and_await"),
@@ -396,12 +408,8 @@ fn text_worker_invoke_and_await(
 }
 
 fn text_worker_get(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_urn =
         add_environment_service_component(deps, &format!("{name} text worker get"), &cli)?
             .component_urn;
@@ -464,12 +472,8 @@ fn text_worker_get(
 }
 
 fn text_worker_list(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_urn =
         add_environment_service_component(deps, &format!("{name} text worker list"), &cli)?
             .component_urn;
@@ -511,12 +515,8 @@ fn text_worker_list(
 }
 
 fn text_example_list(
-    (_, _, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (_, _, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let cfg = &cli.config;
     let res = cli.with_format(Format::Text).run_string(&[
         "list-examples",
@@ -536,12 +536,8 @@ fn text_example_list(
 }
 
 fn text_api_definition_import(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_name = format!("text_api_definition_import{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -567,12 +563,8 @@ fn text_api_definition_import(
 }
 
 fn text_api_definition_add(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_name = format!("text_api_definition_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -598,12 +590,8 @@ fn text_api_definition_add(
 }
 
 fn text_api_definition_update(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_name = format!("text_api_definition_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -631,12 +619,8 @@ fn text_api_definition_update(
 }
 
 fn text_api_definition_list(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_name = format!("text_api_definition_list{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -667,12 +651,8 @@ fn text_api_definition_list(
 }
 
 fn text_api_definition_get(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let component_name = format!("text_api_definition_get{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
@@ -706,12 +686,8 @@ fn text_api_definition_get(
 }
 
 fn text_api_deployment_deploy(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let definition = crate::api_deployment::make_definition(
         deps,
         &cli,
@@ -745,12 +721,8 @@ fn text_api_deployment_deploy(
 }
 
 fn text_api_deployment_get(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let definition = crate::api_deployment::make_definition(
         deps,
         &cli,
@@ -790,12 +762,8 @@ fn text_api_deployment_get(
 }
 
 fn text_api_deployment_list(
-    (deps, name, cli): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
-        String,
-        CliLive,
-    ),
-) -> Result<(), Failed> {
+    (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
+) -> Result<(), anyhow::Error> {
     let definition = crate::api_deployment::make_definition(
         deps,
         &cli,

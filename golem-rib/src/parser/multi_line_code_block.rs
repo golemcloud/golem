@@ -66,6 +66,8 @@ mod internal {
 }
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::expr::Expr;
     use crate::function_name::DynamicParsedFunctionName;
     use crate::{ArmPattern, MatchArm};

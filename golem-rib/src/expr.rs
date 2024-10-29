@@ -17,8 +17,8 @@ use crate::parser::rib_expr::rib_program;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
-    from_string, text, type_inference, DynamicParsedFunctionName, InferredType, ParsedFunctionName,
-    VariableId,
+    from_string, text, type_checker, type_inference, DynamicParsedFunctionName, InferredType,
+    ParsedFunctionName, VariableId,
 };
 use bincode::{Decode, Encode};
 use combine::stream::position;
@@ -46,7 +46,7 @@ pub enum Expr {
     Identifier(VariableId, InferredType),
     Boolean(bool, InferredType),
     Concat(Vec<Expr>, InferredType),
-    Multiple(Vec<Expr>, InferredType),
+    ExprBlock(Vec<Expr>, InferredType),
     Not(Box<Expr>, InferredType),
     GreaterThan(Box<Expr>, Box<Expr>, InferredType),
     And(Box<Expr>, Box<Expr>, InferredType),
@@ -66,6 +66,17 @@ pub enum Expr {
 }
 
 impl Expr {
+    pub fn as_record(&self) -> Option<Vec<(String, Expr)>> {
+        match self {
+            Expr::Record(fields, _) => Some(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.deref().clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        }
+    }
     /// Parse a text directly as Rib expression
     /// Example of a Rib expression:
     ///
@@ -165,7 +176,7 @@ impl Expr {
     }
 
     pub fn is_multiple(&self) -> bool {
-        matches!(self, Expr::Multiple(_, _))
+        matches!(self, Expr::ExprBlock(_, _))
     }
 
     pub fn inbuilt_variant(&self) -> Option<(String, Option<Expr>)> {
@@ -295,7 +306,7 @@ impl Expr {
             .last()
             .map_or(InferredType::Unknown, |e| e.inferred_type());
 
-        Expr::Multiple(expressions, inferred_type)
+        Expr::ExprBlock(expressions, inferred_type)
     }
 
     #[allow(clippy::should_implement_trait)]
@@ -402,7 +413,7 @@ impl Expr {
             | Expr::Identifier(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
-            | Expr::Multiple(_, inferred_type)
+            | Expr::ExprBlock(_, inferred_type)
             | Expr::Not(_, inferred_type)
             | Expr::GreaterThan(_, _, inferred_type)
             | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
@@ -431,6 +442,9 @@ impl Expr {
             .map_err(|x| vec![x])?;
         type_inference::type_inference_fix_point(Self::inference_scan, self)
             .map_err(|x| vec![x])?;
+
+        self.check_types(function_type_registry)
+            .map_err(|x| vec![x])?;
         self.unify_types()?;
         Ok(())
     }
@@ -456,9 +470,7 @@ impl Expr {
         self.infer_all_identifiers()?;
         let expr = self.pull_types_up()?;
         *self = expr;
-        self.unify_types().unwrap_or(());
         self.infer_global_inputs();
-
         Ok(())
     }
 
@@ -503,8 +515,11 @@ impl Expr {
         type_inference::bind_type(self);
     }
 
-    pub fn type_check(&self) -> Result<(), Vec<String>> {
-        type_inference::type_check(self)
+    pub fn check_types(
+        &mut self,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> Result<(), String> {
+        type_checker::type_check(self, function_type_registry)
     }
 
     pub fn unify_types(&mut self) -> Result<(), Vec<String>> {
@@ -531,7 +546,7 @@ impl Expr {
             | Expr::Flags(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
-            | Expr::Multiple(_, inferred_type)
+            | Expr::ExprBlock(_, inferred_type)
             | Expr::Not(_, inferred_type)
             | Expr::GreaterThan(_, _, inferred_type)
             | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
@@ -573,7 +588,7 @@ impl Expr {
             | Expr::Flags(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
-            | Expr::Multiple(_, inferred_type)
+            | Expr::ExprBlock(_, inferred_type)
             | Expr::Not(_, inferred_type)
             | Expr::GreaterThan(_, _, inferred_type)
             | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
@@ -714,6 +729,14 @@ pub enum ArmPattern {
 }
 
 impl ArmPattern {
+    pub fn is_wildcard(&self) -> bool {
+        matches!(self, ArmPattern::WildCard)
+    }
+
+    pub fn is_literal_identifier(&self) -> bool {
+        matches!(self, ArmPattern::Literal(expr) if expr.is_identifier())
+    }
+
     pub fn constructor(name: &str, patterns: Vec<ArmPattern>) -> ArmPattern {
         ArmPattern::Constructor(name.to_string(), patterns)
     }
@@ -1191,7 +1214,7 @@ impl From<Expr> for golem_api_grpc::proto::golem::rib::Expr {
                     exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
                 },
             )),
-            Expr::Multiple(exprs, _) => {
+            Expr::ExprBlock(exprs, _) => {
                 Some(golem_api_grpc::proto::golem::rib::expr::Expr::Multiple(
                     golem_api_grpc::proto::golem::rib::MultipleExpr {
                         exprs: exprs.into_iter().map(|expr| expr.into()).collect(),
@@ -1510,6 +1533,12 @@ impl Display for Expr {
     }
 }
 
+impl Display for ArmPattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", text::to_string_arm_pattern(self).unwrap())
+    }
+}
+
 impl<'de> Deserialize<'de> for Expr {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -1544,6 +1573,8 @@ impl Serialize for Expr {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::ParsedFunctionSite::PackagedInterface;
     use crate::{
         ArmPattern, DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, MatchArm,

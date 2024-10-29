@@ -121,6 +121,16 @@ impl From<ComponentServiceError> for ComponentError {
                     error: error.to_safe_string(),
                 }))
             }
+            ComponentServiceError::ComponentConstraintConflictError(_) => {
+                ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                }))
+            }
+            ComponentServiceError::ComponentConstraintCreateError(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
             ComponentServiceError::InitialFileError { .. } => {
                 ComponentError::BadRequest(Json(ErrorsBody {
                     errors: vec![error.to_safe_string()],
@@ -158,8 +168,12 @@ impl ComponentApi {
     /// If the component type is not specified, it will be considered as a `Durable` component.
     #[oai(path = "/", method = "post", operation_id = "create_component")]
     async fn create_component(&self, payload: UploadPayload) -> Result<Json<Component>> {
-        let record =
-            recorded_http_api_request!("create_component", component_name = payload.name.0);
+        let component_id = ComponentId::new_v4();
+        let record = recorded_http_api_request!(
+            "create_component",
+            component_name = payload.name.0,
+            component_id = component_id.to_string()
+        );
         let response = {
             let data = payload.component.into_vec().await?;
             let component_name = payload.name;
@@ -175,7 +189,7 @@ impl ComponentApi {
 
             self.component_service
                 .create(
-                    &ComponentId::new_v4(),
+                    &component_id,
                     &component_name,
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,

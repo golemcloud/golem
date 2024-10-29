@@ -30,7 +30,8 @@ use golem_api_grpc::proto::golem::worker::v1::{
     InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
     InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest,
     InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::LogEvent;
 
@@ -189,6 +190,18 @@ pub trait WorkerService {
         Ok(self.client().await?.get_oplog(request).await?.into_inner())
     }
 
+    async fn search_oplog(
+        &self,
+        request: SearchOplogRequest,
+    ) -> crate::Result<SearchOplogResponse> {
+        Ok(self
+            .client()
+            .await?
+            .search_oplog(request)
+            .await?
+            .into_inner())
+    }
+
     fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
     fn private_grpc_port(&self) -> u16;
@@ -210,7 +223,7 @@ pub trait WorkerService {
         self.private_custom_request_port()
     }
 
-    fn kill(&self);
+    async fn kill(&self);
 }
 
 async fn new_client(

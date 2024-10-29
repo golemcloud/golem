@@ -24,12 +24,12 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
 
         match expr {
             Expr::Number(_, _, inferred_type) => {
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
@@ -37,32 +37,32 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
             Expr::Record(vec, inferred_type) => {
                 queue.extend(vec.iter_mut().map(|(_, expr)| &mut **expr));
 
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!("Unable to resolve the type of record {}", expr_str));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::Tuple(vec, inferred_type) => {
                 queue.extend(vec.iter_mut());
 
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!("Unable to resolve the type of tuple {}", expr_str));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::Sequence(vec, inferred_type) => {
                 queue.extend(vec.iter_mut());
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
@@ -71,38 +71,38 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                             "Unable to resolve the type of sequence {}",
                             expr_str
                         ));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::Option(Some(expr), inferred_type) => {
                 queue.push(expr);
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!("Unable to resolve the type of option {}", expr_str));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
 
             Expr::Option(None, inferred_type) => {
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!("Unable to resolve the type of option {}", expr_str));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
 
             Expr::Result(Ok(expr), inferred_type) => {
                 queue.push(expr);
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
@@ -111,14 +111,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                             "Unable to resolve the type of `result::ok` {}",
                             expr_str
                         ));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::Result(Err(expr), inferred_type) => {
                 queue.push(expr);
 
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
@@ -127,7 +127,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                             "Unable to resolve the type of `result::err` {}",
                             expr_str
                         ));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
@@ -136,7 +136,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 queue.push(then);
                 queue.push(else_);
 
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
@@ -145,7 +145,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                             "Unable to resolve the type of condition expression {}",
                             expr_str
                         ));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
@@ -158,7 +158,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     internal::push_arm_pattern_expr(arm_pattern, &mut queue);
                     queue.push(arm_resolution_expr);
                 }
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
@@ -167,14 +167,14 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                             "Unable to resolve the type of pattern match expression {}",
                             expr_str
                         ));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::Call(function_call, vec, inferred_type) => {
                 queue.extend(vec.iter_mut());
 
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
@@ -183,13 +183,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                             "Unable to resolve the type of function return {}",
                             function_call
                         ));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::SelectField(expr, _, inferred_type) => {
                 queue.push(expr);
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
@@ -198,13 +198,13 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                             "Unable to resolve the type of field selection {}",
                             expr_str
                         ));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::SelectIndex(expr, _, inferred_type) => {
                 queue.push(expr);
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
@@ -213,7 +213,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                             "Unable to resolve the type of index selection {}",
                             expr_str
                         ));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
@@ -222,37 +222,37 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 queue.push(expr);
             }
             Expr::Literal(_, inferred_type) => {
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::Flags(_, inferred_type) => {
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!("Unable to resolve the type of flags {}", expr_str));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::Identifier(_, inferred_type) => {
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!(
-                            "Unable to resolve the type of identifier {}",
-                            expr_str
+                            "Unable to resolve the type of identifier {:?}",
+                            expr
                         ));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
@@ -260,63 +260,63 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
             Expr::Concat(exprs, _) => {
                 queue.extend(exprs);
             }
-            Expr::Multiple(expr, inferred_type) => {
+            Expr::ExprBlock(expr, inferred_type) => {
                 queue.extend(expr);
 
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::Not(expr, inferred_type) => {
                 queue.push(expr);
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!("Unable to resolve the type of {}", expr_str));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
             Expr::Unwrap(expr, inferred_type) => {
                 queue.push(expr);
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!("Unable to resolve the type of {}", expr_str));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
 
             Expr::Throw(_, inferred_type) => {
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!("Unable to resolve the type of {}", expr_str));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }
 
             Expr::GetTag(_, inferred_type) => {
-                let unified_inferred_type = inferred_type.unify_types_and_verify();
+                let unified_inferred_type = inferred_type.unify();
 
                 match unified_inferred_type {
                     Ok(unified_type) => *inferred_type = unified_type,
                     Err(e) => {
                         errors.push(format!("Unable to resolve the type of {}", expr_str));
-                        errors.extend(e);
+                        errors.push(e);
                     }
                 }
             }

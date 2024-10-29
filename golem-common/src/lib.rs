@@ -31,6 +31,9 @@ pub mod serialization;
 pub mod tracing;
 pub mod uri;
 
+#[cfg(test)]
+test_r::enable!();
+
 /// Trait to convert a value to a string which is safe to return through a public API.
 pub trait SafeDisplay {
     fn to_safe_string(&self) -> String;

@@ -47,8 +47,10 @@ use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use uuid::{uuid, Uuid};
 
+pub mod component_constraint;
 pub mod component_metadata;
 pub mod exports;
+pub mod lucene;
 pub mod oplog;
 pub mod public_oplog;
 pub mod regions;
@@ -2034,8 +2036,20 @@ pub struct ScanCursor {
 }
 
 impl ScanCursor {
-    pub fn is_finished(&self) -> bool {
+    pub fn is_active_layer_finished(&self) -> bool {
         self.cursor == 0
+    }
+
+    pub fn is_finished(&self) -> bool {
+        self.cursor == 0 && self.layer == 0
+    }
+
+    pub fn into_option(self) -> Option<Self> {
+        if self.is_finished() {
+            None
+        } else {
+            Some(self)
+        }
     }
 }
 
@@ -2488,6 +2502,8 @@ impl From<golem_api_grpc::proto::golem::common::FileSystemPermission> for FileSy
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use std::collections::HashSet;
     use std::str::FromStr;
     use std::time::SystemTime;

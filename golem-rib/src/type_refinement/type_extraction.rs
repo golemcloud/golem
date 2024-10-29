@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::type_refinement::precise_types::{
-    ErrType, ListType, OkType, OptionalType, RecordType, TupleType,
+    ErrType, ListType, OkType, OptionalType, RecordType, TupleType, VariantType,
 };
 use crate::InferredType;
 
@@ -59,11 +59,11 @@ impl ExtractInnerTypes for TupleType {
 // certain types requires looking up by a index or a field name.
 // Further-more, there is no guarantee that the type associated with that field
 // is a singleton
-pub trait GetInferredTypeByField {
-    fn get(&self, field_name: &str) -> Vec<InferredType>;
+pub trait GetInferredTypeByName {
+    fn get(&self, name: &str) -> Vec<InferredType>;
 }
 
-impl GetInferredTypeByField for RecordType {
+impl GetInferredTypeByName for RecordType {
     fn get(&self, field_name: &str) -> Vec<InferredType> {
         self.0
             .iter()
@@ -74,6 +74,15 @@ impl GetInferredTypeByField for RecordType {
                     None
                 }
             })
+            .collect()
+    }
+}
+
+impl GetInferredTypeByName for VariantType {
+    fn get(&self, name: &str) -> Vec<InferredType> {
+        self.0
+            .iter()
+            .filter_map(|(n, typ)| if n == name { typ.clone() } else { None })
             .collect()
     }
 }

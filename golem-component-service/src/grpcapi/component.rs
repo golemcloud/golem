@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::pin::Pin;
 use std::sync::Arc;
 use golem_api_grpc::proto::golem::component::v1::create_component_request_chunk;
 use golem_api_grpc::proto::golem::component::v1::download_initial_files_response;
@@ -29,10 +30,12 @@ use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService;
 use golem_api_grpc::proto::golem::component::v1::{
-    component_error, create_component_request, create_component_response,
-    download_component_response, get_component_metadata_all_versions_response,
-    get_component_metadata_response, get_components_response, update_component_request,
-    update_component_response, ComponentError, CreateComponentRequest,
+    component_error, create_component_constraints_response, create_component_request,
+    create_component_response, download_component_response,
+    get_component_metadata_all_versions_response, get_component_metadata_response,
+    get_components_response, update_component_request, update_component_response, ComponentError,
+    CreateComponentConstraintsRequest, CreateComponentConstraintsResponse,
+    CreateComponentConstraintsSuccessResponse, CreateComponentRequest,
     CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentRequest,
     DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
     GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest,
@@ -41,13 +44,17 @@ use golem_api_grpc::proto::golem::component::v1::{
     UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
 };
 use golem_api_grpc::proto::golem::component::Component;
+use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
+use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::grpc::proto_component_id_string;
+use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
+use golem_component_service_base::model::ComponentConstraints;
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
-use golem_service_base::stream::ByteStream;
+use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
 fn bad_request_error(error: &str) -> ComponentError {
@@ -80,7 +87,7 @@ impl ComponentGrpcApi {
             .component_service
             .get(&id, &DefaultNamespace::default())
             .await?;
-        Ok(result.into_iter().map(|p| p.into()).collect())
+        Ok(result.into_iter().map(Component::from).collect())
     }
 
     async fn get_component_metadata(
@@ -145,7 +152,10 @@ impl ComponentGrpcApi {
     async fn download(
         &self,
         request: DownloadComponentRequest,
-    ) -> Result<ByteStream, ComponentError> {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
+        ComponentError,
+    > {
         let id: ComponentId = request
             .component_id
             .and_then(|id| id.try_into().ok())
@@ -178,6 +188,7 @@ impl ComponentGrpcApi {
 
     async fn create(
         &self,
+        component_id: ComponentId,
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
         files_ro: Option<PackagedFiles>,
@@ -189,7 +200,7 @@ impl ComponentGrpcApi {
         let result = self
             .component_service
             .create(
-                &ComponentId::new_v4(),
+                &component_id,
                 &name,
                 component_type,
                 data,
@@ -232,6 +243,22 @@ impl ComponentGrpcApi {
             ).await?;
         Ok(result.into())
     }
+
+    async fn create_component_constraints(
+        &self,
+        component_constraint: &ComponentConstraints<DefaultNamespace>,
+    ) -> Result<ComponentConstraintsProto, ComponentError> {
+        let response = self
+            .component_service
+            .create_or_update_constraint(component_constraint)
+            .await
+            .map(|v| ComponentConstraintsProto {
+                component_id: Some(v.component_id.into()),
+                constraints: Some(FunctionConstraintCollectionProto::from(v.constraints)),
+            })?;
+
+        Ok(response)
+    }
 }
 
 #[async_trait::async_trait]
@@ -271,9 +298,11 @@ impl ComponentService for ComponentGrpcApi {
             })
         });
 
+        let component_id = ComponentId::new_v4();
         let record = recorded_grpc_api_request!(
             "create_component",
-            component_name = header.as_ref().map(|r| r.component_name.clone())
+            component_name = header.as_ref().map(|r| r.component_name.clone()),
+            component_id = component_id.to_string(),
         );
 
         let result = match header {
@@ -301,7 +330,7 @@ impl ComponentService for ComponentGrpcApi {
                 let files_ro = PackagedFiles::from_vec(files_ro);
                 let files_rw = PackagedFiles::from_vec(files_rw);
 
-                self.create(request, data, files_ro, files_rw)
+                self.create(component_id, request, data, files_ro, files_rw)
                     .instrument(record.span.clone())
                     .await
             }
@@ -330,7 +359,8 @@ impl ComponentService for ComponentGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "download_component",
-            component_id = proto_component_id_string(&request.component_id)
+            component_id = proto_component_id_string(&request.component_id),
+            component_version = request.version.unwrap_or_default().to_string(),
         );
         let stream: Self::DownloadComponentStream =
             match self.download(request).instrument(record.span.clone()).await {
@@ -447,7 +477,7 @@ impl ComponentService for ComponentGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_latest_component_metadata",
-            component_id = proto_component_id_string(&request.component_id)
+            component_id = proto_component_id_string(&request.component_id),
         );
 
         let response = match self
@@ -546,7 +576,8 @@ impl ComponentService for ComponentGrpcApi {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_component_metadata",
-            component_id = proto_component_id_string(&request.component_id)
+            component_id = proto_component_id_string(&request.component_id),
+            component_version = request.version.to_string(),
         );
 
         let response = match self
@@ -566,5 +597,101 @@ impl ComponentService for ComponentGrpcApi {
         Ok(Response::new(GetComponentMetadataResponse {
             result: Some(response),
         }))
+    }
+
+    async fn create_component_constraints(
+        &self,
+        request: Request<CreateComponentConstraintsRequest>,
+    ) -> Result<Response<CreateComponentConstraintsResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!("create_component_constraints",);
+
+        match request.component_constraints {
+            Some(proto_constraints) => {
+                let component_id = match proto_constraints
+                    .component_id
+                    .and_then(|id| id.try_into().ok())
+                    .ok_or_else(|| bad_request_error("Missing component id"))
+                {
+                    Ok(id) => id,
+                    Err(fail) => {
+                        return Ok(Response::new(CreateComponentConstraintsResponse {
+                            result: Some(record.fail(
+                                create_component_constraints_response::Result::Error(fail.clone()),
+                                &ComponentTraceErrorKind(&fail),
+                            )),
+                        }))
+                    }
+                };
+
+                let constraints = if let Some(worker_functions_in_rib) =
+                    proto_constraints.constraints
+                {
+                    let result = FunctionConstraintCollection::try_from(worker_functions_in_rib)
+                        .map_err(|err| bad_request_error(err.as_str()));
+
+                    match result {
+                        Ok(worker_functions_in_rib) => worker_functions_in_rib,
+                        Err(fail) => {
+                            return Ok(Response::new(CreateComponentConstraintsResponse {
+                                result: Some(record.fail(
+                                    create_component_constraints_response::Result::Error(
+                                        fail.clone(),
+                                    ),
+                                    &ComponentTraceErrorKind(&fail),
+                                )),
+                            }))
+                        }
+                    }
+                } else {
+                    let error = internal_error("Failed to create constraints");
+                    return Ok(Response::new(CreateComponentConstraintsResponse {
+                        result: Some(record.fail(
+                            create_component_constraints_response::Result::Error(error.clone()),
+                            &ComponentTraceErrorKind(&error),
+                        )),
+                    }));
+                };
+
+                let component_constraint = ComponentConstraints {
+                    namespace: DefaultNamespace::default(),
+                    component_id,
+                    constraints,
+                };
+
+                let response = match self
+                    .create_component_constraints(&component_constraint)
+                    .instrument(record.span.clone())
+                    .await
+                {
+                    Ok(v) => {
+                        record.succeed(create_component_constraints_response::Result::Success(
+                            CreateComponentConstraintsSuccessResponse {
+                                components: Some(v),
+                            },
+                        ))
+                    }
+                    Err(error) => record.fail(
+                        create_component_constraints_response::Result::Error(error.clone()),
+                        &ComponentTraceErrorKind(&error),
+                    ),
+                };
+
+                Ok(Response::new(CreateComponentConstraintsResponse {
+                    result: Some(response),
+                }))
+            }
+
+            None => {
+                let bad_request = bad_request_error("Missing component constraints");
+                let error = record.fail(
+                    create_component_constraints_response::Result::Error(bad_request.clone()),
+                    &ComponentTraceErrorKind(&bad_request),
+                );
+                Ok(Response::new(CreateComponentConstraintsResponse {
+                    result: Some(error),
+                }))
+            }
+        }
     }
 }

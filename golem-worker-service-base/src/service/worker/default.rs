@@ -15,7 +15,6 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use futures::TryStreamExt;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
@@ -29,24 +28,21 @@ use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, InterruptWorkerRequest,
-    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
+    InvokeAndAwaitWorkerRequest, ResumeWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::OplogCursor;
+use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
     ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
+use golem_service_base::model::{Component, GolemError};
 use golem_service_base::model::{
-    GetFileResponse, GetFilesResponse, GetOplogResponse, GolemErrorUnknown, ResourceLimits, WorkerMetadata
+    GetFileResponse, GetFilesResponse, GetOplogResponse, GolemErrorUnknown, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata
 };
-use golem_service_base::routing_table::HasRoutingTableService;
-use golem_service_base::{
-    model::{Component, GolemError},
-    routing_table::RoutingTableService,
-};
+use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 
 use crate::service::component::ComponentService;
 
@@ -238,6 +234,16 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        query: String,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> Result<GetOplogResponse, WorkerServiceError>;
+
     async fn get_files(
         &self,
         worker_id: &WorkerId,
@@ -325,6 +331,7 @@ where
         let worker_id_clone = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "create_worker",
             move |worker_executor_client| {
                 info!("Create worker");
                 let worker_id = worker_id_clone.clone();
@@ -364,6 +371,7 @@ where
         let stream = self
             .call_worker_executor(
                 worker_id.clone(),
+                "connect_worker",
                 move |worker_executor_client| {
                     info!("Connect worker");
                     Box::pin(worker_executor_client.connect_worker(ConnectWorkerRequest {
@@ -397,6 +405,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "delete_worker",
             move |worker_executor_client| {
                 info!("Delete worker");
                 let worker_id = worker_id.clone();
@@ -453,6 +462,7 @@ where
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
+            "invoke_and_await_worker_typed",
             move |worker_executor_client| {
                 info!("Invoking function on {}: {}", worker_id_clone, function_name);
                 Box::pin(worker_executor_client.invoke_and_await_worker_typed(
@@ -514,6 +524,7 @@ where
 
         let invoke_response = self.call_worker_executor(
             worker_id.clone(),
+            "invoke_and_await_worker",
             move |worker_executor_client| {
                 info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
@@ -572,6 +583,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "invoke_worker",
             move |worker_executor_client| {
                 info!("Invoke function");
                 let worker_id = worker_id.clone();
@@ -621,6 +633,7 @@ where
         let result = self
             .call_worker_executor(
                 worker_id.clone(),
+                "complete_promise",
                 move |worker_executor_client| {
                     info!("Complete promise");
                     let promise_id = promise_id.clone();
@@ -669,6 +682,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "interrupt_worker",
             move |worker_executor_client| {
                 info!("Interrupt");
                 let worker_id = worker_id.clone();
@@ -706,6 +720,7 @@ where
         let worker_id = worker_id.clone();
         let metadata = self.call_worker_executor(
             worker_id.clone(),
+            "get_metadata",
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 info!("Get metadata");
@@ -782,6 +797,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "resume_worker",
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.resume_worker(ResumeWorkerRequest {
@@ -815,6 +831,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "update_worker",
             move |worker_executor_client| {
                 info!("Update worker");
                 let worker_id = worker_id.clone();
@@ -862,6 +879,7 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "get_oplog",
             move |worker_executor_client| {
                 info!("Get oplog");
                 let worker_id = worker_id.clone();
@@ -886,8 +904,8 @@ where
                                 last_index,
                             },
                         )),
-                } => Ok(GetOplogResponse {
-                    entries: entries
+                } => {
+                    let entries: Vec<PublicOplogEntry> = entries
                         .into_iter()
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
@@ -895,11 +913,23 @@ where
                             GolemError::Unknown(GolemErrorUnknown {
                                 details: format!("Unexpected oplog entries in error: {err}"),
                             })
-                        })?,
-                    next: next.map(|c| c.into()),
-                    first_index_in_chunk,
-                    last_index,
-                }),
+                        })?;
+                    Ok(GetOplogResponse {
+                        entries: entries
+                            .into_iter()
+                            .enumerate()
+                            .map(|(idx, entry)| PublicOplogEntryWithIndex {
+                                oplog_index: OplogIndex::from_u64(
+                                    (first_index_in_chunk) + idx as u64,
+                                ),
+                                entry,
+                            })
+                            .collect(),
+                        next: next.map(|c| c.into()),
+                        first_index_in_chunk,
+                        last_index,
+                    })
+                }
                 workerexecutor::v1::GetOplogResponse {
                     result: Some(workerexecutor::v1::get_oplog_response::Result::Failure(err)),
                 } => Err(err.into()),
@@ -908,6 +938,71 @@ where
             WorkerServiceError::InternalCallError,
         )
         .await
+    }
+
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        cursor: Option<OplogCursor>,
+        count: u64,
+        query: String,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> Result<GetOplogResponse, WorkerServiceError> {
+        let worker_id = worker_id.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            "search_oplog",
+            move |worker_executor_client| {
+                info!("Search oplog");
+                let worker_id = worker_id.clone();
+                let query_clone = query.clone();
+                Box::pin(
+                    worker_executor_client.search_oplog(workerexecutor::v1::SearchOplogRequest {
+                        worker_id: Some(worker_id.into()),
+                        query: query_clone,
+                        cursor: cursor.clone().map(|c| c.into()),
+                        count,
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::SearchOplogResponse {
+                    result:
+                    Some(golem_api_grpc::proto::golem::workerexecutor::v1::search_oplog_response::Result::Success(
+                             workerexecutor::v1::SearchOplogSuccessResponse {
+                                 entries,
+                                 next,
+                                 last_index,
+                             },
+                         )),
+                } => {
+                    let entries: Vec<PublicOplogEntryWithIndex> = entries
+                        .into_iter()
+                        .map(|e| e.try_into())
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|err| {
+                            GolemError::Unknown(GolemErrorUnknown {
+                                details: format!("Unexpected oplog entries in error: {err}"),
+                            })
+                        })?;
+                    let first_index_in_chunk =  entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
+                    Ok(GetOplogResponse {
+                        entries,
+                        next: next.map(|c| c.into()),
+                        first_index_in_chunk,
+                        last_index,
+                    })
+                }
+                SearchOplogResponse {
+                    result: Some(workerexecutor::v1::search_oplog_response::Result::Failure(err)),
+                } => Err(err.into()),
+                SearchOplogResponse { .. } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+            .await
     }
 
     async fn get_files(
@@ -919,8 +1014,8 @@ where
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
+            "get_files",
             move |worker_executor_client| {
-                info!("Get files");
                 let worker_id = worker_id.clone();
                 Box::pin(
                     worker_executor_client.get_files(workerexecutor::v1::GetFilesRequest {
@@ -954,8 +1049,8 @@ where
         let path = path.to_string();
         let streaming = self.call_worker_executor(
             worker_id.clone(),
+            "get_file",
             move |worker_executor_client| {
-                info!("Get file");
                 let worker_id = worker_id.clone();
                 let path = path.clone();
                 Box::pin(
@@ -1043,6 +1138,7 @@ where
         let component_id = component_id.clone();
         let result = self.call_worker_executor(
             AllExecutors,
+            "get_running_workers_metadata",
             move |worker_executor_client| {
                 let component_id: golem_api_grpc::proto::golem::component::ComponentId =
                     component_id.clone().into();
@@ -1100,6 +1196,7 @@ where
         let result = self
             .call_worker_executor(
                 RandomExecutor,
+                "get_workers_metadata",
                 move |worker_executor_client| {
                     let component_id: golem_api_grpc::proto::golem::component::ComponentId =
                         component_id.clone().into();

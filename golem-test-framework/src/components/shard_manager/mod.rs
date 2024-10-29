@@ -53,16 +53,8 @@ pub trait ShardManager {
         self.private_grpc_port()
     }
 
-    fn kill(&self);
+    async fn kill(&self);
     async fn restart(&self, number_of_shards_override: Option<usize>);
-
-    fn blocking_restart(&self, number_of_shards_override: Option<usize>) {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async move { self.restart(number_of_shards_override).await });
-    }
 }
 
 async fn new_client(host: &str, grpc_port: u16) -> ShardManagerServiceClient<Channel> {

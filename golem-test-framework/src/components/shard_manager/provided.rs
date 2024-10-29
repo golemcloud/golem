@@ -48,7 +48,7 @@ impl ShardManager for ProvidedShardManager {
         self.grpc_port
     }
 
-    fn kill(&self) {
+    async fn kill(&self) {
         panic!("Cannot kill provided shard manager");
     }
 

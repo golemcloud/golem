@@ -209,3 +209,8 @@ message LogParameters {
   string context = 3;
   string message = 4;
 }
+
+message OplogEntryWithIndex {
+  uint64 oplog_index = 1;
+  OplogEntry entry = 2;
+}

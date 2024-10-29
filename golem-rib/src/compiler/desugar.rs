@@ -336,13 +336,27 @@ mod internal {
                 }
             }
 
-            InferredType::Option(_) if constructor_name == "none" => Some(IfThenBranch {
-                condition: Expr::equal_to(
-                    Expr::get_tag(pred_expr.clone()),
-                    Expr::literal(constructor_name),
-                ),
-                body: resolution.clone(),
-            }),
+            InferredType::Option(_) if constructor_name == "none" => {
+                let cond = if let Some(t) = tag {
+                    Expr::and(
+                        t,
+                        Expr::equal_to(
+                            Expr::get_tag(pred_expr.clone()),
+                            Expr::literal(constructor_name),
+                        ),
+                    )
+                } else {
+                    Expr::equal_to(
+                        Expr::get_tag(pred_expr.clone()),
+                        Expr::literal(constructor_name),
+                    )
+                };
+
+                Some(IfThenBranch {
+                    condition: cond,
+                    body: resolution.clone(),
+                })
+            }
 
             InferredType::Result { ok, error } => {
                 let inner_variant_arg_type = if constructor_name == "ok" {
@@ -513,6 +527,8 @@ mod internal {
 
 #[cfg(test)]
 mod desugar_tests {
+    use test_r::test;
+
     use crate::compiler::desugar::desugar_tests::expectations::expected_condition_with_identifiers;
     use crate::type_registry::FunctionTypeRegistry;
     use crate::Expr;
@@ -551,7 +567,7 @@ mod desugar_tests {
           let x: option<u64> = some(1);
           match x {
             some(x) => x,
-            some(y) => y
+            none => 1u64
           }
         "#;
 
@@ -575,13 +591,13 @@ mod desugar_tests {
 
         pub(crate) fn last_expr(expr: &Expr) -> Expr {
             match expr {
-                Expr::Multiple(exprs, _) => exprs.last().unwrap().clone(),
+                Expr::ExprBlock(exprs, _) => exprs.last().unwrap().clone(),
                 _ => expr.clone(),
             }
         }
     }
     mod expectations {
-        use crate::{Expr, InferredType, VariableId};
+        use crate::{Expr, InferredType, Number, TypeName, VariableId};
         pub(crate) fn expected_condition_with_identifiers() -> Expr {
             Expr::Cond(
                 Box::new(Expr::EqualTo(
@@ -595,7 +611,7 @@ mod desugar_tests {
                     Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
                     InferredType::Bool,
                 )),
-                Box::new(Expr::Multiple(
+                Box::new(Expr::ExprBlock(
                     vec![
                         Expr::Let(
                             VariableId::match_identifier("x".to_string(), 1),
@@ -625,28 +641,12 @@ mod desugar_tests {
                             )),
                             InferredType::Unknown,
                         )),
-                        Box::new(Expr::Literal("some".to_string(), InferredType::Str)),
+                        Box::new(Expr::Literal("none".to_string(), InferredType::Str)),
                         InferredType::Bool,
                     )),
-                    Box::new(Expr::Multiple(
-                        vec![
-                            Expr::Let(
-                                VariableId::match_identifier("y".to_string(), 2),
-                                None,
-                                Box::new(Expr::Unwrap(
-                                    Box::new(Expr::Identifier(
-                                        VariableId::local("x", 0),
-                                        InferredType::Option(Box::new(InferredType::U64)),
-                                    )),
-                                    InferredType::Unknown,
-                                )),
-                                InferredType::U64,
-                            ),
-                            Expr::Identifier(
-                                VariableId::match_identifier("y".to_string(), 2),
-                                InferredType::U64,
-                            ),
-                        ],
+                    Box::new(Expr::Number(
+                        Number { value: 1f64 },
+                        Some(TypeName::U64),
                         InferredType::U64,
                     )),
                     Box::new(Expr::Throw(

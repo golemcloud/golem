@@ -21,8 +21,8 @@ use crate::components::k8s::{
     Routing,
 };
 use crate::components::GolemEnvVars;
-use async_dropper_simple::{AsyncDrop, AsyncDropper};
-use async_scoped::TokioScope;
+use async_dropper_simple::AsyncDropper;
+use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{Pod, Service};
 use kube::api::PostParams;
 use kube::{Api, Client};
@@ -36,9 +36,9 @@ pub struct K8sComponentCompilationService {
     namespace: K8sNamespace,
     local_host: String,
     local_port: u16,
-    pod: Arc<Mutex<K8sPod>>,
-    service: Arc<Mutex<K8sService>>,
-    routing: Arc<Mutex<K8sRouting>>,
+    pod: Arc<Mutex<Option<K8sPod>>>,
+    service: Arc<Mutex<Option<K8sService>>>,
+    routing: Arc<Mutex<Option<K8sRouting>>>,
 }
 
 impl K8sComponentCompilationService {
@@ -189,13 +189,14 @@ impl K8sComponentCompilationService {
             namespace: namespace.clone(),
             local_host,
             local_port,
-            pod: Arc::new(Mutex::new(managed_pod)),
-            service: Arc::new(Mutex::new(managed_service)),
-            routing: Arc::new(Mutex::new(managed_routing)),
+            pod: Arc::new(Mutex::new(Some(managed_pod))),
+            service: Arc::new(Mutex::new(Some(managed_service))),
+            routing: Arc::new(Mutex::new(Some(managed_routing))),
         }
     }
 }
 
+#[async_trait]
 impl ComponentCompilationService for K8sComponentCompilationService {
     fn private_host(&self) -> String {
         format!("{}.{}.svc.cluster.local", Self::NAME, &self.namespace.0)
@@ -221,16 +222,9 @@ impl ComponentCompilationService for K8sComponentCompilationService {
         self.local_port
     }
 
-    fn kill(&self) {
-        TokioScope::scope_and_block(|s| {
-            s.spawn(async move {
-                let mut pod = self.pod.lock().await;
-                pod.inner_mut().async_drop().await;
-                let mut service = self.service.lock().await;
-                service.inner_mut().async_drop().await;
-                let mut routing = self.routing.lock().await;
-                routing.inner_mut().async_drop().await;
-            })
-        });
+    async fn kill(&self) {
+        let _ = self.pod.lock().await.take();
+        let _ = self.service.lock().await.take();
+        let _ = self.routing.lock().await.take();
     }
 }

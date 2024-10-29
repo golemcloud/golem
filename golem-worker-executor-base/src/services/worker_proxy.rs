@@ -151,6 +151,7 @@ impl RemoteWorkerProxy {
     pub fn new(endpoint: Uri, access_token: Uuid) -> Self {
         Self {
             client: GrpcClient::new(
+                "worker_service",
                 |channel| {
                     WorkerServiceClient::new(channel)
                         .send_compressed(CompressionEncoding::Gzip)
@@ -193,7 +194,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         let response: InvokeAndAwaitTypedResponse = self
             .client
-            .call(move |client| {
+            .call("invoke_and_await_typed", move |client| {
                 Box::pin(client.invoke_and_await_typed(authorised_grpc_request(
                     InvokeAndAwaitRequest {
                         worker_id: Some(owned_worker_id.worker_id().into_target_worker_id().into()),
@@ -259,7 +260,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         let response: InvokeResponse = self
             .client
-            .call(move |client| {
+            .call("invoke", move |client| {
                 Box::pin(client.invoke(authorised_grpc_request(
                     InvokeRequest {
                         worker_id: Some(owned_worker_id.worker_id().into_target_worker_id().into()),
@@ -297,7 +298,7 @@ impl WorkerProxy for RemoteWorkerProxy {
 
         let response: UpdateWorkerResponse = self
             .client
-            .call(move |client| {
+            .call("update_worker", move |client| {
                 Box::pin(client.update_worker(authorised_grpc_request(
                     UpdateWorkerRequest {
                         worker_id: Some(owned_worker_id.worker_id().into()),

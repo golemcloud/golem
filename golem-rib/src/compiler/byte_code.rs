@@ -14,7 +14,7 @@
 
 use crate::compiler::byte_code::internal::ExprState;
 use crate::compiler::ir::RibIR;
-use crate::{Expr, InstructionId};
+use crate::{Expr, InferredExpr, InstructionId};
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::rib::RibByteCode as ProtoRibByteCode;
 
@@ -25,7 +25,8 @@ pub struct RibByteCode {
 
 impl RibByteCode {
     // Convert expression to bytecode instructions
-    pub fn from_expr(expr: Expr) -> Result<RibByteCode, String> {
+    pub fn from_expr(inferred_expr: &InferredExpr) -> Result<RibByteCode, String> {
+        let expr = Expr::from(inferred_expr.clone());
         let mut instructions = Vec::new();
         let mut stack: Vec<ExprState> = Vec::new();
         let mut instruction_id = InstructionId::init();
@@ -206,7 +207,7 @@ mod internal {
                 let analysed_type = convert_to_analysed_type_for(expr, inferred_type)?;
                 instructions.push(RibIR::PushList(analysed_type, exprs.len()));
             }
-            Expr::Multiple(exprs, _) => {
+            Expr::ExprBlock(exprs, _) => {
                 // Push all expressions in reverse order
                 for expr in exprs.iter() {
                     stack.push(ExprState::from_expr(expr));
@@ -269,12 +270,12 @@ mod internal {
                 )?));
             }
 
-            Expr::Call(invocation_name, arguments, inferred_type) => {
+            Expr::Call(call_type, arguments, inferred_type) => {
                 for expr in arguments.iter().rev() {
                     stack.push(ExprState::from_expr(expr));
                 }
 
-                match invocation_name {
+                match call_type {
                     CallType::Function(parsed_function_name) => {
                         let function_result_type = if inferred_type.is_unit() {
                             AnalysedTypeWithUnit::Unit
@@ -285,11 +286,13 @@ mod internal {
                             )?)
                         };
 
+                        // Invoke Function after resolving the function name
                         instructions
                             .push(RibIR::InvokeFunction(arguments.len(), function_result_type));
 
                         let site = parsed_function_name.site.clone();
 
+                        // Resolve the function name and update stack
                         match &parsed_function_name.function {
                             DynamicParsedFunctionReference::Function { function } => instructions
                                 .push(RibIR::CreateFunctionName(
@@ -527,16 +530,21 @@ mod internal {
 
 #[cfg(test)]
 mod compiler_tests {
+    use test_r::test;
+
     use super::*;
-    use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};
+    use crate::{ArmPattern, FunctionTypeRegistry, InferredType, MatchArm, Number, VariableId};
+    use golem_wasm_ast::analysis::analysed_type::{list, str};
     use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr};
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
     #[test]
     fn test_instructions_for_literal() {
         let literal = Expr::Literal("hello".to_string(), InferredType::Str);
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&literal, &empty_registry).unwrap();
 
-        let instructions = RibByteCode::from_expr(literal).unwrap();
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![RibIR::PushLit(TypeAnnotatedValue::Str("hello".to_string()))];
 
@@ -551,9 +559,11 @@ mod compiler_tests {
     fn test_instructions_for_identifier() {
         let inferred_input_type = InferredType::Str;
         let variable_id = VariableId::local("request", 0);
+        let empty_registry = FunctionTypeRegistry::empty();
         let expr = Expr::Identifier(variable_id.clone(), inferred_input_type);
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![RibIR::LoadVar(variable_id)];
 
@@ -577,7 +587,10 @@ mod compiler_tests {
             InferredType::Unknown,
         );
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
             RibIR::PushLit(TypeAnnotatedValue::Str("hello".to_string())),
@@ -597,8 +610,10 @@ mod compiler_tests {
         let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
 
         let expr = Expr::equal_to(number_f32, number_u32);
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let type_annotated_value1 = TypeAnnotatedValue::F32(1.0);
         let type_annotated_value2 = TypeAnnotatedValue::U32(1);
@@ -622,8 +637,10 @@ mod compiler_tests {
         let number_u32 = Expr::Number(Number { value: 2f64 }, None, InferredType::U32);
 
         let expr = Expr::greater_than(number_f32, number_u32);
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let type_annotated_value1 = TypeAnnotatedValue::F32(1.0);
         let type_annotated_value2 = TypeAnnotatedValue::U32(2);
@@ -647,8 +664,10 @@ mod compiler_tests {
         let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
 
         let expr = Expr::less_than(number_f32, number_u32);
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let type_annotated_value1 = TypeAnnotatedValue::F32(1.0);
         let type_annotated_value2 = TypeAnnotatedValue::U32(1);
@@ -672,8 +691,10 @@ mod compiler_tests {
         let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
 
         let expr = Expr::greater_than_or_equal_to(number_f32, number_u32);
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let type_annotated_value1 = TypeAnnotatedValue::F32(1.0);
         let type_annotated_value2 = TypeAnnotatedValue::U32(1);
@@ -697,8 +718,10 @@ mod compiler_tests {
         let number_u32 = Expr::Number(Number { value: 1f64 }, None, InferredType::U32);
 
         let expr = Expr::less_than_or_equal_to(number_f32, number_u32);
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let type_annotated_value1 = TypeAnnotatedValue::F32(1.0);
         let type_annotated_value2 = TypeAnnotatedValue::U32(1);
@@ -718,7 +741,7 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_record() {
-        let record = Expr::Record(
+        let expr = Expr::Record(
             vec![
                 (
                     "foo_key".to_string(),
@@ -735,7 +758,10 @@ mod compiler_tests {
             ]),
         );
 
-        let instructions = RibByteCode::from_expr(record).unwrap();
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let bar_value = TypeAnnotatedValue::Str("bar_value".to_string());
         let foo_value = TypeAnnotatedValue::Str("foo_value".to_string());
@@ -768,7 +794,7 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_multiple() {
-        let multiple = Expr::Multiple(
+        let expr = Expr::ExprBlock(
             vec![
                 Expr::Literal("foo".to_string(), InferredType::Str),
                 Expr::Literal("bar".to_string(), InferredType::Str),
@@ -776,7 +802,10 @@ mod compiler_tests {
             InferredType::Unknown,
         );
 
-        let instructions = RibByteCode::from_expr(multiple).unwrap();
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
             RibIR::PushLit(TypeAnnotatedValue::Str("foo".to_string())),
@@ -792,7 +821,7 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_if_conditional() {
-        let if_expr = Expr::Literal("pred".to_string(), InferredType::Str);
+        let if_expr = Expr::Literal("pred".to_string(), InferredType::Bool);
         let then_expr = Expr::Literal("then".to_string(), InferredType::Str);
         let else_expr = Expr::Literal("else".to_string(), InferredType::Str);
 
@@ -803,7 +832,10 @@ mod compiler_tests {
             InferredType::Str,
         );
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
             RibIR::PushLit(TypeAnnotatedValue::Str("pred".to_string())),
@@ -824,10 +856,10 @@ mod compiler_tests {
 
     #[test]
     fn test_instructions_for_nested_if_else() {
-        let if_expr = Expr::Literal("if-pred1".to_string(), InferredType::Str);
+        let if_expr = Expr::Literal("if-pred1".to_string(), InferredType::Bool);
         let then_expr = Expr::Literal("then1".to_string(), InferredType::Str);
         let else_expr = Expr::Cond(
-            Box::new(Expr::Literal("else-pred2".to_string(), InferredType::Str)),
+            Box::new(Expr::Literal("else-pred2".to_string(), InferredType::Bool)),
             Box::new(Expr::Literal("else-then2".to_string(), InferredType::Str)),
             Box::new(Expr::Literal("else-else2".to_string(), InferredType::Str)),
             InferredType::Str,
@@ -840,7 +872,10 @@ mod compiler_tests {
             InferredType::Str,
         );
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
             // if case
@@ -885,10 +920,12 @@ mod compiler_tests {
             ]),
         );
 
-        let select_field =
-            Expr::SelectField(Box::new(record), "bar_key".to_string(), InferredType::Str);
+        let expr = Expr::SelectField(Box::new(record), "bar_key".to_string(), InferredType::Str);
 
-        let instructions = RibByteCode::from_expr(select_field).unwrap();
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let bar_value = TypeAnnotatedValue::Str("bar_value".to_string());
         let foo_value = TypeAnnotatedValue::Str("foo_value".to_string());
@@ -899,11 +936,11 @@ mod compiler_tests {
             RibIR::CreateAndPushRecord(AnalysedType::Record(TypeRecord {
                 fields: vec![
                     NameTypePair {
-                        name: "foo_key".to_string(),
+                        name: "bar_key".to_string(),
                         typ: AnalysedType::Str(TypeStr),
                     },
                     NameTypePair {
-                        name: "bar_key".to_string(),
+                        name: "foo_key".to_string(),
                         typ: AnalysedType::Str(TypeStr),
                     },
                 ],
@@ -927,17 +964,20 @@ mod compiler_tests {
                 Expr::Literal("foo".to_string(), InferredType::Str),
                 Expr::Literal("bar".to_string(), InferredType::Str),
             ],
-            InferredType::Str,
+            InferredType::List(Box::new(InferredType::Str)),
         );
 
-        let select_index = Expr::SelectIndex(Box::new(sequence), 1, InferredType::Str);
+        let expr = Expr::SelectIndex(Box::new(sequence), 1, InferredType::Str);
 
-        let instructions = RibByteCode::from_expr(select_index).unwrap();
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         let instruction_set = vec![
             RibIR::PushLit(TypeAnnotatedValue::Str("bar".to_string())),
             RibIR::PushLit(TypeAnnotatedValue::Str("foo".to_string())),
-            RibIR::PushList(AnalysedType::Str(TypeStr), 2),
+            RibIR::PushList(list(str()), 2),
             RibIR::SelectIndex(1),
         ];
 
@@ -978,7 +1018,10 @@ mod compiler_tests {
             InferredType::Str,
         );
 
-        let instructions = RibByteCode::from_expr(expr).unwrap();
+        let empty_registry = FunctionTypeRegistry::empty();
+        let inferred_expr = InferredExpr::from_expr(&expr, &empty_registry).unwrap();
+
+        let instructions = RibByteCode::from_expr(&inferred_expr).unwrap();
 
         // instructions will correspond to an if-else statement
         let instruction_set = vec![
@@ -1018,6 +1061,8 @@ mod compiler_tests {
 
     #[cfg(test)]
     mod invalid_function_invoke_tests {
+        use test_r::test;
+
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
@@ -1220,6 +1265,8 @@ mod compiler_tests {
 
     #[cfg(test)]
     mod global_input_tests {
+        use test_r::test;
+
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{compiler, Expr};
         use golem_wasm_ast::analysis::{
@@ -1227,7 +1274,7 @@ mod compiler_tests {
             TypeRecord, TypeResult, TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,
         };
 
-        #[tokio::test]
+        #[test]
         async fn test_str_global_input() {
             let request_value_type = AnalysedType::Str(TypeStr);
 
@@ -1256,7 +1303,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_number_global_input() {
             let request_value_type = AnalysedType::U32(TypeU32);
 
@@ -1285,7 +1332,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_variant_type_info() {
             let request_value_type = AnalysedType::Variant(TypeVariant {
                 cases: vec![
@@ -1334,7 +1381,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_result_type_info() {
             let request_value_type = AnalysedType::Result(TypeResult {
                 ok: Some(Box::new(AnalysedType::U64(TypeU64))),
@@ -1371,7 +1418,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_option_type_info() {
             let request_value_type = AnalysedType::Option(TypeOption {
                 inner: Box::new(AnalysedType::Str(TypeStr)),
@@ -1407,7 +1454,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_enum_type_info() {
             let request_value_type = AnalysedType::Enum(TypeEnum {
                 cases: vec!["prod".to_string(), "dev".to_string(), "test".to_string()],
@@ -1444,7 +1491,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_record_global_input() {
             let request_value_type = AnalysedType::Record(TypeRecord {
                 fields: vec![NameTypePair {
@@ -1492,7 +1539,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_tuple_global_input() {
             let request_value_type = AnalysedType::Tuple(TypeTuple {
                 items: vec![
@@ -1536,7 +1583,7 @@ mod compiler_tests {
             assert_eq!(compiled.global_input_type_info, expected_type_info);
         }
 
-        #[tokio::test]
+        #[test]
         async fn test_list_global_input() {
             let request_value_type = AnalysedType::List(TypeList {
                 inner: Box::new(AnalysedType::Str(TypeStr)),

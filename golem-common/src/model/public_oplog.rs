@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use crate::config::RetryConfig;
+use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
 use crate::model::regions::OplogRegion;
 use crate::model::{AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId};
 use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
+use golem_wasm_rpc::{Value, ValueAndType};
 use poem_openapi::types::{ParseFromParameter, ParseResult};
 use poem_openapi::{Object, Union};
 use serde::{Deserialize, Serialize};
@@ -94,7 +96,9 @@ pub struct DetailsParameter {
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct PublicRetryConfig {
     pub max_attempts: u32,
+    #[serde(with = "humantime_serde")]
     pub min_delay: Duration,
+    #[serde(with = "humantime_serde")]
     pub max_delay: Duration,
     pub multiplier: f64,
     pub max_jitter_factor: Option<f64>,
@@ -324,6 +328,396 @@ pub enum PublicOplogEntry {
     Log(LogParameters),
     /// Marks the point where the worker was restarted from clean initial state
     Restart(TimestampParameter),
+}
+
+impl PublicOplogEntry {
+    pub fn matches(&self, query: &Query) -> bool {
+        fn matches_impl(entry: &PublicOplogEntry, query: &Query, field_stack: &[String]) -> bool {
+            match query {
+                Query::Or { queries } => queries
+                    .iter()
+                    .any(|query| matches_impl(entry, query, field_stack)),
+                Query::And { queries } => queries
+                    .iter()
+                    .all(|query| matches_impl(entry, query, field_stack)),
+                Query::Not { query } => !matches_impl(entry, query, field_stack),
+                Query::Regex { .. } => {
+                    entry.matches_leaf_query(field_stack, &query.clone().try_into().unwrap())
+                }
+                Query::Term { .. } => {
+                    entry.matches_leaf_query(field_stack, &query.clone().try_into().unwrap())
+                }
+                Query::Phrase { .. } => {
+                    entry.matches_leaf_query(field_stack, &query.clone().try_into().unwrap())
+                }
+                Query::Field { field, query } => {
+                    let mut new_stack: Vec<String> = field_stack.to_vec();
+                    let parts: Vec<String> = field.split(".").map(|s| s.to_string()).collect();
+                    new_stack.extend(parts);
+                    matches_impl(entry, query, &new_stack)
+                }
+            }
+        }
+
+        matches_impl(self, query, &[])
+    }
+
+    fn string_match(s: &str, path: &[String], query_path: &[String], query: &LeafQuery) -> bool {
+        let lowercase_path = path
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect::<Vec<String>>();
+        let lowercase_query_path = query_path
+            .iter()
+            .map(|s| s.to_lowercase())
+            .collect::<Vec<String>>();
+        if lowercase_path == lowercase_query_path || query_path.is_empty() {
+            query.matches(s)
+        } else {
+            false
+        }
+    }
+
+    fn matches_leaf_query(&self, query_path: &[String], query: &LeafQuery) -> bool {
+        match self {
+            PublicOplogEntry::Create(_params) => {
+                Self::string_match("create", &[], query_path, query)
+            }
+            PublicOplogEntry::ImportedFunctionInvoked(params) => {
+                Self::string_match("importedfunctioninvoked", &[], query_path, query)
+                    || Self::string_match("imported-function-invoked", &[], query_path, query)
+                    || Self::string_match("imported-function", &[], query_path, query)
+                    || Self::string_match(&params.function_name, &[], query_path, query)
+                    || Self::match_value(&params.request, &[], query_path, query)
+                    || Self::match_value(&params.response, &[], query_path, query)
+            }
+            PublicOplogEntry::ExportedFunctionInvoked(params) => {
+                Self::string_match("exportedfunctioninvoked", &[], query_path, query)
+                    || Self::string_match("exported-function-invoked", &[], query_path, query)
+                    || Self::string_match("exported-function", &[], query_path, query)
+                    || Self::string_match(&params.function_name, &[], query_path, query)
+                    || params
+                        .request
+                        .iter()
+                        .any(|v| Self::match_value(v, &[], query_path, query))
+                    || Self::string_match(&params.idempotency_key.value, &[], query_path, query)
+            }
+            PublicOplogEntry::ExportedFunctionCompleted(params) => {
+                Self::string_match("exportedfunctioncompleted", &[], query_path, query)
+                    || Self::string_match("exported-function-completed", &[], query_path, query)
+                    || Self::string_match("exported-function", &[], query_path, query)
+                    || Self::match_value(&params.response, &[], query_path, query)
+                // TODO: should we store function name and idempotency key in ExportedFunctionCompleted?
+            }
+            PublicOplogEntry::Suspend(_params) => {
+                Self::string_match("suspend", &[], query_path, query)
+            }
+            PublicOplogEntry::Error(params) => {
+                Self::string_match("error", &[], query_path, query)
+                    || Self::string_match(&params.error, &[], query_path, query)
+            }
+            PublicOplogEntry::NoOp(_params) => Self::string_match("noop", &[], query_path, query),
+            PublicOplogEntry::Jump(_params) => Self::string_match("jump", &[], query_path, query),
+            PublicOplogEntry::Interrupted(_params) => {
+                Self::string_match("interrupted", &[], query_path, query)
+            }
+            PublicOplogEntry::Exited(_params) => {
+                Self::string_match("exited", &[], query_path, query)
+            }
+            PublicOplogEntry::ChangeRetryPolicy(_params) => {
+                Self::string_match("changeretrypolicy", &[], query_path, query)
+                    || Self::string_match("change-retry-policy", &[], query_path, query)
+            }
+            PublicOplogEntry::BeginAtomicRegion(_params) => {
+                Self::string_match("beginatomicregion", &[], query_path, query)
+                    || Self::string_match("begin-atomic-region", &[], query_path, query)
+            }
+            PublicOplogEntry::EndAtomicRegion(_params) => {
+                Self::string_match("endatomicregion", &[], query_path, query)
+                    || Self::string_match("end-atomic-region", &[], query_path, query)
+            }
+            PublicOplogEntry::BeginRemoteWrite(_params) => {
+                Self::string_match("beginremotewrite", &[], query_path, query)
+                    || Self::string_match("begin-remote-write", &[], query_path, query)
+            }
+            PublicOplogEntry::EndRemoteWrite(_params) => {
+                Self::string_match("endremotewrite", &[], query_path, query)
+                    || Self::string_match("end-remote-write", &[], query_path, query)
+            }
+            PublicOplogEntry::PendingWorkerInvocation(params) => {
+                Self::string_match("pendingworkerinvocation", &[], query_path, query)
+                    || Self::string_match("pending-worker-invocation", &[], query_path, query)
+                    || match &params.invocation {
+                        PublicWorkerInvocation::ExportedFunction(params) => {
+                            Self::string_match(&params.full_function_name, &[], query_path, query)
+                                || Self::string_match(
+                                    &params.idempotency_key.value,
+                                    &[],
+                                    query_path,
+                                    query,
+                                )
+                                || params
+                                    .function_input
+                                    .as_ref()
+                                    .map(|params| {
+                                        params
+                                            .iter()
+                                            .any(|v| Self::match_value(v, &[], query_path, query))
+                                    })
+                                    .unwrap_or(false)
+                        }
+                        PublicWorkerInvocation::ManualUpdate(params) => Self::string_match(
+                            &params.target_version.to_string(),
+                            &[],
+                            query_path,
+                            query,
+                        ),
+                    }
+            }
+            PublicOplogEntry::PendingUpdate(params) => {
+                Self::string_match("pendingupdate", &[], query_path, query)
+                    || Self::string_match("pending-update", &[], query_path, query)
+                    || Self::string_match("update", &[], query_path, query)
+                    || Self::string_match(
+                        &params.target_version.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+            }
+            PublicOplogEntry::SuccessfulUpdate(params) => {
+                Self::string_match("successfulupdate", &[], query_path, query)
+                    || Self::string_match("successful-update", &[], query_path, query)
+                    || Self::string_match("update", &[], query_path, query)
+                    || Self::string_match(
+                        &params.target_version.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+            }
+            PublicOplogEntry::FailedUpdate(params) => {
+                Self::string_match("failedupdate", &[], query_path, query)
+                    || Self::string_match("failed-update", &[], query_path, query)
+                    || Self::string_match("update", &[], query_path, query)
+                    || Self::string_match(
+                        &params.target_version.to_string(),
+                        &[],
+                        query_path,
+                        query,
+                    )
+                    || params
+                        .details
+                        .as_ref()
+                        .map(|details| Self::string_match(details, &[], query_path, query))
+                        .unwrap_or(false)
+            }
+            PublicOplogEntry::GrowMemory(_params) => {
+                Self::string_match("growmemory", &[], query_path, query)
+                    || Self::string_match("grow-memory", &[], query_path, query)
+            }
+            PublicOplogEntry::CreateResource(_params) => {
+                Self::string_match("createresource", &[], query_path, query)
+                    || Self::string_match("create-resource", &[], query_path, query)
+            }
+            PublicOplogEntry::DropResource(_params) => {
+                Self::string_match("dropresource", &[], query_path, query)
+                    || Self::string_match("drop-resource", &[], query_path, query)
+            }
+            PublicOplogEntry::DescribeResource(params) => {
+                Self::string_match("describeresource", &[], query_path, query)
+                    || Self::string_match("describe-resource", &[], query_path, query)
+                    || Self::string_match(&params.resource_name, &[], query_path, query)
+                    || params
+                        .resource_params
+                        .iter()
+                        .any(|v| Self::match_value(v, &[], query_path, query))
+            }
+            PublicOplogEntry::Log(params) => {
+                Self::string_match("log", &[], query_path, query)
+                    || Self::string_match(&params.context, &[], query_path, query)
+                    || Self::string_match(&params.message, &[], query_path, query)
+            }
+            PublicOplogEntry::Restart(_params) => {
+                Self::string_match("restart", &[], query_path, query)
+            }
+        }
+    }
+
+    fn match_value(
+        value: &ValueAndType,
+        path_stack: &[String],
+        query_path: &[String],
+        query: &LeafQuery,
+    ) -> bool {
+        match (&value.value, &value.typ) {
+            (Value::Bool(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::U8(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::U16(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::U32(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::U64(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::S8(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::S16(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::S32(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::S64(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::F32(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::F64(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::Char(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::String(value), _) => {
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
+            }
+            (Value::List(elems), AnalysedType::List(list)) => elems.iter().any(|v| {
+                Self::match_value(
+                    &ValueAndType::new(v.clone(), (*list.inner).clone()),
+                    path_stack,
+                    query_path,
+                    query,
+                )
+            }),
+            (Value::Tuple(elems), AnalysedType::Tuple(tuple)) => {
+                if elems.len() != tuple.items.len() {
+                    false
+                } else {
+                    elems
+                        .iter()
+                        .zip(tuple.items.iter())
+                        .enumerate()
+                        .any(|(idx, (v, t))| {
+                            let mut new_path: Vec<String> = path_stack.to_vec();
+                            new_path.push(idx.to_string());
+                            Self::match_value(
+                                &ValueAndType::new(v.clone(), t.clone()),
+                                &new_path,
+                                query_path,
+                                query,
+                            )
+                        })
+                }
+            }
+            (Value::Record(fields), AnalysedType::Record(record)) => {
+                if fields.len() != record.fields.len() {
+                    false
+                } else {
+                    fields.iter().zip(record.fields.iter()).any(|(v, t)| {
+                        let mut new_path: Vec<String> = path_stack.to_vec();
+                        new_path.push(t.name.clone());
+                        Self::match_value(
+                            &ValueAndType::new(v.clone(), t.typ.clone()),
+                            &new_path,
+                            path_stack,
+                            query,
+                        )
+                    })
+                }
+            }
+            (
+                Value::Variant {
+                    case_value,
+                    case_idx,
+                },
+                AnalysedType::Variant(variant),
+            ) => {
+                let case = variant.cases.get(*case_idx as usize);
+                match (case_value, case) {
+                    (
+                        Some(value),
+                        Some(NameOptionTypePair {
+                            typ: Some(typ),
+                            name,
+                        }),
+                    ) => {
+                        let mut new_path: Vec<String> = path_stack.to_vec();
+                        new_path.push(name.clone());
+                        Self::match_value(
+                            &ValueAndType::new((**value).clone(), typ.clone()),
+                            &new_path,
+                            query_path,
+                            query,
+                        )
+                    }
+                    _ => false,
+                }
+            }
+            (Value::Enum(value), AnalysedType::Enum(typ)) => {
+                if let Some(case) = typ.cases.get(*value as usize) {
+                    Self::string_match(case, path_stack, query_path, query)
+                } else {
+                    false
+                }
+            }
+            (Value::Flags(bitmap), AnalysedType::Flags(flags)) => {
+                let names = bitmap
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, set)| if *set { flags.names.get(idx) } else { None })
+                    .collect::<Vec<_>>();
+                names
+                    .iter()
+                    .any(|name| Self::string_match(name, path_stack, query_path, query))
+            }
+            (Value::Option(Some(value)), AnalysedType::Option(typ)) => Self::match_value(
+                &ValueAndType::new((**value).clone(), (*typ.inner).clone()),
+                path_stack,
+                query_path,
+                query,
+            ),
+            (Value::Result(value), AnalysedType::Result(typ)) => match value {
+                Ok(Some(value)) if typ.ok.is_some() => {
+                    let mut new_path = path_stack.to_vec();
+                    new_path.push("ok".to_string());
+                    Self::match_value(
+                        &ValueAndType::new(
+                            (**value).clone(),
+                            (**(typ.ok.as_ref().unwrap())).clone(),
+                        ),
+                        &new_path,
+                        query_path,
+                        query,
+                    )
+                }
+                Err(Some(value)) if typ.err.is_some() => {
+                    let mut new_path = path_stack.to_vec();
+                    new_path.push("err".to_string());
+                    Self::match_value(
+                        &ValueAndType::new(
+                            (**value).clone(),
+                            (**(typ.err.as_ref().unwrap())).clone(),
+                        ),
+                        &new_path,
+                        query_path,
+                        query,
+                    )
+                }
+                _ => false,
+            },
+            (Value::Handle { .. }, _) => false,
+            _ => false,
+        }
+    }
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEntry {
@@ -1170,5 +1564,413 @@ impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
             next_oplog_index: value.next_oplog_index,
             current_component_version: value.current_component_version,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::{
+        ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, Empty,
+        EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
+        ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
+        GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters,
+        PendingUpdateParameters, PendingWorkerInvocationParameters, PublicOplogEntry,
+        PublicRetryConfig, PublicUpdateDescription, PublicWorkerInvocation,
+        PublicWrappedFunctionType, ResourceParameters, SnapshotBasedUpdateParameters,
+        SuccessfulUpdateParameters, TimestampParameter,
+    };
+    use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
+    use crate::model::regions::OplogRegion;
+    use crate::model::{AccountId, ComponentId, IdempotencyKey, Timestamp, WorkerId};
+    use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
+    use golem_wasm_rpc::{Value, ValueAndType};
+    use poem_openapi::types::ToJSON;
+    use test_r::test;
+    use uuid::Uuid;
+
+    fn rounded_ts(ts: Timestamp) -> Timestamp {
+        Timestamp::from(ts.to_millis())
+    }
+
+    #[test]
+    fn create_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::Create(CreateParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            worker_id: WorkerId {
+                component_id: ComponentId(
+                    Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
+                ),
+                worker_name: "test1".to_string(),
+            },
+            component_version: 1,
+            args: vec!["a".to_string(), "b".to_string()],
+            env: vec![("x".to_string(), "y".to_string())]
+                .into_iter()
+                .collect(),
+            account_id: AccountId {
+                value: "account_id".to_string(),
+            },
+            parent: Some(WorkerId {
+                component_id: ComponentId(
+                    Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
+                ),
+                worker_name: "test2".to_string(),
+            }),
+            component_size: 100_000_000,
+            initial_total_linear_memory_size: 200_000_000,
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn imported_function_invoked_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::ImportedFunctionInvoked(ImportedFunctionInvokedParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            function_name: "test".to_string(),
+            request: ValueAndType {
+                value: Value::String("test".to_string()),
+                typ: str(),
+            },
+            response: ValueAndType {
+                value: Value::List(vec![Value::U64(1)]),
+                typ: list(u64()),
+            },
+            wrapped_function_type: PublicWrappedFunctionType::ReadRemote(Empty),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn exported_function_invoked_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::ExportedFunctionInvoked(ExportedFunctionInvokedParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            function_name: "test".to_string(),
+            request: vec![
+                ValueAndType {
+                    value: Value::String("test".to_string()),
+                    typ: str(),
+                },
+                ValueAndType {
+                    value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
+                    typ: record(vec![field("x", s16()), field("y", s16())]),
+                },
+            ],
+            idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn exported_function_completed_serialization_poem_serde_equivalence() {
+        let entry =
+            PublicOplogEntry::ExportedFunctionCompleted(ExportedFunctionCompletedParameters {
+                timestamp: rounded_ts(Timestamp::now_utc()),
+                response: ValueAndType {
+                    value: Value::Enum(1),
+                    typ: r#enum(&["red", "green", "blue"]),
+                },
+                consumed_fuel: 100,
+            });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn suspend_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::Suspend(TimestampParameter {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn error_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::Error(ErrorParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            error: "test".to_string(),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn no_op_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::NoOp(TimestampParameter {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn jump_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::Jump(JumpParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            jump: OplogRegion {
+                start: OplogIndex::from_u64(1),
+                end: OplogIndex::from_u64(2),
+            },
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn interrupted_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::Interrupted(TimestampParameter {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn exited_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::Exited(TimestampParameter {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn change_retry_policy_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::ChangeRetryPolicy(ChangeRetryPolicyParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            new_policy: PublicRetryConfig {
+                max_attempts: 10,
+                min_delay: std::time::Duration::from_secs(1),
+                max_delay: std::time::Duration::from_secs(10),
+                multiplier: 2.0,
+                max_jitter_factor: Some(0.1),
+            },
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn begin_atomic_region_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::BeginAtomicRegion(TimestampParameter {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn end_atomic_region_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::EndAtomicRegion(EndRegionParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            begin_index: OplogIndex::from_u64(1),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn begin_remote_write_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::BeginRemoteWrite(TimestampParameter {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn end_remote_write_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::EndRemoteWrite(EndRegionParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            begin_index: OplogIndex::from_u64(1),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn pending_worker_invocation_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            invocation: PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {
+                idempotency_key: IdempotencyKey::new("idempotency_key".to_string()),
+                full_function_name: "test".to_string(),
+                function_input: Some(vec![
+                    ValueAndType {
+                        value: Value::String("test".to_string()),
+                        typ: str(),
+                    },
+                    ValueAndType {
+                        value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
+                        typ: record(vec![field("x", s16()), field("y", s16())]),
+                    },
+                ]),
+            }),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn pending_update_serialization_poem_serde_equivalence_1() {
+        let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            target_version: 1,
+            description: PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
+                payload: "test".as_bytes().to_vec(),
+            }),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn pending_update_serialization_poem_serde_equivalence_2() {
+        let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            target_version: 1,
+            description: PublicUpdateDescription::Automatic(Empty),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn successful_update_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            target_version: 1,
+            new_component_size: 100_000_000,
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn failed_update_serialization_poem_serde_equivalence_1() {
+        let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            target_version: 1,
+            details: Some("test".to_string()),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn failed_update_serialization_poem_serde_equivalence_2() {
+        let entry = PublicOplogEntry::FailedUpdate(FailedUpdateParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            target_version: 1,
+            details: None,
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn grow_memory_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::GrowMemory(GrowMemoryParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            delta: 100_000_000,
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn create_resource_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::CreateResource(ResourceParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            id: WorkerResourceId(100),
+        });
+
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn drop_resource_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::DropResource(ResourceParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            id: WorkerResourceId(100),
+        });
+
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn describe_resource_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::DescribeResource(DescribeResourceParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            id: WorkerResourceId(100),
+            resource_name: "test".to_string(),
+            resource_params: vec![
+                ValueAndType {
+                    value: Value::String("test".to_string()),
+                    typ: str(),
+                },
+                ValueAndType {
+                    value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
+                    typ: record(vec![field("x", s16()), field("y", s16())]),
+                },
+            ],
+        });
+
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn log_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::Log(LogParameters {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+            level: LogLevel::Stderr,
+            context: "test".to_string(),
+            message: "test".to_string(),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
+    }
+
+    #[test]
+    fn restart_serialization_poem_serde_equivalence() {
+        let entry = PublicOplogEntry::Restart(TimestampParameter {
+            timestamp: rounded_ts(Timestamp::now_utc()),
+        });
+        let serialized = entry.to_json_string();
+        let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(entry, deserialized);
     }
 }

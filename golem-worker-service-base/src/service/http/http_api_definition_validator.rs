@@ -101,6 +101,8 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::api::WorkerBindingType;
     use crate::api_definition::http::{MethodPattern, Route};
     use crate::service::http::http_api_definition_validator::unique_routes;

@@ -929,12 +929,32 @@ impl DynamicParsedFunctionName {
         }
     }
 
-    pub fn function_name(&self) -> String {
-        self.to_static().function.function_name()
+    pub fn function_name_with_prefix_identifiers(&self) -> String {
+        self.to_parsed_function_name().function.function_name()
+    }
+
+    // Usually resource name in the real metadata consist of prefixes such as [constructor]
+    // However, the one obtained through the dynamic-parsed-function-name is simple without these prefix
+    pub fn resource_name_simplified(&self) -> Option<String> {
+        self.to_parsed_function_name()
+            .function
+            .resource_name()
+            .cloned()
+    }
+
+    // Usually resource method in the real metadata consist of prefixes such as [method]
+    pub fn resource_method_name_simplified(&self) -> Option<String> {
+        self.to_parsed_function_name()
+            .function
+            .resource_method_name()
+    }
+
+    pub fn raw_resource_params_mut(&mut self) -> Option<&mut Vec<Expr>> {
+        self.function.raw_resource_params_mut()
     }
 
     //
-    pub fn to_static(&self) -> ParsedFunctionName {
+    pub fn to_parsed_function_name(&self) -> ParsedFunctionName {
         ParsedFunctionName {
             site: self.site.clone(),
             function: self.function.to_static(),
@@ -944,7 +964,7 @@ impl DynamicParsedFunctionName {
 
 impl Display for DynamicParsedFunctionName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let function_name = self.to_static().to_string();
+        let function_name = self.to_parsed_function_name().to_string();
         write!(f, "{}", function_name)
     }
 }
@@ -1006,7 +1026,7 @@ impl ParsedFunctionName {
             parser.easy_parse(name);
 
         match result {
-            Ok((parsed, _)) => Ok(parsed.to_static()),
+            Ok((parsed, _)) => Ok(parsed.to_parsed_function_name()),
             Err(error) => {
                 let error_message = error
                     .map_position(|p| p.translate_position(name))
@@ -1084,6 +1104,8 @@ impl From<ParsedFunctionName> for golem_api_grpc::proto::golem::rib::ParsedFunct
 
 #[cfg(test)]
 mod function_name_tests {
+    use test_r::test;
+
     use super::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 
     #[test]

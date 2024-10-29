@@ -12,16 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{add_test, inherit_test_dep, test_gen};
+
 use crate::cli::{Cli, CliLive};
+use crate::Tracing;
 use assert2::assert;
 use golem_cli::command::profile::{ProfileType, ProfileView};
 use golem_cli::config::{ProfileConfig, ProfileName};
 use golem_cli::model::Format;
-use golem_test_framework::config::TestDependencies;
-use libtest_mimic::{Failed, Trial};
+use golem_test_framework::config::EnvBasedTestDependencies;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+use test_r::core::{DynamicTestRegistration, TestType};
 use url::Url;
+
+inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
 
 #[derive(Debug, Clone, Copy)]
 enum ArgsKind {
@@ -38,41 +44,37 @@ impl Display for ArgsKind {
     }
 }
 
-fn make(
-    args_kind: ArgsKind,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-) -> Vec<Trial> {
-    let ctx = (deps, args_kind);
-    vec![
-        Trial::test_in_context(
-            format!("profile_add_get_list_switch_delete_{args_kind}"),
-            ctx.clone(),
-            profile_add_get_list_switch_delete,
-        ),
-        Trial::test_in_context(
-            format!("profile_config_{args_kind}"),
-            ctx.clone(),
-            profile_config,
-        ),
-    ]
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, ArgsKind::Short);
+    make(r, ArgsKind::Long);
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let mut short_args = make(ArgsKind::Short, deps.clone());
-
-    let mut long_args = make(ArgsKind::Long, deps);
-
-    short_args.append(&mut long_args);
-
-    short_args
+fn make(r: &mut DynamicTestRegistration, args_kind: ArgsKind) {
+    add_test!(
+        r,
+        format!("profile_add_get_list_switch_delete_{args_kind}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, _tracing: &Tracing| {
+            profile_add_get_list_switch_delete((deps, args_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("profile_config_{args_kind}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, _tracing: &Tracing| {
+            profile_config((deps, args_kind))
+        }
+    );
 }
 
 fn profile_add_get_list_switch_delete(
-    (deps, kind): (Arc<dyn TestDependencies + Send + Sync + 'static>, ArgsKind),
-) -> Result<(), Failed> {
+    (deps, kind): (&EnvBasedTestDependencies, ArgsKind),
+) -> Result<(), anyhow::Error> {
     let name = format!("profile_add_get_list_switch_delete_{kind}");
 
-    let cli = CliLive::make(&name, deps).unwrap();
+    let cli = CliLive::make(&name, Arc::new(deps.clone()))?;
     let cli = match kind {
         ArgsKind::Short => cli.with_short_args(),
         ArgsKind::Long => cli.with_long_args(),
@@ -100,9 +102,9 @@ fn profile_add_get_list_switch_delete(
         is_active: true,
         name: ProfileName("p_with_worker_url".to_string()),
         typ: ProfileType::Golem,
-        url: Some(Url::parse("http://localhost:9876").unwrap()),
+        url: Some(Url::parse("http://localhost:9876")?),
         cloud_url: None,
-        worker_url: Some(Url::parse("http://localhost:9875").unwrap()),
+        worker_url: Some(Url::parse("http://localhost:9875")?),
         allow_insecure: true,
         authenticated: None,
         config: ProfileConfig {
@@ -126,7 +128,7 @@ fn profile_add_get_list_switch_delete(
         is_active: false,
         name: ProfileName("p_no_worker_url".to_string()),
         typ: ProfileType::Golem,
-        url: Some(Url::parse("http://localhost:9874").unwrap()),
+        url: Some(Url::parse("http://localhost:9874")?),
         cloud_url: None,
         worker_url: None,
         allow_insecure: false,
@@ -150,7 +152,7 @@ fn profile_add_get_list_switch_delete(
         is_active: false,
         name: ProfileName("p_2".to_string()),
         typ: ProfileType::Golem,
-        url: Some(Url::parse("http://localhost:9873").unwrap()),
+        url: Some(Url::parse("http://localhost:9873")?),
         cloud_url: None,
         worker_url: None,
         allow_insecure: false,
@@ -188,11 +190,11 @@ fn profile_add_get_list_switch_delete(
 }
 
 fn profile_config(
-    (deps, kind): (Arc<dyn TestDependencies + Send + Sync + 'static>, ArgsKind),
-) -> Result<(), Failed> {
+    (deps, kind): (&EnvBasedTestDependencies, ArgsKind),
+) -> Result<(), anyhow::Error> {
     let name = format!("profile_config_{kind}");
 
-    let cli = CliLive::make(&name, deps).unwrap();
+    let cli = CliLive::make(&name, Arc::new(deps.clone()))?;
     let cli = match kind {
         ArgsKind::Short => cli.with_short_args(),
         ArgsKind::Long => cli.with_long_args(),

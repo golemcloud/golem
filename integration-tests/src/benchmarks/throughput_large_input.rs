@@ -77,7 +77,7 @@ impl Benchmark for ThroughputLargeInput {
     }
 
     async fn cleanup(benchmark_context: Self::BenchmarkContext) {
-        benchmark_context.deps.kill_all();
+        benchmark_context.deps.kill_all().await;
         benchmark_context.rust_service.kill_all();
     }
 

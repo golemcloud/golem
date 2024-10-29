@@ -39,19 +39,21 @@ impl Display for ApiDefinitionLookupError {
     }
 }
 
-pub struct HttpApiDefinitionLookup<Namespace> {
-    deployment_service: Arc<dyn ApiDeploymentService<Namespace> + Sync + Send>,
+pub struct HttpApiDefinitionLookup<AuthCtx, Namespace> {
+    deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>,
 }
 
-impl<Namespace> HttpApiDefinitionLookup<Namespace> {
-    pub fn new(deployment_service: Arc<dyn ApiDeploymentService<Namespace> + Sync + Send>) -> Self {
+impl<AuthCtx, Namespace> HttpApiDefinitionLookup<AuthCtx, Namespace> {
+    pub fn new(
+        deployment_service: Arc<dyn ApiDeploymentService<AuthCtx, Namespace> + Sync + Send>,
+    ) -> Self {
         Self { deployment_service }
     }
 }
 
 #[async_trait]
-impl<Namespace> ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition>
-    for HttpApiDefinitionLookup<Namespace>
+impl<AuthCtx, Namespace> ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition>
+    for HttpApiDefinitionLookup<AuthCtx, Namespace>
 {
     async fn get(
         &self,

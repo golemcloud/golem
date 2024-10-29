@@ -14,10 +14,12 @@
 
 use futures::stream;
 use futures::Stream;
+use pin_project::pin_project;
 use std::error::Error;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
 use std::task::{Context, Poll};
+use tracing::error;
 
 pub struct ByteStream {
     inner: Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Unpin + Send + Sync>,
@@ -58,13 +60,40 @@ impl ByteStream {
     }
 }
 
+#[pin_project]
+pub struct LoggedByteStream<Inner> {
+    #[pin]
+    inner: Inner,
+}
+
+impl<S: Stream<Item = Result<Vec<u8>, anyhow::Error>>> LoggedByteStream<S> {
+    pub fn new(inner: S) -> Self {
+        Self { inner }
+    }
+}
+
+impl<S: Stream<Item = Result<Vec<u8>, anyhow::Error>>> Stream for LoggedByteStream<S> {
+    type Item = Result<Vec<u8>, anyhow::Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+        let poll_result = this.inner.poll_next(cx);
+        if let Poll::Ready(Some(Err(error))) = &poll_result {
+            error!("Error in stream: {}", error);
+        }
+        poll_result
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::stream::ByteStream;
     use anyhow::Error;
     use futures::{stream, StreamExt, TryStreamExt};
 
-    #[tokio::test]
+    #[test]
     pub async fn test_byte_stream() {
         let stream = ByteStream::new(stream::iter(vec![Ok(vec![1, 2, 3]), Ok(vec![4, 5, 6])]));
         let stream_data: Vec<u8> = stream

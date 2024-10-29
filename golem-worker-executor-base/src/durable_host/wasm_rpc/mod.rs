@@ -168,24 +168,32 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             },
             |_, oplog, entry| {
                 Box::pin(async move {
-                    let typed_value = DurableWorkerCtx::<Ctx>::try_default_load::<
-                        TypeAnnotatedValue,
-                        SerializableError,
-                    >(oplog.clone(), entry)
-                    .await;
-                    if let Ok(Ok(typed_value)) = typed_value {
-                        typed_value
-                            .try_into()
-                            .map_err(|s: String| RpcError::ProtocolError { details: s })
-                    } else if let Ok(Err(err)) = typed_value {
-                        Err(err.into())
-                    } else {
-                        let wit_value = DurableWorkerCtx::<Ctx>::default_load::<
-                            WitValue,
-                            SerializableError,
-                        >(oplog, entry)
-                        .await;
-                        wit_value.map_err(|err| err.into())
+                    match entry {
+                        OplogEntry::ImportedFunctionInvokedV1 { .. } => {
+                            // Legacy oplog entry, used WitValue in its payload
+                            let wit_value = DurableWorkerCtx::<Ctx>::default_load::<
+                                WitValue,
+                                SerializableError,
+                            >(oplog, entry)
+                            .await;
+                            wit_value.map_err(|err| err.into())
+                        }
+                        OplogEntry::ImportedFunctionInvoked { .. } => {
+                            // New oplog entry, uses TypeAnnotatedValue in its payload
+                            let typed_value = DurableWorkerCtx::<Ctx>::try_default_load::<
+                                TypeAnnotatedValue,
+                                SerializableError,
+                            >(oplog.clone(), entry)
+                            .await;
+                            match typed_value {
+                                Ok(Ok(typed_value)) => typed_value
+                                    .try_into()
+                                    .map_err(|s: String| RpcError::ProtocolError { details: s }),
+                                Ok(Err(err)) => Err(err.into()),
+                                Err(err) => Err(err.into()),
+                            }
+                        }
+                        _ => unreachable!(),
                     }
                 })
             },
@@ -227,7 +235,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
-            "golem::rpc::wasm-rpc::invoke idempotency key",
+            "golem::rpc::wasm-rpc::invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0
             (),
             |_ctx| {
                 Box::pin(async move {
@@ -317,7 +325,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let uuid = Durability::<Ctx, (), (u64, u64), SerializableError>::custom_wrap(
             self,
             WrappedFunctionType::ReadLocal,
-            "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key",
+            "golem::rpc::wasm-rpc::invoke-and-await idempotency key", // NOTE: must keep invoke-and-await in the name for compatibility with Golem 1.0
             (),
             |_ctx| {
                 Box::pin(async move {

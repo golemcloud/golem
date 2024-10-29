@@ -1063,7 +1063,7 @@ paths:
     get:
       tags:
       - Worker
-      summary: Get the oplog of a worker
+      summary: Get or search the oplog of a worker
       operationId: get_oplog
       parameters:
       - in: path
@@ -1085,7 +1085,6 @@ paths:
         style: simple
       - in: query
         name: from
-        required: true
         deprecated: false
         schema:
           type: integer
@@ -1106,6 +1105,13 @@ paths:
         deprecated: false
         schema:
           $ref: '#/components/schemas/OplogCursor'
+        explode: true
+        style: form
+      - in: query
+        name: query
+        deprecated: false
+        schema:
+          type: string
         explode: true
         style: form
       responses:
@@ -3054,19 +3060,19 @@ components:
         entries:
           type: array
           items:
-            $ref: '#/components/schemas/PublicOplogEntry'
+            $ref: '#/components/schemas/PublicOplogEntryWithIndex'
         next:
           $ref: '#/components/schemas/OplogCursor'
-        first_index_in_chunk:
+        firstIndexInChunk:
           type: integer
           format: uint64
-        last_index:
+        lastIndex:
           type: integer
           format: uint64
       required:
       - entries
-      - first_index_in_chunk
-      - last_index
+      - firstIndexInChunk
+      - lastIndex
     GolemError:
       discriminator:
         propertyName: type
@@ -3958,6 +3964,17 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+    PublicOplogEntryWithIndex:
+      type: object
+      properties:
+        oplogIndex:
+          type: integer
+          format: uint64
+        entry:
+          $ref: '#/components/schemas/PublicOplogEntry'
+      required:
+      - oplogIndex
+      - entry
     PublicOplogEntry_ChangeRetryPolicyParameters:
       allOf:
       - type: object

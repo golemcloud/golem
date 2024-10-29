@@ -51,14 +51,13 @@ impl ComponentService for FileSystemComponentService {
             .expect("Failed to add component")
     }
 
-    async fn add_component(
+    async fn add_component_with_id(
         &self,
         local_path: &Path,
+        component_id: &ComponentId,
         component_type: ComponentType,
         initial_files: PackagedFileSet,
-    ) -> Result<ComponentId, AddComponentError> {
-        let uuid = Uuid::new_v4();
-
+    ) -> Result<(), AddComponentError> {
         let target_dir = &self.root;
         debug!("Local component store: {target_dir:?}");
         if !target_dir.exists() {
@@ -81,7 +80,7 @@ impl ComponentService for FileSystemComponentService {
         };
         let _ = std::fs::copy(
             local_path,
-            target_dir.join(format!("{uuid}-0{postfix}.wasm")),
+            target_dir.join(format!("{component_id}-0{postfix}.wasm")),
         )
         .map_err(|err| {
             AddComponentError::Other(format!(
@@ -96,13 +95,28 @@ impl ComponentService for FileSystemComponentService {
         ] {
             if let Some(files) = files {
                 std::fs::write(
-                    target_dir.join(format!("{uuid}-0{postfix}-{permission_postfix}.zip")),
+                    target_dir.join(format!("{component_id}-0{postfix}-{permission_postfix}.zip")),
                     files
                 ).expect("Failed to copy initial files to the local component store");
             }
         }
 
-        Ok(ComponentId(uuid))
+        Ok(())
+    }
+
+    async fn add_component(
+        &self,
+        local_path: &Path,
+        component_type: ComponentType,
+        initial_files: PackagedFileSet,
+    ) -> Result<ComponentId, AddComponentError> {
+        let uuid = Uuid::new_v4();
+        let component_id = ComponentId(uuid);
+
+        self.add_component_with_id(local_path, &component_id, component_type, initial_files)
+            .await?;
+
+        Ok(component_id)
     }
 
     async fn add_component_with_name(
@@ -199,5 +213,5 @@ impl ComponentService for FileSystemComponentService {
         panic!("No real component service running")
     }
 
-    fn kill(&self) {}
+    async fn kill(&self) {}
 }

@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common;
+use test_r::{inherit_test_dep, test};
+
+use crate::{common, LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use async_mutex::Mutex;
 use golem_test_framework::dsl::TestDslUnsafe;
@@ -27,6 +29,10 @@ use tokio::task::JoinHandle;
 use tonic::transport::Body;
 use tracing::debug;
 use warp::Filter;
+
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
 
 struct F1Blocker {
     pub value: u64,
@@ -74,20 +80,17 @@ impl TestHttpServer {
                         debug!("f1: {body}");
 
                         let mut guard = f1_blocker_clone.lock().await;
-                        match &*guard {
-                            Some(blocker) => {
-                                if blocker.value == body {
-                                    let F1Blocker {
-                                        reached, resume, ..
-                                    } = guard.take().unwrap();
-                                    debug!("Reached f1 blocking point");
-                                    reached.send(()).unwrap();
-                                    debug!("Awaiting resume at f1 blocking point");
-                                    resume.await.unwrap();
-                                    debug!("Resuming from f1 blocking point");
-                                }
+                        if let Some(blocker) = &*guard {
+                            if blocker.value == body {
+                                let F1Blocker {
+                                    reached, resume, ..
+                                } = guard.take().unwrap();
+                                debug!("Reached f1 blocking point");
+                                reached.send(()).unwrap();
+                                debug!("Awaiting resume at f1 blocking point");
+                                resume.await.unwrap();
+                                debug!("Resuming from f1 blocking point");
                             }
-                            None => {}
                         }
 
                         Response::builder()
@@ -129,11 +132,15 @@ impl TestHttpServer {
     }
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn auto_update_on_running() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn auto_update_on_running(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let mut http_server = TestHttpServer::start(host_http_port);
@@ -199,11 +206,15 @@ async fn auto_update_on_running() {
     check!(metadata.last_known_status.failed_updates.is_empty());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn auto_update_on_idle() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn auto_update_on_idle(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let component_id = executor.store_unique_component("update-test-v1").await;
     let worker_id = executor
@@ -237,11 +248,15 @@ async fn auto_update_on_idle() {
     check!(metadata.last_known_status.successful_updates.len() == 1);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn failing_auto_update_on_idle() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn failing_auto_update_on_idle(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port);
@@ -290,11 +305,15 @@ async fn failing_auto_update_on_idle() {
     check!(metadata.last_known_status.successful_updates.is_empty());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn auto_update_on_idle_with_non_diverging_history() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn auto_update_on_idle_with_non_diverging_history(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let component_id = executor.store_unique_component("update-test-v1").await;
     let worker_id = executor
@@ -341,11 +360,15 @@ async fn auto_update_on_idle_with_non_diverging_history() {
     check!(metadata.last_known_status.successful_updates.len() == 1);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn failing_auto_update_on_running() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn failing_auto_update_on_running(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let mut http_server = TestHttpServer::start(host_http_port);
@@ -418,11 +441,15 @@ async fn failing_auto_update_on_running() {
     check!(metadata.last_known_status.failed_updates.len() == 1);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn manual_update_on_idle() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn manual_update_on_idle(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port);
@@ -475,11 +502,15 @@ async fn manual_update_on_idle() {
     check!(metadata.last_known_status.successful_updates.len() == 1);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn manual_update_on_idle_without_save_snapshot() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn manual_update_on_idle_without_save_snapshot(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port);
@@ -531,11 +562,15 @@ async fn manual_update_on_idle_without_save_snapshot() {
     check!(metadata.last_known_status.successful_updates.is_empty());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn auto_update_on_running_followed_by_manual() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn auto_update_on_running_followed_by_manual(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let mut http_server = TestHttpServer::start(host_http_port);
@@ -619,11 +654,15 @@ async fn auto_update_on_running_followed_by_manual() {
     check!(metadata.last_known_status.failed_updates.is_empty());
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn manual_update_on_idle_with_failing_load() {
-    let context = common::TestContext::new();
-    let executor = common::start(&context).await.unwrap();
+async fn manual_update_on_idle_with_failing_load(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = common::TestContext::new(last_unique_id);
+    let executor = common::start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
     let http_server = TestHttpServer::start(host_http_port);

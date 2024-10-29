@@ -337,13 +337,18 @@ mod internal {
 
 #[cfg(test)]
 mod test {
-    use super::*;
-    use crate::worker_binding::HttpRequestDetails;
+    use test_r::test;
+
     use crate::worker_bridge_execution::to_response::internal::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
+
+    use crate::worker_binding::{HttpRequestDetails, RequestDetails};
+    use crate::worker_bridge_execution::to_response::ToResponse;
     use http::header::CONTENT_TYPE;
+    use http::StatusCode;
+    use rib::RibInterpreterResult;
     use std::collections::HashMap;
 
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
@@ -371,7 +376,7 @@ mod test {
         })
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_evaluation_result_to_response_with_http_specifics() {
         let record = create_record(vec![
             ("status".to_string(), TypeAnnotatedValue::U16(400)),
@@ -411,7 +416,7 @@ mod test {
         assert_eq!(status, expected_status);
     }
 
-    #[tokio::test]
+    #[test]
     async fn test_evaluation_result_to_response_with_no_http_specifics() {
         let evaluation_result: RibInterpreterResult =
             RibInterpreterResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));

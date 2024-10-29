@@ -157,6 +157,14 @@ impl SpawnedShardManager {
 
         (child, logger)
     }
+
+    fn blocking_kill(&self) {
+        info!("Stopping golem-shard-manager");
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+        let _logger = self.logger.lock().unwrap().take();
+    }
 }
 
 #[async_trait]
@@ -173,12 +181,8 @@ impl ShardManager for SpawnedShardManager {
         self.grpc_port
     }
 
-    fn kill(&self) {
-        info!("Stopping golem-shard-manager");
-        if let Some(mut child) = self.child.lock().unwrap().take() {
-            let _ = child.kill();
-        }
-        let _logger = self.logger.lock().unwrap().take();
+    async fn kill(&self) {
+        self.blocking_kill();
     }
 
     async fn restart(&self, number_of_shards_override: Option<usize>) {
@@ -217,6 +221,6 @@ impl ShardManager for SpawnedShardManager {
 
 impl Drop for SpawnedShardManager {
     fn drop(&mut self) {
-        self.kill();
+        self.blocking_kill();
     }
 }

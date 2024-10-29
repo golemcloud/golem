@@ -12,9 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
 use crate::components;
 use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
@@ -41,6 +38,10 @@ use crate::components::worker_service::docker::DockerWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::{DbType, TestDependencies};
+use async_trait::async_trait;
+use std::fmt::{Debug, Formatter};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::Level;
 
 pub struct EnvBasedTestDependenciesConfig {
@@ -121,6 +122,14 @@ impl EnvBasedTestDependenciesConfig {
             Level::DEBUG
         }
     }
+
+    pub fn redis_monitor_stdout_level(&self) -> Level {
+        Level::TRACE
+    }
+
+    pub fn redis_monitor_stderr_level(&self) -> Level {
+        Level::ERROR
+    }
 }
 
 impl Default for EnvBasedTestDependenciesConfig {
@@ -141,6 +150,7 @@ impl Default for EnvBasedTestDependenciesConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct EnvBasedTestDependencies {
     config: Arc<EnvBasedTestDependenciesConfig>,
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
@@ -153,24 +163,13 @@ pub struct EnvBasedTestDependencies {
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
 }
 
+impl Debug for EnvBasedTestDependencies {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "EnvBasedTestDependencies")
+    }
+}
+
 impl EnvBasedTestDependencies {
-    pub fn blocking_new_from_config(config: EnvBasedTestDependenciesConfig) -> Self {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async move { Self::new(config).await })
-    }
-
-    pub fn blocking_new_from_worker_executor_cluster_size(
-        worker_executor_cluster_size: usize,
-    ) -> Self {
-        Self::blocking_new_from_config(EnvBasedTestDependenciesConfig {
-            worker_executor_cluster_size,
-            ..EnvBasedTestDependenciesConfig::new()
-        })
-    }
-
     async fn make_rdb(
         config: Arc<EnvBasedTestDependenciesConfig>,
     ) -> Arc<dyn Rdb + Send + Sync + 'static> {
@@ -218,8 +217,8 @@ impl EnvBasedTestDependencies {
     ) -> Arc<dyn RedisMonitor + Send + Sync + 'static> {
         Arc::new(SpawnedRedisMonitor::new(
             redis,
-            config.default_stdout_level(),
-            config.default_stderr_level(),
+            config.redis_monitor_stdout_level(),
+            config.redis_monitor_stderr_level(),
         ))
     }
 
@@ -264,7 +263,7 @@ impl EnvBasedTestDependencies {
                 DockerComponentService::new(
                     Some((
                         DockerComponentCompilationService::NAME,
-                        DockerComponentCompilationService::GRPC_PORT,
+                        DockerComponentCompilationService::GRPC_PORT.as_u16(),
                     )),
                     rdb,
                     config.default_verbosity(),
@@ -475,6 +474,7 @@ impl EnvBasedTestDependencies {
     }
 }
 
+#[async_trait]
 impl TestDependencies for EnvBasedTestDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         self.rdb.clone()

@@ -215,6 +215,8 @@ where
 }
 #[cfg(test)]
 mod function_call_tests {
+    use test_r::test;
+
     use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use combine::EasyParser;
 

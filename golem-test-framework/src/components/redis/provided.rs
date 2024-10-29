@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::components::redis::Redis;
+use async_trait::async_trait;
 use tracing::info;
 
 pub struct ProvidedRedis {
@@ -32,6 +33,7 @@ impl ProvidedRedis {
     }
 }
 
+#[async_trait]
 impl Redis for ProvidedRedis {
     fn assert_valid(&self) {}
 
@@ -47,11 +49,5 @@ impl Redis for ProvidedRedis {
         &self.prefix
     }
 
-    fn kill(&self) {}
-}
-
-impl Drop for ProvidedRedis {
-    fn drop(&mut self) {
-        self.kill()
-    }
+    async fn kill(&self) {}
 }

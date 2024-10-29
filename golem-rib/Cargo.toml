@@ -12,7 +12,7 @@ golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 
 async-trait = { workspace = true }
 bincode = { workspace = true }
-combine = "4.6.7"
+combine = { workspace = true }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 poem-openapi = { workspace = true }
@@ -22,6 +22,10 @@ serde_json = { workspace = true }
 tokio = {workspace = true}
 wasm-wave = { workspace = true }
 
+[dev-dependencies]
+test-r = { workspace = true }
+
 [lib]
 name = "rib"
 path = "src/lib.rs"
+harness = false

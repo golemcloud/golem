@@ -12,8 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::time::Instant;
+use test_r::{flaky, test, test_dep};
+
 use assert2::check;
-use ctor::ctor;
 use nonempty_collections::nev;
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -45,8 +47,10 @@ impl Tracing {
     }
 }
 
-#[ctor]
-pub static TRACING: Tracing = Tracing::init();
+#[test_dep]
+fn tracing() -> Tracing {
+    Tracing::init()
+}
 
 fn rounded_ts(ts: Timestamp) -> Timestamp {
     Timestamp::from(ts.to_millis())
@@ -236,8 +240,8 @@ fn rounded(entry: OplogEntry) -> OplogEntry {
     }
 }
 
-#[tokio::test]
-async fn open_add_and_read_back() {
+#[test]
+async fn open_add_and_read_back(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 100).await;
@@ -284,8 +288,8 @@ async fn open_add_and_read_back() {
     );
 }
 
-#[tokio::test]
-async fn open_add_and_read_back_ephemeral() {
+#[test]
+async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let primary_oplog_service = Arc::new(
@@ -346,8 +350,8 @@ async fn open_add_and_read_back_ephemeral() {
     );
 }
 
-#[tokio::test]
-async fn entries_with_small_payload() {
+#[test]
+async fn entries_with_small_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 100).await;
@@ -456,8 +460,8 @@ async fn entries_with_small_payload() {
     assert_eq!(p4, vec![1, 2, 3]);
 }
 
-#[tokio::test]
-async fn entries_with_large_payload() {
+#[test]
+async fn entries_with_large_payload(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(indexed_storage, blob_storage, 1, 100).await;
@@ -570,33 +574,39 @@ async fn entries_with_large_payload() {
     assert_eq!(p4, large_payload4);
 }
 
-#[tokio::test]
-async fn multilayer_transfers_entries_after_limit_reached_1() {
+#[test]
+#[flaky(10)]
+async fn multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, false).await;
 }
 
-#[tokio::test]
-async fn multilayer_transfers_entries_after_limit_reached_2() {
+#[test]
+#[flaky(10)]
+async fn multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, false).await;
 }
 
-#[tokio::test]
-async fn multilayer_transfers_entries_after_limit_reached_3() {
+#[test]
+#[flaky(10)]
+async fn multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, false).await;
 }
 
-#[tokio::test]
-async fn blob_multilayer_transfers_entries_after_limit_reached_1() {
+#[test]
+#[flaky(10)]
+async fn blob_multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, true).await;
 }
 
-#[tokio::test]
-async fn blob_multilayer_transfers_entries_after_limit_reached_2() {
+#[test]
+#[flaky(10)]
+async fn blob_multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, true).await;
 }
 
-#[tokio::test]
-async fn blob_multilayer_transfers_entries_after_limit_reached_3() {
+#[test]
+#[flaky(10)]
+async fn blob_multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, true).await;
 }
 
@@ -675,7 +685,30 @@ async fn multilayer_transfers_entries_after_limit_reached(
         entries.push(entry);
     }
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    let start = Instant::now();
+    loop {
+        let primary_length = primary_oplog_service
+            .open(
+                &owned_worker_id,
+                primary_oplog_service.get_last_index(&owned_worker_id).await,
+                ComponentType::Durable,
+            )
+            .await
+            .length()
+            .await;
+
+        let secondary_length = secondary_layer.open(&owned_worker_id).await.length().await;
+        if primary_length == expected_1 && secondary_length == expected_2 {
+            break;
+        }
+
+        let elapsed = start.elapsed();
+        if elapsed.as_secs() > 120 {
+            panic!("Timeout");
+        } else {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
 
     debug!("Fetching information to evaluate the test");
 
@@ -706,13 +739,13 @@ async fn multilayer_transfers_entries_after_limit_reached(
     check!(all_entries.values().cloned().collect::<Vec<_>>() == entries);
 }
 
-#[tokio::test]
-async fn read_from_archive() {
+#[test]
+async fn read_from_archive(_tracing: &Tracing) {
     read_from_archive_impl(false).await;
 }
 
-#[tokio::test]
-async fn blob_read_from_archive() {
+#[test]
+async fn blob_read_from_archive(_tracing: &Tracing) {
     read_from_archive_impl(true).await;
 }
 
@@ -800,33 +833,146 @@ async fn read_from_archive_impl(use_blob: bool) {
     assert_eq!(first10.into_values().collect::<Vec<_>>(), original_first10);
 }
 
-#[tokio::test]
-async fn write_after_archive() {
+#[test]
+async fn read_initial_from_archive(_tracing: &Tracing) {
+    crate::services::oplog::tests::read_initial_from_archive_impl(false).await;
+}
+
+#[test]
+async fn blob_read_initial_from_archive(_tracing: &Tracing) {
+    crate::services::oplog::tests::read_initial_from_archive_impl(true).await;
+}
+
+async fn read_initial_from_archive_impl(use_blob: bool) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 1))
+    } else {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            1,
+        ))
+    };
+    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> = if use_blob {
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2))
+    } else {
+        Arc::new(CompressedOplogArchiveService::new(
+            indexed_storage.clone(),
+            2,
+        ))
+    };
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        10,
+        10,
+    ));
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let worker_id = WorkerId {
+        component_id: ComponentId(Uuid::new_v4()),
+        worker_name: "test".to_string(),
+    };
+    let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+    let timestamp = Timestamp::now_utc();
+    let create_entry = rounded(OplogEntry::Create {
+        timestamp,
+        worker_id: WorkerId {
+            component_id: ComponentId(Uuid::new_v4()),
+            worker_name: "test".to_string(),
+        },
+        component_version: 1,
+        args: vec![],
+        env: vec![],
+        account_id: AccountId {
+            value: "user1".to_string(),
+        },
+        parent: None,
+        component_size: 0,
+        initial_total_linear_memory_size: 0,
+    });
+
+    let oplog = oplog_service
+        .create(
+            &owned_worker_id,
+            create_entry.clone(),
+            ComponentType::Durable,
+        )
+        .await;
+
+    // The create entry is in the primary oplog now
+    let read1 = oplog_service
+        .read(&owned_worker_id, OplogIndex::INITIAL, 1)
+        .await
+        .into_iter()
+        .next();
+    let last_index_1 = oplog_service.get_last_index(&owned_worker_id).await;
+
+    // Archiving it to the secondary
+    let more = MultiLayerOplog::try_archive_blocking(&oplog).await;
+
+    // Reading it again, now it needs to be fetched from the secondary layer
+    let read2 = oplog_service
+        .read(&owned_worker_id, OplogIndex::INITIAL, 1)
+        .await
+        .into_iter()
+        .next();
+    let last_index_2 = oplog_service.get_last_index(&owned_worker_id).await;
+
+    // Archiving it to the tertiary
+    MultiLayerOplog::try_archive_blocking(&oplog).await;
+
+    // Reading it again, now it needs to be fetched from the tertiary layer
+    let read3 = oplog_service
+        .read(&owned_worker_id, OplogIndex::INITIAL, 1)
+        .await
+        .into_iter()
+        .next();
+    let last_index_3 = oplog_service.get_last_index(&owned_worker_id).await;
+
+    assert_eq!(more, Some(true));
+    assert_eq!(read1, Some((OplogIndex::INITIAL, create_entry.clone())));
+    assert_eq!(read2, Some((OplogIndex::INITIAL, create_entry.clone())));
+    assert_eq!(read3, Some((OplogIndex::INITIAL, create_entry)));
+
+    assert_eq!(last_index_1, OplogIndex::INITIAL);
+    assert_eq!(last_index_2, OplogIndex::INITIAL);
+    assert_eq!(last_index_3, OplogIndex::INITIAL);
+}
+
+#[test]
+async fn write_after_archive(_tracing: &Tracing) {
     write_after_archive_impl(false, Reopen::No).await;
 }
 
-#[tokio::test]
-async fn blob_write_after_archive() {
+#[test]
+async fn blob_write_after_archive(_tracing: &Tracing) {
     write_after_archive_impl(true, Reopen::No).await;
 }
 
-#[tokio::test]
-async fn write_after_archive_reopen() {
+#[test]
+async fn write_after_archive_reopen(_tracing: &Tracing) {
     write_after_archive_impl(false, Reopen::Yes).await;
 }
 
-#[tokio::test]
-async fn blob_write_after_archive_reopen() {
+#[test]
+async fn blob_write_after_archive_reopen(_tracing: &Tracing) {
     write_after_archive_impl(true, Reopen::Yes).await;
 }
 
-#[tokio::test]
-async fn write_after_archive_reopen_full() {
+#[test]
+async fn write_after_archive_reopen_full(_tracing: &Tracing) {
     write_after_archive_impl(false, Reopen::Full).await;
 }
 
-#[tokio::test]
-async fn blob_write_after_archive_reopen_full() {
+#[test]
+async fn blob_write_after_archive_reopen_full(_tracing: &Tracing) {
     write_after_archive_impl(true, Reopen::Full).await;
 }
 
@@ -1058,13 +1204,13 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     );
 }
 
-#[tokio::test]
-async fn empty_layer_gets_deleted() {
+#[test]
+async fn empty_layer_gets_deleted(_tracing: &Tracing) {
     empty_layer_gets_deleted_impl(false).await;
 }
 
-#[tokio::test]
-async fn blob_empty_layer_gets_deleted() {
+#[test]
+async fn blob_empty_layer_gets_deleted(_tracing: &Tracing) {
     empty_layer_gets_deleted_impl(true).await;
 }
 
@@ -1163,13 +1309,13 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
     assert!(tertiary_exists);
 }
 
-#[tokio::test]
-async fn scheduled_archive() {
+#[test]
+async fn scheduled_archive(_tracing: &Tracing) {
     scheduled_archive_impl(false).await;
 }
 
-#[tokio::test]
-async fn blob_scheduled_archive() {
+#[test]
+async fn blob_scheduled_archive(_tracing: &Tracing) {
     scheduled_archive_impl(true).await;
 }
 
@@ -1302,4 +1448,100 @@ async fn scheduled_archive_impl(use_blob: bool) {
     let last_oplog_index_3 = oplog_service.get_last_index(&owned_worker_id).await;
 
     assert_eq!(last_oplog_index_2, last_oplog_index_3);
+}
+
+#[test]
+async fn multilayer_scan_for_component(_tracing: &Tracing) {
+    let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
+    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let primary_oplog_service = Arc::new(
+        PrimaryOplogService::new(indexed_storage.clone(), blob_storage.clone(), 1, 100).await,
+    );
+    let secondary_layer: Arc<dyn OplogArchiveService + Send + Sync> = Arc::new(
+        CompressedOplogArchiveService::new(indexed_storage.clone(), 1),
+    );
+    let tertiary_layer: Arc<dyn OplogArchiveService + Send + Sync> =
+        Arc::new(BlobOplogArchiveService::new(blob_storage.clone(), 2));
+
+    let oplog_service = Arc::new(MultiLayerOplogService::new(
+        primary_oplog_service.clone(),
+        nev![secondary_layer.clone(), tertiary_layer.clone()],
+        1000, // no transfer will occur by reaching limit in this test
+        10,
+    ));
+    let account_id = AccountId {
+        value: "user1".to_string(),
+    };
+    let component_id = ComponentId(Uuid::new_v4());
+
+    // Adding some workers
+    let mut primary_workers = Vec::new();
+    let mut secondary_workers = Vec::new();
+    let mut tertiary_workers = Vec::new();
+    for i in 0..100 {
+        let worker_id = WorkerId {
+            component_id: component_id.clone(),
+            worker_name: format!("worker-{}", i),
+        };
+        let create_entry = OplogEntry::create(
+            worker_id.clone(),
+            1,
+            Vec::new(),
+            Vec::new(),
+            account_id.clone(),
+            None,
+            100,
+            100,
+        );
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+        let oplog = oplog_service
+            .create(&owned_worker_id, create_entry, ComponentType::Durable)
+            .await;
+
+        debug!("Created {worker_id}");
+        match i % 3 {
+            0 => primary_workers.push(worker_id),
+            1 => {
+                secondary_workers.push(worker_id.clone());
+                debug!("Archiving {worker_id} to secondary layer");
+                MultiLayerOplog::try_archive_blocking(&oplog).await;
+            }
+            2 => {
+                tertiary_workers.push(worker_id.clone());
+                debug!("Archiving {worker_id} to secondary layer");
+                let r = MultiLayerOplog::try_archive_blocking(&oplog).await;
+                debug!("[{r:?}] => archiving {worker_id} to tertiary layer");
+                MultiLayerOplog::try_archive_blocking(&oplog).await;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    debug!(
+        "Created {}/{}/{} workers, waiting for background processes",
+        primary_workers.len(),
+        secondary_workers.len(),
+        tertiary_workers.len()
+    );
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let mut cursor = ScanCursor::default();
+    let mut result = Vec::new();
+    let page_size = 10;
+    loop {
+        let (new_cursor, ids) = oplog_service
+            .scan_for_component(&account_id, &component_id, cursor, page_size)
+            .await
+            .unwrap();
+        debug!("Got {} elements, new cursor is {}", ids.len(), new_cursor);
+        result.extend(ids);
+        if new_cursor.is_finished() {
+            break;
+        } else {
+            cursor = new_cursor;
+        }
+    }
+
+    assert_eq!(result.len(), 100);
 }

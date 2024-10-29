@@ -24,22 +24,14 @@ pub mod spawned;
 #[async_trait]
 pub trait WorkerExecutorCluster {
     fn size(&self) -> usize;
-    fn kill_all(&self);
+    async fn kill_all(&self);
     async fn restart_all(&self);
 
-    fn stop(&self, index: usize);
+    async fn stop(&self, index: usize);
     async fn start(&self, index: usize);
-
-    fn blocking_start(&self, index: usize) {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(async move { self.start(index).await });
-    }
 
     fn to_vec(&self) -> Vec<Arc<dyn WorkerExecutor + Send + Sync + 'static>>;
 
-    fn stopped_indices(&self) -> Vec<usize>;
-    fn started_indices(&self) -> Vec<usize>;
+    async fn stopped_indices(&self) -> Vec<usize>;
+    async fn started_indices(&self) -> Vec<usize>;
 }

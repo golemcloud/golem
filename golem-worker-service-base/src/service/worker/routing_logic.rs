@@ -33,7 +33,7 @@ use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::get_delay;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{GolemError, GolemErrorInvalidShardId, GolemErrorUnknown};
-use golem_service_base::routing_table::{HasRoutingTableService, RoutingTableError};
+use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableError};
 
 use crate::service::worker::WorkerServiceError;
 
@@ -42,6 +42,7 @@ pub trait RoutingLogic {
     async fn call_worker_executor<Target, F, G, H, Out, R>(
         &self,
         target: Target,
+        description: impl AsRef<str> + Send,
         remote_call: F,
         response_map: G,
         error_map: H,
@@ -68,6 +69,7 @@ pub trait CallOnExecutor<Out: Send + 'static> {
 
     async fn call_on_worker_executor<F>(
         &self,
+        description: impl AsRef<str> + Send,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
     ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
@@ -90,6 +92,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
 
     async fn call_on_worker_executor<F>(
         &self,
+        description: impl AsRef<str> + Send,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
     ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
@@ -115,7 +118,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for WorkerId {
                 Some(
                     context
                         .worker_executor_clients()
-                        .call(pod.uri_02(), f)
+                        .call(description, pod.uri_02(), f)
                         .await
                         .map_err(|err| {
                             CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
@@ -140,6 +143,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for TargetWorkerId {
 
     async fn call_on_worker_executor<F>(
         &self,
+        description: impl AsRef<str> + Send,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
     ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
@@ -155,11 +159,15 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for TargetWorkerId {
     {
         if let Some(worker_id) = self.clone().try_into_worker_id() {
             // The TargetWorkerId had a worker name so we know which shard we need to call it on
-            worker_id.call_on_worker_executor(context, f).await
+            worker_id
+                .call_on_worker_executor(description, context, f)
+                .await
         } else {
             // The TargetWorkerId did not have a worker name specified so we can forward the call to a random
             // executor
-            RandomExecutor.call_on_worker_executor(context, f).await
+            RandomExecutor
+                .call_on_worker_executor(description, context, f)
+                .await
         }
     }
 
@@ -180,6 +188,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
 
     async fn call_on_worker_executor<F>(
         &self,
+        description: impl AsRef<str> + Send,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
     ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
@@ -205,7 +214,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for RandomExecutor {
                 Some(
                     context
                         .worker_executor_clients()
-                        .call(pod.uri_02(), f)
+                        .call(description, pod.uri_02(), f)
                         .await
                         .map_err(|status| {
                             CallWorkerExecutorErrorWithContext::failed_to_connect_to_pod(
@@ -232,6 +241,7 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
 
     async fn call_on_worker_executor<F>(
         &self,
+        description: impl AsRef<str> + Send,
         context: &(impl HasRoutingTableService + HasWorkerExecutorClients + Send + Sync),
         f: F,
     ) -> Result<(Option<Self::ResultOut>, Option<Pod>), CallWorkerExecutorErrorWithContext>
@@ -243,8 +253,9 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
             + Send
             + Sync
             + Clone
-            + 'static + 'static,
+            + 'static,
     {
+        let description = description.as_ref().to_string();
         let routing_table = context
             .routing_table_service()
             .get_routing_table()
@@ -261,9 +272,10 @@ impl<Out: Send + 'static> CallOnExecutor<Out> for AllExecutors {
                 let _ = fibers.spawn({
                     let pod = pod.clone();
                     let f = f.clone();
+                    let description = description.clone();
                     async move {
                         worker_executor_clients
-                            .call(pod.uri_02(), f)
+                            .call(description, pod.uri_02(), f)
                             .await
                             .map_err(|err| (err, pod))
                     }
@@ -349,6 +361,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
     async fn call_worker_executor<Target, F, G, H, Out, R>(
         &self,
         target: Target,
+        description: impl AsRef<str> + Send,
         remote_call: F,
         response_map: G,
         error_map: H,
@@ -373,7 +386,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
             let span = retry.start_attempt(Target::tracing_kind(&target));
 
             let worker_result = target
-                .call_on_worker_executor(self, remote_call.clone())
+                .call_on_worker_executor(description.as_ref(), self, remote_call.clone())
                 .await;
 
             let result = async {

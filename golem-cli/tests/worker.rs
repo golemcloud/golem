@@ -12,148 +12,217 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
+
 use crate::cli::{Cli, CliConfig, CliLive};
-use crate::RefKind;
+use crate::{RefKind, Tracing};
+use anyhow::anyhow;
 use assert2::assert;
 use golem_cli::model::component::ComponentView;
+use golem_cli::model::text::fmt::TextFormat;
+use golem_cli::model::text::worker::WorkerGetView;
 use golem_cli::model::{Format, IdempotencyKey, WorkersMetadataResponseView};
 use golem_client::model::{PublicOplogEntry, UpdateRecord};
 use golem_common::model::TargetWorkerId;
 use golem_common::uri::oss::url::{ComponentUrl, WorkerUrl};
 use golem_common::uri::oss::urn::WorkerUrn;
-use golem_test_framework::config::TestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use indoc::formatdoc;
-use libtest_mimic::{Failed, Trial};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
+use std::thread::sleep;
 use std::time::Duration;
-use strum::IntoEnumIterator;
+use test_r::core::{DynamicTestRegistration, TestType};
+use tracing::debug;
 
-fn make(
-    cli: CliLive,
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
-    ref_kind: RefKind,
-) -> Vec<Trial> {
-    let cli_suffix = if cli.config.short_args {
-        "short"
-    } else {
-        "long"
-    };
+inherit_test_dep!(EnvBasedTestDependencies);
+inherit_test_dep!(Tracing);
 
-    let suffix = format!("_{ref_kind}_{cli_suffix}");
-
-    let name = format!("CLI_{cli_suffix}_{ref_kind}");
-
-    let ctx = (deps, name.to_string(), cli, ref_kind);
-    vec![
-        Trial::test_in_context(
-            format!("worker_new_instance{suffix}"),
-            ctx.clone(),
-            worker_new_instance,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_and_await{suffix}"),
-            ctx.clone(),
-            worker_invoke_and_await,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_and_await_wave_params{suffix}"),
-            ctx.clone(),
-            worker_invoke_and_await_wave_params,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_no_params{suffix}"),
-            ctx.clone(),
-            worker_invoke_no_params,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_drop{suffix}"),
-            ctx.clone(),
-            worker_invoke_drop,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_json_params{suffix}"),
-            ctx.clone(),
-            worker_invoke_json_params,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_wave_params{suffix}"),
-            ctx.clone(),
-            worker_invoke_wave_params,
-        ),
-        Trial::test_in_context(
-            format!("worker_connect{suffix}"),
-            ctx.clone(),
-            worker_connect,
-        ),
-        Trial::test_in_context(
-            format!("worker_connect_failed{suffix}"),
-            ctx.clone(),
-            worker_connect_failed,
-        ),
-        Trial::test_in_context(
-            format!("worker_interrupt{suffix}"),
-            ctx.clone(),
-            worker_interrupt,
-        ),
-        Trial::test_in_context(
-            format!("worker_simulated_crash{suffix}"),
-            ctx.clone(),
-            worker_simulated_crash,
-        ),
-        Trial::test_in_context(format!("worker_list{suffix}"), ctx.clone(), worker_list),
-        Trial::test_in_context(format!("worker_update{suffix}"), ctx.clone(), worker_update),
-        Trial::test_in_context(
-            format!("worker_invoke_indexed_resource{suffix}"),
-            ctx.clone(),
-            worker_invoke_indexed_resource,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_without_name{suffix}"),
-            ctx.clone(),
-            worker_invoke_without_name,
-        ),
-        Trial::test_in_context(
-            format!("worker_invoke_without_name_ephemeral{suffix}"),
-            ctx.clone(),
-            worker_invoke_without_name_ephemeral,
-        ),
-        Trial::test_in_context(
-            format!("worker_get_oplog{suffix}"),
-            ctx.clone(),
-            worker_get_oplog,
-        ),
-    ]
+#[test_dep]
+fn cli(deps: &EnvBasedTestDependencies) -> CliLive {
+    CliLive::make("worker", Arc::new(deps.clone())).unwrap()
 }
 
-pub fn all(deps: Arc<dyn TestDependencies + Send + Sync + 'static>) -> Vec<Trial> {
-    let clis = vec![
-        CliLive::make("worker_short", deps.clone())
-            .unwrap()
-            .with_short_args(),
-        CliLive::make("worker_long", deps.clone())
-            .unwrap()
-            .with_long_args(),
-    ];
+#[test_gen]
+fn generated(r: &mut DynamicTestRegistration) {
+    make(r, "_name_short", "CLI_short_name", true, RefKind::Name);
+    make(r, "_name_long", "CLI_long_name", false, RefKind::Name);
+    make(r, "_url_short", "CLI_short_url", true, RefKind::Url);
+    make(r, "_url_long", "CLI_long_url", false, RefKind::Url);
+    make(r, "_urn_short", "CLI_short_urn", true, RefKind::Urn);
+    make(r, "_urn_long", "CLI_long_urn", false, RefKind::Urn);
+}
 
-    let mut tests = Vec::new();
-
-    for cli in clis {
-        for ref_kind in RefKind::iter() {
-            tests.append(&mut make(cli.clone(), deps.clone(), ref_kind));
+fn make(
+    r: &mut DynamicTestRegistration,
+    suffix: &'static str,
+    name: &'static str,
+    short: bool,
+    ref_kind: RefKind,
+) {
+    add_test!(
+        r,
+        format!("worker_new_instance{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_new_instance((deps, name.to_string(), cli.with_args(short), ref_kind))
         }
-    }
-
-    tests
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_and_await{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_and_await((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_and_await_wave_params{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_and_await_wave_params((
+                deps,
+                name.to_string(),
+                cli.with_args(short),
+                ref_kind,
+            ))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_no_params{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_no_params((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_drop{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_drop((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_json_params{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_json_params((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_wave_params{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_wave_params((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_connect{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_connect((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_connect_failed{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_connect_failed((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_interrupt{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_interrupt((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_simulated_crash{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_simulated_crash((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_list{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_list((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_update{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_update((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_indexed_resource{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_indexed_resource((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_without_name{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_without_name((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_invoke_without_name_ephemeral{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_invoke_without_name_ephemeral((
+                deps,
+                name.to_string(),
+                cli.with_args(short),
+                ref_kind,
+            ))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_get_oplog{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_get_oplog((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
+    add_test!(
+        r,
+        format!("worker_search_oplog{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            worker_search_oplog((deps, name.to_string(), cli.with_args(short), ref_kind))
+        }
+    );
 }
 
 pub fn add_component_from_file(
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    deps: &(impl TestDependencies + Send + Sync + 'static),
     component_name: &str,
     cli: &CliLive,
     file: &str,
-) -> Result<ComponentView, Failed> {
+) -> anyhow::Result<ComponentView> {
     let env_service = deps.component_directory().join(file);
     let cfg = &cli.config;
 
@@ -167,11 +236,11 @@ pub fn add_component_from_file(
 }
 
 pub fn add_ephemeral_component_from_file(
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    deps: &(impl TestDependencies + Send + Sync + 'static),
     component_name: &str,
     cli: &CliLive,
     file: &str,
-) -> Result<ComponentView, Failed> {
+) -> anyhow::Result<ComponentView> {
     let env_service = deps.component_directory().join(file);
     let cfg = &cli.config;
 
@@ -186,10 +255,10 @@ pub fn add_ephemeral_component_from_file(
 }
 
 pub fn add_environment_service_component(
-    deps: Arc<dyn TestDependencies + Send + Sync + 'static>,
+    deps: &(impl TestDependencies + Send + Sync + 'static),
     component_name: &str,
     cli: &CliLive,
-) -> Result<ComponentView, Failed> {
+) -> anyhow::Result<ComponentView> {
     add_component_from_file(deps, component_name, cli, "environment-service.wasm")
 }
 
@@ -213,12 +282,12 @@ fn component_ref_value(component: &ComponentView, ref_kind: RefKind) -> String {
 
 fn worker_new_instance(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component =
         add_environment_service_component(deps, &format!("{name} worker new instance"), &cli)?;
     let worker_name = format!("{name}_worker_new_instance");
@@ -278,12 +347,12 @@ fn worker_ref(
 
 fn worker_invoke_and_await(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component =
         add_environment_service_component(deps, &format!("{name} worker_invoke_and_await"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_and_await");
@@ -375,12 +444,12 @@ fn worker_invoke_and_await(
 
 fn worker_invoke_and_await_wave_params(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component = add_component_from_file(
         deps,
         &format!("{name} worker_invoke_and_await_wave_params"),
@@ -442,12 +511,12 @@ fn worker_invoke_and_await_wave_params(
 
 fn worker_invoke_drop(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component = add_component_from_file(
         deps,
         &format!("{name} worker_invoke_drop"),
@@ -523,12 +592,12 @@ fn worker_invoke_drop(
 
 fn worker_invoke_no_params(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component =
         add_environment_service_component(deps, &format!("{name} worker_invoke_no_params"), &cli)?;
     let worker_name = format!("{name}_worker_invoke_no_params");
@@ -556,12 +625,12 @@ fn worker_invoke_no_params(
 
 fn worker_invoke_json_params(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component = add_environment_service_component(
         deps,
         &format!("{name} worker_invoke_json_params"),
@@ -593,12 +662,12 @@ fn worker_invoke_json_params(
 
 fn worker_invoke_wave_params(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component = add_component_from_file(
         deps,
         &format!("{name} worker_invoke_wave_params"),
@@ -635,12 +704,12 @@ fn worker_invoke_wave_params(
 
 fn worker_connect(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let cfg = &cli.config;
 
     let stdout_service = deps.component_directory().join("write-stdout.wasm");
@@ -670,7 +739,7 @@ fn worker_connect(
     let stdout = child
         .stdout
         .take()
-        .ok_or::<Failed>("Can't get golem cli stdout".into())?;
+        .ok_or(anyhow!("Can't get golem cli stdout"))?;
 
     std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
@@ -710,12 +779,12 @@ fn worker_connect(
 
 fn worker_connect_failed(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let cfg = &cli.config;
 
     let stdout_service = deps.component_directory().join("write-stdout.wasm");
@@ -741,12 +810,12 @@ fn worker_connect_failed(
 
 fn worker_interrupt(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let cfg = &cli.config;
 
     let interruption_service = deps.component_directory().join("interruption.wasm");
@@ -775,12 +844,12 @@ fn worker_interrupt(
 
 fn worker_simulated_crash(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let cfg = &cli.config;
 
     let interruption_service = deps.component_directory().join("interruption.wasm");
@@ -809,12 +878,12 @@ fn worker_simulated_crash(
 
 fn worker_list(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component = add_environment_service_component(deps, &format!("{name} worker_list"), &cli)?;
     let cfg = &cli.config;
 
@@ -915,12 +984,12 @@ fn worker_list(
 
 fn worker_update(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let cfg = &cli.config;
     let component_v1 = deps.component_directory().join("update-test-v1.wasm");
     let component: ComponentView = cli.run(&[
@@ -932,7 +1001,7 @@ fn worker_update(
     ])?;
     let worker_name = format!("{name}_worker_update");
 
-    let workers_list = || -> Result<WorkersMetadataResponseView, Failed> {
+    let workers_list = || -> Result<WorkersMetadataResponseView, anyhow::Error> {
         cli.run_trimmed(&[
             "worker",
             "list",
@@ -980,6 +1049,25 @@ fn worker_update(
         UpdateRecord::FailedUpdate(_) => panic!("Update failed"),
     };
 
+    loop {
+        let mut cli_args = vec!["worker".to_owned(), "get".to_owned()];
+        cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+        let result: WorkerGetView = cli.run(&cli_args)?;
+
+        if result.0.component_version == target_version {
+            break;
+        } else {
+            debug!("Waiting for worker to update...");
+            sleep(Duration::from_secs(2));
+        }
+    }
+
+    let mut cli_args = vec!["worker".to_owned(), "oplog".to_owned()];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let result: Vec<(u64, PublicOplogEntry)> = cli.run(&cli_args)?;
+    result.print();
+
+    assert_eq!(result.len(), 3); // create, enqueue update, successful update
     assert_eq!(original_updates, 0);
     assert_eq!(target_version, 1);
     Ok(())
@@ -987,12 +1075,12 @@ fn worker_update(
 
 fn worker_invoke_indexed_resource(
     (deps, name, cli, ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component = add_component_from_file(
         deps,
         &format!("{name}_worker_invoke_indexed_resource"),
@@ -1049,17 +1137,22 @@ fn worker_invoke_indexed_resource(
         json!({"typ":{"items":[{"type":"U64"}],"type":"Tuple"},"value":[3]})
     );
 
+    let mut cli_args = vec!["worker".to_owned(), "oplog".to_owned()];
+    cli_args.append(&mut worker_ref(cfg, ref_kind, &component, &worker_name));
+    let result: Vec<(u64, PublicOplogEntry)> = cli.run(&cli_args)?;
+    result.print();
+
     Ok(())
 }
 
 fn worker_invoke_without_name(
     (deps, name, cli, _ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component = add_environment_service_component(
         deps,
         &format!("{name} worker_invoke_without_name"),
@@ -1089,12 +1182,12 @@ fn worker_invoke_without_name(
 
 fn worker_invoke_without_name_ephemeral(
     (deps, name, cli, _ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component = add_ephemeral_component_from_file(
         deps,
         &format!("{name} worker_invoke_without_name_ephemeral"),
@@ -1125,12 +1218,12 @@ fn worker_invoke_without_name_ephemeral(
 
 fn worker_get_oplog(
     (deps, name, cli, _ref_kind): (
-        Arc<dyn TestDependencies + Send + Sync + 'static>,
+        &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
         RefKind,
     ),
-) -> Result<(), Failed> {
+) -> anyhow::Result<()> {
     let component = add_component_from_file(
         deps,
         &format!("{name} worker_get_oplog"),
@@ -1174,7 +1267,141 @@ fn worker_get_oplog(
     let result: Vec<(u64, PublicOplogEntry)> =
         cli.run(&["worker", "oplog", &cfg.arg('W', "worker"), &url.to_string()])?;
 
-    assert_eq!(result.len(), 14);
+    result.print();
 
+    // Whether there is an "enqueued invocation" entry or just directly started invocation
+    // depends on timing
+    assert!(result.len() >= 12 && result.len() <= 14);
+
+    Ok(())
+}
+
+fn worker_search_oplog(
+    (deps, name, cli, _ref_kind): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+        RefKind,
+    ),
+) -> anyhow::Result<()> {
+    let component = add_component_from_file(
+        deps,
+        &format!("{name} worker_search_oplog"),
+        &cli,
+        "shopping-cart.wasm",
+    )?;
+    let cfg = &cli.config;
+
+    let url = WorkerUrl {
+        component_name: component.component_name.clone(),
+        worker_name: Some("search-oplog-1".to_string()),
+    };
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{initialize-cart}",
+        &cfg.arg('a', "arg"),
+        r#""test-user-1""#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{add-item}",
+        &cfg.arg('a', "arg"),
+        r#"{ product-id: "G1000", name: "Golem T-Shirt M", price: 100.0, quantity: 5 }"#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{add-item}",
+        &cfg.arg('a', "arg"),
+        r#"{ product-id: "G1001", name: "Golem Cloud Subscription 1y", price: 999999.0, quantity: 1 }"#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{add-item}",
+        &cfg.arg('a', "arg"),
+        r#"{ product-id: "G1002", name: "Mud Golem", price: 11.0, quantity: 10 }"#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{update-item-quantity}",
+        &cfg.arg('a', "arg"),
+        r#""G1002""#,
+        &cfg.arg('a', "arg"),
+        r#"20"#,
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{get-cart-contents}",
+    ])?;
+
+    let _: Value = cli.run_json(&[
+        "worker",
+        "invoke-and-await",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        &cfg.arg('f', "function"),
+        "golem:it/api.{checkout}",
+    ])?;
+
+    let _oplog: Vec<(u64, PublicOplogEntry)> =
+        cli.run(&["worker", "oplog", &cfg.arg('W', "worker"), &url.to_string()])?;
+
+    let result1: Vec<(u64, PublicOplogEntry)> = cli.run(&[
+        "worker",
+        "oplog",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        "--query",
+        "G1002",
+    ])?;
+    let result2: Vec<(u64, PublicOplogEntry)> = cli.run(&[
+        "worker",
+        "oplog",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        "--query",
+        "imported-function",
+    ])?;
+    let result3: Vec<(u64, PublicOplogEntry)> = cli.run(&[
+        "worker",
+        "oplog",
+        &cfg.arg('W', "worker"),
+        &url.to_string(),
+        "--query",
+        "product-id:G1001 OR product-id:G1000",
+    ])?;
+
+    assert_eq!(result1.len(), 4); // two invocations and two log messages
+    assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
+    assert_eq!(result3.len(), 2); // two invocations
     Ok(())
 }

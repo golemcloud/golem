@@ -53,6 +53,7 @@ pub struct ShardManagerServiceGrpc {
 impl ShardManagerServiceGrpc {
     pub fn new(config: ShardManagerServiceGrpcConfig) -> Self {
         let client = GrpcClient::new(
+            "shard_manager",
             |channel| {
                 ShardManagerServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
@@ -83,7 +84,7 @@ impl ShardManagerService for ShardManagerServiceGrpc {
                 let pod_name = pod_name.clone();
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("register", move |client| {
                             Box::pin(client.register(shardmanager::v1::RegisterRequest {
                                 host: host.clone(),
                                 port: *port as i32,

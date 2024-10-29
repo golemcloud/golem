@@ -13,18 +13,21 @@
 // limitations under the License.
 
 pub use byte_code::*;
+pub use compiler_output::*;
 use golem_wasm_ast::analysis::AnalysedExport;
 pub use ir::*;
 pub use type_with_unit::*;
+pub use worker_functions_in_rib::*;
 
 use crate::type_registry::FunctionTypeRegistry;
-use crate::{Expr, RibInputTypeInfo};
-use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
+use crate::{Expr, InferredExpr, RibInputTypeInfo};
 
 mod byte_code;
+mod compiler_output;
 mod desugar;
 mod ir;
 mod type_with_unit;
+mod worker_functions_in_rib;
 
 pub fn compile(
     expr: &Expr,
@@ -42,13 +45,12 @@ pub fn compile_with_limited_globals(
     allowed_global_variables: Option<Vec<String>>,
 ) -> Result<CompilerOutput, String> {
     let type_registry = FunctionTypeRegistry::from_export_metadata(export_metadata);
-    let mut expr_cloned = expr.clone();
-    expr_cloned
-        .infer_types(&type_registry)
-        .map_err(|e| e.join("\n"))?;
+    let inferred_expr = InferredExpr::from_expr(expr, &type_registry)?;
+    let function_calls_identified =
+        WorkerFunctionsInRib::from_inferred_expr(&inferred_expr, &type_registry)?;
 
     let global_input_type_info =
-        RibInputTypeInfo::from_expr(&mut expr_cloned).map_err(|e| format!("Error: {}", e))?;
+        RibInputTypeInfo::from_expr(&inferred_expr).map_err(|e| format!("Error: {}", e))?;
 
     if let Some(allowed_global_variables) = &allowed_global_variables {
         let mut un_allowed_variables = vec![];
@@ -68,45 +70,11 @@ pub fn compile_with_limited_globals(
         }
     }
 
-    let byte_code = RibByteCode::from_expr(expr_cloned)?;
+    let byte_code = RibByteCode::from_expr(&inferred_expr)?;
 
     Ok(CompilerOutput {
+        worker_invoke_calls: function_calls_identified,
         byte_code,
         global_input_type_info,
     })
-}
-
-#[derive(Debug, Clone)]
-pub struct CompilerOutput {
-    pub byte_code: RibByteCode,
-    pub global_input_type_info: RibInputTypeInfo,
-}
-
-impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
-    type Error = String;
-
-    fn try_from(value: ProtoCompilerOutput) -> Result<Self, Self::Error> {
-        let proto_rib_input = value.rib_input.ok_or("Missing rib_input")?;
-        let proto_byte_code = value.byte_code.ok_or("Missing byte_code")?;
-        let rib_input = RibInputTypeInfo::try_from(proto_rib_input)?;
-        let byte_code = RibByteCode::try_from(proto_byte_code)?;
-
-        Ok(CompilerOutput {
-            byte_code,
-            global_input_type_info: rib_input,
-        })
-    }
-}
-
-impl From<CompilerOutput> for ProtoCompilerOutput {
-    fn from(value: CompilerOutput) -> Self {
-        ProtoCompilerOutput {
-            byte_code: Some(golem_api_grpc::proto::golem::rib::RibByteCode::from(
-                value.byte_code,
-            )),
-            rib_input: Some(golem_api_grpc::proto::golem::rib::RibInputType::from(
-                value.global_input_type_info,
-            )),
-        }
-    }
 }

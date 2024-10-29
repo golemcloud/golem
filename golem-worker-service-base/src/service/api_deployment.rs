@@ -16,7 +16,7 @@ use crate::api_definition::{
     ApiDefinitionId, ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 
@@ -32,16 +32,21 @@ use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::api_definition::ApiDefinitionIdWithVersion;
+use crate::service::component::ComponentService;
 use chrono::Utc;
+use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
+use rib::WorkerFunctionsInRib;
 use std::fmt::{Debug, Display};
 
 #[async_trait]
-pub trait ApiDeploymentService<Namespace> {
+pub trait ApiDeploymentService<AuthCtx, Namespace> {
     async fn deploy(
         &self,
         deployment: &ApiDeploymentRequest<Namespace>,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), ApiDeploymentError<Namespace>>;
 
     async fn undeploy(
@@ -88,6 +93,8 @@ pub enum ApiDeploymentError<Namespace> {
     InternalRepoError(RepoError),
     #[error("Internal error: failed to convert {what}: {error}")]
     InternalConversionError { what: String, error: String },
+    #[error("Internal error: failed to create component constraints {0}")]
+    ComponentConstraintCreateError(String),
 }
 
 impl<T> ApiDeploymentError<T> {
@@ -114,6 +121,7 @@ impl<Namespace: Display> SafeDisplay for ApiDeploymentError<Namespace> {
             ApiDeploymentError::ApiDefinitionsConflict(_) => self.to_string(),
             ApiDeploymentError::InternalRepoError(inner) => inner.to_safe_string(),
             ApiDeploymentError::InternalConversionError { .. } => self.to_string(),
+            ApiDeploymentError::ComponentConstraintCreateError(_) => self.to_string(),
         }
     }
 }
@@ -158,19 +166,22 @@ impl ConflictChecker for HttpApiDefinition {
     }
 }
 
-pub struct ApiDeploymentServiceDefault {
+pub struct ApiDeploymentServiceDefault<AuthCtx> {
     pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
     pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
 }
 
-impl ApiDeploymentServiceDefault {
+impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
     pub fn new(
         deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
+        component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     ) -> Self {
         Self {
             deployment_repo,
             definition_repo,
+            component_service,
         }
     }
 
@@ -202,17 +213,64 @@ impl ApiDeploymentServiceDefault {
 
         Ok(())
     }
+
+    fn get_worker_functions_in_api_definitions<Namespace>(
+        definitions: Vec<CompiledHttpApiDefinition>,
+    ) -> Result<HashMap<ComponentId, FunctionConstraintCollection>, ApiDeploymentError<Namespace>>
+    {
+        let mut worker_functions_in_rib = HashMap::new();
+
+        for definition in definitions {
+            for route in definition.routes {
+                let component_id = route.binding.component_id;
+                let worker_calls = route.binding.response_compiled.worker_calls;
+                if let Some(worker_calls) = worker_calls {
+                    worker_functions_in_rib
+                        .entry(component_id.component_id)
+                        .or_insert_with(Vec::new)
+                        .push(worker_calls)
+                }
+            }
+        }
+
+        Self::merge_worker_functions_in_rib(worker_functions_in_rib)
+    }
+
+    fn merge_worker_functions_in_rib<Namespace>(
+        worker_functions: HashMap<ComponentId, Vec<WorkerFunctionsInRib>>,
+    ) -> Result<HashMap<ComponentId, FunctionConstraintCollection>, ApiDeploymentError<Namespace>>
+    {
+        let mut merged_worker_functions: HashMap<ComponentId, FunctionConstraintCollection> =
+            HashMap::new();
+
+        for (component_id, worker_functions_in_rib) in worker_functions {
+            let function_constraints = worker_functions_in_rib
+                .iter()
+                .map(FunctionConstraintCollection::from_worker_functions_in_rib)
+                .collect::<Vec<_>>();
+
+            let merged_calls = FunctionConstraintCollection::try_merge(function_constraints)
+                .map_err(|err| ApiDeploymentError::ApiDefinitionsConflict(err))?;
+
+            merged_worker_functions.insert(component_id, merged_calls);
+        }
+
+        Ok(merged_worker_functions)
+    }
 }
 
 #[async_trait]
-impl<Namespace> ApiDeploymentService<Namespace> for ApiDeploymentServiceDefault
+impl<AuthCtx, Namespace> ApiDeploymentService<AuthCtx, Namespace>
+    for ApiDeploymentServiceDefault<AuthCtx>
 where
+    AuthCtx: Send + Sync,
     Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
     <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
 {
     async fn deploy(
         &self,
         deployment: &ApiDeploymentRequest<Namespace>,
+        auth_ctx: &AuthCtx,
     ) -> Result<(), ApiDeploymentError<Namespace>> {
         info!(namespace = %deployment.namespace, "Deploy API definitions");
 
@@ -252,9 +310,10 @@ where
 
         let mut set_not_draft: Vec<ApiDefinitionIdWithVersion> = vec![];
 
-        let mut definitions: Vec<CompiledHttpApiDefinition> = vec![];
+        let mut new_definitions: Vec<CompiledHttpApiDefinition> = vec![];
 
         for api_definition_key in deployment.api_definition_keys.clone() {
+            // If definition is not present in existing deployment
             if !existing_api_definition_keys.contains(&api_definition_key) {
                 let record = self
                     .definition_repo
@@ -279,14 +338,14 @@ where
                         let definition = record.try_into().map_err(|e| {
                             ApiDeploymentError::conversion_error("API definition record", e)
                         })?;
-                        definitions.push(definition);
+                        new_definitions.push(definition);
                     }
                 }
 
                 new_deployment_records.push(ApiDeploymentRecord::new(
                     deployment.namespace.clone(),
                     deployment.site.clone(),
-                    api_definition_key.clone(),
+                    api_definition_key,
                     created_at,
                 ));
             }
@@ -296,10 +355,11 @@ where
             .get_definitions_by_site(&(&deployment.site.clone()).into())
             .await?;
 
-        definitions.extend(existing_definitions);
+        new_definitions.extend(existing_definitions);
 
         let conflicting_definitions = HttpApiDefinition::find_conflicts(
-            definitions
+            new_definitions
+                .clone()
                 .into_iter()
                 .map(|x| x.into())
                 .collect::<Vec<HttpApiDefinition>>()
@@ -335,6 +395,18 @@ where
                         false,
                     )
                     .await?;
+            }
+
+            let constraints =
+                Self::get_worker_functions_in_api_definitions(new_definitions.clone())?;
+
+            for (component_id, constraints) in constraints {
+                self.component_service
+                    .create_or_update_constraints(&component_id, constraints, auth_ctx)
+                    .await
+                    .map_err(|err| {
+                        ApiDeploymentError::ComponentConstraintCreateError(err.to_safe_string())
+                    })?;
             }
 
             self.deployment_repo.create(new_deployment_records).await?;
@@ -571,6 +643,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::service::api_deployment::ApiDeploymentError;
     use golem_common::SafeDisplay;
     use golem_service_base::repo::RepoError;

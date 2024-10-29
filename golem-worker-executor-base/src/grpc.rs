@@ -38,7 +38,8 @@ use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    get_file_response, get_file_success_response, ConnectWorkerRequest, DeleteWorkerRequest, GetFileRequest, GetFileResponse, GetFilesRequest, GetFilesResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, UpdateWorkerRequest, UpdateWorkerResponse
+    get_file_response, get_file_success_response, ConnectWorkerRequest, DeleteWorkerRequest, GetFileRequest, GetFileResponse, GetFilesRequest, GetFilesResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -53,7 +54,9 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 
-use crate::model::public_oplog::{find_component_version_at, get_public_oplog_chunk};
+use crate::model::public_oplog::{
+    find_component_version_at, get_public_oplog_chunk, search_public_oplog,
+};
 use crate::model::{InterruptKind, LastError};
 use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
@@ -522,8 +525,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
 
         match &worker_status.status {
-            WorkerStatus::Suspended | WorkerStatus::Interrupted => {
-                info!("Activating ${worker_status:?} worker {worker_id} due to explicit resume request");
+            WorkerStatus::Suspended | WorkerStatus::Interrupted | WorkerStatus::Idle => {
+                info!(
+                    "Activating {:?} worker {worker_id} due to explicit resume request",
+                    worker_status.status
+                );
                 let _ = Worker::get_or_create_running(
                     &self.services,
                     &owned_worker_id,
@@ -536,7 +542,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 Ok(())
             }
             _ => Err(GolemError::invalid_request(format!(
-                "Worker {worker_id} is not suspended or interrupted",
+                "Worker {worker_id} is not suspended, interrupted or idle",
                 worker_id = worker_id
             ))),
         }
@@ -1108,6 +1114,91 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .map_err(GolemError::unknown)?,
                         next,
                         first_index_in_chunk: chunk.first_index_in_chunk.into(),
+                        last_index: chunk.last_index.into(),
+                    },
+                ),
+            ),
+        })
+    }
+
+    async fn search_oplog_internal(
+        &self,
+        request: SearchOplogRequest,
+    ) -> Result<SearchOplogResponse, GolemError> {
+        let worker_id = request
+            .worker_id
+            .ok_or(GolemError::invalid_request("worker_id not found"))?;
+        let worker_id: WorkerId = worker_id.try_into().map_err(GolemError::invalid_request)?;
+
+        let account_id = request
+            .account_id
+            .ok_or(GolemError::invalid_request("account_id not found"))?;
+        let account_id: AccountId = account_id.into();
+
+        let owned_worker_id = OwnedWorkerId::new(&account_id, &worker_id);
+
+        self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+
+        let chunk = match request.cursor {
+            Some(cursor) => {
+                search_public_oplog(
+                    self.component_service(),
+                    self.oplog_service(),
+                    &owned_worker_id,
+                    cursor.current_component_version,
+                    OplogIndex::from_u64(cursor.next_oplog_index),
+                    min(request.count as usize, 100), // TODO: configurable maximum,
+                    &request.query,
+                )
+                .await
+                .map_err(GolemError::unknown)?
+            }
+            None => {
+                let start = OplogIndex::INITIAL;
+                let initial_component_version =
+                    find_component_version_at(self.oplog_service(), &owned_worker_id, start)
+                        .await?;
+                search_public_oplog(
+                    self.component_service(),
+                    self.oplog_service(),
+                    &owned_worker_id,
+                    initial_component_version,
+                    start,
+                    min(request.count as usize, 100), // TODO: configurable maximum,
+                    &request.query,
+                )
+                .await
+                .map_err(GolemError::unknown)?
+            }
+        };
+
+        let next = if chunk.entries.is_empty() {
+            None
+        } else {
+            Some(golem::worker::OplogCursor {
+                next_oplog_index: chunk.next_oplog_index.into(),
+                current_component_version: chunk.current_component_version,
+            })
+        };
+
+        Ok(SearchOplogResponse {
+            result: Some(
+                golem::workerexecutor::v1::search_oplog_response::Result::Success(
+                    golem::workerexecutor::v1::SearchOplogSuccessResponse {
+                        entries: chunk
+                            .entries
+                            .into_iter()
+                            .map(|(idx, entry)| {
+                                entry.try_into().map(|entry: golem::worker::OplogEntry| {
+                                    golem::worker::OplogEntryWithIndex {
+                                        oplog_index: idx.into(),
+                                        entry: Some(entry),
+                                    }
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()
+                            .map_err(GolemError::unknown)?,
+                        next,
                         last_index: chunk.last_index.into(),
                     },
                 ),
@@ -1980,6 +2071,35 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 }))))
             }
         }   
+    }
+
+    async fn search_oplog(
+        &self,
+        request: Request<SearchOplogRequest>,
+    ) -> Result<Response<SearchOplogResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "search_oplog",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let result = self
+            .search_oplog_internal(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(response) => record.succeed(Ok(Response::new(response))),
+            Err(err) => record.fail(
+                Ok(Response::new(SearchOplogResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::search_oplog_response::Result::Failure(
+                            err.clone().into(),
+                        ),
+                    ),
+                })),
+                &err,
+            ),
+        }
     }
 }
 

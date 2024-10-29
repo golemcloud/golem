@@ -9,7 +9,7 @@ description = "Shared code between Golem services"
 
 
 [lib]
-
+harness = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
@@ -22,6 +22,7 @@ async_zip = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
+combine = { workspace = true }
 console-subscriber = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
@@ -32,6 +33,7 @@ git-version = { workspace = true }
 humantime-serde = { workspace = true }
 http_02 = { workspace = true }
 iso8601-timestamp = { workspace = true }
+itertools = { workspace = true }
 lazy_static = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
@@ -40,6 +42,7 @@ prost = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
 range-set-blaze = "0.1.16"
+regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -52,7 +55,8 @@ tracing-serde = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }
-itertools = { workspace = true }
 
 [dev-dependencies]
+anyhow = { workspace = true }
+test-r = { workspace = true }
 tracing-test = { workspace = true }

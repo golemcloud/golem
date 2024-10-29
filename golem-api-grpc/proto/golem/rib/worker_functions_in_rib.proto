@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package golem.rib;
+import "wasm/ast/type.proto";
+import "golem/rib/registry_key.proto";
+
+message WorkerFunctionsInRib {
+    repeated WorkerFunctionType function_calls = 1;
+}
+
+message WorkerFunctionType {
+    RegistryKey function_key = 1;
+    repeated wasm.ast.Type parameter_types = 2;
+    repeated wasm.ast.Type return_types = 3;
+}

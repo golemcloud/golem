@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package golem.rib;
+
+message RegistryKey {
+    oneof key_type {
+        FunctionName function_name = 1;
+        FunctionNameWithInterface function_name_with_interface = 2;
+    }
+}
+
+message FunctionName {
+    string name = 1;
+}
+
+message FunctionNameWithInterface {
+    string interface_name = 1;
+    string function_name = 2;
+}
+

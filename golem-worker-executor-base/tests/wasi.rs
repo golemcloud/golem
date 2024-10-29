@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test};
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::net::SocketAddr;
@@ -21,6 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
@@ -41,11 +44,19 @@ use url::Url;
 use walkdir::WalkDir;
 use warp::Filter;
 
-#[tokio::test]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn write_stdout() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn write_stdout(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("write-stdout").await;
     let worker_id = executor.start_worker(&component_id, "write-stdout-1").await;
@@ -63,11 +74,15 @@ async fn write_stdout() {
     check!(stdout_events(events.into_iter()) == vec!["Sample text written to the output\n"]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn write_stderr() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn write_stderr(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("write-stderr").await;
     let worker_id = executor.start_worker(&component_id, "write-stderr-1").await;
@@ -85,11 +100,15 @@ async fn write_stderr() {
     check!(stderr_events(events.into_iter()) == vec!["Sample text written to the error output\n"]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn read_stdin() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn read_stdin(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("read-stdin").await;
     let worker_id = executor.start_worker(&component_id, "read-stdin-1").await;
@@ -101,11 +120,15 @@ async fn read_stdin() {
     assert!(result.is_err()); // stdin is disabled
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn clocks() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn clocks(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("clocks").await;
     let worker_id = executor.start_worker(&component_id, "clocks-1").await;
@@ -147,11 +170,15 @@ async fn clocks() {
     check!(odt_diff < 5.0);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn file_write_read_delete() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn file_write_read_delete(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-write-read-delete").await;
     let mut env = HashMap::new();
@@ -178,11 +205,15 @@ async fn file_write_read_delete() {
 }
 
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn file_initial() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn file_initial(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let files = InitialFileSet {
         files: vec![
@@ -386,11 +417,15 @@ async fn file_initial() {
     }
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn directories() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn directories(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("directories").await;
     let worker_id = executor.start_worker(&component_id, "directories-1").await;
@@ -440,11 +475,15 @@ async fn directories() {
     check!(tuple[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn directories_replay() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn directories_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("directories").await;
     let worker_id = executor.start_worker(&component_id, "directories-1").await;
@@ -455,7 +494,7 @@ async fn directories_replay() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     // NOTE: if the directory listing would not be stable, replay would fail with divergence error
 
@@ -502,11 +541,15 @@ async fn directories_replay() {
     check!(tuple[3] == Value::U32(1)); // final number of entries NOTE: this should be 0 if remove_directory worked
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn file_write_read() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn file_write_read(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-1").await;
@@ -524,7 +567,7 @@ async fn file_write_read() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let result = executor
         .invoke_and_await(
@@ -543,14 +586,18 @@ async fn file_write_read() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn http_client() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn http_client(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let host_http_port = context.host_http_port();
-    let http_server = tokio::spawn(async move {
+    let http_server = spawn(async move {
         let route = warp::path::end()
             .and(warp::post())
             .and(warp::header::<String>("X-Test"))
@@ -601,15 +648,19 @@ async fn http_client() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn http_client_using_reqwest() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn http_client_using_reqwest(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
     let host_http_port = context.host_http_port();
-    let http_server = tokio::spawn(async move {
+    let http_server = spawn(async move {
         let route = warp::path("post-example")
             .and(warp::post())
             .and(warp::header::optional::<String>("X-Test"))
@@ -663,11 +714,15 @@ async fn http_client_using_reqwest() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn environment_service() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn environment_service(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("environment-service").await;
     let args = vec!["test-arg".to_string()];
@@ -718,14 +773,18 @@ async fn environment_service() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn http_client_response_persisted_between_invocations() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn http_client_response_persisted_between_invocations(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
     let host_http_port = context.host_http_port();
 
-    let http_server = tokio::spawn(async move {
+    let http_server = spawn(async move {
         let call_count = Arc::new(AtomicU8::new(0));
         let route = warp::path::end()
             .and(warp::post())
@@ -775,7 +834,7 @@ async fn http_client_response_persisted_between_invocations() {
     drop(executor);
     drop(rx);
 
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
     let _rx = executor.capture_output(&worker_id).await;
 
     let result = executor
@@ -792,16 +851,20 @@ async fn http_client_response_persisted_between_invocations() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn http_client_interrupting_response_stream() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn http_client_interrupting_response_stream(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
     let host_http_port = context.host_http_port();
 
     let (signal_tx, mut signal_rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let http_server = tokio::spawn(async move {
+    let http_server = spawn(async move {
         let route = warp::path("big-byte-array").and(warp::get()).map(move || {
             let (sender, body) = Body::channel();
             let signal_tx = signal_tx.clone();
@@ -878,11 +941,15 @@ async fn http_client_interrupting_response_stream() {
     check!(result == Ok(vec![Value::U64(100 * 1024)]));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn sleep() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn sleep(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("clock-service").await;
     let worker_id = executor
@@ -895,7 +962,7 @@ async fn sleep() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let start = Instant::now();
     let _ = executor
@@ -907,11 +974,15 @@ async fn sleep() {
     check!(duration.as_secs() < 2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn resuming_sleep() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn resuming_sleep(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("clock-service").await;
     let worker_id = executor
@@ -938,7 +1009,7 @@ async fn resuming_sleep() {
 
     info!("Restarting worker...");
 
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     info!("Worker restarted");
 
@@ -953,11 +1024,15 @@ async fn resuming_sleep() {
     check!(duration.as_secs() >= 10);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn failing_worker() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn failing_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("failing-component").await;
     let worker_id = executor
@@ -992,11 +1067,15 @@ async fn failing_worker() {
     check!(worker_error_message(&result3.err().unwrap()).starts_with("Previous invocation failed"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn file_service_write_direct() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn file_service_write_direct(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-2").await;
@@ -1014,7 +1093,7 @@ async fn file_service_write_direct() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let result = executor
         .invoke_and_await(
@@ -1033,11 +1112,15 @@ async fn file_service_write_direct() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn filesystem_write_replay_restores_file_times() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn filesystem_write_replay_restores_file_times(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
@@ -1063,7 +1146,7 @@ async fn filesystem_write_replay_restores_file_times() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let times2 = executor
         .invoke_and_await(
@@ -1077,11 +1160,15 @@ async fn filesystem_write_replay_restores_file_times() {
     check!(times1 == times2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn filesystem_create_dir_replay_restores_file_times() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn filesystem_create_dir_replay_restores_file_times(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-4").await;
@@ -1104,7 +1191,7 @@ async fn filesystem_create_dir_replay_restores_file_times() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let times2 = executor
         .invoke_and_await(
@@ -1118,11 +1205,15 @@ async fn filesystem_create_dir_replay_restores_file_times() {
     check!(times1 == times2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn file_hard_link() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn file_hard_link(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-5").await;
@@ -1168,11 +1259,15 @@ async fn file_hard_link() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn filesystem_link_replay_restores_file_times() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn filesystem_link_replay_restores_file_times(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-6").await;
@@ -1234,7 +1329,7 @@ async fn filesystem_link_replay_restores_file_times() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let times_dir_2 = executor
         .invoke_and_await(
@@ -1257,11 +1352,15 @@ async fn filesystem_link_replay_restores_file_times() {
     check!(times_file_1 == times_file_2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn filesystem_remove_dir_replay_restores_file_times() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn filesystem_remove_dir_replay_restores_file_times(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-7").await;
@@ -1282,7 +1381,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         )
         .await
         .unwrap();
-    _ = executor
+    let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-directory}",
@@ -1300,7 +1399,7 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let times2 = executor
         .invoke_and_await(
@@ -1314,11 +1413,15 @@ async fn filesystem_remove_dir_replay_restores_file_times() {
     check!(times1 == times2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn filesystem_symlink_replay_restores_file_times() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn filesystem_symlink_replay_restores_file_times(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-8").await;
@@ -1381,7 +1484,7 @@ async fn filesystem_symlink_replay_restores_file_times() {
 
     drop(executor);
 
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let times_dir_2 = executor
         .invoke_and_await(
@@ -1404,11 +1507,15 @@ async fn filesystem_symlink_replay_restores_file_times() {
     check!(times_file_1 == times_file_2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn filesystem_rename_replay_restores_file_times() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn filesystem_rename_replay_restores_file_times(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-9").await;
@@ -1478,7 +1585,7 @@ async fn filesystem_rename_replay_restores_file_times() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let times_srcdir_2 = executor
         .invoke_and_await(
@@ -1510,11 +1617,15 @@ async fn filesystem_rename_replay_restores_file_times() {
     check!(times_file_1 == times_file_2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn filesystem_remove_file_replay_restores_file_times() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn filesystem_remove_file_replay_restores_file_times(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor
@@ -1540,7 +1651,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         )
         .await
         .unwrap();
-    _ = executor
+    let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-file}",
@@ -1558,7 +1669,7 @@ async fn filesystem_remove_file_replay_restores_file_times() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let times2 = executor
         .invoke_and_await(
@@ -1572,11 +1683,15 @@ async fn filesystem_remove_file_replay_restores_file_times() {
     check!(times1 == times2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn filesystem_write_via_stream_replay_restores_file_times() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn filesystem_write_via_stream_replay_restores_file_times(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
@@ -1602,7 +1717,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let times2 = executor
         .invoke_and_await(
@@ -1616,11 +1731,15 @@ async fn filesystem_write_via_stream_replay_restores_file_times() {
     check!(times1 == times2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn filesystem_metadata_hash() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn filesystem_metadata_hash(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("file-service").await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
@@ -1646,7 +1765,7 @@ async fn filesystem_metadata_hash() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     let hash2 = executor
         .invoke_and_await(
@@ -1660,11 +1779,15 @@ async fn filesystem_metadata_hash() {
     check!(hash1 == hash2);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn ip_address_resolve() {
-    let context = TestContext::new();
-    let executor = start(&context).await.unwrap();
+async fn ip_address_resolve(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
 
     let component_id = executor.store_component("networking").await;
     let worker_id = executor
@@ -1677,7 +1800,7 @@ async fn ip_address_resolve() {
         .unwrap();
 
     drop(executor);
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
 
     // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
 

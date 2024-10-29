@@ -256,6 +256,8 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
     use crate::api::WorkerBindingType;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};

@@ -81,6 +81,7 @@ clap = { version = "4.5.4", features = [
     "help",
 ] }
 cli-table = "0.4.7"
+combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.3.0"
 ctor = "0.2.6"
@@ -97,7 +98,7 @@ futures-core = "0.3.29"
 futures-util = "0.3.29"
 git-version = "0.3.9"
 golem-wasm-ast = "1.0.1"
-golem-wasm-rpc = { version = "1.0.5", default-features = false, features = [
+golem-wasm-rpc = { version = "1.0.7", default-features = false, features = [
     "host",
 ] }
 
@@ -136,7 +137,7 @@ prometheus = { version = "0.13.3", features = ["process"] }
 proptest = "1.4.0"
 prost = "0.12.6"
 prost-types = "0.12.6"
-redis = { version = "0.25.2", features = ["default"] }
+redis = { version = "0.25.2", features = ["default", "tokio-comp"] }
 regex = "1.10.3"
 reqwest = { version = "0.12.5", features = [
     "gzip",
@@ -161,12 +162,13 @@ strum = "0.26.1"
 strum_macros = "0.26.1"
 tap = "1.0.1"
 tempfile = "3.9.0"
-testcontainers = { version = "0.15.0", features = ["async-trait", "tokio"] }
-testcontainers-modules = { version = "0.3.2", features = [
+testcontainers = { version = "0.23.1" }
+testcontainers-modules = { version = "0.11.2", features = [
     "postgres",
     "redis",
     "minio",
 ] }
+test-r = "0.0.14"
 thiserror = "1.0.56"
 tokio = { version = "1.0", features = [
     "macros",

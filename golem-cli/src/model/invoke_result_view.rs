@@ -109,6 +109,8 @@ impl InvokeResultView {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use chrono::Utc;
     use golem_wasm_ast::analysis::analysed_type::{bool, handle};
     use golem_wasm_ast::analysis::{

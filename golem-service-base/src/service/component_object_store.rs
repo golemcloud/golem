@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::config::{ComponentStoreLocalConfig, ComponentStoreS3Config};
-use crate::stream::ByteStream;
+use crate::stream::{ByteStream, LoggedByteStream};
 use anyhow::Error;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
@@ -22,23 +22,90 @@ use std::fs;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tracing::{debug, info};
+use tracing::{debug, debug_span, error, info};
+use tracing_futures::Instrument;
 
 #[async_trait]
 pub trait ComponentObjectStore {
-    async fn get(&self, object_key: &str) -> Result<Vec<u8>, anyhow::Error>;
+    async fn get(&self, object_key: &str) -> Result<Vec<u8>, Error>;
 
-    async fn get_stream(&self, object_key: &str) -> ByteStream;
+    async fn get_stream(
+        &self,
+        object_key: &str,
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>>;
 
-    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error>;
+    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error>;
 
-    async fn delete(&self, object_key: &str) -> Result<(), anyhow::Error>;
+    async fn delete(&self, object_key: &str) -> Result<(), Error>;
+}
+
+pub struct LoggedComponentObjectStore<Store> {
+    store: Store,
+}
+
+impl<Store: ComponentObjectStore> LoggedComponentObjectStore<Store> {
+    pub fn new(store: Store) -> Self {
+        Self { store }
+    }
+
+    fn logged<R>(
+        &self,
+        message: &'static str,
+        key: &str,
+        result: Result<R, Error>,
+    ) -> Result<R, Error> {
+        match &result {
+            Ok(_) => debug!(key = key, "{message}"),
+            Err(error) => error!(key = key, error = error.to_string(), "{message}"),
+        }
+        result
+    }
+}
+
+#[async_trait]
+impl<Store: ComponentObjectStore + Sync> ComponentObjectStore
+    for LoggedComponentObjectStore<Store>
+{
+    async fn get(&self, object_key: &str) -> Result<Vec<u8>, Error> {
+        self.logged(
+            "Getting component",
+            object_key,
+            self.store.get(object_key).await,
+        )
+    }
+
+    async fn get_stream(
+        &self,
+        object_key: &str,
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>> {
+        let span = debug_span!("Getting component stream", key = object_key);
+        let inner_stream = self.store.get_stream(object_key).await;
+        let logging_stream = LoggedByteStream::new(inner_stream);
+        let instrumented_stream = logging_stream.instrument(span);
+        Box::pin(instrumented_stream)
+    }
+
+    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error> {
+        self.logged(
+            "Putting object",
+            object_key,
+            self.store.put(object_key, data).await,
+        )
+    }
+
+    async fn delete(&self, object_key: &str) -> Result<(), Error> {
+        self.logged(
+            "Deleting object",
+            object_key,
+            self.store.delete(object_key).await,
+        )
+    }
 }
 
 pub struct AwsByteStream(aws_sdk_s3::primitives::ByteStream);
 
 impl Stream for AwsByteStream {
-    type Item = Result<Vec<u8>, anyhow::Error>;
+    type Item = Result<Vec<u8>, Error>;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         Pin::new(&mut self.0)
             .poll_next(cx)
@@ -85,7 +152,7 @@ impl AwsS3ComponentObjectStore {
 
 #[async_trait]
 impl ComponentObjectStore for AwsS3ComponentObjectStore {
-    async fn get(&self, object_key: &str) -> Result<Vec<u8>, anyhow::Error> {
+    async fn get(&self, object_key: &str) -> Result<Vec<u8>, Error> {
         let key = self.get_key(object_key);
 
         info!("Getting object: {}/{}", self.bucket_name, key);
@@ -102,25 +169,30 @@ impl ComponentObjectStore for AwsS3ComponentObjectStore {
         Ok(data.to_vec())
     }
 
-    async fn get_stream(&self, object_key: &str) -> ByteStream {
+    async fn get_stream(
+        &self,
+        object_key: &str,
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>> {
         let key = self.get_key(object_key);
 
         info!("Getting object: {}/{}", self.bucket_name, key);
 
-        match self
-            .client
-            .get_object()
-            .bucket(&self.bucket_name)
-            .key(key)
-            .send()
-            .await
-        {
-            Ok(response) => response.body.into(),
-            Err(error) => ByteStream::error(error),
-        }
+        Box::pin(
+            match self
+                .client
+                .get_object()
+                .bucket(&self.bucket_name)
+                .key(key)
+                .send()
+                .await
+            {
+                Ok(response) => response.body.into(),
+                Err(error) => ByteStream::error(error),
+            },
+        )
     }
 
-    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error> {
+    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error> {
         let key = self.get_key(object_key);
 
         info!("Putting object: {}/{}", self.bucket_name, key);
@@ -136,7 +208,7 @@ impl ComponentObjectStore for AwsS3ComponentObjectStore {
         Ok(())
     }
 
-    async fn delete(&self, object_key: &str) -> Result<(), anyhow::Error> {
+    async fn delete(&self, object_key: &str) -> Result<(), Error> {
         let key = self.get_key(object_key);
 
         info!("Deleting object: {}/{}", self.bucket_name, key);
@@ -187,7 +259,7 @@ impl FsComponentObjectStore {
 
 #[async_trait]
 impl ComponentObjectStore for FsComponentObjectStore {
-    async fn get(&self, object_key: &str) -> Result<Vec<u8>, anyhow::Error> {
+    async fn get(&self, object_key: &str) -> Result<Vec<u8>, Error> {
         let dir_path = self.get_dir_path();
 
         debug!("Getting object: {}/{}", dir_path.display(), object_key);
@@ -197,24 +269,29 @@ impl ComponentObjectStore for FsComponentObjectStore {
         if file_path.exists() {
             fs::read(file_path).map_err(|e| e.into())
         } else {
-            Err(anyhow::Error::msg("Object not found"))
+            Err(Error::msg("Object not found"))
         }
     }
 
-    async fn get_stream(&self, object_key: &str) -> ByteStream {
+    async fn get_stream(
+        &self,
+        object_key: &str,
+    ) -> Pin<Box<dyn Stream<Item = Result<Vec<u8>, Error>> + Send + Sync>> {
         let dir_path = self.get_dir_path();
 
         debug!("Getting object: {}/{}", dir_path.display(), object_key);
 
         let file_path = dir_path.join(object_key);
 
-        match aws_sdk_s3::primitives::ByteStream::from_path(file_path).await {
-            Ok(stream) => stream.into(),
-            Err(error) => ByteStream::error(error),
-        }
+        Box::pin(
+            match aws_sdk_s3::primitives::ByteStream::from_path(file_path).await {
+                Ok(stream) => stream.into(),
+                Err(error) => ByteStream::error(error),
+            },
+        )
     }
 
-    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), anyhow::Error> {
+    async fn put(&self, object_key: &str, data: Vec<u8>) -> Result<(), Error> {
         let dir_path = self.get_dir_path();
 
         debug!("Putting object: {}/{}", dir_path.display(), object_key);
@@ -249,11 +326,13 @@ impl ComponentObjectStore for FsComponentObjectStore {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::config::ComponentStoreLocalConfig;
     use crate::service::component_object_store::{ComponentObjectStore, FsComponentObjectStore};
     use futures::TryStreamExt;
 
-    #[tokio::test]
+    #[test]
     pub async fn test_fs_object_store() {
         let config = ComponentStoreLocalConfig {
             root_path: "/tmp/cloud-service".to_string(),

@@ -28,6 +28,9 @@ pub mod wasi_host;
 pub mod worker;
 pub mod workerctx;
 
+#[cfg(test)]
+test_r::enable!();
+
 use crate::grpc::WorkerExecutorImpl;
 use crate::http_server::HttpServerImpl;
 use crate::services::active_workers::ActiveWorkers;
@@ -55,8 +58,10 @@ use crate::services::worker_enumeration::{
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{component, shard_manager, All};
 use crate::storage::blob::s3::S3BlobStorage;
+use crate::storage::blob::sqlite::SqliteBlobStorage;
 use crate::storage::blob::BlobStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
+use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::redis::RedisKeyValueStorage;
@@ -73,7 +78,7 @@ use nonempty_collections::NEVec;
 use prometheus::Registry;
 use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
-use storage::sqlite_types::SqlitePool;
+use storage::sqlite::SqlitePool;
 use tokio::runtime::Handle;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
@@ -162,8 +167,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
-            .build()
-            .unwrap();
+            .build()?;
 
         let http_server = HttpServerImpl::new(
             golem_config.http_addr()?,
@@ -171,8 +175,9 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             "Worker executor is running",
         );
 
-        let (redis, key_value_storage): (
+        let (redis, sqlite, key_value_storage): (
             Option<RedisPool>,
+            Option<SqlitePool>,
             Arc<dyn KeyValueStorage + Send + Sync>,
         ) = match &golem_config.key_value_storage {
             KeyValueStorageConfig::Redis(redis) => {
@@ -182,42 +187,67 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                     .map_err(|err| anyhow!(err))?;
                 let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
                     Arc::new(RedisKeyValueStorage::new(pool.clone()));
-                (Some(pool), key_value_storage)
+                (Some(pool), None, key_value_storage)
             }
             KeyValueStorageConfig::InMemory => {
                 info!("Using in-memory key-value storage");
-                (None, Arc::new(InMemoryKeyValueStorage::new()))
+                (None, None, Arc::new(InMemoryKeyValueStorage::new()))
             }
             KeyValueStorageConfig::Sqlite(sqlite) => {
                 info!("Using Sqlite for key-value storage at {}", sqlite.database);
                 let pool = SqlitePool::configured(sqlite)
                     .await
                     .map_err(|err| anyhow!(err))?;
-                let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> =
-                    Arc::new(SqliteKeyValueStorage::new(pool.clone()));
-                (None, key_value_storage)
+                let key_value_storage: Arc<dyn KeyValueStorage + Send + Sync> = Arc::new(
+                    SqliteKeyValueStorage::new(pool.clone())
+                        .await
+                        .map_err(|err| anyhow!(err))?,
+                );
+                (None, Some(pool), key_value_storage)
             }
         };
 
-        let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config
-            .indexed_storage
-        {
-            IndexedStorageConfig::KVStoreRedis => {
-                info!("Using the same Redis for indexed-storage");
-                let redis = redis
-                    .expect("Redis must be configured key-value storage when using KVStoreRedis");
-                Arc::new(RedisIndexedStorage::new(redis.clone()))
-            }
-            IndexedStorageConfig::Redis(redis) => {
-                info!("Using Redis for indexed-storage at {}", redis.url());
-                let pool = RedisPool::configured(redis).await?;
-                Arc::new(RedisIndexedStorage::new(pool.clone()))
-            }
-            IndexedStorageConfig::InMemory => {
-                info!("Using in-memory indexed storage");
-                Arc::new(storage::indexed::memory::InMemoryIndexedStorage::new())
-            }
-        };
+        let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> =
+            match &golem_config.indexed_storage {
+                IndexedStorageConfig::KVStoreRedis => {
+                    info!("Using the same Redis for indexed-storage");
+                    let redis = redis.expect(
+                        "Redis must be configured as key-value storage when using KVStoreRedis",
+                    );
+                    Arc::new(RedisIndexedStorage::new(redis.clone()))
+                }
+                IndexedStorageConfig::Redis(redis) => {
+                    info!("Using Redis for indexed-storage at {}", redis.url());
+                    let pool = RedisPool::configured(redis).await?;
+                    Arc::new(RedisIndexedStorage::new(pool.clone()))
+                }
+                IndexedStorageConfig::KVStoreSqlite => {
+                    info!("Using the same Sqlite for indexed-storage");
+                    let sqlite = sqlite.clone().expect(
+                        "Sqlite must be configured as key-value storage when using KVStoreSqlite",
+                    );
+                    Arc::new(
+                        SqliteIndexedStorage::new(sqlite.clone())
+                            .await
+                            .map_err(|err| anyhow!(err))?,
+                    )
+                }
+                IndexedStorageConfig::Sqlite(sqlite) => {
+                    info!("Using Sqlite for indexed storage at {}", sqlite.database);
+                    let pool = SqlitePool::configured(sqlite)
+                        .await
+                        .map_err(|err| anyhow!(err))?;
+                    Arc::new(
+                        SqliteIndexedStorage::new(pool.clone())
+                            .await
+                            .map_err(|err| anyhow!(err))?,
+                    )
+                }
+                IndexedStorageConfig::InMemory => {
+                    info!("Using in-memory indexed storage");
+                    Arc::new(storage::indexed::memory::InMemoryIndexedStorage::new())
+                }
+            };
         let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &golem_config.blob_storage {
             BlobStorageConfig::S3(config) => {
                 info!("Using S3 for blob storage");
@@ -230,6 +260,28 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 );
                 Arc::new(
                     storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                        .await
+                        .map_err(|err| anyhow!(err))?,
+                )
+            }
+            BlobStorageConfig::KVStoreSqlite => {
+                info!("Using the same Sqlite for blob-storage");
+                let sqlite = sqlite.expect(
+                    "Sqlite must be configured as key-value storage when using KVStoreSqlite",
+                );
+                Arc::new(
+                    SqliteBlobStorage::new(sqlite.clone())
+                        .await
+                        .map_err(|err| anyhow!(err))?,
+                )
+            }
+            BlobStorageConfig::Sqlite(sqlite) => {
+                info!("Using Sqlite for blob storage at {}", sqlite.database);
+                let pool = SqlitePool::configured(sqlite)
+                    .await
+                    .map_err(|err| anyhow!(err))?;
+                Arc::new(
+                    SqliteBlobStorage::new(pool.clone())
                         .await
                         .map_err(|err| anyhow!(err))?,
                 )

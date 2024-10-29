@@ -195,6 +195,8 @@ mod internal {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::parser::type_name::TypeName;
     use crate::type_inference::inference_fix_point::internal::{
         equivalent_exprs, equivalent_types, non_equivalent_types,
@@ -387,7 +389,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr).unwrap();
         expr.infer_types(&FunctionTypeRegistry::empty()).unwrap();
-        let expected = Expr::Multiple(
+        let expected = Expr::ExprBlock(
             vec![
                 Expr::Let(
                     VariableId::local("x", 0),

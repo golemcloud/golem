@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::DEPS;
+use test_r::{inherit_test_dep, test, timeout};
+
 use assert2::check;
 
 use golem_test_framework::dsl::TestDslUnsafe;
@@ -21,6 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use crate::Tracing;
 use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
@@ -28,6 +30,7 @@ use golem_common::model::{
     TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
     WorkerStatus,
 };
+use golem_test_framework::config::EnvBasedTestDependencies;
 use rand::seq::IteratorRandom;
 use serde_json::json;
 use std::time::{Duration, SystemTime};
@@ -37,20 +40,24 @@ use warp::http::{Response, StatusCode};
 use warp::hyper::Body;
 use warp::Filter;
 
-#[tokio::test]
+inherit_test_dep!(Tracing);
+inherit_test_dep!(EnvBasedTestDependencies);
+
+#[test]
 #[tracing::instrument]
-async fn dynamic_worker_creation() {
-    let component_id = DEPS.store_component("environment-service").await;
+#[timeout(120000)]
+async fn dynamic_worker_creation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("environment-service").await;
     let worker_id = WorkerId {
         component_id: component_id.clone(),
         worker_name: "dynamic-worker-creation-1".to_string(),
     };
 
-    let args = DEPS
+    let args = deps
         .invoke_and_await(&worker_id, "golem:it/api.{get-arguments}", vec![])
         .await
         .unwrap();
-    let env = DEPS
+    let env = deps
         .invoke_and_await(&worker_id, "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
@@ -103,20 +110,21 @@ fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
     }
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn dynamic_worker_creation_without_name() {
-    let component_id = DEPS.store_component("environment-service").await;
+#[timeout(120000)]
+async fn dynamic_worker_creation_without_name(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("environment-service").await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
         worker_name: None,
     };
 
-    let env1 = DEPS
+    let env1 = deps
         .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
-    let env2 = DEPS
+    let env2 = deps
         .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
@@ -133,20 +141,24 @@ async fn dynamic_worker_creation_without_name() {
     check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn ephemeral_worker_creation_without_name() {
-    let component_id = DEPS.store_ephemeral_component("environment-service").await;
+#[timeout(120000)]
+async fn ephemeral_worker_creation_without_name(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    let component_id = deps.store_ephemeral_component("environment-service").await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
         worker_name: None,
     };
 
-    let env1 = DEPS
+    let env1 = deps
         .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
-    let env2 = DEPS
+    let env2 = deps
         .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
         .await
         .unwrap();
@@ -163,16 +175,20 @@ async fn ephemeral_worker_creation_without_name() {
     check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn ephemeral_worker_creation_with_name_is_not_persistent() {
-    let component_id = DEPS.store_ephemeral_component("counters").await;
+#[timeout(120000)]
+async fn ephemeral_worker_creation_with_name_is_not_persistent(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    let component_id = deps.store_ephemeral_component("counters").await;
     let worker_id = TargetWorkerId {
         component_id: component_id.clone(),
         worker_name: Some("test".to_string()),
     };
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             worker_id.clone(),
             "rpc:counters/api.{inc-global-by}",
@@ -181,7 +197,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent() {
         .await
         .unwrap();
 
-    let result = DEPS
+    let result = deps
         .invoke_and_await(
             worker_id.clone(),
             "rpc:counters/api.{get-global-value}",
@@ -193,14 +209,15 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent() {
     check!(result == vec![Value::U64(0)]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_1() {
-    let component_id = DEPS.store_unique_component("counters").await;
-    let worker_id = DEPS.start_worker(&component_id, "counters-1").await;
-    DEPS.log_output(&worker_id).await;
+#[timeout(120000)]
+async fn counter_resource_test_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_unique_component("counters").await;
+    let worker_id = deps.start_worker(&component_id, "counters-1").await;
+    deps.log_output(&worker_id).await;
 
-    let counter1 = DEPS
+    let counter1 = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{[constructor]counter}",
@@ -209,7 +226,7 @@ async fn counter_resource_test_1() {
         .await
         .unwrap();
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{[method]counter.inc-by}",
@@ -217,7 +234,7 @@ async fn counter_resource_test_1() {
         )
         .await;
 
-    let result1 = DEPS
+    let result1 = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{[method]counter.get-value}",
@@ -225,9 +242,9 @@ async fn counter_resource_test_1() {
         )
         .await;
 
-    let (metadata1, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata1, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{[drop]counter}",
@@ -235,11 +252,11 @@ async fn counter_resource_test_1() {
         )
         .await;
 
-    let result2 = DEPS
+    let result2 = deps
         .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
-    let (metadata2, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata2, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
 
     check!(result1 == Ok(vec![Value::U64(5)]));
 
@@ -295,14 +312,15 @@ async fn counter_resource_test_1() {
     check!(resources2 == vec![]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_1_json() {
-    let component_id = DEPS.store_unique_component("counters").await;
-    let worker_id = DEPS.start_worker(&component_id, "counters-1j").await;
-    DEPS.log_output(&worker_id).await;
+#[timeout(120000)]
+async fn counter_resource_test_1_json(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_unique_component("counters").await;
+    let worker_id = deps.start_worker(&component_id, "counters-1j").await;
+    deps.log_output(&worker_id).await;
 
-    let counter1 = DEPS
+    let counter1 = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{[constructor]counter}",
@@ -349,7 +367,7 @@ async fn counter_resource_test_1_json() {
 
     info!("Using counter1 resource handle {counter1}");
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{[method]counter.inc-by}",
@@ -360,7 +378,7 @@ async fn counter_resource_test_1_json() {
         )
         .await;
 
-    let result1 = DEPS
+    let result1 = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{[method]counter.get-value}",
@@ -368,9 +386,9 @@ async fn counter_resource_test_1_json() {
         )
         .await;
 
-    let (metadata1, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata1, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{[drop]counter}",
@@ -378,11 +396,11 @@ async fn counter_resource_test_1_json() {
         )
         .await;
 
-    let result2 = DEPS
+    let result2 = deps
         .invoke_and_await_json(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
-    let (metadata2, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata2, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
 
     check!(
         result1
@@ -472,14 +490,15 @@ async fn counter_resource_test_1_json() {
     check!(resources2 == vec![]);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_2() {
-    let component_id = DEPS.store_unique_component("counters").await;
-    let worker_id = DEPS.start_worker(&component_id, "counters-2").await;
-    DEPS.log_output(&worker_id).await;
+#[timeout(120000)]
+async fn counter_resource_test_2(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_unique_component("counters").await;
+    let worker_id = deps.start_worker(&component_id, "counters-2").await;
+    deps.log_output(&worker_id).await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{counter(\"counter1\").inc-by}",
@@ -487,14 +506,14 @@ async fn counter_resource_test_2() {
         )
         .await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").inc-by}",
             vec![Value::U64(1)],
         )
         .await;
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").inc-by}",
@@ -502,14 +521,14 @@ async fn counter_resource_test_2() {
         )
         .await;
 
-    let result1 = DEPS
+    let result1 = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{counter(\"counter1\").get-value}",
             vec![],
         )
         .await;
-    let result2 = DEPS
+    let result2 = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").get-value}",
@@ -517,14 +536,14 @@ async fn counter_resource_test_2() {
         )
         .await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{counter(\"counter1\").drop}",
             vec![],
         )
         .await;
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").drop}",
@@ -532,7 +551,7 @@ async fn counter_resource_test_2() {
         )
         .await;
 
-    let result3 = DEPS
+    let result3 = deps
         .invoke_and_await(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
@@ -547,14 +566,15 @@ async fn counter_resource_test_2() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn counter_resource_test_2_json() {
-    let component_id = DEPS.store_unique_component("counters").await;
-    let worker_id = DEPS.start_worker(&component_id, "counters-2j").await;
-    DEPS.log_output(&worker_id).await;
+#[timeout(120000)]
+async fn counter_resource_test_2_json(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_unique_component("counters").await;
+    let worker_id = deps.start_worker(&component_id, "counters-2j").await;
+    deps.log_output(&worker_id).await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter1\").inc-by}",
@@ -566,7 +586,7 @@ async fn counter_resource_test_2_json() {
         )
         .await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").inc-by}",
@@ -577,7 +597,7 @@ async fn counter_resource_test_2_json() {
             )],
         )
         .await;
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").inc-by}",
@@ -589,14 +609,14 @@ async fn counter_resource_test_2_json() {
         )
         .await;
 
-    let result1 = DEPS
+    let result1 = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter1\").get-value}",
             vec![],
         )
         .await;
-    let result2 = DEPS
+    let result2 = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").get-value}",
@@ -604,14 +624,14 @@ async fn counter_resource_test_2_json() {
         )
         .await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter1\").drop}",
             vec![],
         )
         .await;
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await_json(
             &worker_id,
             "rpc:counters/api.{counter(\"counter2\").drop}",
@@ -619,7 +639,7 @@ async fn counter_resource_test_2_json() {
         )
         .await;
 
-    let result3 = DEPS
+    let result3 = deps
         .invoke_and_await_json(&worker_id, "rpc:counters/api.{get-all-dropped}", vec![])
         .await;
 
@@ -682,13 +702,14 @@ async fn counter_resource_test_2_json() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn shopping_cart_example() {
-    let component_id = DEPS.store_component("shopping-cart").await;
-    let worker_id = DEPS.start_worker(&component_id, "shopping-cart-1").await;
+#[timeout(120000)]
+async fn shopping_cart_example(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+    let worker_id = deps.start_worker(&component_id, "shopping-cart-1").await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{initialize-cart}",
@@ -696,7 +717,7 @@ async fn shopping_cart_example() {
         )
         .await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -709,7 +730,7 @@ async fn shopping_cart_example() {
         )
         .await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -722,7 +743,7 @@ async fn shopping_cart_example() {
         )
         .await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
@@ -735,7 +756,7 @@ async fn shopping_cart_example() {
         )
         .await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{update-item-quantity}",
@@ -743,11 +764,11 @@ async fn shopping_cart_example() {
         )
         .await;
 
-    let contents = DEPS
+    let contents = deps
         .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
         .await;
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
         .await;
 
@@ -776,22 +797,23 @@ async fn shopping_cart_example() {
     );
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn auction_example_1() {
-    let registry_component_id = DEPS.store_component("auction_registry_composed").await;
-    let auction_component_id = DEPS.store_component("auction").await;
+#[timeout(120000)]
+async fn auction_example_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let registry_component_id = deps.store_component("auction_registry_composed").await;
+    let auction_component_id = deps.store_component("auction").await;
 
     let mut env = HashMap::new();
     env.insert(
         "AUCTION_COMPONENT_ID".to_string(),
         auction_component_id.to_string(),
     );
-    let registry_worker_id = DEPS
+    let registry_worker_id = deps
         .start_worker_with(&registry_component_id, "auction-registry-1", vec![], env)
         .await;
 
-    let _ = DEPS.log_output(&registry_worker_id).await;
+    let _ = deps.log_output(&registry_worker_id).await;
 
     let expiration = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -801,7 +823,7 @@ async fn auction_example_1() {
     let mut create_results = vec![];
 
     for _ in 1..100 {
-        let create_auction_result = DEPS
+        let create_auction_result = deps
             .invoke_and_await(
                 &registry_worker_id,
                 "auction:registry/api.{create-auction}",
@@ -817,7 +839,7 @@ async fn auction_example_1() {
         create_results.push(create_auction_result);
     }
 
-    let get_auctions_result = DEPS
+    let get_auctions_result = deps
         .invoke_and_await(
             &registry_worker_id,
             "auction:registry/api.{get-auctions}",
@@ -838,16 +860,17 @@ fn get_worker_ids(workers: Vec<(WorkerMetadata, Option<String>)>) -> HashSet<Wor
         .collect::<HashSet<WorkerId>>()
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn get_workers() {
-    let component_id = DEPS.store_component("shopping-cart").await;
+#[timeout(120000)]
+async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
 
     let workers_count = 150;
     let mut worker_ids = HashSet::new();
 
     for i in 0..workers_count {
-        let worker_id = DEPS
+        let worker_id = deps
             .start_worker(&component_id, &format!("get-workers-test-{}", i))
             .await;
 
@@ -859,7 +882,7 @@ async fn get_workers() {
         .choose_multiple(&mut rand::thread_rng(), workers_count / 10);
 
     for worker_id in check_worker_ids {
-        let _ = DEPS
+        let _ = deps
             .invoke_and_await(
                 worker_id,
                 "golem:it/api.{initialize-cart}",
@@ -867,7 +890,7 @@ async fn get_workers() {
             )
             .await;
 
-        let (cursor, values) = DEPS
+        let (cursor, values) = deps
             .get_workers_metadata(
                 &component_id,
                 Some(
@@ -908,7 +931,7 @@ async fn get_workers() {
         "get-workers-test-".to_string(),
     ));
     while found_worker_ids.len() < workers_count && cursor.is_some() {
-        let (cursor1, values1) = DEPS
+        let (cursor1, values1) = deps
             .get_workers_metadata(
                 &component_id,
                 filter.clone(),
@@ -928,17 +951,18 @@ async fn get_workers() {
     check!(found_worker_ids.eq(&worker_ids));
 
     if let Some(cursor) = cursor {
-        let (_, values) = DEPS
+        let (_, values) = deps
             .get_workers_metadata(&component_id, filter, cursor, workers_count as u64, true)
             .await;
         check!(values.len() == 0);
     }
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn get_running_workers() {
-    let component_id = DEPS.store_component("http-client-2").await;
+#[timeout(120000)]
+async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_unique_component("http-client-2").await;
     let host_http_port = 8585;
 
     let polling_worker_ids: Arc<Mutex<HashSet<WorkerId>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -982,7 +1006,7 @@ async fn get_running_workers() {
     let mut worker_ids = HashSet::new();
 
     for i in 0..workers_count {
-        let worker_id = DEPS
+        let worker_id = deps
             .start_worker_with(
                 &component_id,
                 &format!("worker-http-client-{}", i),
@@ -997,7 +1021,7 @@ async fn get_running_workers() {
     let mut found_worker_ids = HashSet::new();
 
     for worker_id in worker_ids.clone() {
-        let _ = DEPS
+        let _ = deps
             .invoke(
                 &worker_id,
                 "golem:it/api.{start-polling}",
@@ -1019,7 +1043,7 @@ async fn get_running_workers() {
     }
 
     for worker_id in worker_ids.clone() {
-        let (_, values) = DEPS
+        let (_, values) = deps
             .get_workers_metadata(
                 &component_id,
                 Some(
@@ -1041,7 +1065,7 @@ async fn get_running_workers() {
         found_worker_ids.extend(get_worker_ids(values));
     }
 
-    let (_, values) = DEPS
+    let (_, values) = deps
         .get_workers_metadata(
             &component_id,
             Some(WorkerFilter::new_status(
@@ -1057,35 +1081,36 @@ async fn get_running_workers() {
     http_server.abort();
 
     check!(found_worker_ids.len() == workers_count);
-    check!(found_worker_ids.eq(&worker_ids));
+    check!(&found_worker_ids == &worker_ids);
 
     let found_worker_ids2 = get_worker_ids(values);
 
     check!(found_worker_ids2.len() == workers_count);
-    check!(found_worker_ids2.eq(&worker_ids));
+    check!(&found_worker_ids2 == &worker_ids);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn auto_update_on_idle() {
-    let component_id = DEPS.store_unique_component("update-test-v1").await;
-    let worker_id = DEPS
+#[timeout(300000)]
+async fn auto_update_on_idle(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_unique_component("update-test-v1").await;
+    let worker_id = deps
         .start_worker(&component_id, "auto_update_on_idle")
         .await;
-    let _ = DEPS.log_output(&worker_id).await;
+    let _ = deps.log_output(&worker_id).await;
 
-    let target_version = DEPS.update_component(&component_id, "update-test-v2").await;
+    let target_version = deps.update_component(&component_id, "update-test-v2").await;
     info!("Updated component to version {target_version}");
 
-    DEPS.auto_update_worker(&worker_id, target_version).await;
+    deps.auto_update_worker(&worker_id, target_version).await;
 
-    let result = DEPS
+    let result = deps
         .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
         .await
         .unwrap();
 
     info!("result: {:?}", result);
-    let (metadata, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
@@ -1096,24 +1121,28 @@ async fn auto_update_on_idle() {
     check!(metadata.last_known_status.successful_updates.len() == 1);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn auto_update_on_idle_via_host_function() {
-    let component_id = DEPS.store_unique_component("update-test-v1").await;
-    let worker_id = DEPS
+#[timeout(300000)]
+async fn auto_update_on_idle_via_host_function(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) {
+    let component_id = deps.store_unique_component("update-test-v1").await;
+    let worker_id = deps
         .start_worker(&component_id, "auto_update_on_idle_via_host_function")
         .await;
-    let _ = DEPS.log_output(&worker_id).await;
+    let _ = deps.log_output(&worker_id).await;
 
-    let target_version = DEPS.update_component(&component_id, "update-test-v2").await;
+    let target_version = deps.update_component(&component_id, "update-test-v2").await;
     info!("Updated component to version {target_version}");
 
-    let runtime_svc = DEPS.store_component("runtime-service").await;
+    let runtime_svc = deps.store_component("runtime-service").await;
     let runtime_svc_worker = WorkerId {
         component_id: runtime_svc,
         worker_name: "runtime-service".to_string(),
     };
-    DEPS.invoke_and_await(
+    deps.invoke_and_await(
         &runtime_svc_worker,
         "golem:it/api.{update-worker}",
         vec![
@@ -1131,13 +1160,13 @@ async fn auto_update_on_idle_via_host_function() {
     .await
     .unwrap();
 
-    let result = DEPS
+    let result = deps
         .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
         .await
         .unwrap();
 
     info!("result: {:?}", result);
-    let (metadata, _) = DEPS.get_worker_metadata(&worker_id).await.unwrap();
+    let (metadata, _) = deps.get_worker_metadata(&worker_id).await.unwrap();
 
     // Expectation: the worker has no history so the update succeeds and then calling f2 returns
     // the current state which is 0
@@ -1148,10 +1177,11 @@ async fn auto_update_on_idle_via_host_function() {
     check!(metadata.last_known_status.successful_updates.len() == 1);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
-async fn get_oplog_1() {
-    let component_id = DEPS.store_component("runtime-service").await;
+#[timeout(120000)]
+async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("runtime-service").await;
 
     let worker_id = WorkerId {
         component_id,
@@ -1161,7 +1191,7 @@ async fn get_oplog_1() {
     let idempotency_key1 = IdempotencyKey::fresh();
     let idempotency_key2 = IdempotencyKey::fresh();
 
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await(
             worker_id.clone(),
             "golem:it/api.{generate-idempotency-keys}",
@@ -1169,7 +1199,7 @@ async fn get_oplog_1() {
         )
         .await
         .unwrap();
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await_with_key(
             worker_id.clone(),
             &idempotency_key1,
@@ -1178,7 +1208,7 @@ async fn get_oplog_1() {
         )
         .await
         .unwrap();
-    let _ = DEPS
+    let _ = deps
         .invoke_and_await_with_key(
             worker_id.clone(),
             &idempotency_key2,
@@ -1188,9 +1218,11 @@ async fn get_oplog_1() {
         .await
         .unwrap();
 
-    let oplog = DEPS.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+    let oplog = deps.get_oplog(&worker_id, OplogIndex::INITIAL).await;
 
-    assert_eq!(oplog.len(), 14);
+    // Whether there is an "enqueued invocation" entry or just directly started invocation
+    // depends on oplog
+    assert!(oplog.len() >= 12 && oplog.len() <= 14);
     assert!(matches!(oplog[0], PublicOplogEntry::Create(_)));
     assert_eq!(
         oplog
@@ -1203,4 +1235,161 @@ async fn get_oplog_1() {
             .count(),
         3
     );
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_component("shopping-cart").await;
+
+    let worker_id = WorkerId {
+        component_id,
+        worker_name: "searchoplog1".to_string(),
+    };
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{initialize-cart}",
+            vec![Value::String("test-user-1".to_string())],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1000".to_string()),
+                Value::String("Golem T-Shirt M".to_string()),
+                Value::F32(100.0),
+                Value::U32(5),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1001".to_string()),
+                Value::String("Golem Cloud Subscription 1y".to_string()),
+                Value::F32(999999.0),
+                Value::U32(1),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Value::Record(vec![
+                Value::String("G1002".to_string()),
+                Value::String("Mud Golem".to_string()),
+                Value::F32(11.0),
+                Value::U32(10),
+            ])],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{update-item-quantity}",
+            vec![Value::String("G1002".to_string()), Value::U32(20)],
+        )
+        .await;
+
+    let _ = deps
+        .invoke_and_await(&worker_id, "golem:it/api.{get-cart-contents}", vec![])
+        .await;
+
+    let _ = deps
+        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
+        .await;
+
+    let _oplog = deps.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+
+    let result1 = deps.search_oplog(&worker_id, "G1002").await;
+
+    let result2 = deps.search_oplog(&worker_id, "imported-function").await;
+
+    let result3 = deps
+        .search_oplog(&worker_id, "product-id:G1001 OR product-id:G1000")
+        .await;
+
+    assert_eq!(result1.len(), 4); // two invocations and two log messages
+    assert_eq!(result2.len(), 2); // get_preopened_directories, get_random_bytes
+    assert_eq!(result3.len(), 2); // two invocations
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(600000)]
+async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let component_id = deps.store_unique_component("counters").await;
+    let worker_id = deps
+        .start_worker(&component_id, "counters-recreation")
+        .await;
+
+    // Doing many requests, so parts of the oplog gets archived
+    for _ in 1..=1200 {
+        let _ = deps
+            .invoke_and_await(
+                &worker_id,
+                "rpc:counters/api.{counter(\"counter1\").inc-by}",
+                vec![Value::U64(1)],
+            )
+            .await;
+    }
+
+    let result1 = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    deps.delete_worker(&worker_id).await;
+
+    // Invoking again should create a new worker
+    let _ = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").inc-by}",
+            vec![Value::U64(1)],
+        )
+        .await;
+
+    let result2 = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+
+    deps.delete_worker(&worker_id).await;
+
+    // Also if we explicitly create a new one
+    let worker_id = deps
+        .start_worker(&component_id, "counters-recreation")
+        .await;
+    let result3 = deps
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters/api.{counter(\"counter1\").get-value}",
+            vec![],
+        )
+        .await;
+
+    check!(result1 == Ok(vec![Value::U64(1200)]));
+    check!(result2 == Ok(vec![Value::U64(1)]));
+    check!(result3 == Ok(vec![Value::U64(0)]));
 }

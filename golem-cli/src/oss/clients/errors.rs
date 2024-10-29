@@ -223,6 +223,8 @@ fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String 
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::oss::clients::errors::ResponseContentErrorMapper;
     use golem_client::model::VersionedComponentId;
     use golem_client::{

@@ -430,6 +430,8 @@ pub struct SerializableHttpRequest {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::durable_host::http::serialized::{SerializableErrorCode, SerializedHttpVersion};
     use http::Version;
     use proptest::option::of;

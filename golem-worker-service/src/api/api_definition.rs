@@ -302,14 +302,19 @@ impl RegisterApiDefinitionApi {
 
 #[cfg(test)]
 mod test {
+    use test_r::test;
+
     use super::*;
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
     use golem_common::config::DbSqliteConfig;
+    use golem_common::model::component_constraint::FunctionConstraintCollection;
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
-    use golem_worker_service_base::repo::api_definition::{ApiDefinitionRepo, DbApiDefinitionRepo};
+    use golem_worker_service_base::repo::api_definition::{
+        ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
+    };
     use golem_worker_service_base::repo::api_deployment;
     use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::component::ComponentResult;
@@ -360,6 +365,15 @@ mod test {
         ) -> ComponentResult<Component> {
             unimplemented!()
         }
+
+        async fn create_or_update_constraints(
+            &self,
+            _component_id: &ComponentId,
+            _constraints: FunctionConstraintCollection,
+            _auth_ctx: &EmptyAuthCtx,
+        ) -> ComponentResult<FunctionConstraintCollection> {
+            unimplemented!()
+        }
     }
 
     async fn make_route<'c>() -> (poem::Route, SqliteDb<'c>) {
@@ -375,11 +389,12 @@ mod test {
 
         let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
 
-        let api_definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send> =
-            Arc::new(DbApiDefinitionRepo::new(db_pool.clone().into()));
+        let api_definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send> = Arc::new(
+            LoggedApiDefinitionRepo::new(DbApiDefinitionRepo::new(db_pool.clone().into())),
+        );
         let api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send> =
-            Arc::new(api_deployment::DbApiDeploymentRepo::new(
-                db_pool.clone().into(),
+            Arc::new(api_deployment::LoggedDeploymentRepo::new(
+                api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
             ));
 
         let component_service: ComponentService = Arc::new(TestComponentService);
@@ -398,7 +413,7 @@ mod test {
         )
     }
 
-    #[tokio::test]
+    #[test]
     async fn conflict_error_returned() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
@@ -428,7 +443,7 @@ mod test {
         response.assert_status(http::StatusCode::CONFLICT);
     }
 
-    #[tokio::test]
+    #[test]
     async fn update_non_existant() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
@@ -453,7 +468,7 @@ mod test {
         response.assert_status(http::StatusCode::NOT_FOUND);
     }
 
-    #[tokio::test]
+    #[test]
     async fn get_all() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
@@ -493,7 +508,7 @@ mod test {
     }
 
     #[ignore] // There is already sql tests that does this
-    #[tokio::test]
+    #[test]
     async fn decode_openapi_json() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);

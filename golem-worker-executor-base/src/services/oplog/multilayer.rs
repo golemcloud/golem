@@ -12,16 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::cmp::min;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use nonempty_collections::{NEVec, NonEmptyIterator};
-use prometheus::core::{Atomic, AtomicU64};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot::Sender;
 use tracing::{debug, error, info, warn, Instrument};
 
 use crate::error::GolemError;
@@ -200,9 +202,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         )
                         .await
                 };
-                Arc::new(
-                    MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await,
-                )
+                MultiLayerOplog::new(self.owned_worker_id, primary, self.service, close).await
             }
             ComponentType::Ephemeral => {
                 let primary = self
@@ -381,7 +381,7 @@ impl OplogService for MultiLayerOplogService {
                     .primary
                     .scan_for_component(account_id, component_id, cursor, count)
                     .await?;
-                if new_cursor.is_finished() {
+                if new_cursor.is_active_layer_finished() {
                     // Continuing with the first lower layer
                     Ok((
                         ScanCursor {
@@ -392,14 +392,14 @@ impl OplogService for MultiLayerOplogService {
                     ))
                 } else {
                     // Still scanning the primary layer
-                    return Ok((new_cursor, ids));
+                    Ok((new_cursor, ids))
                 }
             }
-            layer if layer < self.lower.len().get() => {
-                let (new_cursor, ids) = self.lower[layer]
+            layer if layer <= self.lower.len().get() => {
+                let (new_cursor, ids) = self.lower[layer - 1]
                     .scan_for_component(account_id, component_id, cursor, count)
                     .await?;
-                if new_cursor.is_finished() && (layer + 1) < self.lower.len().get() {
+                if new_cursor.is_active_layer_finished() && (layer + 1) <= self.lower.len().get() {
                     // Continuing with the next lower layer
                     Ok((
                         ScanCursor {
@@ -408,16 +408,23 @@ impl OplogService for MultiLayerOplogService {
                         },
                         ids,
                     ))
+                } else if new_cursor.is_active_layer_finished() {
+                    // Finished scanning the last layer
+                    Ok((
+                        ScanCursor {
+                            cursor: 0,
+                            layer: 0,
+                        },
+                        ids,
+                    ))
                 } else {
                     // Still scanning the current layer
-                    return Ok((new_cursor, ids));
+                    Ok((new_cursor, ids))
                 }
             }
-            layer => {
-                return Err(GolemError::unknown(format!(
-                    "Invalid oplog layer in scan cursor: {layer}"
-                )));
-            }
+            layer => Err(GolemError::unknown(format!(
+                "Invalid oplog layer in scan cursor: {layer}"
+            ))),
         }
     }
 
@@ -445,19 +452,20 @@ pub struct MultiLayerOplog {
     primary: Arc<dyn Oplog + Send + Sync>,
     lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
     multi_layer_oplog_service: MultiLayerOplogService,
-    transfer_fiber: Option<tokio::task::JoinHandle<()>>,
+    transfer_fiber: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
     primary_length: AtomicU64,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
 impl MultiLayerOplog {
+    #[allow(clippy::new_ret_no_self)]
     pub async fn new(
         owned_worker_id: OwnedWorkerId,
         primary: Arc<dyn Oplog + Send + Sync>,
         multi_layer_oplog_service: MultiLayerOplogService,
         close: Box<dyn FnOnce() + Send + Sync>,
-    ) -> Self {
+    ) -> Arc<dyn Oplog + Send + Sync> {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 
         let mut lower: Vec<Arc<dyn OplogArchive + Send + Sync>> = Vec::new();
@@ -480,34 +488,40 @@ impl MultiLayerOplog {
         }
         let lower = NEVec::from_vec(lower).expect("At least one lower layer is required");
 
-        let transfer_fiber = tokio::spawn(
-            Self::background_transfer(
-                owned_worker_id.clone(),
-                primary.clone(),
-                lower.clone(),
-                multi_layer_oplog_service.clone(),
-                rx,
-            )
-            .in_current_span(),
-        );
-
         let initial_primary_length = primary.length().await;
-
-        Self {
-            owned_worker_id,
-            primary,
-            lower,
-            multi_layer_oplog_service,
-            transfer_fiber: Some(transfer_fiber),
+        let result = Arc::new(Self {
+            owned_worker_id: owned_worker_id.clone(),
+            primary: primary.clone(),
+            lower: lower.clone(),
+            multi_layer_oplog_service: multi_layer_oplog_service.clone(),
+            transfer_fiber: Arc::new(Mutex::new(None)),
             transfer: tx,
             primary_length: AtomicU64::new(initial_primary_length),
             close_fn: Some(close),
-        }
+        });
+        let result_oplog: Arc<dyn Oplog + Send + Sync> = result.clone();
+
+        result.set_background_transfer(tokio::spawn(
+            Self::background_transfer(
+                owned_worker_id,
+                Arc::downgrade(&result_oplog),
+                lower,
+                multi_layer_oplog_service,
+                rx,
+            )
+            .in_current_span(),
+        ));
+
+        result
+    }
+
+    fn set_background_transfer(&self, fiber: tokio::task::JoinHandle<()>) {
+        *self.transfer_fiber.lock().unwrap() = Some(fiber);
     }
 
     async fn background_transfer(
         owned_worker_id: OwnedWorkerId,
-        primary: Arc<dyn Oplog + Send + Sync>,
+        primary: Weak<dyn Oplog + Send + Sync>,
         lower: NEVec<Arc<dyn OplogArchive + Send + Sync>>,
         multi_layer_oplog_service: MultiLayerOplogService,
         mut rx: UnboundedReceiver<BackgroundTransferMessage>,
@@ -519,27 +533,35 @@ impl MultiLayerOplog {
                 TransferFromPrimary {
                     last_transferred_idx,
                     mut keep_alive,
+                    done,
                 } => {
                     info!("Transferring oplog entries up to index {last_transferred_idx} of the primary oplog to the next layer");
                     debug!("Reading entries from the primary oplog");
 
-                    let transfer = BackgroundTransferFromPrimary::new(
-                        owned_worker_id.clone(),
-                        last_transferred_idx,
-                        multi_layer_oplog_service.clone(),
-                        primary.clone(),
-                        lower.clone(),
-                    );
-                    let result = transfer.run().await;
-                    if let Err(error) = result {
-                        error!("Failed to transfer entries from the primary oplog: {error}");
+                    if let Some(primary) = primary.upgrade() {
+                        let transfer = BackgroundTransferFromPrimary::new(
+                            owned_worker_id.clone(),
+                            last_transferred_idx,
+                            multi_layer_oplog_service.clone(),
+                            primary.clone(),
+                            lower.clone(),
+                        );
+                        let result = transfer.run().await;
+                        if let Err(error) = result {
+                            error!("Failed to transfer entries from the primary oplog: {error}");
+                        }
+                        let _ = keep_alive.take();
+
+                        if let Some(done) = done {
+                            done.send(()).unwrap()
+                        }
                     }
-                    let _ = keep_alive.take();
                 }
                 TransferFromLower {
                     source,
                     last_transferred_idx,
                     mut keep_alive,
+                    done,
                 } => {
                     info!("Transferring oplog entries up to index {last_transferred_idx} of oplog layer {source} to the next layer");
                     debug!("Reading entries from oplog layer {source}");
@@ -555,6 +577,10 @@ impl MultiLayerOplog {
                         error!("Failed to transfer entries from oplog layer {source}: {error}");
                     }
                     let _ = keep_alive.take();
+
+                    if let Some(done) = done {
+                        done.send(()).unwrap()
+                    }
                 }
             }
         }
@@ -562,16 +588,28 @@ impl MultiLayerOplog {
 
     pub async fn try_archive(this: &Arc<dyn Oplog + Send + Sync>) -> Option<bool> {
         let this = downcast_oplog::<MultiLayerOplog>(this)?;
-        Some(Self::archive(this).await)
+        Some(Self::archive(this, false).await)
     }
 
-    async fn archive(this: Arc<Self>) -> bool {
-        if this.primary_length.get() > 0 {
+    pub async fn try_archive_blocking(this: &Arc<dyn Oplog + Send + Sync>) -> Option<bool> {
+        let this = downcast_oplog::<MultiLayerOplog>(this)?;
+        Some(Self::archive(this, true).await)
+    }
+
+    async fn archive(this: Arc<Self>, blocking: bool) -> bool {
+        let (done_tx, done_rx) = if blocking {
+            let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+            (Some(done_tx), Some(done_rx))
+        } else {
+            (None, None)
+        };
+        let result = if this.primary_length.load(Ordering::Acquire) > 0 {
             // transferring the whole primary oplog to the next layer
             this.transfer
                 .send(TransferFromPrimary {
                     last_transferred_idx: this.primary.current_oplog_index().await,
                     keep_alive: Some(this.clone()),
+                    done: done_tx,
                 })
                 .expect("Failed to enqueue transfer of primary oplog entries");
 
@@ -600,6 +638,7 @@ impl MultiLayerOplog {
                             .current_oplog_index()
                             .await,
                         keep_alive: Some(this.clone()),
+                        done: done_tx,
                     })
                     .expect("Failed to enqueue transfer of primary oplog entries");
 
@@ -609,7 +648,15 @@ impl MultiLayerOplog {
                 // Fully archived
                 false
             }
+        };
+
+        if let Some(done_rx) = done_rx {
+            done_rx
+                .await
+                .expect("Failed to wait for the archiving to finish");
         }
+
+        result
     }
 }
 
@@ -618,7 +665,7 @@ impl Drop for MultiLayerOplog {
         if let Some(close_fn) = self.close_fn.take() {
             close_fn();
         }
-        self.transfer_fiber.take().unwrap().abort();
+        self.transfer_fiber.lock().unwrap().take().unwrap().abort();
     }
 }
 
@@ -634,27 +681,30 @@ impl Debug for MultiLayerOplog {
 impl Oplog for MultiLayerOplog {
     async fn add(&self, entry: OplogEntry) {
         self.primary.add(entry).await;
-        self.primary_length.inc_by(1);
+        self.primary_length.fetch_add(1, Ordering::AcqRel);
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         self.primary.drop_prefix(last_dropped_id).await;
         let new_length = self.primary.length().await;
-        self.primary_length.set(new_length);
+        let old_length = self.primary_length.load(Ordering::Acquire);
+        let new_length = min(new_length, old_length);
+        self.primary_length.store(new_length, Ordering::Release);
     }
 
     async fn commit(&self, level: CommitLevel) {
         self.primary.commit(level).await;
-        let count = self.primary_length.get();
+        let count = self.primary_length.load(Ordering::Acquire);
         if count >= self.multi_layer_oplog_service.entry_count_limit {
             let current_idx = self.primary.current_oplog_index().await;
             debug!("Enqueuing transfer of {count} oplog entries from the primary oplog to the next layer up to {current_idx}");
             let _ = self.transfer.send(TransferFromPrimary {
                 last_transferred_idx: current_idx,
                 keep_alive: None,
+                done: None,
             });
             // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
-            self.primary_length.set(0);
+            self.primary_length.store(0, Ordering::Release);
         }
     }
 
@@ -697,11 +747,13 @@ enum BackgroundTransferMessage {
     TransferFromPrimary {
         last_transferred_idx: OplogIndex,
         keep_alive: Option<Arc<dyn Oplog + Send + Sync>>,
+        done: Option<Sender<()>>,
     },
     TransferFromLower {
         source: usize,
         last_transferred_idx: OplogIndex,
         keep_alive: Option<Arc<dyn Oplog + Send + Sync>>,
+        done: Option<Sender<()>>,
     },
 }
 
@@ -716,11 +768,7 @@ trait BackgroundTransfer {
         match entries.last() {
             Some(last_entry) => {
                 let last_dropped_id = last_entry.0;
-
-                debug!("Writing entries to the secondary oplog");
                 self.append_target(entries).await;
-
-                debug!("Dropping transferred entries from the primary oplog");
                 self.drop_source_prefix(last_dropped_id).await;
             }
             None => {
@@ -770,17 +818,18 @@ impl OplogArchive for WrappedOplogArchive {
         if !chunk.is_empty() {
             let last_idx = chunk.last().unwrap().0;
             self.archive.append(chunk).await;
-            self.entry_count.inc_by(1);
-            let count = self.entry_count.get();
+            let old_count = self.entry_count.fetch_add(1, Ordering::AcqRel);
+            let count = old_count + 1;
             if count >= self.entry_count_limit {
                 debug!("Enqueuing transfer of oplog entries from the oplog layer {} to the next layer up to {last_idx}", self.layer);
                 let _ = self.transfer.send(TransferFromLower {
                     source: self.layer,
                     last_transferred_idx: last_idx,
                     keep_alive: None,
+                    done: None,
                 });
                 // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
-                self.entry_count.set(0);
+                self.entry_count.store(0, Ordering::Release);
             }
         }
     }
@@ -792,11 +841,13 @@ impl OplogArchive for WrappedOplogArchive {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
         self.archive.drop_prefix(last_dropped_id).await;
         let new_length = self.archive.length().await;
-        self.entry_count.set(new_length);
+        let old_entry_count = self.entry_count.load(Ordering::Acquire);
+        let new_entry_count = min(new_length, old_entry_count);
+        self.entry_count.store(new_entry_count, Ordering::Release);
     }
 
     async fn length(&self) -> u64 {
-        self.entry_count.get()
+        self.archive.length().await
     }
 
     async fn get_last_index(&self) -> OplogIndex {

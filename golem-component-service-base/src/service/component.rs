@@ -12,25 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::num::TryFromIntError;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::model::Component;
-use crate::repo::component::ComponentRepo;
+use crate::model::{Component, ComponentConstraints};
+use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
-use crate::service::component_processor::process_component;
 use async_trait::async_trait;
 use chrono::Utc;
+use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::file_system::PackagedFiles;
-use golem_common::model::component_metadata::ComponentProcessingError;
+use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::{ComponentId, ComponentType, FileSystemPermission};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
-use golem_service_base::stream::ByteStream;
+use golem_wasm_ast::analysis::AnalysedType;
+use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use tap::TapFallible;
+use tokio_stream::Stream;
 use tracing::{error, info};
 
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +54,10 @@ pub enum ComponentError {
     InternalConversionError { what: String, error: String },
     #[error("Internal component store error: {message}: {error}")]
     ComponentStoreError { message: String, error: String },
+    #[error("Component Constraint Error. Make sure the component is backward compatible as the functions are already in use:\n{0}")]
+    ComponentConstraintConflictError(ConflictReport),
+    #[error("Component Constraint Create Error: {0}")]
+    ComponentConstraintCreateError(String),
     #[error("Invalid or conflicting file path: {file_path}")]
     InitialFileError { file_path: String },
 }
@@ -79,6 +88,8 @@ impl SafeDisplay for ComponentError {
             ComponentError::InternalRepoError(inner) => inner.to_safe_string(),
             ComponentError::InternalConversionError { .. } => self.to_string(),
             ComponentError::ComponentStoreError { .. } => self.to_string(),
+            ComponentError::ComponentConstraintConflictError(_) => self.to_string(),
+            ComponentError::ComponentConstraintCreateError(_) => self.to_string(),
             ComponentError::InitialFileError { .. } => self.to_string(),
         }
     }
@@ -90,32 +101,56 @@ impl From<RepoError> for ComponentError {
     }
 }
 
-pub fn create_new_component<Namespace>(
-    component_id: &ComponentId,
-    component_name: &ComponentName,
-    component_type: ComponentType,
-    data: &[u8],
-    namespace: &Namespace,
-) -> Result<Component<Namespace>, ComponentProcessingError>
-where
-    Namespace: Eq + Clone + Send + Sync,
-{
-    let metadata = process_component(data)?;
-
-    let versioned_component_id = VersionedComponentId {
-        component_id: component_id.clone(),
-        version: 0,
-    };
-
-    Ok(Component {
-        namespace: namespace.clone(),
-        component_name: component_name.clone(),
-        component_size: data.len() as u64,
-        metadata,
-        created_at: Utc::now(),
-        versioned_component_id,
-        component_type,
-    })
+impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::ComponentError {
+    fn from(value: ComponentError) -> Self {
+        let error = match value {
+            ComponentError::AlreadyExists(_) => component_error::Error::AlreadyExists(ErrorBody {
+                error: value.to_safe_string(),
+            }),
+            ComponentError::UnknownComponentId(_)
+            | ComponentError::UnknownVersionedComponentId(_) => {
+                component_error::Error::NotFound(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::ComponentProcessingError(error) => {
+                component_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                })
+            }
+            ComponentError::InternalRepoError(_) => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::InternalConversionError { .. } => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::ComponentStoreError { .. } => {
+                component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
+            ComponentError::ComponentConstraintConflictError(_) => {
+                component_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                })
+            }
+            ComponentError::ComponentConstraintCreateError(_) => {
+                component_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                })
+            }
+            ComponentError::InitialFileError { .. } => {
+                component_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![value.to_safe_string()],
+                })
+            }
+        };
+        Self { error: Some(error) }
+    }
 }
 
 #[async_trait]
@@ -153,7 +188,10 @@ pub trait ComponentService<Namespace> {
         component_id: &ComponentId,
         version: Option<u64>,
         namespace: &Namespace,
-    ) -> Result<ByteStream, ComponentError>;
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
+        ComponentError,
+    >;
 
     async fn download_initial_files(
         &self,
@@ -169,7 +207,10 @@ pub trait ComponentService<Namespace> {
         version: Option<u64>,
         namespace: &Namespace,
         permission_type: &FileSystemPermission,
-    ) -> Result<ByteStream, ComponentError>;
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>, 
+        ComponentError
+    >;
 
     async fn get_protected_data(
         &self,
@@ -218,6 +259,16 @@ pub trait ComponentService<Namespace> {
         component_id: &ComponentId,
         namespace: &Namespace,
     ) -> Result<(), ComponentError>;
+
+    async fn create_or_update_constraint(
+        &self,
+        component_constraint: &ComponentConstraints<Namespace>,
+    ) -> Result<ComponentConstraints<Namespace>, ComponentError>;
+
+    async fn get_component_constraint(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<FunctionConstraintCollection>, ComponentError>;
 }
 
 pub struct ComponentServiceDefault {
@@ -237,6 +288,131 @@ impl ComponentServiceDefault {
             object_store,
             component_compilation,
         }
+    }
+
+    pub fn find_component_metadata_conflicts(
+        function_constraint_collection: &FunctionConstraintCollection,
+        new_type_registry: &FunctionTypeRegistry,
+    ) -> ConflictReport {
+        let mut missing_functions = vec![];
+        let mut conflicting_functions = vec![];
+
+        for existing_function_call in &function_constraint_collection.function_constraints {
+            if let Some(new_registry_value) =
+                new_type_registry.lookup(&existing_function_call.function_key)
+            {
+                let mut parameter_conflict = false;
+                let mut return_conflict = false;
+
+                if existing_function_call.parameter_types != new_registry_value.argument_types() {
+                    parameter_conflict = true;
+                }
+
+                let new_return_types = match new_registry_value.clone() {
+                    RegistryValue::Function { return_types, .. } => return_types,
+                    _ => vec![],
+                };
+
+                if existing_function_call.return_types != new_return_types {
+                    return_conflict = true;
+                }
+
+                if parameter_conflict || return_conflict {
+                    conflicting_functions.push(ConflictingFunction {
+                        function: existing_function_call.function_key.clone(),
+                        existing_parameter_types: existing_function_call.parameter_types.clone(),
+                        new_parameter_types: new_registry_value.clone().argument_types().clone(),
+                        existing_result_types: existing_function_call.return_types.clone(),
+                        new_result_types: new_return_types,
+                    });
+                }
+            } else {
+                missing_functions.push(existing_function_call.function_key.clone());
+            }
+        }
+
+        ConflictReport {
+            missing_functions,
+            conflicting_functions,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConflictingFunction {
+    pub function: RegistryKey,
+    pub existing_parameter_types: Vec<AnalysedType>,
+    pub new_parameter_types: Vec<AnalysedType>,
+    pub existing_result_types: Vec<AnalysedType>,
+    pub new_result_types: Vec<AnalysedType>,
+}
+
+impl Display for ConflictingFunction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Function: {}", self.function)?;
+        writeln!(f, "  Parameter Type Conflict:")?;
+        writeln!(
+            f,
+            "    Existing: {}",
+            internal::convert_to_pretty_types(&self.existing_parameter_types)
+        )?;
+        writeln!(
+            f,
+            "    New:      {}",
+            internal::convert_to_pretty_types(&self.new_parameter_types)
+        )?;
+
+        writeln!(f, "  Result Type Conflict:")?;
+        writeln!(
+            f,
+            "    Existing: {}",
+            internal::convert_to_pretty_types(&self.existing_result_types)
+        )?;
+        writeln!(
+            f,
+            "    New:      {}",
+            internal::convert_to_pretty_types(&self.new_result_types)
+        )?;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct ConflictReport {
+    pub missing_functions: Vec<RegistryKey>,
+    pub conflicting_functions: Vec<ConflictingFunction>,
+}
+
+impl Display for ConflictReport {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Handling missing functions
+        writeln!(f, "Missing Functions:")?;
+        if self.missing_functions.is_empty() {
+            writeln!(f, "  None")?;
+        } else {
+            for missing_function in &self.missing_functions {
+                writeln!(f, "  - {}", missing_function)?;
+            }
+        }
+
+        // Handling conflicting functions
+        writeln!(f, "\nFunctions with conflicting types:")?;
+        if self.conflicting_functions.is_empty() {
+            writeln!(f, "  None")?;
+        } else {
+            for conflict in &self.conflicting_functions {
+                writeln!(f, "{}", conflict)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl ConflictReport {
+    pub fn is_empty(&self) -> bool {
+        self.missing_functions.is_empty() && self.conflicting_functions.is_empty()
     }
 }
 
@@ -262,7 +438,7 @@ where
             .await?
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
-        let component = create_new_component(
+        let component = Component::new(
             component_id,
             component_name,
             component_type,
@@ -306,9 +482,23 @@ where
         files_rw: Option<PackagedFiles>,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
+
         let created_at = Utc::now();
-        let metadata =
-            process_component(&data).map_err(ComponentError::ComponentProcessingError)?;
+
+        let metadata = ComponentMetadata::analyse_component(&data)
+            .map_err(ComponentError::ComponentProcessingError)?;
+
+        let constraints = self.component_repo.get_constraint(component_id).await?;
+
+        let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
+
+        if let Some(constraints) = constraints {
+            let conflicts =
+                Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
+            if !conflicts.is_empty() {
+                return Err(ComponentError::ComponentConstraintConflictError(conflicts));
+            }
+        }
 
         let next_component = self
             .component_repo
@@ -383,7 +573,10 @@ where
         component_id: &ComponentId,
         version: Option<u64>,
         namespace: &Namespace,
-    ) -> Result<ByteStream, ComponentError> {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
+        ComponentError,
+    > {
         let versioned_component_id = self
             .get_versioned_component_id(component_id, version, namespace)
             .await?
@@ -429,7 +622,10 @@ where
         version: Option<u64>,
         namespace: &Namespace,
         permission_type: &FileSystemPermission,
-    ) -> Result<ByteStream, ComponentError> {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>, 
+        ComponentError
+    > {
         let versioned_component_id = self
             .get_versioned_component_id(component_id, version, namespace)
             .await?
@@ -639,6 +835,44 @@ where
             Err(ComponentError::UnknownComponentId(component_id.clone()))
         }
     }
+
+    async fn create_or_update_constraint(
+        &self,
+        component_constraint: &ComponentConstraints<Namespace>,
+    ) -> Result<ComponentConstraints<Namespace>, ComponentError> {
+        info!(namespace = %component_constraint.namespace, "Create Component Constraint");
+        let component_id = &component_constraint.component_id;
+        let record = ComponentConstraintsRecord::try_from(component_constraint.clone())
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        self.component_repo
+            .create_or_update_constraint(&record)
+            .await?;
+        let result = self
+            .component_repo
+            .get_constraint(&component_constraint.component_id)
+            .await?
+            .ok_or(ComponentError::ComponentConstraintCreateError(format!(
+                "Failed to create constraints for {}",
+                component_id
+            )))?;
+
+        let component_constraints = ComponentConstraints {
+            namespace: component_constraint.namespace.clone(),
+            component_id: component_id.clone(),
+            constraints: result,
+        };
+
+        Ok(component_constraints)
+    }
+
+    async fn get_component_constraint(
+        &self,
+        component_id: &ComponentId,
+    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
+        let result = self.component_repo.get_constraint(component_id).await?;
+        Ok(result)
+    }
 }
 
 impl ComponentServiceDefault {
@@ -739,8 +973,24 @@ impl ComponentServiceDefault {
     }
 }
 
+mod internal {
+    use golem_wasm_ast::analysis::AnalysedType;
+    pub(crate) fn convert_to_pretty_types(analysed_types: &[AnalysedType]) -> String {
+        let type_names = analysed_types
+            .iter()
+            .map(|x| {
+                rib::TypeName::try_from(x.clone()).map_or("unknwon".to_string(), |x| x.to_string())
+            })
+            .collect::<Vec<_>>();
+
+        type_names.join(", ")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::service::component::ComponentError;
     use golem_common::SafeDisplay;
     use golem_service_base::repo::RepoError;

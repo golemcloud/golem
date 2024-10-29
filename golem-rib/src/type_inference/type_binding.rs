@@ -56,7 +56,7 @@ mod internal {
             | Expr::Flags(_, inferred_type)
             | Expr::Boolean(_, inferred_type)
             | Expr::Concat(_, inferred_type)
-            | Expr::Multiple(_, inferred_type)
+            | Expr::ExprBlock(_, inferred_type)
             | Expr::Not(_, inferred_type)
             | Expr::GreaterThan(_, _, inferred_type)
             | Expr::GreaterThanOrEqualTo(_, _, inferred_type)
@@ -81,6 +81,8 @@ mod internal {
 
 #[cfg(test)]
 mod type_binding_tests {
+    use test_r::test;
+
     use super::*;
     use crate::parser::type_name::TypeName;
     use crate::{ArmPattern, InferredType, MatchArm, Number, VariableId};
@@ -149,7 +151,7 @@ mod type_binding_tests {
         let expected = Expr::Let(
             VariableId::global("x".to_string()),
             None,
-            Box::new(Expr::Multiple(
+            Box::new(Expr::ExprBlock(
                 vec![
                     Expr::Let(
                         VariableId::global("y".to_string()),

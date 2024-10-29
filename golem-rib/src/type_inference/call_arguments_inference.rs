@@ -42,7 +42,10 @@ pub fn infer_call_arguments_type(
 mod internal {
     use crate::call_type::CallType;
     use crate::type_inference::kind::GetTypeKind;
-    use crate::{Expr, FunctionTypeRegistry, InferredType, RegistryKey, RegistryValue};
+    use crate::{
+        DynamicParsedFunctionName, Expr, FunctionTypeRegistry, InferredType, RegistryKey,
+        RegistryValue,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
 
@@ -50,87 +53,34 @@ mod internal {
         call_type: &mut CallType,
         function_type_registry: &FunctionTypeRegistry,
         args: &mut [Expr],
-        inferred_type: &mut InferredType,
+        function_result_inferred_type: &mut InferredType,
     ) -> Result<(), String> {
+        let cloned = call_type.clone();
+
         match call_type {
             CallType::Function(dynamic_parsed_function_name) => {
-                let parsed_function_static = dynamic_parsed_function_name.clone().to_static();
-                let function = parsed_function_static.clone().function;
-                if function.resource_name().is_some() {
-                    let resource_name =
-                        function.resource_name().ok_or("Resource name not found")?;
+                let resource_constructor_registry_key =
+                    RegistryKey::resource_constructor_registry_key(dynamic_parsed_function_name);
 
-                    let constructor_name = { format!["[constructor]{}", resource_name] };
-
-                    let mut constructor_params: &mut Vec<Expr> = &mut vec![];
-
-                    if let Some(resource_params) = dynamic_parsed_function_name
-                        .function
-                        .raw_resource_params_mut()
-                    {
-                        constructor_params = resource_params
+                match resource_constructor_registry_key {
+                    Some(resource_constructor_name) => handle_function_with_resource(
+                        &resource_constructor_name,
+                        dynamic_parsed_function_name,
+                        function_type_registry,
+                        function_result_inferred_type,
+                        args,
+                    ),
+                    None => {
+                        let registry_key = RegistryKey::from_call_type(&cloned);
+                        infer_args_and_result_type(
+                            &FunctionDetails::Fqn(dynamic_parsed_function_name.to_string()),
+                            function_type_registry,
+                            &registry_key,
+                            args,
+                            Some(function_result_inferred_type),
+                        )
+                        .map_err(|e| e.to_string())
                     }
-
-                    let registry_key = RegistryKey::from_function_name(
-                        &parsed_function_static.site,
-                        constructor_name.as_str(),
-                    );
-
-                    // Infer the types of constructor parameter expressions
-                    infer_types(
-                        &FunctionTypeInternal::ResourceConstructorName {
-                            fqn: parsed_function_static.to_string(),
-                            resource_constructor_name_pretty: parsed_function_static
-                                .function
-                                .resource_name()
-                                .cloned()
-                                .unwrap_or_default(),
-                            resource_constructor_name: constructor_name,
-                        },
-                        function_type_registry,
-                        registry_key,
-                        constructor_params,
-                        inferred_type,
-                    )
-                    .map_err(|e| e.to_string())?;
-
-                    // Infer the types of resource method parameters
-                    let resource_method_name = function.function_name();
-                    let registry_key = RegistryKey::from_function_name(
-                        &parsed_function_static.site,
-                        resource_method_name.as_str(),
-                    );
-
-                    infer_types(
-                        &FunctionTypeInternal::ResourceMethodName {
-                            fqn: parsed_function_static.to_string(),
-                            resource_constructor_name_pretty: parsed_function_static
-                                .function
-                                .resource_name()
-                                .cloned()
-                                .unwrap_or_default(),
-                            resource_method_name_pretty: parsed_function_static
-                                .function
-                                .resource_method_name()
-                                .unwrap_or_default(),
-                            resource_method_name,
-                        },
-                        function_type_registry,
-                        registry_key,
-                        args,
-                        inferred_type,
-                    )
-                    .map_err(|e| e.to_string())
-                } else {
-                    let registry_key = RegistryKey::from_invocation_name(call_type);
-                    infer_types(
-                        &FunctionTypeInternal::Fqn(parsed_function_static.to_string()),
-                        function_type_registry,
-                        registry_key,
-                        args,
-                        inferred_type,
-                    )
-                    .map_err(|e| e.to_string())
                 }
             }
 
@@ -144,12 +94,12 @@ mod internal {
 
             CallType::VariantConstructor(variant_name) => {
                 let registry_key = RegistryKey::FunctionName(variant_name.clone());
-                infer_types(
-                    &FunctionTypeInternal::VariantName(variant_name.clone()),
+                infer_args_and_result_type(
+                    &FunctionDetails::VariantName(variant_name.clone()),
                     function_type_registry,
-                    registry_key,
+                    &registry_key,
                     args,
-                    inferred_type,
+                    Some(function_result_inferred_type),
                 )
                 .map_err(|e| e.to_string())
             }
@@ -159,14 +109,14 @@ mod internal {
     // An internal error type for all possibilities of errors
     // when inferring the type of arguments
     enum FunctionArgsTypeInferenceError {
-        UnknownFunction(FunctionTypeInternal),
+        UnknownFunction(FunctionDetails),
         ArgumentSizeMisMatch {
-            function_type_internal: FunctionTypeInternal,
+            function_type_internal: FunctionDetails,
             expected: usize,
             provided: usize,
         },
         TypeMisMatchError {
-            function_type_internal: FunctionTypeInternal,
+            function_type_internal: FunctionDetails,
             expected: AnalysedType,
             provided: Expr,
         },
@@ -174,7 +124,7 @@ mod internal {
 
     impl FunctionArgsTypeInferenceError {
         fn type_mismatch(
-            function_type_internal: FunctionTypeInternal,
+            function_type_internal: FunctionDetails,
             expected: AnalysedType,
             provided: Expr,
         ) -> FunctionArgsTypeInferenceError {
@@ -189,13 +139,13 @@ mod internal {
     impl Display for FunctionArgsTypeInferenceError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                FunctionArgsTypeInferenceError::UnknownFunction(FunctionTypeInternal::Fqn(
+                FunctionArgsTypeInferenceError::UnknownFunction(FunctionDetails::Fqn(
                     parsed_function_name,
                 )) => {
                     write!(f, "Unknown function call: `{}`", parsed_function_name)
                 }
                 FunctionArgsTypeInferenceError::UnknownFunction(
-                    FunctionTypeInternal::ResourceMethodName {
+                    FunctionDetails::ResourceMethodName {
                         fqn,
                         resource_constructor_name_pretty: resource_name_human,
                         resource_method_name_pretty: resource_method_name_human,
@@ -209,7 +159,7 @@ mod internal {
                     )
                 }
                 FunctionArgsTypeInferenceError::UnknownFunction(
-                    FunctionTypeInternal::ResourceConstructorName {
+                    FunctionDetails::ResourceConstructorName {
                         fqn,
                         resource_constructor_name_pretty: resource_constructor_name_human,
                         ..
@@ -222,9 +172,9 @@ mod internal {
                     )
                 }
 
-                FunctionArgsTypeInferenceError::UnknownFunction(
-                    FunctionTypeInternal::VariantName(variant_name),
-                ) => {
+                FunctionArgsTypeInferenceError::UnknownFunction(FunctionDetails::VariantName(
+                    variant_name,
+                )) => {
                     write!(f, "Invalid variant constructor call: {}", variant_name)
                 }
 
@@ -233,19 +183,19 @@ mod internal {
                     expected,
                     provided,
                 } => match function_type_internal {
-                    FunctionTypeInternal::ResourceConstructorName {
+                    FunctionDetails::ResourceConstructorName {
                         resource_constructor_name_pretty: resource_constructor_name_human,
                         ..
                     } => {
                         write!(f,"Invalid type for the argument in resource constructor `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", resource_constructor_name_human, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
                     }
-                    FunctionTypeInternal::ResourceMethodName { fqn, .. } => {
+                    FunctionDetails::ResourceMethodName { fqn, .. } => {
                         write!(f,"Invalid type for the argument in resource method `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", fqn, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
                     }
-                    FunctionTypeInternal::Fqn(fqn) => {
+                    FunctionDetails::Fqn(fqn) => {
                         write!(f,"Invalid type for the argument in function `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", fqn, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
                     }
-                    FunctionTypeInternal::VariantName(str) => {
+                    FunctionDetails::VariantName(str) => {
                         write!(f,"Invalid type for the argument in variant constructor `{}`. Expected type `{}`, but provided argument `{}` is a `{}`", str, expected.get_type_kind(), provided, provided.inferred_type().get_type_kind())
                     }
                 },
@@ -254,19 +204,19 @@ mod internal {
                     expected,
                     provided,
                 } => match function_type_internal {
-                    FunctionTypeInternal::ResourceConstructorName {
+                    FunctionDetails::ResourceConstructorName {
                         resource_constructor_name_pretty,
                         ..
                     } => {
                         write!(f, "Incorrect number of arguments for resource constructor `{}`. Expected {}, but provided {}", resource_constructor_name_pretty, expected, provided)
                     }
-                    FunctionTypeInternal::ResourceMethodName { fqn, .. } => {
+                    FunctionDetails::ResourceMethodName { fqn, .. } => {
                         write!(f, "Incorrect number of arguments in resource method `{}`. Expected {}, but provided {}", fqn, expected, provided)
                     }
-                    FunctionTypeInternal::Fqn(fqn) => {
+                    FunctionDetails::Fqn(fqn) => {
                         write!(f, "Incorrect number of arguments for function `{}`. Expected {}, but provided {}", fqn, expected, provided)
                     }
-                    FunctionTypeInternal::VariantName(str) => {
+                    FunctionDetails::VariantName(str) => {
                         write!(f, "Invalid number of arguments in variant `{}`. Expected {}, but provided {}", str, expected, provided)
                     }
                 },
@@ -274,14 +224,103 @@ mod internal {
         }
     }
 
-    fn infer_types(
-        function_name: &FunctionTypeInternal,
+    fn handle_function_with_resource(
+        resource_constructor_registry_key: &RegistryKey,
+        dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
         function_type_registry: &FunctionTypeRegistry,
-        key: RegistryKey,
+        function_result_inferred_type: &mut InferredType,
+        resource_method_args: &mut [Expr],
+    ) -> Result<(), String> {
+        // Infer the resource constructors
+        infer_resource_constructor_arguments(
+            resource_constructor_registry_key,
+            dynamic_parsed_function_name,
+            function_type_registry,
+        )?;
+
+        let resource_method_registry_key =
+            RegistryKey::fqn_registry_key(dynamic_parsed_function_name);
+
+        // Infer the resource arguments
+        infer_resource_method_arguments(
+            &resource_method_registry_key,
+            dynamic_parsed_function_name,
+            function_type_registry,
+            resource_method_args,
+            function_result_inferred_type,
+        )
+    }
+
+    fn infer_resource_method_arguments(
+        resource_method_registry_key: &RegistryKey,
+        dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
+        function_type_registry: &FunctionTypeRegistry,
+        resource_method_args: &mut [Expr],
+        function_result_inferred_type: &mut InferredType,
+    ) -> Result<(), String> {
+        // Infer the types of resource method parameters
+        let resource_method_name_in_metadata =
+            dynamic_parsed_function_name.function_name_with_prefix_identifiers();
+
+        infer_args_and_result_type(
+            &FunctionDetails::ResourceMethodName {
+                fqn: dynamic_parsed_function_name.to_string(),
+                resource_constructor_name_pretty: dynamic_parsed_function_name
+                    .resource_name_simplified()
+                    .unwrap_or_default(),
+                resource_method_name_pretty: dynamic_parsed_function_name
+                    .resource_method_name_simplified()
+                    .unwrap_or_default(),
+                resource_method_name: resource_method_name_in_metadata,
+            },
+            function_type_registry,
+            resource_method_registry_key,
+            resource_method_args,
+            Some(function_result_inferred_type),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    fn infer_resource_constructor_arguments(
+        resource_constructor_registry_key: &RegistryKey,
+        dynamic_parsed_function_name: &mut DynamicParsedFunctionName,
+        function_type_registry: &FunctionTypeRegistry,
+    ) -> Result<(), String> {
+        let fqn = dynamic_parsed_function_name.to_string();
+        // Mainly for error reporting
+        let resource_constructor_name_pretty = dynamic_parsed_function_name
+            .resource_name_simplified()
+            .unwrap_or_default();
+
+        let mut constructor_params: &mut Vec<Expr> = &mut vec![];
+
+        if let Some(resource_params) = dynamic_parsed_function_name.raw_resource_params_mut() {
+            constructor_params = resource_params
+        }
+
+        // Infer the types of constructor parameter expressions
+        infer_args_and_result_type(
+            &FunctionDetails::ResourceConstructorName {
+                fqn,
+                resource_constructor_name_pretty,
+                resource_constructor_name: resource_constructor_registry_key.get_function_name(),
+            },
+            function_type_registry,
+            resource_constructor_registry_key,
+            constructor_params,
+            None,
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    fn infer_args_and_result_type(
+        function_name: &FunctionDetails,
+        function_type_registry: &FunctionTypeRegistry,
+        key: &RegistryKey,
         args: &mut [Expr],
-        inferred_type: &mut InferredType,
+        function_result_inferred_type: Option<&mut InferredType>,
     ) -> Result<(), FunctionArgsTypeInferenceError> {
-        if let Some(value) = function_type_registry.types.get(&key) {
+        if let Some(value) = function_type_registry.types.get(key) {
             match value {
                 RegistryValue::Value(_) => Ok(()),
                 RegistryValue::Variant {
@@ -292,7 +331,10 @@ mod internal {
 
                     if parameter_types.len() == args.len() {
                         tag_argument_types(function_name, args, &parameter_types)?;
-                        *inferred_type = InferredType::from_variant_cases(variant_type);
+
+                        if let Some(function_result_type) = function_result_inferred_type {
+                            *function_result_type = InferredType::from_variant_cases(variant_type);
+                        }
 
                         Ok(())
                     } else {
@@ -309,7 +351,7 @@ mod internal {
                 } => {
                     let mut parameter_types = parameter_types.clone();
 
-                    if let FunctionTypeInternal::ResourceMethodName { .. } = function_name {
+                    if let FunctionDetails::ResourceMethodName { .. } = function_name {
                         if let Some(AnalysedType::Handle(_)) = parameter_types.first() {
                             parameter_types.remove(0);
                         }
@@ -318,13 +360,15 @@ mod internal {
                     if parameter_types.len() == args.len() {
                         tag_argument_types(function_name, args, &parameter_types)?;
 
-                        *inferred_type = {
-                            if return_types.len() == 1 {
-                                return_types[0].clone().into()
-                            } else {
-                                InferredType::Sequence(
-                                    return_types.iter().map(|t| t.clone().into()).collect(),
-                                )
+                        if let Some(function_result_type) = function_result_inferred_type {
+                            *function_result_type = {
+                                if return_types.len() == 1 {
+                                    return_types[0].clone().into()
+                                } else {
+                                    InferredType::Sequence(
+                                        return_types.iter().map(|t| t.clone().into()).collect(),
+                                    )
+                                }
                             }
                         };
 
@@ -345,8 +389,11 @@ mod internal {
         }
     }
 
+    // An internal structure that has specific details
+    // of the components of a function name, especially to handle
+    // the resource constructors within a function name.
     #[derive(Clone)]
-    enum FunctionTypeInternal {
+    enum FunctionDetails {
         ResourceConstructorName {
             fqn: String,
             resource_constructor_name_pretty: String,
@@ -362,25 +409,25 @@ mod internal {
         VariantName(String),
     }
 
-    impl Display for FunctionTypeInternal {
+    impl Display for FunctionDetails {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             match self {
-                FunctionTypeInternal::ResourceConstructorName {
+                FunctionDetails::ResourceConstructorName {
                     resource_constructor_name,
                     ..
                 } => {
                     write!(f, "{}", resource_constructor_name)
                 }
-                FunctionTypeInternal::ResourceMethodName {
+                FunctionDetails::ResourceMethodName {
                     resource_method_name,
                     ..
                 } => {
                     write!(f, "{}", resource_method_name)
                 }
-                FunctionTypeInternal::Fqn(fqn) => {
+                FunctionDetails::Fqn(fqn) => {
                     write!(f, "{}", fqn)
                 }
-                FunctionTypeInternal::VariantName(name) => {
+                FunctionDetails::VariantName(name) => {
                     write!(f, "{}", name)
                 }
             }
@@ -389,7 +436,7 @@ mod internal {
 
     // A preliminary check of the arguments passed before  typ inference
     fn check_function_arguments(
-        function_name: &FunctionTypeInternal,
+        function_name: &FunctionDetails,
         expected: &AnalysedType,
         provided: &Expr,
     ) -> Result<(), FunctionArgsTypeInferenceError> {
@@ -411,7 +458,7 @@ mod internal {
     }
 
     fn tag_argument_types(
-        function_name: &FunctionTypeInternal,
+        function_name: &FunctionDetails,
         args: &mut [Expr],
         parameter_types: &[AnalysedType],
     ) -> Result<(), FunctionArgsTypeInferenceError> {
@@ -426,6 +473,8 @@ mod internal {
 
 #[cfg(test)]
 mod function_parameters_inference_tests {
+    use test_r::test;
+
     use crate::call_type::CallType;
     use crate::function_name::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
     use crate::type_registry::FunctionTypeRegistry;
@@ -485,7 +534,7 @@ mod function_parameters_inference_tests {
             InferredType::Sequence(vec![]), // Call Expressions return type is updated
         );
 
-        let expected = Expr::Multiple(vec![let_binding, call_expr], InferredType::Unknown);
+        let expected = Expr::ExprBlock(vec![let_binding, call_expr], InferredType::Unknown);
 
         assert_eq!(expr, expected);
     }

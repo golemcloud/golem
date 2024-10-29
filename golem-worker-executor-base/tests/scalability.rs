@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use test_r::{inherit_test_dep, test, timeout};
+
 use crate::common::{start, start_limited, TestContext, TestWorkerExecutor};
+use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use futures_util::stream::FuturesUnordered;
 use futures_util::StreamExt;
@@ -25,10 +28,18 @@ use tokio::spawn;
 use tokio::task::JoinSet;
 use tracing::info;
 
-#[tokio::test(flavor = "multi_thread")]
+inherit_test_dep!(WorkerExecutorTestDependencies);
+inherit_test_dep!(LastUniqueId);
+inherit_test_dep!(Tracing);
+
+#[test]
 #[tracing::instrument]
-async fn spawning_many_workers_that_sleep() {
-    let context = TestContext::new();
+async fn spawning_many_workers_that_sleep(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
     fn worker_name(n: i32) -> String {
         format!("sleeping-worker-{}", n)
     }
@@ -43,7 +54,7 @@ async fn spawning_many_workers_that_sleep() {
         (result, duration)
     }
 
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
     let component_id = executor.store_component("clocks").await;
 
     let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
@@ -110,10 +121,14 @@ async fn spawning_many_workers_that_sleep() {
     check!(total_duration.as_secs() < 10);
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[test]
 #[tracing::instrument]
-async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended() {
-    let context = TestContext::new();
+async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
     fn worker_name(n: i32) -> String {
         format!("sleeping-suspending-worker-{}", n)
     }
@@ -128,7 +143,7 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended() {
         (result, duration)
     }
 
-    let executor = start(&context).await.unwrap();
+    let executor = start(deps, &context).await.unwrap();
     let component_id = executor.store_component("clocks").await;
 
     let warmup_worker = executor.start_worker(&component_id, &worker_name(0)).await;
@@ -211,12 +226,16 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended() {
     check!(p952 < 25000);
 }
 
-#[tokio::test]
+#[test]
 #[tracing::instrument]
 #[allow(clippy::needless_range_loop)]
-async fn initial_large_memory_allocation() {
-    let context = TestContext::new();
-    let executor = start_limited(&context, Some(768 * 1024 * 1024))
+async fn initial_large_memory_allocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_limited(deps, &context, Some(768 * 1024 * 1024))
         .await
         .unwrap();
     let component_id = executor.store_component("large-initial-memory").await;
@@ -248,12 +267,17 @@ async fn initial_large_memory_allocation() {
     }
 }
 
-#[tokio::test]
+#[test]
+#[timeout(30000)]
 #[tracing::instrument]
 #[allow(clippy::needless_range_loop)]
-async fn dynamic_large_memory_allocation() {
-    let context = TestContext::new();
-    let executor = start_limited(&context, Some(768 * 1024 * 1024))
+async fn dynamic_large_memory_allocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_limited(deps, &context, Some(768 * 1024 * 1024))
         .await
         .unwrap();
     let component_id = executor.store_component("large-dynamic-memory").await;

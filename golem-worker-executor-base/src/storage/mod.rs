@@ -15,4 +15,4 @@
 pub mod blob;
 pub mod indexed;
 pub mod keyvalue;
-pub mod sqlite_types;
+pub mod sqlite;

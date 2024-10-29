@@ -43,6 +43,7 @@ service WorkerExecutor {
   rpc GetWorkersMetadata(GetWorkersMetadataRequest) returns (GetWorkersMetadataResponse);
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
+  rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
   rpc GetFiles(GetFilesRequest) returns (GetFilesResponse) {}
   rpc GetFile(GetFileRequest) returns (stream GetFileResponse) {}
 }
@@ -282,6 +283,28 @@ message GetOplogSuccessResponse {
   uint64 first_index_in_chunk = 3;
   uint64 last_index = 5;
 }
+
+message SearchOplogRequest {
+  golem.worker.WorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  string query = 3;
+  optional golem.worker.OplogCursor cursor = 5;
+  uint64 count = 6;
+}
+
+message SearchOplogResponse {
+  oneof result {
+    SearchOplogSuccessResponse success = 1;
+    golem.worker.v1.WorkerExecutionError failure = 2;
+  }
+}
+
+message SearchOplogSuccessResponse {
+  repeated golem.worker.OplogEntryWithIndex entries = 1;
+  optional golem.worker.OplogCursor next = 2;
+  uint64 last_index = 5;
+}
+
 
 message GetFilesRequest {
   golem.worker.WorkerId worker_id = 1;

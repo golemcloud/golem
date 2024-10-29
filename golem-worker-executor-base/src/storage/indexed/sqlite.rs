@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::storage::sqlite::SqlitePool;
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::TryFutureExt;
 use std::time::Duration;
-
-use crate::storage::sqlite_types::SqlitePool;
 
 use super::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 
@@ -27,11 +25,36 @@ pub struct SqliteIndexedStorage {
 }
 
 impl SqliteIndexedStorage {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub async fn new(pool: SqlitePool) -> Result<Self, String> {
+        let result = Self { pool };
+        result.init().await?;
+        Ok(result)
     }
 
-    fn to_string(namespace: &IndexedStorageNamespace) -> String {
+    async fn init(&self) -> Result<(), String> {
+        self.pool.execute(
+        sqlx::query(
+            r#"
+                        CREATE TABLE IF NOT EXISTS index_storage (
+                            namespace TEXT NOT NULL,          -- Namespace to logically group entries
+                            key TEXT NOT NULL,                -- Unique identifier for the index
+                            id INTEGER NOT NULL,              -- Unique numeric identifier for each entry
+                            value BLOB NOT NULL,              -- Arbitrary binary payload for each entry
+                            PRIMARY KEY (namespace, key, id)  -- Unique constraint on (namespace, key, id)
+                        );
+                         "#,
+        ))
+            .await?;
+
+        self.pool
+            .execute(sqlx::query(
+                "CREATE INDEX IF NOT EXISTS idx_key ON index_storage (namespace, key);",
+            ))
+            .await?;
+        Ok(())
+    }
+
+    fn namespace(namespace: IndexedStorageNamespace) -> String {
         match namespace {
             IndexedStorageNamespace::OpLog => "worker-oplog".to_string(),
             IndexedStorageNamespace::CompressedOpLog { level } => {
@@ -68,11 +91,17 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
+        let query = sqlx::query_as::<_, (bool,)>(
+            "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace = ? AND key = ?);",
+        )
+        .bind(Self::namespace(namespace))
+        .bind(key);
+
         self.pool
             .with(svc_name, api_name)
-            .exists_index(&Self::to_string(&namespace), key)
-            .map_err(|e| e.to_string())
+            .fetch_optional_as(query)
             .await
+            .map(|row| row.unwrap_or((false,)).0)
     }
 
     async fn scan(
@@ -84,11 +113,28 @@ impl IndexedStorage for SqliteIndexedStorage {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<String>), String> {
-        self.pool
+        let key = pattern.replace("*", "%").replace("?", "_");
+        let query =
+            sqlx::query_as("SELECT key FROM index_storage WHERE namespace = ? AND key LIKE ? ORDER BY key LIMIT ? OFFSET ?;")
+                .bind(Self::namespace(namespace))
+                .bind(&key)
+                .bind(sqlx::types::Json(count))
+                .bind(sqlx::types::Json(cursor));
+
+        let keys = self
+            .pool
             .with(svc_name, api_name)
-            .scan(&Self::to_string(&namespace), pattern, cursor, count)
-            .map_err(|e| e.to_string())
+            .fetch_all::<(String,), _>(query)
             .await
+            .map(|keys| keys.into_iter().map(|k| k.0).collect::<Vec<String>>())?;
+
+        let new_cursor = if keys.len() < count as usize {
+            0
+        } else {
+            cursor + count
+        };
+
+        Ok((new_cursor, keys))
     }
 
     async fn append(
@@ -101,11 +147,21 @@ impl IndexedStorage for SqliteIndexedStorage {
         id: u64,
         value: &[u8],
     ) -> Result<(), String> {
+        let query = sqlx::query(
+            r#"
+                    INSERT INTO index_storage (namespace, key, id, value) VALUES (?,?,?,?);
+                    "#,
+        )
+        .bind(Self::namespace(namespace))
+        .bind(key)
+        .bind(sqlx::types::Json(id))
+        .bind(value);
+
         self.pool
             .with(svc_name, api_name)
-            .append(&Self::to_string(&namespace), key, id, value)
-            .map_err(|e| e.to_string())
+            .execute(query)
             .await
+            .map(|_| ())
     }
 
     async fn length(
@@ -115,11 +171,17 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<u64, String> {
+        let query = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM index_storage WHERE namespace = ? AND key = ?;",
+        )
+        .bind(Self::namespace(namespace))
+        .bind(key);
+
         self.pool
             .with(svc_name, api_name)
-            .length(&Self::to_string(&namespace), key)
-            .map_err(|e| e.to_string())
+            .fetch_optional_as(query)
             .await
+            .map(|row| row.map(|r| r.0 as u64).unwrap_or(0))
     }
 
     async fn delete(
@@ -129,11 +191,15 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), String> {
+        let query = sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ?;")
+            .bind(Self::namespace(namespace))
+            .bind(key);
+
         self.pool
             .with(svc_name, api_name)
-            .delete(&Self::to_string(&namespace), key)
-            .map_err(|e| e.to_string())
+            .execute(query)
             .await
+            .map(|_| ())
     }
 
     async fn read(
@@ -146,11 +212,19 @@ impl IndexedStorage for SqliteIndexedStorage {
         start_id: u64,
         end_id: u64,
     ) -> Result<Vec<(u64, Bytes)>, String> {
+        let query = sqlx::query_as(
+            "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? AND id BETWEEN ? AND ?;",
+        )
+            .bind(Self::namespace(namespace))
+            .bind(key)
+            .bind(sqlx::types::Json(start_id))
+            .bind(sqlx::types::Json(end_id));
+
         self.pool
             .with(svc_name, api_name)
-            .read(&Self::to_string(&namespace), key, start_id, end_id)
-            .map_err(|e| e.to_string())
+            .fetch_all::<DBIdValue, _>(query)
             .await
+            .map(|vec| vec.into_iter().map(|row| row.into_pair()).collect())
     }
 
     async fn first(
@@ -161,11 +235,17 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Bytes)>, String> {
+        let query = sqlx::query_as(
+                    "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id ASC LIMIT 1;",
+                )
+                    .bind(Self::namespace(namespace))
+                    .bind(key);
+
         self.pool
             .with(svc_name, api_name)
-            .first(&Self::to_string(&namespace), key)
-            .map_err(|e| e.to_string())
+            .fetch_optional_as::<DBIdValue, _>(query)
             .await
+            .map(|op| op.map(|row| row.into_pair()))
     }
 
     async fn last(
@@ -176,11 +256,17 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Bytes)>, String> {
+        let query = sqlx::query_as(
+                    "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? ORDER BY id DESC LIMIT 1;",
+                )
+                .bind(Self::namespace(namespace))
+                .bind(key);
+
         self.pool
             .with(svc_name, api_name)
-            .last(&Self::to_string(&namespace), key)
-            .map_err(|e| e.to_string())
+            .fetch_optional_as::<DBIdValue, _>(query)
             .await
+            .map(|op| op.map(|row| row.into_pair()))
     }
 
     async fn closest(
@@ -192,11 +278,18 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         id: u64,
     ) -> Result<Option<(u64, Bytes)>, String> {
+        let query = sqlx::query_as(
+            "SELECT id, value FROM index_storage WHERE namespace = ? AND key = ? AND id >= ? ORDER BY id ASC LIMIT 1;",
+        )
+            .bind(Self::namespace(namespace))
+            .bind(key)
+            .bind(sqlx::types::Json(id));
+
         self.pool
             .with(svc_name, api_name)
-            .closest(&Self::to_string(&namespace), key, id)
-            .map_err(|e| e.to_string())
+            .fetch_optional_as::<DBIdValue, _>(query)
             .await
+            .map(|op| op.map(|row| row.into_pair()))
     }
 
     async fn drop_prefix(
@@ -207,10 +300,28 @@ impl IndexedStorage for SqliteIndexedStorage {
         key: &str,
         last_dropped_id: u64,
     ) -> Result<(), String> {
+        let query =
+            sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ? AND id <= ?;")
+                .bind(Self::namespace(namespace))
+                .bind(key)
+                .bind(sqlx::types::Json(last_dropped_id));
+
         self.pool
             .with(svc_name, api_name)
-            .drop_prefix(&Self::to_string(&namespace), key, last_dropped_id)
-            .map_err(|e| e.to_string())
+            .execute(query)
             .await
+            .map(|_| ())
+    }
+}
+
+#[derive(sqlx::FromRow, Debug)]
+struct DBIdValue {
+    pub id: i64,
+    value: Vec<u8>,
+}
+
+impl DBIdValue {
+    fn into_pair(self) -> (u64, Bytes) {
+        (self.id as u64, Bytes::from(self.value))
     }
 }

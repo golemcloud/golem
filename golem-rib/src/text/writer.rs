@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::expr::Expr;
-use crate::MatchArm;
+use crate::{ArmPattern, MatchArm};
 use std::fmt::Display;
 use std::io::Write;
 
@@ -22,6 +22,16 @@ pub fn write_expr(expr: &Expr) -> Result<String, WriterError> {
     let mut writer = Writer::new(&mut buf);
 
     writer.write_expr(expr)?;
+
+    String::from_utf8(buf)
+        .map_err(|err| WriterError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, err)))
+}
+
+pub fn write_arm_pattern(arm_pattern: &ArmPattern) -> Result<String, WriterError> {
+    let mut buf = vec![];
+    let mut writer = Writer::new(&mut buf);
+
+    internal::write_arm_pattern(arm_pattern, &mut writer)?;
 
     String::from_utf8(buf)
         .map_err(|err| WriterError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, err)))
@@ -153,7 +163,7 @@ impl<W: Write> Writer<W> {
                 internal::write_concatenated_exprs(self, concatenated)?;
                 self.write_display("\"")
             }
-            Expr::Multiple(expr, _) => {
+            Expr::ExprBlock(expr, _) => {
                 for (idx, expr) in expr.iter().enumerate() {
                     if idx != 0 {
                         self.write_display(";")?;
@@ -213,7 +223,7 @@ impl<W: Write> Writer<W> {
                         arm_pattern,
                         arm_resolution_expr,
                     } = &match_term;
-                    internal::write_constructor(arm_pattern, self)?;
+                    internal::write_arm_pattern(arm_pattern, self)?;
                     self.write_str(" => ")?;
                     self.write_expr(arm_resolution_expr)?;
                 }
@@ -342,7 +352,7 @@ mod internal {
         Ok(())
     }
 
-    pub(crate) fn write_constructor<W>(
+    pub(crate) fn write_arm_pattern<W>(
         match_case: &ArmPattern,
         writer: &mut Writer<W>,
     ) -> Result<(), WriterError>
@@ -354,7 +364,7 @@ mod internal {
             ArmPattern::As(name, pattern) => {
                 writer.write_str(name)?;
                 writer.write_str(" @ ")?;
-                write_constructor(pattern, writer)
+                write_arm_pattern(pattern, writer)
             }
             ArmPattern::Constructor(constructor_type, variables) => {
                 if !variables.is_empty() {
@@ -366,7 +376,7 @@ mod internal {
                         if idx != 0 {
                             writer.write_str(",")?;
                         }
-                        write_constructor(pattern, writer)?;
+                        write_arm_pattern(pattern, writer)?;
                     }
 
                     writer.write_str(")")
@@ -382,7 +392,7 @@ mod internal {
                     if idx != 0 {
                         writer.write_str(",")?;
                     }
-                    write_constructor(pattern, writer)?;
+                    write_arm_pattern(pattern, writer)?;
                 }
 
                 writer.write_str(")")
@@ -395,7 +405,7 @@ mod internal {
                     if idx != 0 {
                         writer.write_str(",")?;
                     }
-                    write_constructor(pattern, writer)?;
+                    write_arm_pattern(pattern, writer)?;
                 }
 
                 writer.write_str("]")
@@ -410,7 +420,7 @@ mod internal {
                     }
                     writer.write_str(key)?;
                     writer.write_str(":")?;
-                    write_constructor(value, writer)?;
+                    write_arm_pattern(value, writer)?;
                 }
 
                 writer.write_str("}")

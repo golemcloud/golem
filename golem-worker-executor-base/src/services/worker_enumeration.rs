@@ -109,10 +109,9 @@ impl DefaultWorkerEnumerationService {
         count: u64,
         precise: bool,
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GolemError> {
-        let mut new_cursor: Option<ScanCursor> = None;
         let mut workers: Vec<WorkerMetadata> = vec![];
 
-        let (new_scan_cursor, keys) = self
+        let (new_cursor, keys) = self
             .oplog_service
             .scan_for_component(account_id, component_id, cursor, count)
             .await?;
@@ -142,11 +141,7 @@ impl DefaultWorkerEnumerationService {
             }
         }
 
-        if !new_scan_cursor.is_finished() {
-            new_cursor = Some(new_scan_cursor);
-        }
-
-        Ok((new_cursor, workers))
+        Ok((new_cursor.into_option(), workers))
     }
 }
 

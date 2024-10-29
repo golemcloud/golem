@@ -36,6 +36,7 @@ use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::exports::{find_resource_site, function_by_name};
+use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::public_oplog::{
     ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, Empty,
@@ -114,6 +115,66 @@ pub async fn get_public_oplog_chunk(
         next_oplog_index,
         current_component_version,
         first_index_in_chunk: initial_oplog_index,
+        last_index,
+    })
+}
+
+pub struct PublicOplogSearchResult {
+    pub entries: Vec<(OplogIndex, PublicOplogEntry)>,
+    pub next_oplog_index: OplogIndex,
+    pub current_component_version: ComponentVersion,
+    pub last_index: OplogIndex,
+}
+
+pub async fn search_public_oplog(
+    component_service: Arc<dyn ComponentService + Send + Sync>,
+    oplog_service: Arc<dyn OplogService + Send + Sync>,
+    owned_worker_id: &OwnedWorkerId,
+    initial_component_version: ComponentVersion,
+    initial_oplog_index: OplogIndex,
+    count: usize,
+    query: &str,
+) -> Result<PublicOplogSearchResult, String> {
+    let mut results = Vec::new();
+    let mut last_index;
+    let mut current_index = initial_oplog_index;
+    let mut current_component_version = initial_component_version;
+
+    let query = Query::parse(query)?;
+
+    loop {
+        let chunk = get_public_oplog_chunk(
+            component_service.clone(),
+            oplog_service.clone(),
+            owned_worker_id,
+            current_component_version,
+            current_index,
+            count,
+        )
+        .await?;
+
+        for (idx, entry) in chunk.entries.into_iter().enumerate() {
+            if entry.matches(&query) {
+                results.push((
+                    OplogIndex::from_u64(u64::from(current_index) + idx as u64),
+                    entry,
+                ));
+            }
+        }
+
+        last_index = chunk.last_index;
+        current_index = chunk.next_oplog_index;
+        current_component_version = chunk.current_component_version;
+
+        if current_index >= last_index || results.len() >= count {
+            break;
+        }
+    }
+
+    Ok(PublicOplogSearchResult {
+        entries: results,
+        next_oplog_index: current_index,
+        current_component_version,
         last_index,
     })
 }
@@ -807,10 +868,7 @@ fn encode_host_function_request_as_value(
             Ok(payload.into_value_and_type())
         }
         "golem::rpc::wasm-rpc::generate_unique_local_worker_id" => no_payload(),
-        "cli::preopens::get_directories" => {
-            let payload: Result<Vec<String>, SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
-        }
+        "cli::preopens::get_directories" => no_payload(),
         "filesystem::types::descriptor::stat" => {
             let payload: String = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())

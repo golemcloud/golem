@@ -1,5 +1,7 @@
 #[cfg(test)]
 mod comprehensive_test {
+    use test_r::test;
+
     use crate::{compiler, Expr};
     use golem_wasm_ast::analysis::{
         AnalysedType, NameTypePair, TypeBool, TypeF32, TypeF64, TypeRecord, TypeS16, TypeS32,
@@ -7,7 +9,7 @@ mod comprehensive_test {
     };
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
-    #[tokio::test]
+    #[test]
     async fn test_interpreter_complex_rib() {
         let expr = r#"
 
@@ -140,11 +142,13 @@ mod comprehensive_test {
 
               let some_option_response_processed = match some_option_response {
                  some(some(x)) => x,
+                 some(none) => "not found",
                  none => "not found"
               };
 
               let none_option_response_processed = match none_option_response {
                  some(some(x)) => x,
+                 some(none) => "not found",
                  none => "not found"
               };
 
@@ -324,12 +328,14 @@ mod comprehensive_test {
 
               let ok_of_variant_response_processed = match ok_of_variant_response {
                 ok(case-str(a)) => a,
-                err(case-str(b)) => b
+                err(case-str(b)) => b,
+                _ => "not found"
               };
 
                 let err_of_variant_response_processed = match err_of_variant_response {
                     ok(case-str(a)) => a,
-                    err(case-str(b)) => b
+                    err(case-str(b)) => b,
+                    _ => "not found"
                 };
 
               let ok_of_enum_response_processed = match ok_of_enum_response {

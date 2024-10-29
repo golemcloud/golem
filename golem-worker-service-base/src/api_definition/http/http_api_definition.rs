@@ -3,6 +3,11 @@ use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use Iterator;
 
+use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
+use crate::parser::path_pattern_parser::PathPatternParser;
+use crate::parser::{GolemParser, ParseError};
+use crate::worker_binding::CompiledGolemWorkerBinding;
+use crate::worker_binding::GolemWorkerBinding;
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use golem_service_base::model::{Component, VersionedComponentId};
@@ -10,12 +15,6 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-
-use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
-use crate::parser::path_pattern_parser::PathPatternParser;
-use crate::parser::{GolemParser, ParseError};
-use crate::worker_binding::CompiledGolemWorkerBinding;
-use crate::worker_binding::GolemWorkerBinding;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -353,7 +352,7 @@ pub struct Route {
     pub binding: GolemWorkerBinding,
 }
 
-#[derive(Debug, Clone, PartialEq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CompiledRoute {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
@@ -421,6 +420,8 @@ impl From<CompiledRoute> for Route {
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use super::*;
     use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 

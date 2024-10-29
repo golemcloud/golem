@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Deref;
+use async_trait::async_trait;
+use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
-
-use ctor::{ctor, dtor};
+use test_r::{tag_suite, test_dep};
 use tracing::Level;
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
@@ -59,8 +60,31 @@ pub mod ts_rpc1;
 pub mod ts_rpc2;
 pub mod wasi;
 
+test_r::enable!();
+
+tag_suite!(api, group1);
+tag_suite!(blobstore, group1);
+tag_suite!(keyvalue, group1);
+
+tag_suite!(guest_languages1, group2);
+
+tag_suite!(transactions, group3);
+tag_suite!(wasi, group3);
+
+tag_suite!(scalability, group4);
+tag_suite!(hot_update, group4);
+tag_suite!(rust_rpc, group4);
+
+tag_suite!(guest_languages2, group5);
+
+tag_suite!(ts_rpc1, group6);
+
+tag_suite!(guest_languages3, group7);
+
+tag_suite!(ts_rpc2, group8);
+
 #[derive(Clone)]
-pub(crate) struct WorkerExecutorPerTestDependencies {
+pub struct WorkerExecutorPerTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
@@ -69,6 +93,7 @@ pub(crate) struct WorkerExecutorPerTestDependencies {
     component_directory: PathBuf,
 }
 
+#[async_trait]
 impl TestDependencies for WorkerExecutorPerTestDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         panic!("Not supported")
@@ -109,11 +134,23 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
     }
 }
 
-struct WorkerExecutorTestDependencies {
+pub struct WorkerExecutorTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
     component_directory: PathBuf,
+}
+
+impl Debug for WorkerExecutorTestDependencies {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WorkerExecutorTestDependencies")
+    }
+}
+
+impl Default for WorkerExecutorTestDependencies {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WorkerExecutorTestDependencies {
@@ -170,6 +207,7 @@ impl WorkerExecutorTestDependencies {
     }
 }
 
+#[async_trait]
 impl TestDependencies for WorkerExecutorTestDependencies {
     fn rdb(&self) -> Arc<dyn Rdb + Send + Sync + 'static> {
         panic!("Not supported")
@@ -210,28 +248,31 @@ impl TestDependencies for WorkerExecutorTestDependencies {
     }
 }
 
-#[ctor]
-pub static BASE_DEPS: WorkerExecutorTestDependencies = WorkerExecutorTestDependencies::new();
+#[derive(Debug)]
+pub struct Tracing;
 
-#[dtor]
-unsafe fn drop_base_deps() {
-    let base_deps_ptr = BASE_DEPS.deref() as *const WorkerExecutorTestDependencies;
-    let base_deps_ptr = base_deps_ptr as *mut WorkerExecutorTestDependencies;
-    (*base_deps_ptr).redis().kill();
-    (*base_deps_ptr).redis_monitor().kill();
+#[test_dep]
+pub fn tracing() -> Tracing {
+    init_tracing_with_default_debug_env_filter(&TracingConfig::test_pretty_without_time(
+        "worker-executor-tests",
+    ));
+
+    Tracing
 }
 
-struct Tracing;
+#[test_dep]
+pub fn test_dependencies(_tracing: &Tracing) -> WorkerExecutorTestDependencies {
+    WorkerExecutorTestDependencies::new()
+}
 
-impl Tracing {
-    pub fn init() -> Self {
-        init_tracing_with_default_debug_env_filter(&TracingConfig::test_pretty_without_time(
-            "worker-executor-tests-base",
-        ));
+#[derive(Debug)]
+pub struct LastUniqueId {
+    pub id: AtomicU16,
+}
 
-        Self
+#[test_dep]
+pub fn last_unique_id() -> LastUniqueId {
+    LastUniqueId {
+        id: AtomicU16::new(0),
     }
 }
-
-#[ctor]
-pub static TRACING: Tracing = Tracing::init();

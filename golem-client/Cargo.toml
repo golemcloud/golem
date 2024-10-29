@@ -10,6 +10,7 @@ description = "Client for Golem Cloud's REST API"
 include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 
 [lib]
+harness = false
 
 [dependencies]
 golem-common = { path = "../golem-common", version = "0.0.0" }
@@ -26,6 +27,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+[dev-dependencies]
+test-r = { workspace = true }
 
 [build-dependencies]
 #golem-openapi-client-generator = "0.0.10"

@@ -29,8 +29,8 @@ impl WorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
 }
 
 mod internal {
+    use super::UnauthorisedWorkerRequestExecutor;
     use crate::empty_worker_metadata;
-    use crate::worker_bridge_request_executor::UnauthorisedWorkerRequestExecutor;
 
     use golem_common::model::WorkerId;
     use golem_service_base::model::validate_worker_name;

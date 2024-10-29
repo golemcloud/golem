@@ -8,6 +8,7 @@ repository = "https://github.com/golemcloud/golem"
 description = "Shared code between Golem services"
 
 [lib]
+harness = false
 
 [dependencies]
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
@@ -28,6 +29,7 @@ http_02 = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 num-traits = { workspace = true }
+pin-project = "1.1.7"
 poem-openapi = { workspace = true }
 prost-types = { workspace = true }
 rand = { workspace = true }
@@ -45,7 +47,9 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
+tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 url = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+test-r = { workspace = true }

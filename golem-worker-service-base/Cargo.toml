@@ -8,6 +8,11 @@ repository = "https://github.com/golemcloud/golem"
 description = "Base functionalities of Golem Worker Service"
 
 [lib]
+harness = false
+
+[[test]]
+name = "services_tests"
+harness = false
 
 [dependencies]
 golem-common = { path = "../golem-common" }
@@ -77,6 +82,7 @@ criterion = { version = "0.3", features = ["html_reports"] }
 fastrand = "2.0.2"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
+test-r = { workspace = true }
 
 [[bench]]
 name = "tree"

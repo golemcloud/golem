@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::{Duration, Instant};
-
+use async_trait::async_trait;
 use redis::RedisResult;
+use std::time::{Duration, Instant};
 use tracing::info;
 
 pub mod docker;
@@ -22,6 +22,7 @@ pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
+#[async_trait]
 pub trait Redis {
     fn assert_valid(&self);
 
@@ -37,7 +38,7 @@ pub trait Redis {
 
     fn prefix(&self) -> &str;
 
-    fn kill(&self);
+    async fn kill(&self);
 
     fn try_get_connection(&self, db: u16) -> RedisResult<redis::Connection> {
         let client = redis::Client::open(format!(
@@ -45,14 +46,31 @@ pub trait Redis {
             self.public_host(),
             self.public_port(),
             db
-        ))
-        .unwrap();
+        ))?;
         client.get_connection()
+    }
+
+    async fn try_get_async_connection(
+        &self,
+        db: u16,
+    ) -> RedisResult<redis::aio::MultiplexedConnection> {
+        let client = redis::Client::open(format!(
+            "redis://{}:{}/{}",
+            self.public_host(),
+            self.public_port(),
+            db
+        ))?;
+        client.get_multiplexed_async_connection().await
     }
 
     fn get_connection(&self, db: u16) -> redis::Connection {
         self.assert_valid();
         self.try_get_connection(db).unwrap()
+    }
+
+    async fn get_async_connection(&self, db: u16) -> redis::aio::MultiplexedConnection {
+        self.assert_valid();
+        self.try_get_async_connection(db).await.unwrap()
     }
 
     fn flush_db(&self, db: u16) {

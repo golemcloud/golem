@@ -102,13 +102,14 @@ impl OplogArchiveService for CompressedOplogArchiveService {
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), GolemError> {
+        let ScanCursor { cursor, layer } = cursor;
         let (cursor, keys) = self
             .indexed_storage
             .with("compressed_oplog", "scan")
             .scan(
                 IndexedStorageNamespace::CompressedOpLog { level: self.level },
                 &PrimaryOplogService::key_pattern(component_id),
-                cursor.cursor,
+                cursor,
                 count,
             )
             .await
@@ -117,7 +118,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             });
 
         Ok((
-            ScanCursor { cursor, layer: 0 },
+            ScanCursor { cursor, layer },
             keys.into_iter()
                 .map(|key| OwnedWorkerId {
                     worker_id: PrimaryOplogService::get_worker_id_from_key(&key, component_id),
@@ -314,6 +315,18 @@ impl OplogArchive for CompressedOplogArchive {
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+        let mut cache = self.cache.write().await;
+
+        let idx_to_evict = cache
+            .iter()
+            .filter(|(idx, _)| **idx <= last_dropped_id)
+            .map(|(idx, _)| *idx)
+            .collect::<Vec<_>>();
+
+        for idx in idx_to_evict {
+            cache.remove(&idx);
+        }
+
         let worker_id = &self.worker_id;
         self.indexed_storage.with("compressed_oplog", "drop_prefix")
             .drop_prefix(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key, last_dropped_id.into())

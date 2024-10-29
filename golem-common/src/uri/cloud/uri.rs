@@ -177,6 +177,8 @@ uri_from_into!(ResourceUri);
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+
     use crate::model::{ComponentId, TargetWorkerId, WorkerId};
     use crate::uri::cloud::uri::{
         ApiDefinitionUri, ApiDeploymentUri, ComponentOrVersionUri, ComponentUri,
