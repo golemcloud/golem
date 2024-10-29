@@ -32,6 +32,12 @@ pub trait InitialFileSystemService {
         initial_file: &Vec<u8>,
         path: &Path
     ) -> Result<(), GolemError>;
+
+    async fn set_permissions(
+        &self,
+        path: &Path,
+    ) -> Result<(), GolemError>;
+
 }
 
 pub struct DefaultInitialFileSystemService {
@@ -94,7 +100,7 @@ impl InitialFileSystemService for DefaultInitialFileSystemService {
         path: &Path
     ) -> Result<(), GolemError> {
         info!("Saving initial file system for component: {}", component_id);
-
+        info!("Saving to {}", path.display());
 
         self.blob_storage
             .put_raw(
@@ -113,6 +119,10 @@ impl InitialFileSystemService for DefaultInitialFileSystemService {
                     format!("Could not store initial file system: {err}"),
                 )
             })
+    }
+
+    async fn set_permissions(&self, path: &Path) -> Result<(), GolemError> {
+        self.blob_storage.set_permissions(path).await.map_err(|err| {GolemError::PermissionsNotSet })
     }
 }
 pub struct InitialFileSystemServiceDisabled {}
@@ -147,6 +157,10 @@ impl InitialFileSystemService for InitialFileSystemServiceDisabled {
         path: &Path
     ) -> Result<(), GolemError> {
         Ok(())
+    }
+
+    async fn set_permissions(&self, path: &Path) -> Result<(), GolemError> {
+        todo!()
     }
 }
 

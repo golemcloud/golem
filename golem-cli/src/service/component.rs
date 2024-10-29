@@ -26,8 +26,7 @@ use indoc::formatdoc;
 use itertools::Itertools;
 use std::fmt::Display;
 use std::path::PathBuf;
-use golem_wasm_rpc_stubgen::model::oam::Application;
-use tokio::fs::File;
+use golem_wasm_rpc_stubgen::model::oam::{Application};
 
 #[async_trait]
 pub trait ComponentService {

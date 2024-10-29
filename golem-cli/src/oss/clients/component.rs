@@ -15,7 +15,7 @@
 use std::io::Read;
 use std::path::PathBuf;
 use async_trait::async_trait;
-use golem_wasm_rpc_stubgen::model::oam::Application;
+use golem_wasm_rpc_stubgen::model::oam::{Application};
 use crate::clients::component::ComponentClient;
 use golem_common::uri::oss::urn::ComponentUrn;
 use tokio::fs::File;
@@ -86,21 +86,20 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         config: Application,
     ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {file:?}");
+        info!("the config is {:?}",config);
+
+        let config_str = serde_json::to_string(&config);
 
         let component = match file {
             PathBufOrStdin::Path(path) => {
                 let file = File::open(path.clone())
                     .await
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
-
-                let file2 = File::open(path)
-                    .await
-                    .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
                 let ifs_file = File::open(ifs.clone())
                     .await
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
                 self.client
-                    .create_component(&name.0, Some(&component_type), file, Some(ifs_file), Some("filePermissions"))
+                    .create_component(&name.0, Some(&component_type), file, Some(ifs_file), config_str.unwrap().as_str())
                     .await?
             }
             PathBufOrStdin::Stdin => {
@@ -111,7 +110,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .create_component(&name.0, Some(&component_type), bytes.clone(), Some(bytes), Some("filePermissions"))
+                    .create_component(&name.0, Some(&component_type), bytes.clone(), Some(bytes), config_str.unwrap().as_str())
                     .await?
             }
         };

@@ -97,7 +97,7 @@ impl CompileWorker {
                         let send_result = sender
                             .send(CompiledComponent {
                                 component_and_version: request.component,
-                                component,
+                                component
                             })
                             .await;
 

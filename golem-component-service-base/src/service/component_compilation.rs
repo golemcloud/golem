@@ -21,10 +21,11 @@ use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::ComponentId;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use golem_service_base::model::Configuration;
 
 #[async_trait]
 pub trait ComponentCompilationService {
-    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64, ifs_data: Vec<u8>);
+    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64, ifs_data: Vec<u8>, config: Configuration);
 }
 
 pub struct ComponentCompilationServiceDefault {
@@ -48,7 +49,7 @@ impl ComponentCompilationServiceDefault {
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDefault {
-    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64, ifs_data: Vec<u8>) {
+    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64, ifs_data: Vec<u8>, config: Configuration) {
         let component_id_clone = component_id.clone();
         let ifs_data_clone = ifs_data.clone();
         let result = self
@@ -61,6 +62,7 @@ impl ComponentCompilationService for ComponentCompilationServiceDefault {
                         component_id: Some(component_id_clone.into()),
                         component_version,
                         ifs_data: ifs_data_clone,
+                        config: config.0
 
                     };
 
@@ -81,5 +83,5 @@ pub struct ComponentCompilationServiceDisabled;
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDisabled {
-    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64, ifs_data: Vec<u8>) {}
+    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64, ifs_data: Vec<u8>, config: Configuration) {}
 }

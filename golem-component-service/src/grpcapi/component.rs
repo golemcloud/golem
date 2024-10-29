@@ -41,6 +41,7 @@ use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::stream::ByteStream;
 use tonic::{Request, Response, Status, Streaming};
+use golem_service_base::model::Configuration;
 
 fn bad_request_error(error: &str) -> ComponentError {
     ComponentError {
@@ -154,11 +155,12 @@ impl ComponentGrpcApi {
         &self,
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
+        config: Configuration,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let result = self
             .component_service
-            .create(&ComponentId::new_v4(), &name, request.component_type().into(), data, &DefaultNamespace::default(), vec![])
+            .create(&ComponentId::new_v4(), &name, request.component_type().into(), data, &DefaultNamespace::default(), vec![], config)
             .await?;
         Ok(result.into())
     }
@@ -167,6 +169,7 @@ impl ComponentGrpcApi {
         &self,
         request: UpdateComponentRequestHeader,
         data: Vec<u8>,
+        config: Configuration
     ) -> Result<Component, ComponentError> {
         let id: ComponentId = request
             .component_id
@@ -181,7 +184,7 @@ impl ComponentGrpcApi {
         };
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultNamespace::default())
+            .update(&id, data, component_type, &DefaultNamespace::default(), config)
             .await?;
         Ok(result.into())
     }
@@ -213,7 +216,7 @@ impl ComponentService for ComponentGrpcApi {
 
     async fn create_component(
         &self,
-        request: Request<Streaming<CreateComponentRequest>>,
+        request: Request<Streaming<CreateComponentRequest>>
     ) -> Result<Response<CreateComponentResponse>, Status> {
         let chunks: Vec<CreateComponentRequest> =
             request.into_inner().into_stream().try_collect().await?;
@@ -243,7 +246,7 @@ impl ComponentService for ComponentGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                self.create(request, data)
+                self.create(request, data, Configuration("".to_string()))
                     .instrument(record.span.clone())
                     .await
             }
@@ -369,7 +372,7 @@ impl ComponentService for ComponentGrpcApi {
 
     async fn update_component(
         &self,
-        request: Request<Streaming<UpdateComponentRequest>>,
+        request: Request<Streaming<UpdateComponentRequest>>
     ) -> Result<Response<UpdateComponentResponse>, Status> {
         let chunks: Vec<UpdateComponentRequest> =
             request.into_inner().into_stream().try_collect().await?;
@@ -401,7 +404,7 @@ impl ComponentService for ComponentGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                self.update(request, data)
+                self.update(request, data, Configuration("".to_string()))
                     .instrument(record.span.clone())
                     .await
             }

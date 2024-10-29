@@ -84,6 +84,11 @@ pub trait BlobStorage: Debug {
         path: &Path
     ) -> Result<io::Result<Vec<u8>>, String>;
 
+    async fn set_permissions(
+        &self,
+        path: &Path,
+    ) -> Result<(), String>;
+
     async fn get_directory_entries(&self, root_path: &Path, path: &Path) -> Result<io::Result<Vec<(String, bool)>> , String>;
 
     async fn get_file_or_directory(&self, base_path : &Path, path: &Path) -> Result<FileOrDirectoryResponse, String>;

@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use std::error::Error;
-use std::fs;
+use std::fmt::Display;
+use std::{fmt, fs};
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use crate::command::ComponentRefSplit;
 use crate::model::{
     ComponentName, Format, GolemError, GolemResult, PathBufOrStdin, WorkerUpdateMode,
@@ -28,10 +29,11 @@ use golem_client::model::ComponentType;
 use std::sync::Arc;
 use golem_wasm_rpc_stubgen::model::oam::{Application, Component};
 use golem_wasm_rpc_stubgen::model::wasm_rpc::DEFAULT_CONFIG_FILE_NAME;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tracing::{error, info};
+use url::Url;
 use zip::write::{FileOptions, SimpleFileOptions};
 use zip::ZipWriter;
 
@@ -258,16 +260,6 @@ impl<
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
 
-                // let mut result = service
-                //     .update(
-                //         component_name_or_uri.clone(),
-                //         component_file,
-                //         component_type.optional_component_type(),
-                //         project_id.clone(),
-                //         non_interactive,
-                //         format,
-                //     )
-                //     .await?;
 
                 match read_yaml_content() {
                     Ok(config) => {
@@ -373,7 +365,7 @@ async fn compress_files(application: Application) -> Result<PathBuf, Box<dyn Err
 
             for file in &files {
                 info!("Processing file: {:?}", file);
-                let source_path = std::path::Path::new(&file.source_path);
+                let source_path = file.clone().source_path;
 
                 // Handle files based on permissions
                 let target_folder = match file.permissions {
@@ -382,15 +374,17 @@ async fn compress_files(application: Application) -> Result<PathBuf, Box<dyn Err
                 };
 
                 let target_path = format!("{}/{}", target_folder, file.target_path);
+                match source_path{
+                    FileSource::Path(source_path) => {
+                        let mut file_reader = std::fs::File::open(source_path)?;
 
-                if source_path.exists() {
-                    let mut file_reader = std::fs::File::open(source_path)?;
-
-                    // Add file to the corresponding folder in the ZIP archive
-                    zip.start_file(target_path, options)?;
-                    std::io::copy(&mut file_reader, &mut zip)?;
-                } else {
-                    error!("Source path {:?} does not exist", file.source_path);
+                        // Add file to the corresponding folder in the ZIP archive
+                        zip.start_file(target_path, options)?;
+                        std::io::copy(&mut file_reader, &mut zip)?;
+                    }
+                    FileSource::Url(url) => {
+                        info!("Url found {}", url.as_str());
+                    }
                 }
             }
         } else {
@@ -401,6 +395,11 @@ async fn compress_files(application: Application) -> Result<PathBuf, Box<dyn Err
         error!("No components found in application");
         return Err(Box::from("No component found in application".to_string()));
     }
+
+    let golem_yaml_path = PathBuf::from("golem.yaml");
+    let mut golem_yaml_file = fs::File::open(&golem_yaml_path)?;
+    zip.start_file("config/golem.yaml", options)?;
+    std::io::copy(&mut golem_yaml_file, &mut zip)?;
 
     zip.finish()?;
 
@@ -490,13 +489,57 @@ pub enum Permissions{
 
 #[derive(Debug,Clone, Serialize, Deserialize)]
 pub struct FileProperty{
-    #[serde(rename = "sourcePath")]
-    pub source_path: String,
+    #[serde(rename = "sourcePath", deserialize_with = "deserialize_source_path")]
+    pub source_path: FileSource,
     #[serde(rename = "targetPath")]
     pub target_path: String,
     pub permissions: Permissions
 }
 
+
+#[derive(Debug, Clone)]
+pub enum FileSource {
+    Path(String),
+    Url(String),
+}
+
+impl Serialize for FileSource {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            FileSource::Path(path) => serializer.serialize_str(path),
+            FileSource::Url(url) => serializer.serialize_str(url),
+        }
+    }
+}
+fn deserialize_source_path<'de, D>(deserializer: D) -> Result<FileSource, D::Error>
+where
+    D: Deserializer<'de>
+{
+    let source_str = String::deserialize(deserializer)?;
+    if Url::parse(&source_str).is_ok() {
+        Ok(FileSource::Url(source_str))
+    }
+    else if Path::new(&source_str).exists() || source_str.starts_with("/") || source_str.ends_with("./") {
+
+        Ok(FileSource::Path(source_str))
+
+    }else{
+        Err(serde::de::Error::custom("Source path does not exist"))
+    }
+
+}
+
+impl Display for FileSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FileSource::Path(source_path) => write!(f, "Local Path: {}", source_path),
+            FileSource::Url(source_url) => write!(f, "URL: {}", source_url),
+        }
+    }
+}
 
 fn write_yaml_content(source: PathBuf) -> Result<(), Box<dyn Error>> {
     let mut application = Application::new("application_name".parse().unwrap());
@@ -511,7 +554,7 @@ fn write_yaml_content(source: PathBuf) -> Result<(), Box<dyn Error>> {
             let entry = entry?;
             let file_name = entry.file_name().into_string().map_err(|_| "Failed to read file name")?;
             files_in_dir.push(FileProperty{
-                source_path: entry.path().as_path().to_str().unwrap().to_string(),
+                source_path: FileSource::Path(format!("./read-only/{}", file_name)),
                 target_path: format!("/{}", file_name),
                 permissions: Permissions::ReadOnly,
             })
@@ -532,7 +575,7 @@ fn write_yaml_content(source: PathBuf) -> Result<(), Box<dyn Error>> {
                 let entry = entry?;
                 let file_name = entry.file_name().into_string().map_err(|_| "Failed to read file name")?;
                 files_in_dir.push(FileProperty{
-                    source_path: format!("./read-write/{}", file_name),
+                    source_path: FileSource::Path(format!("./read-write/{}", file_name)),
                     target_path: format!("/{}", file_name),
                     permissions: Permissions::ReadWrite,
                 })

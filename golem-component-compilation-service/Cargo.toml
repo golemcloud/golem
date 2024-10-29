@@ -39,6 +39,10 @@ futures-util = "0.3.30"
 lazy_static.workspace = true
 zip = "2.2.0"
 async-std = "1.13.0"
+serde_yaml = "0.9.34"
+serde_json = "1.0.128"
+reqwest = { version = "0.12.9", default-features = false, features = ["rustls-tls"] }
+
 
 [dev-dependencies]
 test-r = { workspace = true }

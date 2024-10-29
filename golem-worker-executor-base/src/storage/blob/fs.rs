@@ -14,6 +14,7 @@
 
 use std::{fs, io};
 use std::fs::ReadDir;
+use std::os::unix::fs::PermissionsExt;
 use tokio::fs::File;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
@@ -215,6 +216,53 @@ impl BlobStorage for FileSystemBlobStorage {
 
         Ok(Ok(buffer))
 
+    }
+
+    async fn set_permissions(&self, base_path: &Path) -> Result<(), String> {
+        // Set permissions for all files in the `read-only` folder
+        let read_only_folder = base_path.join("read-only");
+        if read_only_folder.exists() {
+            for entry in fs::read_dir(&read_only_folder).map_err(|e| {
+                format!("Failed to read read-only directory: {}", e)
+            })? {
+                let entry = entry.map_err(|e| {
+                    format!("Failed to read entry in read-only folder: {}", e)
+                })?;
+                let path = entry.path();
+                if path.is_file() {
+                    let mut permissions = fs::metadata(&path)
+                        .map_err(|e| format!("Failed to get metadata: {}", e))?
+                        .permissions();
+                    permissions.set_readonly(true);
+                    fs::set_permissions(&path, permissions)
+                        .map_err(|e| format!("Failed to set read-only permissions: {}", e))?;
+                }
+            }
+        }
+
+        // Set permissions for all files in the `read-write` folder
+        let read_write_folder = base_path.join("read-write");
+        if read_write_folder.exists() {
+            for entry in fs::read_dir(&read_write_folder).map_err(|e| {
+                format!("Failed to read read-write directory: {}", e)
+            })? {
+                let entry = entry.map_err(|e| {
+                    format!("Failed to read entry in read-write folder: {}", e)
+                })?;
+                let path = entry.path();
+                if path.is_file() {
+                    let mut permissions = fs::metadata(&path)
+                        .map_err(|e| format!("Failed to get metadata: {}", e))?
+                        .permissions();
+                    // Set read-write permissions (e.g., 0o644 on Unix grants read-write to owner and read-only to others)
+                    permissions.set_mode(0o644);
+                    fs::set_permissions(&path, permissions)
+                        .map_err(|e| format!("Failed to set read-write permissions: {}", e))?;
+                }
+            }
+        }
+
+        Ok(())
     }
 
     async fn get_directory_entries(&self, root_path: &Path, path: &Path) -> Result<io::Result<Vec<(String, bool)>>, String> {

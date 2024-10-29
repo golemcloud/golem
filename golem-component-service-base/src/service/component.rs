@@ -26,7 +26,7 @@ use chrono::Utc;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::model::{ComponentName, Configuration, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
@@ -133,6 +133,7 @@ pub trait ComponentService<Namespace> {
         data: Vec<u8>,
         namespace: &Namespace,
         ifs_data: Vec<u8>,
+        config: Configuration
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
@@ -141,6 +142,7 @@ pub trait ComponentService<Namespace> {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
+        config: Configuration
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
@@ -243,6 +245,7 @@ where
         data: Vec<u8>,
         namespace: &Namespace,
         ifs_data: Vec<u8>,
+        config: Configuration
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Create component");
 
@@ -278,31 +281,12 @@ where
                 error!(
             "Failed to save IFS for component {}: {}",
             component.versioned_component_id, e
-        );
+                );
                 return Err(ComponentError::InitialFileSystemStorageError {
                     message: format!("Failed to decompress and save IFS: {}", e),
                 });
             }
         }
-
-        // match self.decompress_and_save_ifs(component_id, ifs_data.clone()).await {
-        //     Ok(_) => {
-        //         info!(
-        //     "Successfully decompressed and saved IFS for component: {}",
-        //     component.versioned_component_id
-        // );
-        //     }
-        //     Err(e) => {
-        //         // Log the error and handle it appropriately
-        //         error!(
-        //     "Failed to decompress and save IFS for component {}: {}",
-        //     component.versioned_component_id, e
-        // );
-        //         return Err(ComponentError::InitialFileSystemStorageError {
-        //             message: format!("Failed to decompress and save IFS: {}", e),
-        //         });
-        //     }
-        // }
         let record = component
             .clone()
             .try_into()
@@ -314,7 +298,7 @@ where
         }
 
         self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data)
+            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data, config)
             .await;
 
         Ok(component)
@@ -326,6 +310,7 @@ where
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
+        config: Configuration
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
         let created_at = Utc::now();
@@ -371,7 +356,7 @@ where
 
         let ifs_data = vec![];
         self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data)
+            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data, config)
             .await;
 
         Ok(component)

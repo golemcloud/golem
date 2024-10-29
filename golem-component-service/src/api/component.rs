@@ -68,7 +68,7 @@ pub struct UploadPayload {
     component_type: Option<ComponentType>,
     component: Upload,
     ifs: Upload,
-    file_permissions: FilePermissions
+    config: Configuration
 }
 
 type Result<T> = std::result::Result<T, ComponentError>;
@@ -150,9 +150,10 @@ impl ComponentApi {
 
         let ifs_data = payload.ifs.into_vec().await?;
         info!("------------------------------------");
-        info!("{:?}",payload.file_permissions);
+        // info!("{:?}",payload.file_permissions);
         info!("{:?}", payload.component.file_name());
         // info!("{:?}", payload.ifs.file_name());
+        info!("{:?}", payload.config);
         info!("{:?}", ifs_data);
         info!("------------------------------------");
         let response = {
@@ -165,7 +166,8 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     &DefaultNamespace::default(),
-                    ifs_data
+                    ifs_data,
+                    config
                 )
                 .instrument(record.span.clone())
                 .await

@@ -1876,11 +1876,12 @@ paths:
                 ifs:
                   type: string
                   format: binary
-                file_permissions:
+                config:
                   type: string
               required:
               - name
               - component
+              - config
         required: true
       responses:
         '200':

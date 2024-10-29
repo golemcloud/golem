@@ -22,7 +22,7 @@ use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_wasm_rpc::wasmtime::EncodingError;
 use tonic::Status;
-
+use golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ComponentParseFailed;
 use crate::model::InterruptKind;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
@@ -97,6 +97,7 @@ pub enum GolemError {
         details: String,
     },
     ShardingNotReady,
+    PermissionsNotSet
 }
 
 impl GolemError {
@@ -262,6 +263,9 @@ impl Display for GolemError {
             GolemError::ShardingNotReady => {
                 write!(f, "Sharding not ready")
             }
+            GolemError::PermissionsNotSet => {
+                write!(f, "Permissions not set")
+            }
         }
     }
 }
@@ -269,6 +273,7 @@ impl Display for GolemError {
 impl Error for GolemError {
     fn description(&self) -> &str {
         match self {
+            GolemError::PermissionsNotSet => "Permissions not set",
             GolemError::InvalidRequest { .. } => "Invalid request",
             GolemError::WorkerAlreadyExists { .. } => "Worker already exists",
             GolemError::WorkerNotFound { .. } => "Worker not found",
@@ -301,6 +306,7 @@ impl Error for GolemError {
 impl TraceErrorKind for GolemError {
     fn trace_error_kind(&self) -> &'static str {
         match self {
+            GolemError::PermissionsNotSet => "PermissionNotSet",
             GolemError::InvalidRequest { .. } => "InvalidRequest",
             GolemError::WorkerAlreadyExists { .. } => "WorkerAlreadyExists",
             GolemError::WorkerNotFound { .. } => "WorkerNotFound",
@@ -375,6 +381,13 @@ impl From<GolemError> for Status {
 impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
     fn from(value: GolemError) -> Self {
         match value {
+            GolemError::PermissionsNotSet => golem::worker::v1::WorkerExecutionError{
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::NoValueInMessage(
+                        golem::worker::v1::NoValueInMessage {},
+                )
+                )
+            },
             GolemError::InvalidRequest { details } => golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::InvalidRequest(

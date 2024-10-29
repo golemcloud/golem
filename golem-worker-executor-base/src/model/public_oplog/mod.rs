@@ -1762,6 +1762,10 @@ impl IntoValue for GolemError {
                     case_idx: 22,
                     case_value: None,
                 },
+                GolemError::PermissionsNotSet => Value::Variant {
+                    case_idx: 23,
+                    case_value: None
+                }
             }
         }
         into_value(self, true)

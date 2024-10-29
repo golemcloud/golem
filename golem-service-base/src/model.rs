@@ -51,7 +51,7 @@ pub struct WorkerCreationResponse {
 pub struct ComponentName(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, NewType)]
-pub struct FilePermissions(pub String);
+pub struct Configuration(pub String);
 
 impl Display for ComponentName {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

@@ -159,6 +159,10 @@ impl BlobStorage for InMemoryBlobStorage {
         todo!()
     }
 
+    async fn set_permissions(&self, path: &Path) -> Result<(), String> {
+        todo!()
+    }
+
     async fn get_directory_entries(&self, root_path: &Path, path: &Path) -> Result<io::Result<Vec<(String, bool)>>, String> {
         todo!()
     }

@@ -18,7 +18,6 @@ golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-component-service-base = { version = "0.0.0", path = "../golem-component-service-base" }
 golem-service-base = { path = "../golem-service-base" }
 golem-wasm-rpc = { workspace = true }
-
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 console-subscriber = { workspace = true }
@@ -59,3 +58,4 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }
+
