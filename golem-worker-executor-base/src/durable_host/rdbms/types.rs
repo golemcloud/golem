@@ -19,6 +19,7 @@ use crate::preview2::wasi::rdbms::types::{
     DbColumnType, DbColumnTypeFlags, DbColumnTypeMeta, DbColumnTypePrimitive, DbRow, DbValue,
     DbValuePrimitive, HostDbResultSet,
 };
+use crate::services::rdbms::types as rdbms_types;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -92,7 +93,7 @@ impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
     }
 }
 
-impl From<DbValuePrimitive> for crate::services::rdbms::DbValuePrimitive {
+impl From<DbValuePrimitive> for rdbms_types::DbValuePrimitive {
     fn from(value: DbValuePrimitive) -> Self {
         match value {
             DbValuePrimitive::Integer(i) => Self::Integer(i),
@@ -116,31 +117,31 @@ impl From<DbValuePrimitive> for crate::services::rdbms::DbValuePrimitive {
     }
 }
 
-impl From<crate::services::rdbms::DbValuePrimitive> for DbValuePrimitive {
-    fn from(value: crate::services::rdbms::DbValuePrimitive) -> Self {
+impl From<rdbms_types::DbValuePrimitive> for DbValuePrimitive {
+    fn from(value: rdbms_types::DbValuePrimitive) -> Self {
         match value {
-            crate::services::rdbms::DbValuePrimitive::Integer(i) => Self::Integer(i),
-            crate::services::rdbms::DbValuePrimitive::Decimal(s) => Self::Decimal(s),
-            crate::services::rdbms::DbValuePrimitive::Float(f) => Self::Float(f),
-            crate::services::rdbms::DbValuePrimitive::Boolean(b) => Self::Boolean(b),
-            crate::services::rdbms::DbValuePrimitive::Datetime(u) => Self::Datetime(u),
-            crate::services::rdbms::DbValuePrimitive::Interval(u) => Self::Interval(u),
-            crate::services::rdbms::DbValuePrimitive::Chars(u) => Self::Chars(u),
-            crate::services::rdbms::DbValuePrimitive::Text(s) => Self::Text(s),
-            crate::services::rdbms::DbValuePrimitive::Binary(u) => Self::Binary(u),
-            crate::services::rdbms::DbValuePrimitive::Blob(u) => Self::Blob(u),
-            crate::services::rdbms::DbValuePrimitive::Enumeration(v) => Self::Enumeration(v),
-            crate::services::rdbms::DbValuePrimitive::Json(s) => Self::Json(s),
-            crate::services::rdbms::DbValuePrimitive::Xml(s) => Self::Xml(s),
-            crate::services::rdbms::DbValuePrimitive::Uuid(uuid) => Self::Uuid(uuid.as_u64_pair()),
-            crate::services::rdbms::DbValuePrimitive::Spatial(v) => Self::Spatial(v),
-            crate::services::rdbms::DbValuePrimitive::Other(n, v) => Self::Other((n, v)),
-            crate::services::rdbms::DbValuePrimitive::DbNull => Self::DbNull,
+            rdbms_types::DbValuePrimitive::Integer(i) => Self::Integer(i),
+            rdbms_types::DbValuePrimitive::Decimal(s) => Self::Decimal(s),
+            rdbms_types::DbValuePrimitive::Float(f) => Self::Float(f),
+            rdbms_types::DbValuePrimitive::Boolean(b) => Self::Boolean(b),
+            rdbms_types::DbValuePrimitive::Datetime(u) => Self::Datetime(u),
+            rdbms_types::DbValuePrimitive::Interval(u) => Self::Interval(u),
+            rdbms_types::DbValuePrimitive::Chars(u) => Self::Chars(u),
+            rdbms_types::DbValuePrimitive::Text(s) => Self::Text(s),
+            rdbms_types::DbValuePrimitive::Binary(u) => Self::Binary(u),
+            rdbms_types::DbValuePrimitive::Blob(u) => Self::Blob(u),
+            rdbms_types::DbValuePrimitive::Enumeration(v) => Self::Enumeration(v),
+            rdbms_types::DbValuePrimitive::Json(s) => Self::Json(s),
+            rdbms_types::DbValuePrimitive::Xml(s) => Self::Xml(s),
+            rdbms_types::DbValuePrimitive::Uuid(uuid) => Self::Uuid(uuid.as_u64_pair()),
+            rdbms_types::DbValuePrimitive::Spatial(v) => Self::Spatial(v),
+            rdbms_types::DbValuePrimitive::Other(n, v) => Self::Other((n, v)),
+            rdbms_types::DbValuePrimitive::DbNull => Self::DbNull,
         }
     }
 }
 
-impl From<DbValue> for crate::services::rdbms::DbValue {
+impl From<DbValue> for rdbms_types::DbValue {
     fn from(value: DbValue) -> Self {
         match value {
             DbValue::Primitive(p) => Self::Primitive(p.into()),
@@ -149,50 +150,50 @@ impl From<DbValue> for crate::services::rdbms::DbValue {
     }
 }
 
-impl From<crate::services::rdbms::DbValue> for DbValue {
-    fn from(value: crate::services::rdbms::DbValue) -> Self {
+impl From<rdbms_types::DbValue> for DbValue {
+    fn from(value: rdbms_types::DbValue) -> Self {
         match value {
-            crate::services::rdbms::DbValue::Primitive(p) => Self::Primitive(p.into()),
-            crate::services::rdbms::DbValue::Array(vs) => {
+            rdbms_types::DbValue::Primitive(p) => Self::Primitive(p.into()),
+            rdbms_types::DbValue::Array(vs) => {
                 Self::Array(vs.into_iter().map(|v| v.into()).collect())
             }
         }
     }
 }
 
-impl From<crate::services::rdbms::DbColumnTypePrimitive> for DbColumnTypePrimitive {
-    fn from(value: crate::services::rdbms::DbColumnTypePrimitive) -> Self {
+impl From<rdbms_types::DbColumnTypePrimitive> for DbColumnTypePrimitive {
+    fn from(value: rdbms_types::DbColumnTypePrimitive) -> Self {
         match value {
-            crate::services::rdbms::DbColumnTypePrimitive::Integer(s) => Self::Integer(s),
-            crate::services::rdbms::DbColumnTypePrimitive::Decimal(p, s) => Self::Decimal((p, s)),
-            crate::services::rdbms::DbColumnTypePrimitive::Float => Self::Float,
-            crate::services::rdbms::DbColumnTypePrimitive::Boolean => Self::Boolean,
-            crate::services::rdbms::DbColumnTypePrimitive::Datetime => Self::Datetime,
-            crate::services::rdbms::DbColumnTypePrimitive::Interval => Self::Interval,
-            crate::services::rdbms::DbColumnTypePrimitive::Chars(s) => Self::Chars(s),
-            crate::services::rdbms::DbColumnTypePrimitive::Text => Self::Text,
-            crate::services::rdbms::DbColumnTypePrimitive::Binary(s) => Self::Binary(s),
-            crate::services::rdbms::DbColumnTypePrimitive::Blob => Self::Blob,
-            crate::services::rdbms::DbColumnTypePrimitive::Enumeration(vs) => Self::Enumeration(vs),
-            crate::services::rdbms::DbColumnTypePrimitive::Json => Self::Json,
-            crate::services::rdbms::DbColumnTypePrimitive::Xml => Self::Xml,
-            crate::services::rdbms::DbColumnTypePrimitive::Uuid => Self::Uuid,
-            crate::services::rdbms::DbColumnTypePrimitive::Spatial => Self::Spatial,
+            rdbms_types::DbColumnTypePrimitive::Integer(s) => Self::Integer(s),
+            rdbms_types::DbColumnTypePrimitive::Decimal(p, s) => Self::Decimal((p, s)),
+            rdbms_types::DbColumnTypePrimitive::Float => Self::Float,
+            rdbms_types::DbColumnTypePrimitive::Boolean => Self::Boolean,
+            rdbms_types::DbColumnTypePrimitive::Datetime => Self::Datetime,
+            rdbms_types::DbColumnTypePrimitive::Interval => Self::Interval,
+            rdbms_types::DbColumnTypePrimitive::Chars(s) => Self::Chars(s),
+            rdbms_types::DbColumnTypePrimitive::Text => Self::Text,
+            rdbms_types::DbColumnTypePrimitive::Binary(s) => Self::Binary(s),
+            rdbms_types::DbColumnTypePrimitive::Blob => Self::Blob,
+            rdbms_types::DbColumnTypePrimitive::Enumeration(vs) => Self::Enumeration(vs),
+            rdbms_types::DbColumnTypePrimitive::Json => Self::Json,
+            rdbms_types::DbColumnTypePrimitive::Xml => Self::Xml,
+            rdbms_types::DbColumnTypePrimitive::Uuid => Self::Uuid,
+            rdbms_types::DbColumnTypePrimitive::Spatial => Self::Spatial,
         }
     }
 }
 
-impl From<crate::services::rdbms::DbColumnType> for DbColumnType {
-    fn from(value: crate::services::rdbms::DbColumnType) -> Self {
+impl From<rdbms_types::DbColumnType> for DbColumnType {
+    fn from(value: rdbms_types::DbColumnType) -> Self {
         match value {
-            crate::services::rdbms::DbColumnType::Primitive(p) => Self::Primitive(p.into()),
-            crate::services::rdbms::DbColumnType::Array(vs, p) => Self::Array((vs, p.into())),
+            rdbms_types::DbColumnType::Primitive(p) => Self::Primitive(p.into()),
+            rdbms_types::DbColumnType::Array(vs, p) => Self::Array((vs, p.into())),
         }
     }
 }
 
-impl From<crate::services::rdbms::DbColumnTypeMeta> for DbColumnTypeMeta {
-    fn from(value: crate::services::rdbms::DbColumnTypeMeta) -> Self {
+impl From<rdbms_types::DbColumnTypeMeta> for DbColumnTypeMeta {
+    fn from(value: rdbms_types::DbColumnTypeMeta) -> Self {
         Self {
             name: value.name,
             db_type: value.db_type.into(),
@@ -205,21 +206,17 @@ impl From<crate::services::rdbms::DbColumnTypeMeta> for DbColumnTypeMeta {
     }
 }
 
-impl From<crate::services::rdbms::DbColumnTypeFlag> for DbColumnTypeFlags {
-    fn from(value: crate::services::rdbms::DbColumnTypeFlag) -> Self {
+impl From<rdbms_types::DbColumnTypeFlag> for DbColumnTypeFlags {
+    fn from(value: rdbms_types::DbColumnTypeFlag) -> Self {
         match value {
-            crate::services::rdbms::DbColumnTypeFlag::PrimaryKey => DbColumnTypeFlags::PRIMARY_KEY,
-            crate::services::rdbms::DbColumnTypeFlag::ForeignKey => DbColumnTypeFlags::FOREIGN_KEY,
-            crate::services::rdbms::DbColumnTypeFlag::Unique => DbColumnTypeFlags::UNIQUE,
-            crate::services::rdbms::DbColumnTypeFlag::Nullable => DbColumnTypeFlags::NULLABLE,
-            crate::services::rdbms::DbColumnTypeFlag::Generated => DbColumnTypeFlags::GENERATED,
-            crate::services::rdbms::DbColumnTypeFlag::AutoIncrement => {
-                DbColumnTypeFlags::AUTO_INCREMENT
-            }
-            crate::services::rdbms::DbColumnTypeFlag::DefaultValue => {
-                DbColumnTypeFlags::DEFAULT_VALUE
-            }
-            crate::services::rdbms::DbColumnTypeFlag::Indexed => DbColumnTypeFlags::INDEXED,
+            rdbms_types::DbColumnTypeFlag::PrimaryKey => DbColumnTypeFlags::PRIMARY_KEY,
+            rdbms_types::DbColumnTypeFlag::ForeignKey => DbColumnTypeFlags::FOREIGN_KEY,
+            rdbms_types::DbColumnTypeFlag::Unique => DbColumnTypeFlags::UNIQUE,
+            rdbms_types::DbColumnTypeFlag::Nullable => DbColumnTypeFlags::NULLABLE,
+            rdbms_types::DbColumnTypeFlag::Generated => DbColumnTypeFlags::GENERATED,
+            rdbms_types::DbColumnTypeFlag::AutoIncrement => DbColumnTypeFlags::AUTO_INCREMENT,
+            rdbms_types::DbColumnTypeFlag::DefaultValue => DbColumnTypeFlags::DEFAULT_VALUE,
+            rdbms_types::DbColumnTypeFlag::Indexed => DbColumnTypeFlags::INDEXED,
         }
     }
 }
