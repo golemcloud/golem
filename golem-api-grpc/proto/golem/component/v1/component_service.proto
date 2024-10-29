@@ -110,7 +110,12 @@ message UpdateComponentRequest {
   oneof data {
     UpdateComponentRequestHeader header = 1;
     UpdateComponentRequestChunk chunk = 2;
+    UpdateIfsRequestData ifs = 3;
   }
+}
+
+message UpdateIfsRequestData {
+    bytes data = 1;
 }
 
 message UpdateComponentRequestHeader {

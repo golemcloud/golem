@@ -30,6 +30,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::Instrument;
 use tracing::log::info;
+use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::{recorded_http_api_request, SafeDisplay};
 
@@ -67,8 +68,13 @@ pub struct UploadPayload {
     name: ComponentName,
     component_type: Option<ComponentType>,
     component: Upload,
+    ifs: Upload
+}
+
+#[derive(Multipart)]
+pub struct UpdatePayload {
+    component: Upload,
     ifs: Upload,
-    config: Configuration
 }
 
 type Result<T> = std::result::Result<T, ComponentError>;
@@ -159,8 +165,7 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     &DefaultNamespace::default(),
-                    ifs_data,
-                    payload.config
+                    ifs_data
                 )
                 .instrument(record.span.clone())
                 .await
@@ -179,8 +184,7 @@ impl ComponentApi {
     async fn update_component(
         &self,
         component_id: Path<ComponentId>,
-        wasm: Binary<Body>,
-
+        payload: UpdatePayload,
         /// Type of the new version of the component - if not specified, the type of the previous version
         /// is used.
         component_type: Query<Option<ComponentType>>,
@@ -189,14 +193,20 @@ impl ComponentApi {
             "update_component",
             component_id = component_id.0.to_string()
         );
+
+        let wasm  = payload.component;
+
+        let ifs = payload.ifs.into_vec().await?;
+
         let response = {
-            let data = wasm.0.into_vec().await?;
+            let data = wasm.into_vec().await?;
             self.component_service
                 .update(
                     &component_id.0,
                     data,
                     component_type.0,
-                    &DefaultNamespace::default()
+                    &DefaultNamespace::default(),
+                    ifs
                 )
                 .instrument(record.span.clone())
                 .await

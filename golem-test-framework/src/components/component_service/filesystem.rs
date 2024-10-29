@@ -104,6 +104,7 @@ impl ComponentService for FileSystemComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
+        ifs: Vec<u8>
     ) -> u64 {
         let target_dir = &self.root;
 

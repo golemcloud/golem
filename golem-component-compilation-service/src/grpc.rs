@@ -82,7 +82,6 @@ impl CompileGrpcService {
     ) -> Result<(), ComponentCompilationError> {
         let component_id = make_component_id(request.component_id)?;
         let component_version = request.component_version;
-        let ifs_data = request.ifs_data;
         self.service
             .enqueue_compilation(component_id, component_version)
             .await?;

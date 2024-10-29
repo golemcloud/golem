@@ -17,7 +17,6 @@ use crate::model::component::Component;
 use crate::model::{ComponentName, GolemError, PathBufOrStdin};
 use async_trait::async_trait;
 use golem_wasm_rpc_stubgen::model::oam::Application;
-use tokio::fs::File;
 use golem_client::model::ComponentType;
 use golem_common::uri::oss::urn::ComponentUrn;
 
@@ -46,12 +45,12 @@ pub trait ComponentClient {
         project: &Option<Self::ProjectContext>,
         component_type: ComponentType,
         ifs: PathBuf,
-        config: Application,
     ) -> Result<Component, GolemError>;
     async fn update(
         &self,
         urn: ComponentUrn,
         file: PathBufOrStdin,
         component_type: Option<ComponentType>,
+        ifs: PathBuf,
     ) -> Result<Component, GolemError>;
 }

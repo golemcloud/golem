@@ -21,13 +21,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use create_component_request::Data;
-use golem_api_grpc::proto::golem::component::v1::{
-    component_error, create_component_request, create_component_response,
-    get_component_metadata_response, get_components_response, update_component_request,
-    update_component_response, CreateComponentRequest, CreateComponentRequestChunk,
-    CreateComponentRequestHeader, GetComponentsRequest, GetLatestComponentRequest,
-    UpdateComponentRequest, UpdateComponentRequestChunk, UpdateComponentRequestHeader,
-};
+use golem_api_grpc::proto::golem::component::v1::{component_error, create_component_request, create_component_response, get_component_metadata_response, get_components_response, update_component_request, update_component_response, CreateComponentRequest, CreateComponentRequestChunk, CreateComponentRequestHeader, GetComponentsRequest, GetLatestComponentRequest, UpdateComponentRequest, UpdateComponentRequestChunk, UpdateComponentRequestHeader, UpdateIfsRequestData};
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 use tokio::time::sleep;
@@ -225,6 +219,7 @@ pub trait ComponentService {
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
+        ifs: Vec<u8>
     ) -> u64 {
         let mut client = self.client().await;
         let mut file = File::open(local_path)
@@ -259,9 +254,20 @@ pub trait ComponentService {
                             component_chunk: buffer[0..n].to_vec(),
                         },
                     )),
+
                 });
             }
         }
+
+        chunks.push(UpdateComponentRequest {
+            data: Some(update_component_request::Data::Ifs(
+                UpdateIfsRequestData{
+                    data: ifs
+                }
+            ))
+        });
+
+
         let response = client
             .update_component(tokio_stream::iter(chunks))
             .await

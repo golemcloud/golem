@@ -57,7 +57,7 @@ pub trait TestDsl {
     async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
+    async fn update_component(&self, component_id: &ComponentId, name: &str, ifs: Vec<u8>) -> ComponentVersion;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
         -> crate::Result<WorkerId>;
@@ -218,11 +218,11 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await
     }
 
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
+    async fn update_component(&self, component_id: &ComponentId, name: &str, ifs: Vec<u8>) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         let _ = dump_component_info(&source_path);
         self.component_service()
-            .update_component(component_id, &source_path, ComponentType::Durable)
+            .update_component(component_id, &source_path, ComponentType::Durable, ifs)
             .await
     }
 
@@ -1158,7 +1158,7 @@ pub trait TestDslUnsafe {
     async fn store_ephemeral_component(&self, name: &str) -> ComponentId;
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
+    async fn update_component(&self, component_id: &ComponentId, name: &str, ifs: Vec<u8>) -> ComponentVersion;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
     async fn try_start_worker(
@@ -1265,8 +1265,8 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::store_component_unverified(self, name).await
     }
 
-    async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
-        <T as TestDsl>::update_component(self, component_id, name).await
+    async fn update_component(&self, component_id: &ComponentId, name: &str, ifs: Vec<u8>) -> ComponentVersion {
+        <T as TestDsl>::update_component(self, component_id, name, ifs).await
     }
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {

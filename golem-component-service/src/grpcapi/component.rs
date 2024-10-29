@@ -41,7 +41,7 @@ use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::stream::ByteStream;
 use tonic::{Request, Response, Status, Streaming};
-use golem_service_base::model::Configuration;
+use golem_api_grpc::proto::golem::component::v1::update_component_request::Data;
 
 fn bad_request_error(error: &str) -> ComponentError {
     ComponentError {
@@ -155,12 +155,11 @@ impl ComponentGrpcApi {
         &self,
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
-        config: Configuration,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let result = self
             .component_service
-            .create(&ComponentId::new_v4(), &name, request.component_type().into(), data, &DefaultNamespace::default(), vec![], config)
+            .create(&ComponentId::new_v4(), &name, request.component_type().into(), data, &DefaultNamespace::default(), vec![])
             .await?;
         Ok(result.into())
     }
@@ -169,6 +168,7 @@ impl ComponentGrpcApi {
         &self,
         request: UpdateComponentRequestHeader,
         data: Vec<u8>,
+        ifs: Vec<u8>
     ) -> Result<Component, ComponentError> {
         let id: ComponentId = request
             .component_id
@@ -183,7 +183,7 @@ impl ComponentGrpcApi {
         };
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultNamespace::default())
+            .update(&id, data, component_type, &DefaultNamespace::default(), ifs)
             .await?;
         Ok(result.into())
     }
@@ -245,7 +245,7 @@ impl ComponentService for ComponentGrpcApi {
                             .unwrap_or_default()
                     })
                     .collect();
-                self.create(request, data, Configuration("".to_string()))
+                self.create(request, data)
                     .instrument(record.span.clone())
                     .await
             }
@@ -391,19 +391,30 @@ impl ComponentService for ComponentGrpcApi {
 
         let result = match header {
             Some(request) => {
-                let data: Vec<u8> = chunks
-                    .iter()
-                    .flat_map(|c| {
-                        c.clone()
-                            .data
-                            .map(|d| match d {
-                                update_component_request::Data::Chunk(d) => d.component_chunk,
-                                _ => vec![],
-                            })
+                    let data: Vec<u8> = chunks
+                        .iter()
+                        .flat_map(|c| {
+                            c.clone()
+                                .data
+                                .map(|d| match d {
+                                    update_component_request::Data::Chunk(d) => d.component_chunk,
+                                    _ => vec![] ,
+                                })
+                                .unwrap_or_default()
+                        })
+                        .collect();
+
+                    // Extract the `ifs` data separately
+                    let ifs_data = chunks.iter().flat_map(|c| {
+                        c.clone().data.map(|d| match d {
+                            update_component_request::Data::Ifs(d) => d.data,
+                            _ => vec![],
+                        })
                             .unwrap_or_default()
-                    })
-                    .collect();
-                self.update(request, data)
+                    }).collect();
+
+
+                self.update(request, data, ifs_data)
                     .instrument(record.span.clone())
                     .await
             }

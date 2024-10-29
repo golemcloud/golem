@@ -1876,12 +1876,9 @@ paths:
                 ifs:
                   type: string
                   format: binary
-                config:
-                  type: string
               required:
               - name
               - component
-              - config
         required: true
       responses:
         '200':
@@ -1954,10 +1951,18 @@ paths:
         style: form
       requestBody:
         content:
-          application/octet-stream:
+          multipart/form-data:
             schema:
-              type: string
-              format: binary
+              type: object
+              properties:
+                component:
+                  type: string
+                  format: binary
+                  description: Binary file for the component
+                ifs:
+                  type: string
+                  format: binary
+                  description: Binary file for initial file system (IFS)
         required: true
       responses:
         '200':

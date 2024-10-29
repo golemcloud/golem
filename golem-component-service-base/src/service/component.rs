@@ -26,7 +26,7 @@ use chrono::Utc;
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
-use golem_service_base::model::{ComponentName, Configuration, VersionedComponentId};
+use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::stream::ByteStream;
@@ -132,8 +132,7 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
-        ifs_data: Vec<u8>,
-        config: Configuration
+        ifs_data: Vec<u8>
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
@@ -141,7 +140,8 @@ pub trait ComponentService<Namespace> {
         component_id: &ComponentId,
         data: Vec<u8>,
         component_type: Option<ComponentType>,
-        namespace: &Namespace
+        namespace: &Namespace,
+        ifs: Vec<u8>
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
@@ -243,8 +243,7 @@ where
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
-        ifs_data: Vec<u8>,
-        config: Configuration
+        ifs_data: Vec<u8>
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Create component");
 
@@ -297,7 +296,7 @@ where
         }
 
         self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data, config)
+            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data)
             .await;
 
         Ok(component)
@@ -309,6 +308,7 @@ where
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
+        ifs: Vec<u8>
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
         let created_at = Utc::now();
@@ -337,6 +337,23 @@ where
             self.upload_user_component(&next_component.versioned_component_id, data.clone()),
             self.upload_protected_component(&next_component.versioned_component_id, data)
         )?;
+        match self.save_ifs_zip(component_id, ifs.clone()).await {
+            Ok(_) => {
+                info!(
+                    "Successfully saved IFS zip for component: {}",
+                    component_id.0
+                    );
+            }
+            Err(e) => {
+                error!(
+                    "Failed to save IFS for component {}: {}",
+                    next_component.versioned_component_id, e
+                );
+                return Err(ComponentError::InitialFileSystemStorageError {
+                    message: format!("Failed to decompress and save IFS: {}", e),
+                });
+            }
+        }
 
         let component = Component {
             component_size,
@@ -352,9 +369,8 @@ where
 
         self.component_repo.create(&record).await?;
 
-        let ifs_data = vec![];
         self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs_data, Configuration("".to_owned()))
+            .enqueue_compilation(component_id, component.versioned_component_id.version, ifs)
             .await;
 
         Ok(component)

@@ -83,12 +83,8 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         project: &Option<Self::ProjectContext>,
         component_type: ComponentType,
         ifs: PathBuf,
-        config: Application,
     ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {file:?}");
-        info!("the config is {:?}",config);
-
-        let config_str = serde_json::to_string(&config);
 
         let component = match file {
             PathBufOrStdin::Path(path) => {
@@ -99,7 +95,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .await
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
                 self.client
-                    .create_component(&name.0, Some(&component_type), file, Some(ifs_file), config_str.unwrap().as_str())
+                    .create_component(&name.0, Some(&component_type), file, Some(ifs_file))
                     .await?
             }
             PathBufOrStdin::Stdin => {
@@ -110,7 +106,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .create_component(&name.0, Some(&component_type), bytes.clone(), Some(bytes), config_str.unwrap().as_str())
+                    .create_component(&name.0, Some(&component_type), bytes.clone(), Some(bytes))
                     .await?
             }
         };
@@ -121,19 +117,23 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
     async fn update(
         &self,
         urn: ComponentUrn,
-        path: PathBufOrStdin,
-        component_type: Option<golem_client::model::ComponentType>,
+        file: PathBufOrStdin,
+        component_type: Option<ComponentType>,
+        ifs: PathBuf,
     ) -> Result<Component, GolemError> {
-        info!("Updating component {urn} from {path:?}");
+        info!("Updating component {urn} from {file:?}");
 
-        let component = match path {
+        let component = match file {
             PathBufOrStdin::Path(path) => {
                 let file = File::open(path)
                     .await
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
+                let ifs_file = File::open(ifs.clone())
+                    .await
+                    .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client
-                    .update_component(&urn.id.0, component_type.as_ref(), file)
+                    .update_component(&urn.id.0, component_type.as_ref(), Some(file), Some(ifs_file))
                     .await?
             }
             PathBufOrStdin::Stdin => {
@@ -143,8 +143,11 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .read_to_end(&mut bytes)
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
+                let ifs_file = File::open(ifs.clone())
+                    .await
+                    .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
                 self.client
-                    .update_component(&urn.id.0, component_type.as_ref(), bytes)
+                    .update_component(&urn.id.0, component_type.as_ref(), Some(bytes), Some(ifs_file))
                     .await?
             }
         };

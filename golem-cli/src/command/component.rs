@@ -45,6 +45,8 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         #[command(flatten)]
         project_ref: ProjectRef,
     },
+
+    ReInit,
     /// Creates a new component with a given name by uploading the component WASM
     #[command(alias = "create")]
     Add {
@@ -215,6 +217,19 @@ impl<
                     }
                 }
             }
+
+            ComponentSubCommand::ReInit => {
+                match re_init_config_file(){
+                    Ok(source) => {
+                        info!("Reinitialized config file at {:?}", source.display());
+                        Ok(GolemResult::Str("Config file created".to_string()))
+                    }
+                    Err(error) => {
+                        Err(GolemError(error.to_string()))?
+                    }
+                }
+            }
+
             ComponentSubCommand::Add {
                 project_ref,
                 component_name,
@@ -226,7 +241,6 @@ impl<
                     Ok(config) => {
                         match compress_files(config.clone()).await{
                             Ok(ifs) => {
-                                // info!("Compressed file {:?}", ifs.metadata());
                                 let project_id = projects.resolve_id_or_default(project_ref).await?;
                                 service
                                     .add(
@@ -236,8 +250,7 @@ impl<
                                         Some(project_id),
                                         non_interactive,
                                         format,
-                                        ifs,
-                                        config
+                                        ifs
                                     )
                                     .await
                             }
@@ -274,8 +287,7 @@ impl<
                                         project_id.clone(),
                                         non_interactive,
                                         format,
-                                        ifs,
-                                        config
+                                        ifs
                                     )
                                     .await?;
                                 if try_update_workers {
@@ -441,32 +453,43 @@ fn load_and_parse_yaml(path: PathBuf) -> Result<Application, Box<dyn Error>> {
     }
 }
 
+fn re_init_config_file() -> Result<PathBuf, Box<dyn Error>> {
+    info!("Reinitializing config file found");
+    initialize_config()
+}
+
+
 fn init_config_file() -> Result<PathBuf, Box<dyn Error>> {
     match find_main_source() {
         None => {
-            info!("No config file found");
-            let current_dir = std::env::current_dir()?;
-            let source = current_dir.join(DEFAULT_CONFIG_FILE_NAME);
-
-            // Scan the directory first
-            scan_directory(current_dir)?;
-
-            // Create the config file if the directory scan succeeds
-            fs::File::create(&source).map_err(|error| {
-                error!("Failed to create YAML config file: {}", error);
-                Box::new(error) as Box<dyn Error>
-            })?;
-
-            // Write the YAML content to the newly created file
-            write_yaml_content(source.clone())?;
-
-            Ok(source) // Return the path of the newly created config file
+            info!("Initializing config file found");
+            // Return the path of the newly created config file
+            initialize_config()
         }
         Some(source) => {
             error!("Config file already exists");
             Err(Box::from("Config file already exists"))
         }
     }
+}
+
+fn initialize_config() -> Result<PathBuf, Box<dyn Error>> {
+    let current_dir = std::env::current_dir()?;
+    let source = current_dir.join(DEFAULT_CONFIG_FILE_NAME);
+
+    // Scan the directory first
+    scan_directory(current_dir)?;
+
+    // Create the config file if the directory scan succeeds
+    fs::File::create(&source).map_err(|error| {
+        error!("Failed to create YAML config file: {}", error);
+        Box::new(error) as Box<dyn Error>
+    })?;
+
+    // Write the YAML content to the newly created file
+    write_yaml_content(source.clone())?;
+
+    Ok(source)// Return the path of the newly created config file
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
