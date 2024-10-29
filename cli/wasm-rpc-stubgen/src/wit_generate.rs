@@ -20,11 +20,12 @@ use crate::stub::{
 };
 use crate::wit_transform::import_remover;
 use crate::{naming, WasmRpcOverride};
-use anyhow::{anyhow, bail};
-use std::fmt::Write;
 use std::fs;
 use std::path::Path;
-use wit_parser::{Enum, Field, Flags, Handle, Result_, Tuple, Type, TypeDef, TypeDefKind, Variant};
+use wit_encoder::{
+    Ident, Interface, Package, PackageName, Params, ResourceFunc, Results, Type, TypeDef,
+    TypeDefKind, VariantCase, World,
+};
 
 pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
@@ -53,439 +54,166 @@ pub fn generate_stub_wit_from_wit_dir(
 }
 
 pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<String> {
-    let world = def.source_world();
-
-    let mut out = String::new();
-
-    writeln!(out, "package {}-stub;", def.source_package_name)?;
-    writeln!(out)?;
-    writeln!(out, "interface stub-{} {{", world.name)?;
-
-    let all_imports = def.stub_imports();
-
-    // Renaming the mandatory imports to avoid collisions with types coming from the stubbed package
-    writeln!(out, "  use golem:rpc/types@0.1.0.{{uri as golem-rpc-uri}};")?;
-    writeln!(
-        out,
-        "  use wasi:io/poll@0.2.0.{{pollable as wasi-io-pollable}};"
-    )?;
-
-    if def.always_inline_types {
-        let mut inline_types: Vec<InterfaceStubTypeDef> = vec![];
-
-        for (import, type_def_info) in all_imports {
-            match &type_def_info.package_id {
-                Some(package_id) if package_id == &def.source_package_id => {
-                    inline_types.push(type_def_info.clone());
-                }
-                _ => writeln!(out, "  use {}.{{{}}};", import.path, import.name)?,
-            }
-        }
-
-        writeln!(out)?;
-
-        for typ in inline_types {
-            write_type_def(&mut out, &typ.type_def, typ.name.as_str(), def)?;
-        }
-    } else {
-        for (import, _) in all_imports {
-            writeln!(out, "  use {}.{{{}}};", import.path, import.name)?;
-        }
-        writeln!(out)?;
-    }
-
-    // Generating async return types
-    for interface in def.stub_imported_interfaces() {
-        for function in &interface.functions {
-            if !function.results.is_empty() {
-                write_async_return_type(&mut out, function, interface, def)?;
-            }
-        }
-        for function in &interface.static_functions {
-            if !function.results.is_empty() {
-                write_async_return_type(&mut out, function, interface, def)?;
-            }
-        }
-    }
-
-    // Generating function definitions
-    for interface in def.stub_imported_interfaces() {
-        writeln!(out, "  resource {} {{", &interface.name)?;
-        match &interface.constructor_params {
-            None => {
-                writeln!(out, "    constructor(location: golem-rpc-uri);")?;
-            }
-            Some(params) => {
-                write!(out, "    constructor(location: golem-rpc-uri")?;
-                if !params.is_empty() {
-                    write!(out, ", ")?;
-                }
-                write_param_list(&mut out, def, params)?;
-                writeln!(out, ");")?;
-            }
-        }
-        for function in &interface.functions {
-            write_function_definition(&mut out, function, false, interface, def)?;
-        }
-        for function in &interface.static_functions {
-            write_function_definition(&mut out, function, true, interface, def)?;
-        }
-        writeln!(out, "  }}")?;
-        writeln!(out)?;
-    }
-
-    writeln!(out, "}}")?;
-    writeln!(out)?;
-
-    writeln!(out, "world {} {{", def.target_world_name())?;
-    writeln!(out, "  export stub-{};", world.name)?;
-    writeln!(out, "}}")?;
-
-    Ok(out)
+    Ok(generate_stub_package_from_stub_def(def).to_string())
 }
 
-fn write_function_definition(
-    out: &mut String,
-    function: &FunctionStub,
-    is_static: bool,
-    owner: &InterfaceStub,
-    def: &StubDefinition,
-) -> anyhow::Result<()> {
-    let func = if is_static { "static_func" } else { "func" };
-    if !function.results.is_empty() {
-        // Write the blocking function
-        write!(out, "    blocking-{}: {func}(", function.name)?;
-        write_param_list(out, def, &function.params)?;
-        write!(out, ")")?;
-        write!(out, " -> ")?;
-        write_function_result_type(out, function, def)?;
-        writeln!(out, ";")?;
-        // Write the non-blocking function
-        write!(out, "    {}: {func}(", function.name)?;
-        write_param_list(out, def, &function.params)?;
-        write!(out, ")")?;
-        write!(out, " -> {}", function.async_result_type(owner))?;
-    } else {
-        // Write the blocking function
-        write!(out, "    blocking-{}: {func}(", function.name)?;
-        write_param_list(out, def, &function.params)?;
-        write!(out, ")")?;
-        writeln!(out, ";")?;
+pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> Package {
+    let mut package = Package::new(PackageName::new(
+        def.source_package_name.namespace.clone(),
+        format!("{}-stub", def.source_package_name.name),
+        def.source_package_name.version.clone(),
+    ));
 
-        // Write the non-blocking function
-        write!(out, "    {}: {func}(", function.name)?;
-        write_param_list(out, def, &function.params)?;
-        write!(out, ")")?;
-    }
-    writeln!(out, ";")?;
-    Ok(())
-}
+    let interface_identifier = def.target_interface_name();
 
-fn write_async_return_type(
-    out: &mut String,
-    function: &FunctionStub,
-    owner: &InterfaceStub,
-    def: &StubDefinition,
-) -> anyhow::Result<()> {
-    writeln!(out, "  resource {} {{", function.async_result_type(owner))?;
-    writeln!(out, "    subscribe: func() -> wasi-io-pollable;")?;
-    write!(out, "    get: func() -> option<")?;
-    write_function_result_type(out, function, def)?;
-    writeln!(out, ">;")?;
-    writeln!(out, "  }}")?;
-    Ok(())
-}
+    // Stub interface
+    {
+        let mut stub_interface = Interface::new(interface_identifier.clone());
 
-fn write_function_result_type(
-    out: &mut String,
-    function: &FunctionStub,
-    def: &StubDefinition,
-) -> anyhow::Result<()> {
-    match &function.results {
-        FunctionResultStub::Single(typ) => {
-            write!(out, "{}", typ.wit_type_string(def)?)?;
-        }
-        FunctionResultStub::Multi(params) => {
-            write!(out, "(")?;
-            write_param_list(out, def, params)?;
-            write!(out, ")")?;
-        }
-        FunctionResultStub::SelfType => {
-            return Err(anyhow!("Unexpected return type in wit generator"));
-        }
-    }
-    Ok(())
-}
+        // Common used types
+        stub_interface.use_type(
+            "golem:rpc/types@0.1.0",
+            "uri",
+            Some(Ident::new("golem-rpc-uri")),
+        );
+        stub_interface.use_type(
+            "wasi:io/poll@0.2.0",
+            "pollable",
+            Some(Ident::new("wasi-io-pollable")),
+        );
 
-fn write_type_def(
-    out: &mut String,
-    typ: &TypeDef,
-    typ_name: &str,
-    def: &StubDefinition,
-) -> anyhow::Result<()> {
-    let typ_kind = &typ.kind;
-    let kind_str = typ_kind.as_str();
-
-    match typ_kind {
-        TypeDefKind::Record(record) => {
-            write!(out, "  {}", kind_str)?;
-            write!(out, " {}", typ_name)?;
-
-            write_record(out, &record.fields, def)?;
-        }
-
-        TypeDefKind::Flags(flags) => {
-            write!(out, "  {}", kind_str)?;
-            write!(out, " {}", typ_name)?;
-
-            write_flags(out, flags)?;
-        }
-        TypeDefKind::Tuple(tuple) => {
-            if let Some(name) = &typ.name {
-                write!(out, "  type {} =", name)?;
-                write!(out, "  {}", kind_str)?;
-                write_tuple(out, tuple, def)?;
-                writeln!(out, ";")?;
+        // Used or inlined type defs
+        for type_def in def.stub_used_type_defs() {
+            if type_def.inlined {
+                stub_interface.type_def(type_def.to_encoder(def))
             } else {
-                write!(out, "  {}", kind_str)?;
-                write_tuple(out, tuple, def)?;
-            }
-        }
-        TypeDefKind::Variant(variant) => {
-            write!(out, "  {}", kind_str)?;
-            write!(out, " {}", typ_name)?;
-            write_variant(out, variant, def)?;
-        }
-        TypeDefKind::Enum(enum_ty) => {
-            write!(out, "  {}", kind_str)?;
-            write!(out, " {}", typ_name)?;
-            write_enum(out, enum_ty)?;
-        }
-        TypeDefKind::Option(option) => {
-            if let Some(name) = &typ.name {
-                write!(out, "  type {} =", name)?;
-                write!(out, "  {}", kind_str)?;
-                write_option(out, option, def)?;
-                writeln!(out, ";")?;
-            } else {
-                write!(out, "  {}", kind_str)?;
-                write_option(out, option, def)?;
+                stub_interface.use_type(
+                    type_def.interface_identifier.clone(),
+                    type_def.type_name.clone(),
+                    type_def.type_name_alias.clone().map(Ident::from),
+                );
             }
         }
 
-        TypeDefKind::Result(result) => {
-            if let Some(name) = &typ.name {
-                write!(out, "  type {} =", name)?;
-                write!(out, "  {}", kind_str)?;
-                write_result(out, result, def)?;
-                writeln!(out, ";")?;
-            } else {
-                write!(out, "  {}", kind_str)?;
-                write_result(out, result, def)?;
-            }
-        }
-
-        TypeDefKind::List(list_typ) => {
-            if let Some(name) = &typ.name {
-                write!(out, "  type {} =", name)?;
-                write!(out, "  {}", kind_str)?;
-                write!(out, " {}", list_typ.wit_type_string(def)?)?;
-                writeln!(out, ";")?;
-            } else {
-                write!(out, "  {}", kind_str)?;
-                write!(out, " {}", list_typ.wit_type_string(def)?)?;
-            }
-        }
-        TypeDefKind::Future(_) => {}
-        TypeDefKind::Stream(_) => {}
-        TypeDefKind::Type(aliased_typ) => match aliased_typ {
-            Type::Id(type_id) => {
-                let aliased_type_def = def.get_type_def(*type_id)?;
-                if aliased_type_def.owner == typ.owner {
-                    // type alias to type defined in the same interface
-                    write!(out, "  {} ", kind_str)?;
-                    write!(out, "{}", typ_name)?;
-                    write!(out, " =")?;
-                    write!(out, " {}", aliased_typ.wit_type_string(def)?)?;
-                    writeln!(out, ";")?;
-                } else {
-                    // import from another interface
-                    write_type_def(out, aliased_type_def, typ_name, def)?;
+        // Async return types
+        for interface in def.stub_imported_interfaces() {
+            for (function, _) in interface.all_functions() {
+                if !function.results.is_empty() {
+                    add_async_return_type(def, &mut stub_interface, function, interface);
                 }
             }
-            _ => {
-                // type alias to primitive
-                write!(out, "  {} ", kind_str)?;
-                write!(out, "{}", typ_name)?;
-                write!(out, " =")?;
-                write!(out, " {}", aliased_typ.wit_type_string(def)?)?;
-                writeln!(out, ";")?;
+        }
+
+        // Function definitions
+        for interface in def.stub_imported_interfaces() {
+            let mut stub_functions = Vec::<ResourceFunc>::new();
+
+            // Constructor
+            {
+                let mut constructor = ResourceFunc::constructor();
+                let mut params = match &interface.constructor_params {
+                    Some(constructor_params) => constructor_params.to_encoder(def),
+                    None => Params::empty(),
+                };
+                params.items_mut().insert(
+                    0,
+                    (
+                        Ident::new("location"),
+                        Type::Named(Ident::new("golem-rpc-uri")),
+                    ),
+                );
+                constructor.set_params(params);
+                stub_functions.push(constructor);
             }
-        },
-        TypeDefKind::Unknown => {
-            write!(out, "  {}", kind_str)?;
+
+            // Functions
+            for (function, is_static) in interface.all_functions() {
+                // Blocking
+                {
+                    let mut blocking_function = {
+                        let function_name = format!("blocking-{}", function.name.clone());
+                        if is_static {
+                            ResourceFunc::static_(function_name)
+                        } else {
+                            ResourceFunc::method(function_name)
+                        }
+                    };
+                    blocking_function.set_params(function.params.to_encoder(def));
+                    if !function.results.is_empty() {
+                        blocking_function.set_results(function.results.to_encoder(def));
+                    }
+                    stub_functions.push(blocking_function);
+                }
+
+                // Async
+                {
+                    let mut async_function = {
+                        if is_static {
+                            ResourceFunc::static_(function.name.clone())
+                        } else {
+                            ResourceFunc::method(function.name.clone())
+                        }
+                    };
+                    async_function.set_params(function.params.to_encoder(def));
+                    if !function.results.is_empty() {
+                        async_function.set_results(Results::Anon(Type::Named(Ident::new(
+                            function.async_result_type(interface),
+                        ))));
+                    }
+                    stub_functions.push(async_function);
+                }
+            }
+
+            stub_interface.type_def(TypeDef::resource(interface.name.clone(), stub_functions));
         }
-        TypeDefKind::Resource => {
-            write!(out, "  {}", kind_str)?;
-        }
-        TypeDefKind::Handle(handle) => {
-            write!(out, "  {}", kind_str)?;
-            write_handle(out, handle, def)?;
-        }
+
+        package.interface(stub_interface);
     }
 
-    Ok(())
-}
-
-// https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#wit-types
-fn write_handle(out: &mut String, handle: &Handle, def: &StubDefinition) -> anyhow::Result<()> {
-    match handle {
-        Handle::Own(type_id) => {
-            write!(out, "{}", Type::Id(*type_id).wit_type_string(def)?)?;
-        }
-        Handle::Borrow(type_id) => {
-            write!(out, " borrow<")?;
-            write!(out, "{}", Type::Id(*type_id).wit_type_string(def)?)?;
-            write!(out, ">")?;
-        }
+    // Stub world
+    {
+        let mut stub_world = World::new(def.target_world_name());
+        stub_world.named_interface_export(interface_identifier);
+        package.world(stub_world);
     }
 
-    Ok(())
+    package
 }
 
-// https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md#wit-types
-fn write_result(out: &mut String, result: &Result_, def: &StubDefinition) -> anyhow::Result<()> {
-    match (result.ok, result.err) {
-        (Some(ok), Some(err)) => {
-            write!(out, "<")?;
-            write!(out, "{}", ok.wit_type_string(def)?)?;
-            write!(out, ", ")?;
-            write!(out, "{}", err.wit_type_string(def)?)?;
-            write!(out, ">")?;
-        }
-        (Some(ok), None) => {
-            write!(out, "<")?;
-            write!(out, "{}", ok.wit_type_string(def)?)?;
-            write!(out, ">")?;
-        }
-        (None, Some(err)) => {
-            write!(out, "<_, ")?;
-            write!(out, "{}", err.wit_type_string(def)?)?;
-            write!(out, ">")?;
-        }
-        (None, None) => {}
-    }
-
-    Ok(())
-}
-
-fn write_option(out: &mut String, option: &Type, def: &StubDefinition) -> anyhow::Result<()> {
-    write!(out, "<")?;
-    write!(out, "{}", option.wit_type_string(def)?)?;
-    write!(out, ">")?;
-    Ok(())
-}
-
-fn write_variant(out: &mut String, variant: &Variant, def: &StubDefinition) -> anyhow::Result<()> {
-    let cases_length = variant.cases.len();
-    write!(out, " {{")?;
-    writeln!(out)?;
-
-    for (idx, case) in variant.cases.iter().enumerate() {
-        write!(out, "    {}", case.name)?;
-
-        if let Some(ty) = case.ty {
-            write!(out, "(")?;
-            write!(out, "{}", ty.wit_type_string(def)?)?;
-            write!(out, ")")?;
-        }
-
-        if idx < cases_length - 1 {
-            writeln!(out, ", ")?;
-        }
-    }
-
-    writeln!(out, "  }}")?;
-    Ok(())
-}
-
-fn write_enum(out: &mut String, enum_ty: &Enum) -> anyhow::Result<()> {
-    let length = enum_ty.cases.len();
-    write!(out, " {{")?;
-    writeln!(out)?;
-    for (idx, case) in enum_ty.cases.iter().enumerate() {
-        write!(out, "    {}", case.name)?;
-        if idx < length - 1 {
-            writeln!(out, ",")?;
-        }
-        writeln!(out)?;
-    }
-    writeln!(out, "  }}")?;
-    Ok(())
-}
-
-fn write_tuple(out: &mut String, tuple: &Tuple, def: &StubDefinition) -> anyhow::Result<()> {
-    let tuple_length = tuple.types.len();
-    write!(out, " <")?;
-    for (idx, typ) in tuple.types.iter().enumerate() {
-        write!(out, "{}", typ.wit_type_string(def)?)?;
-        if idx < tuple_length - 1 {
-            write!(out, ", ")?;
-        }
-    }
-    write!(out, "  >")?;
-    Ok(())
-}
-
-fn write_record(out: &mut String, fields: &[Field], def: &StubDefinition) -> anyhow::Result<()> {
-    write!(out, " {{")?;
-    writeln!(out)?;
-
-    for (idx, field) in fields.iter().enumerate() {
-        write!(
-            out,
-            "    {}: {}",
-            field.name,
-            field.ty.wit_type_string(def)?
-        )?;
-        if idx < fields.len() - 1 {
-            write!(out, ", ")?;
-        }
-    }
-
-    writeln!(out)?;
-    writeln!(out, "  }}")?;
-
-    Ok(())
-}
-
-fn write_flags(out: &mut String, flags: &Flags) -> anyhow::Result<()> {
-    write!(out, " {{")?;
-    writeln!(out)?;
-    let flags_len = flags.flags.len();
-    for (idx, flag) in flags.flags.iter().enumerate() {
-        write!(out, "    {}", flag.name)?;
-        if idx < flags_len - 1 {
-            writeln!(out, ",")?;
-        }
-        writeln!(out)?;
-    }
-    writeln!(out, "  }}")?;
-    Ok(())
-}
-
-fn write_param_list(
-    out: &mut String,
+fn add_async_return_type(
     def: &StubDefinition,
-    params: &[FunctionParamStub],
-) -> anyhow::Result<()> {
-    for (idx, param) in params.iter().enumerate() {
-        write!(out, "{}: {}", param.name, param.typ.wit_type_string(def)?)?;
-        if idx < params.len() - 1 {
-            write!(out, ", ")?;
-        }
-    }
-    Ok(())
+    stub_interface: &mut Interface,
+    function: &FunctionStub,
+    owner_interface: &InterfaceStub,
+) {
+    stub_interface.type_def(TypeDef::resource(
+        function.async_result_type(owner_interface),
+        [
+            {
+                let mut subscribe = ResourceFunc::method("subscribe");
+                subscribe.set_results(Results::Anon(Type::Named(Ident::new("wasi-io-pollable"))));
+                subscribe
+            },
+            {
+                let mut get = ResourceFunc::method("get");
+                match &function.results {
+                    FunctionResultStub::Anon(typ) => {
+                        get.set_results(Results::Anon(Type::option(typ.to_encoder(def))));
+                    }
+                    FunctionResultStub::Named(_params) => {
+                        // TODO: this case was generating in the previous version, check it
+                        // TODO: this should be a proper error message with context
+                        panic!("Named parameters are not supported");
+                    }
+                    FunctionResultStub::SelfType => {
+                        // TODO: this should be a proper error message with context
+                        panic!("Unexpected self return type in wit generator");
+                    }
+                }
+                get
+            },
+        ],
+    ))
 }
 
 pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
@@ -577,78 +305,193 @@ fn write_embedded_source(target_dir: &Path, file_name: &str, content: &str) -> a
     Ok(())
 }
 
-trait TypeExtensions {
-    fn wit_type_string(&self, stub_definition: &StubDefinition) -> anyhow::Result<String>;
+trait ToEncoder {
+    type EncoderType;
+    fn to_encoder(&self, stub_definition: &StubDefinition) -> Self::EncoderType;
 }
 
-impl TypeExtensions for Type {
-    fn wit_type_string(&self, stub_definition: &StubDefinition) -> anyhow::Result<String> {
+impl ToEncoder for wit_parser::Type {
+    type EncoderType = Type;
+
+    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
         match self {
-            Type::Bool => Ok("bool".to_string()),
-            Type::U8 => Ok("u8".to_string()),
-            Type::U16 => Ok("u16".to_string()),
-            Type::U32 => Ok("u32".to_string()),
-            Type::U64 => Ok("u64".to_string()),
-            Type::S8 => Ok("s8".to_string()),
-            Type::S16 => Ok("s16".to_string()),
-            Type::S32 => Ok("s32".to_string()),
-            Type::S64 => Ok("s64".to_string()),
-            Type::F32 => Ok("f32".to_string()),
-            Type::F64 => Ok("f64".to_string()),
-            Type::Char => Ok("char".to_string()),
-            Type::String => Ok("string".to_string()),
-            Type::Id(type_id) => {
-                let typ = stub_definition.get_type_def(*type_id)?;
-                match &typ.kind {
-                    TypeDefKind::Option(inner) => Ok(format!(
-                        "option<{}>",
-                        inner.wit_type_string(stub_definition)?
-                    )),
-                    TypeDefKind::List(inner) => {
-                        Ok(format!("list<{}>", inner.wit_type_string(stub_definition)?))
-                    }
-                    TypeDefKind::Tuple(tuple) => {
-                        let types = tuple
-                            .types
-                            .iter()
-                            .map(|t| t.wit_type_string(stub_definition))
-                            .collect::<anyhow::Result<Vec<_>>>()?;
-                        Ok(format!("tuple<{}>", types.join(", ")))
-                    }
-                    TypeDefKind::Result(result) => match (&result.ok, &result.err) {
-                        (Some(ok), Some(err)) => {
-                            let ok = ok.wit_type_string(stub_definition)?;
-                            let err = err.wit_type_string(stub_definition)?;
-                            Ok(format!("result<{}, {}>", ok, err))
+            wit_parser::Type::Bool => Type::Bool,
+            wit_parser::Type::U8 => Type::U8,
+            wit_parser::Type::U16 => Type::U16,
+            wit_parser::Type::U32 => Type::U32,
+            wit_parser::Type::U64 => Type::U64,
+            wit_parser::Type::S8 => Type::S8,
+            wit_parser::Type::S16 => Type::S16,
+            wit_parser::Type::S32 => Type::S32,
+            wit_parser::Type::S64 => Type::S64,
+            wit_parser::Type::F32 => Type::F32,
+            wit_parser::Type::F64 => Type::F64,
+            wit_parser::Type::Char => Type::Char,
+            wit_parser::Type::String => Type::String,
+            wit_parser::Type::Id(type_id) => {
+                if let Some(type_alias) = def.get_stub_used_type_alias(*type_id) {
+                    Type::Named(Ident::new(type_alias.to_string()))
+                } else {
+                    let typ = def.get_type_def(*type_id).expect("type not found");
+                    match &typ.kind {
+                        wit_parser::TypeDefKind::Option(inner) => {
+                            Type::option(inner.to_encoder(def))
                         }
-                        (Some(ok), None) => {
-                            let ok = ok.wit_type_string(stub_definition)?;
-                            Ok(format!("result<{}>", ok))
+                        wit_parser::TypeDefKind::List(inner) => Type::list(inner.to_encoder(def)),
+                        wit_parser::TypeDefKind::Tuple(tuple) => {
+                            Type::tuple(tuple.types.iter().map(|t| t.to_encoder(def)))
                         }
-                        (None, Some(err)) => {
-                            let err = err.wit_type_string(stub_definition)?;
-                            Ok(format!("result<_, {}>", err))
+                        wit_parser::TypeDefKind::Result(result) => {
+                            match (&result.ok, &result.err) {
+                                (Some(ok), Some(err)) => {
+                                    Type::result_both(ok.to_encoder(def), err.to_encoder(def))
+                                }
+                                (Some(ok), None) => Type::result_ok(ok.to_encoder(def)),
+                                (None, Some(err)) => Type::result_err(err.to_encoder(def)),
+                                (None, None) => {
+                                    panic!("result type has no ok or err types")
+                                }
+                            }
                         }
-                        (None, None) => {
-                            bail!("result type has no ok or err types")
+                        wit_parser::TypeDefKind::Handle(handle) => match handle {
+                            wit_parser::Handle::Own(type_id) => {
+                                wit_parser::Type::Id(*type_id).to_encoder(def)
+                            }
+                            wit_parser::Handle::Borrow(type_id) => Type::borrow(
+                                wit_parser::Type::Id(*type_id).to_encoder(def).to_string(),
+                            ),
+                        },
+                        _ => {
+                            let name = typ
+                                .name
+                                .clone()
+                                .unwrap_or_else(|| panic!("missing name for type: {:?}", typ));
+                            Type::Named(Ident::new(name))
                         }
-                    },
-                    TypeDefKind::Handle(handle) => match handle {
-                        Handle::Own(type_id) => Type::Id(*type_id).wit_type_string(stub_definition),
-                        Handle::Borrow(type_id) => Ok(format!(
-                            "borrow<{}>",
-                            Type::Id(*type_id).wit_type_string(stub_definition)?
-                        )),
-                    },
-                    _ => {
-                        let name = typ
-                            .name
-                            .clone()
-                            .ok_or(anyhow!("wit_type_string: type has no name"))?;
-                        Ok(name)
                     }
                 }
             }
+        }
+    }
+}
+
+impl ToEncoder for Vec<FunctionParamStub> {
+    type EncoderType = Params;
+
+    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
+        Params::from_iter(
+            self.iter()
+                .map(|param| (param.name.clone(), param.typ.to_encoder(def))),
+        )
+    }
+}
+
+impl ToEncoder for FunctionResultStub {
+    type EncoderType = Results;
+
+    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
+        match self {
+            FunctionResultStub::Anon(typ) => Results::Anon(typ.to_encoder(def)),
+            FunctionResultStub::Named(types) => Results::Named(types.to_encoder(def)),
+            FunctionResultStub::SelfType => {
+                // TODO: This should be a proper error message
+                panic!("Unexpected self type function result")
+            }
+        }
+    }
+}
+
+impl ToEncoder for InterfaceStubTypeDef {
+    type EncoderType = TypeDef;
+
+    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
+        (self.stub_type_name(), self.stub_type_def()).to_encoder(def)
+    }
+}
+
+impl ToEncoder for (&str, &wit_parser::TypeDef) {
+    type EncoderType = TypeDef;
+
+    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
+        let (name, type_def) = self;
+        match &type_def.kind {
+            wit_parser::TypeDefKind::Record(record) => TypeDef::record(
+                name.to_string(),
+                record
+                    .fields
+                    .iter()
+                    .map(|field| (field.name.clone(), field.ty.to_encoder(def))),
+            ),
+            wit_parser::TypeDefKind::Flags(flags) => TypeDef::flags(
+                name.to_string(),
+                flags.flags.iter().map(|flag| (flag.name.clone(),)),
+            ),
+            wit_parser::TypeDefKind::Tuple(tuple) => TypeDef::new(
+                name.to_string(),
+                TypeDefKind::Type(Type::tuple(
+                    tuple.types.iter().map(|typ| typ.to_encoder(def)),
+                )),
+            ),
+            wit_parser::TypeDefKind::Variant(variant) => TypeDef::variant(
+                name.to_string(),
+                variant.cases.iter().map(|case| match case.ty {
+                    Some(ty) => VariantCase::value(case.name.clone(), ty.to_encoder(def)),
+                    None => VariantCase::empty(case.name.clone()),
+                }),
+            ),
+            wit_parser::TypeDefKind::Enum(enum_ty) => TypeDef::enum_(
+                name.to_string(),
+                enum_ty.cases.iter().map(|case| case.name.clone()),
+            ),
+            wit_parser::TypeDefKind::Option(typ) => TypeDef::new(
+                name.to_string(),
+                TypeDefKind::Type(Type::option(typ.to_encoder(def))),
+            ),
+            wit_parser::TypeDefKind::Result(result) => TypeDef::new(
+                name.to_string(),
+                // TODO: match is duplicated
+                TypeDefKind::Type(match (&result.ok, &result.err) {
+                    (Some(ok), Some(err)) => {
+                        Type::result_both(ok.to_encoder(def), err.to_encoder(def))
+                    }
+                    (Some(ok), None) => Type::result_ok(ok.to_encoder(def)),
+                    (None, Some(err)) => Type::result_err(err.to_encoder(def)),
+                    (None, None) => {
+                        panic!("result type has no ok or err types")
+                    }
+                }),
+            ),
+            wit_parser::TypeDefKind::List(typ) => TypeDef::new(
+                name.to_string(),
+                TypeDefKind::Type(Type::list(typ.to_encoder(def))),
+            ),
+            wit_parser::TypeDefKind::Future(_) => {
+                panic!("Future type is not supported yet")
+            }
+            wit_parser::TypeDefKind::Stream(_) => {
+                panic!("Stream type is not supported yet")
+            }
+            wit_parser::TypeDefKind::Type(typ) => {
+                TypeDef::new(name.to_string(), TypeDefKind::Type(typ.to_encoder(def)))
+            }
+            wit_parser::TypeDefKind::Unknown => {
+                panic!("Unexpected unknown type")
+            }
+            wit_parser::TypeDefKind::Resource => {
+                panic!("Unexpected resource type")
+            }
+            wit_parser::TypeDefKind::Handle(handle) => TypeDef::new(
+                name.to_string(),
+                // TODO: match is duplicated
+                TypeDefKind::Type(match handle {
+                    wit_parser::Handle::Own(type_id) => {
+                        wit_parser::Type::Id(*type_id).to_encoder(def)
+                    }
+                    wit_parser::Handle::Borrow(type_id) => {
+                        Type::borrow(wit_parser::Type::Id(*type_id).to_encoder(def).to_string())
+                    }
+                }),
+            ),
         }
     }
 }

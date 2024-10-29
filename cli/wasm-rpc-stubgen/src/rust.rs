@@ -515,14 +515,14 @@ fn get_output_values_source(
 ) -> anyhow::Result<Vec<TokenStream>> {
     let mut output_values = Vec::new();
     match &function.results {
-        FunctionResultStub::Single(typ) => {
+        FunctionResultStub::Anon(typ) => {
             output_values.push(extract_from_wit_value(
                 typ,
                 def,
                 quote! { result.tuple_element(0).expect("tuple not found") },
             )?);
         }
-        FunctionResultStub::Multi(params) => {
+        FunctionResultStub::Named(params) => {
             for (n, param) in params.iter().enumerate() {
                 output_values.push(extract_from_wit_value(
                     &param.typ,
@@ -557,13 +557,13 @@ fn get_result_type_source(
     function: &FunctionStub,
 ) -> anyhow::Result<TokenStream> {
     let result_type = match &function.results {
-        FunctionResultStub::Single(typ) => {
+        FunctionResultStub::Anon(typ) => {
             let typ = type_to_rust_ident(typ, def)?;
             quote! {
                 #typ
             }
         }
-        FunctionResultStub::Multi(params) => {
+        FunctionResultStub::Named(params) => {
             let mut results = Vec::new();
             for param in params {
                 let param_name = Ident::new(&to_rust_ident(&param.name), Span::call_site());
