@@ -42,10 +42,7 @@ pub async fn interpret(
 // This function can be used for those the Rib Scripts
 // where there are no side effecting function calls.
 // It is recommended to use `interpret` over `interpret_pure` if you are unsure.
-pub async fn interpret_pure(
-    rib: &RibByteCode,
-    rib_input: &RibInput,
-) -> Result<RibResult, String> {
+pub async fn interpret_pure(rib: &RibByteCode, rib_input: &RibInput) -> Result<RibResult, String> {
     let mut interpreter = Interpreter::pure(rib_input);
     interpreter.run(rib.clone()).await
 }

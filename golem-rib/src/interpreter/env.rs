@@ -80,10 +80,7 @@ impl InterpreterEnv {
         }
     }
 
-    pub fn from(
-        input: &RibInput,
-        call_worker_function_async: &RibFunctionInvoke,
-    ) -> Self {
+    pub fn from(input: &RibInput, call_worker_function_async: &RibFunctionInvoke) -> Self {
         let mut env = Self::from_input(input);
         env.call_worker_function_async = call_worker_function_async.clone();
         env

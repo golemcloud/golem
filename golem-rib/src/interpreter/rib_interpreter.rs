@@ -33,7 +33,10 @@ impl Default for Interpreter {
 
 impl Interpreter {
     pub fn new(input: &RibInput, invoke: RibFunctionInvoke) -> Self {
-        Interpreter { input: input.clone(), invoke }
+        Interpreter {
+            input: input.clone(),
+            invoke,
+        }
     }
 
     // Interpreter that's not expected to call a side-effecting function call.
