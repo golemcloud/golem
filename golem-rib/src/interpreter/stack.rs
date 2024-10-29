@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::interpreter::result::RibInterpreterResult;
+use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use golem_wasm_ast::analysis::protobuf::{NameTypePair, Type};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -22,7 +22,7 @@ use golem_wasm_rpc::protobuf::{
 
 #[derive(Debug)]
 pub struct InterpreterStack {
-    pub stack: Vec<RibInterpreterResult>,
+    pub stack: Vec<RibInterpreterStackValue>,
 }
 
 impl Default for InterpreterStack {
@@ -51,25 +51,25 @@ impl InterpreterStack {
         }));
     }
 
-    pub fn pop(&mut self) -> Option<RibInterpreterResult> {
+    pub fn pop(&mut self) -> Option<RibInterpreterStackValue> {
         self.stack.pop()
     }
 
     pub fn pop_iterator(&mut self) -> Option<Box<dyn Iterator<Item = TypeAnnotatedValue>>> {
         match self.pop() {
-            Some(RibInterpreterResult::Iterator(iter)) => Some(iter),
+            Some(RibInterpreterStackValue::Iterator(iter)) => Some(iter),
             _ => None,
         }
     }
 
     pub fn pop_sink(&mut self) -> Option<Vec<TypeAnnotatedValue>> {
         match self.pop() {
-            Some(RibInterpreterResult::Sink(vec, _)) => Some(vec.clone()),
+            Some(RibInterpreterStackValue::Sink(vec, _)) => Some(vec.clone()),
             _ => None,
         }
     }
 
-    pub fn pop_n(&mut self, n: usize) -> Option<Vec<RibInterpreterResult>> {
+    pub fn pop_n(&mut self, n: usize) -> Option<Vec<RibInterpreterStackValue>> {
         let mut results = Vec::new();
         for _ in 0..n {
             results.push(self.stack.pop()?);
@@ -88,17 +88,19 @@ impl InterpreterStack {
         self.stack.pop().and_then(|v| v.get_val())
     }
 
-    pub fn push(&mut self, interpreter_result: RibInterpreterResult) {
+    pub fn push(&mut self, interpreter_result: RibInterpreterStackValue) {
         self.stack.push(interpreter_result);
     }
 
     pub fn create_sink(&mut self, analysed_type: &AnalysedType) {
-        self.stack
-            .push(RibInterpreterResult::Sink(vec![], analysed_type.clone()))
+        self.stack.push(RibInterpreterStackValue::Sink(
+            vec![],
+            analysed_type.clone(),
+        ))
     }
 
     pub fn push_val(&mut self, element: TypeAnnotatedValue) {
-        self.stack.push(RibInterpreterResult::val(element));
+        self.stack.push(RibInterpreterStackValue::val(element));
     }
 
     pub fn push_to_sink(&mut self, type_annotated_value: TypeAnnotatedValue) -> Result<(), String> {
@@ -113,10 +115,10 @@ impl InterpreterStack {
         }
 
         match sink {
-            Some(RibInterpreterResult::Sink(mut list, analysed_type)) => {
+            Some(RibInterpreterStackValue::Sink(mut list, analysed_type)) => {
                 list.push(type_annotated_value);
                 self.push(possible_iterator);
-                self.push(RibInterpreterResult::Sink(list, analysed_type));
+                self.push(RibInterpreterStackValue::Sink(list, analysed_type));
                 Ok(())
             }
 

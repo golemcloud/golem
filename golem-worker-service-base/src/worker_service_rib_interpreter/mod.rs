@@ -8,7 +8,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_common::model::{ComponentId, IdempotencyKey};
 
 use crate::worker_binding::RibInputValue;
-use rib::{RibByteCode, RibFunctionInvoke, RibInterpreterResult};
+use rib::{RibByteCode, RibFunctionInvoke, RibInterpreterStackValue};
 
 use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutor};
 
@@ -25,7 +25,7 @@ pub trait WorkerServiceRibInterpreter {
         idempotency_key: &Option<IdempotencyKey>,
         rib_byte_code: &RibByteCode,
         rib_input: &RibInputValue,
-    ) -> Result<RibInterpreterResult, EvaluationError>;
+    ) -> Result<RibInterpreterStackValue, EvaluationError>;
 }
 
 #[derive(Debug, PartialEq)]
@@ -66,7 +66,7 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
         idempotency_key: &Option<IdempotencyKey>,
         expr: &RibByteCode,
         rib_input: &RibInputValue,
-    ) -> Result<RibInterpreterResult, EvaluationError> {
+    ) -> Result<RibInterpreterStackValue, EvaluationError> {
         let executor = self.worker_request_executor.clone();
 
         let worker_name = worker_name.to_string();

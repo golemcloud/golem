@@ -14,9 +14,9 @@
 
 use crate::interpreter::env::{EnvironmentKey, InterpreterEnv, RibFunctionInvoke};
 use crate::interpreter::instruction_cursor::RibByteCodeCursor;
-use crate::interpreter::result::RibInterpreterResult;
+use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::interpreter::stack::InterpreterStack;
-use crate::{RibByteCode, RibIR};
+use crate::{RibByteCode, RibIR, RibResult};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
 
@@ -42,7 +42,12 @@ impl Interpreter {
     ) -> Self {
         let input = input
             .into_iter()
-            .map(|(k, v)| (EnvironmentKey::from_global(k), RibInterpreterResult::Val(v)))
+            .map(|(k, v)| {
+                (
+                    EnvironmentKey::from_global(k),
+                    RibInterpreterStackValue::Val(v),
+                )
+            })
             .collect();
 
         Interpreter {
@@ -60,10 +65,7 @@ impl Interpreter {
         }
     }
 
-    pub async fn run(
-        &mut self,
-        instructions0: RibByteCode,
-    ) -> Result<RibInterpreterResult, String> {
+    pub async fn run(&mut self, instructions0: RibByteCode) -> Result<RibResult, String> {
         let mut byte_code_cursor = RibByteCodeCursor::from_rib_byte_code(instructions0);
 
         while let Some(instruction) = byte_code_cursor.get_instruction() {
@@ -259,16 +261,22 @@ impl Interpreter {
             }
         }
 
-        self.stack
+        let stack_value = self
+            .stack
             .pop()
-            .ok_or("Empty stack after running the instructions".to_string())
+            .ok_or("Empty stack after running the instructions".to_string())?;
+
+        let rib_result = RibResult::from_rib_interpreter_stack_value(&stack_value)
+            .ok_or("Failed to obtain a valid result from rib execution".to_string())?;
+
+        Ok(rib_result)
     }
 }
 
 mod internal {
     use crate::interpreter::env::EnvironmentKey;
+    use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
     use crate::interpreter::literal::LiteralValue;
-    use crate::interpreter::result::RibInterpreterResult;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
         CoercedNumericValue, FunctionReferenceType, GetLiteralValue, InstructionId, Interpreter,
@@ -293,35 +301,36 @@ mod internal {
         )?;
 
         let bool_opt = match rib_result {
-            RibInterpreterResult::Val(TypeAnnotatedValue::List(typed_list)) => {
+            RibInterpreterStackValue::Val(TypeAnnotatedValue::List(typed_list)) => {
                 Some(typed_list.values.is_empty())
             }
-            RibInterpreterResult::Iterator(iter) => {
+            RibInterpreterStackValue::Iterator(iter) => {
                 let mut peekable_iter = iter.peekable();
                 let result = peekable_iter.peek().is_some();
-                interpreter_stack.push(RibInterpreterResult::Iterator(Box::new(peekable_iter)));
+                interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(peekable_iter)));
                 Some(result)
             }
-            RibInterpreterResult::Sink(values, analysed_type) => {
+            RibInterpreterStackValue::Sink(values, analysed_type) => {
                 let possible_iterator = interpreter_stack
                     .pop()
                     .ok_or("Internal Error: Expecting an iterator to check is empty".to_string())?;
 
                 match possible_iterator {
-                    RibInterpreterResult::Iterator(iter) => {
+                    RibInterpreterStackValue::Iterator(iter) => {
                         let mut peekable_iter = iter.peekable();
                         let result = peekable_iter.peek().is_some();
                         interpreter_stack
-                            .push(RibInterpreterResult::Iterator(Box::new(peekable_iter)));
-                        interpreter_stack.push(RibInterpreterResult::Sink(values, analysed_type));
+                            .push(RibInterpreterStackValue::Iterator(Box::new(peekable_iter)));
+                        interpreter_stack
+                            .push(RibInterpreterStackValue::Sink(values, analysed_type));
                         Some(result)
                     }
 
                     _ => None,
                 }
             }
-            RibInterpreterResult::Val(_) => None,
-            RibInterpreterResult::Unit => None,
+            RibInterpreterStackValue::Val(_) => None,
+            RibInterpreterStackValue::Unit => None,
         };
 
         let bool = bool_opt.ok_or("Internal Error: Failed to run instruction is_empty")?;
@@ -356,7 +365,7 @@ mod internal {
     pub(crate) fn run_list_to_iterator_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        if let Some(RibInterpreterResult::Val(TypeAnnotatedValue::List(items))) =
+        if let Some(RibInterpreterStackValue::Val(TypeAnnotatedValue::List(items))) =
             interpreter_stack.pop()
         {
             let iter = items
@@ -364,7 +373,7 @@ mod internal {
                 .into_iter()
                 .map(|x| x.clone().type_annotated_value.unwrap());
 
-            interpreter_stack.push(RibInterpreterResult::Iterator(Box::new(iter)));
+            interpreter_stack.push(RibInterpreterStackValue::Iterator(Box::new(iter)));
 
             Ok(())
         } else {
@@ -392,17 +401,18 @@ mod internal {
             .ok_or("Internal Error: Failed to advance the iterator".to_string())?;
 
         match &mut rib_result {
-            RibInterpreterResult::Sink(_, _) => {
+            RibInterpreterStackValue::Sink(_, _) => {
                 let mut existing_iterator = interpreter_stack
                     .pop()
                     .ok_or("Internal Error: an iterator")?;
 
                 match &mut existing_iterator {
-                    RibInterpreterResult::Iterator(iter) => {
+                    RibInterpreterStackValue::Iterator(iter) => {
                         if let Some(type_annotated_value) = iter.next() {
                             interpreter_stack.push(existing_iterator);
                             interpreter_stack.push(rib_result);
-                            interpreter_stack.push(RibInterpreterResult::Val(type_annotated_value));
+                            interpreter_stack
+                                .push(RibInterpreterStackValue::Val(type_annotated_value));
                             Ok(())
                         } else {
                             Err("Internal Error: Iterator has no more items".to_string())
@@ -416,10 +426,10 @@ mod internal {
                 }
             }
 
-            RibInterpreterResult::Iterator(iter) => {
+            RibInterpreterStackValue::Iterator(iter) => {
                 if let Some(type_annotated_value) = iter.next() {
                     interpreter_stack.push(rib_result);
-                    interpreter_stack.push(RibInterpreterResult::Val(type_annotated_value));
+                    interpreter_stack.push(RibInterpreterStackValue::Val(type_annotated_value));
                     Ok(())
                 } else {
                     Err("Internal Error: Iterator has no more items".to_string())
@@ -479,14 +489,14 @@ mod internal {
         ))?;
 
         match value {
-            RibInterpreterResult::Unit => {
-                interpreter.stack.push(RibInterpreterResult::Unit);
+            RibInterpreterStackValue::Unit => {
+                interpreter.stack.push(RibInterpreterStackValue::Unit);
             }
-            RibInterpreterResult::Val(val) => interpreter.stack.push_val(val.clone()),
-            RibInterpreterResult::Iterator(_) => {
+            RibInterpreterStackValue::Val(val) => interpreter.stack.push_val(val.clone()),
+            RibInterpreterStackValue::Iterator(_) => {
                 return Err("Unable to assign an iterator to a variable".to_string())
             }
-            RibInterpreterResult::Sink(_, _) => {
+            RibInterpreterStackValue::Sink(_, _) => {
                 return Err("Unable to assign a sink to a variable".to_string())
             }
         }
@@ -725,7 +735,7 @@ mod internal {
             .ok_or("Failed to get a record from the stack to select a field".to_string())?;
 
         match record {
-            RibInterpreterResult::Val(TypeAnnotatedValue::Record(record)) => {
+            RibInterpreterStackValue::Val(TypeAnnotatedValue::Record(record)) => {
                 let field = record
                     .value
                     .into_iter()
@@ -757,7 +767,7 @@ mod internal {
             .ok_or("Failed to get a record from the stack to select a field".to_string())?;
 
         match record {
-            RibInterpreterResult::Val(TypeAnnotatedValue::List(typed_list)) => {
+            RibInterpreterStackValue::Val(TypeAnnotatedValue::List(typed_list)) => {
                 let value = typed_list
                     .values
                     .get(index)
@@ -771,7 +781,7 @@ mod internal {
                 interpreter_stack.push_val(inner_type_annotated_value);
                 Ok(())
             }
-            RibInterpreterResult::Val(TypeAnnotatedValue::Tuple(typed_tuple)) => {
+            RibInterpreterStackValue::Val(TypeAnnotatedValue::Tuple(typed_tuple)) => {
                 let value = typed_tuple
                     .value
                     .get(index)
@@ -1070,14 +1080,14 @@ mod internal {
 
         let interpreter_result = match result {
             TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) if value.is_empty() => {
-                Ok(RibInterpreterResult::Unit)
+                Ok(RibInterpreterStackValue::Unit)
             }
             TypeAnnotatedValue::Tuple(TypedTuple { value, .. }) if value.len() == 1 => {
                 let inner = value[0]
                     .clone()
                     .type_annotated_value
                     .ok_or("Internal Error. Unexpected empty result")?;
-                Ok(RibInterpreterResult::Val(inner))
+                Ok(RibInterpreterStackValue::Val(inner))
             }
             _ => Err("Named multiple results are not supported yet".to_string()),
         };

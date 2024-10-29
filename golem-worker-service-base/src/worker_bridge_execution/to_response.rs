@@ -3,13 +3,13 @@ use crate::worker_service_rib_interpreter::EvaluationError;
 
 use http::StatusCode;
 use poem::Body;
-use rib::RibInterpreterResult;
+use rib::RibInterpreterStackValue;
 
 pub trait ToResponse<A> {
     fn to_response(&self, request_details: &RequestDetails) -> A;
 }
 
-impl ToResponse<poem::Response> for RibInterpreterResult {
+impl ToResponse<poem::Response> for RibInterpreterStackValue {
     fn to_response(&self, request_details: &RequestDetails) -> poem::Response {
         match internal::IntermediateHttpResponse::from(self) {
             Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
@@ -63,7 +63,7 @@ mod internal {
     use golem_wasm_rpc::protobuf::TypedRecord;
     use poem::web::headers::ContentType;
     use poem::{Body, IntoResponse, ResponseParts};
-    use rib::{GetLiteralValue, LiteralValue, RibInterpreterResult};
+    use rib::{GetLiteralValue, LiteralValue, RibInterpreterStackValue};
     use std::collections::HashMap;
 
     pub(crate) struct IntermediateHttpResponse {
@@ -74,10 +74,10 @@ mod internal {
 
     impl IntermediateHttpResponse {
         pub(crate) fn from(
-            evaluation_result: &RibInterpreterResult,
+            evaluation_result: &RibInterpreterStackValue,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
             match evaluation_result {
-                RibInterpreterResult::Val(typed_value) => {
+                RibInterpreterStackValue::Val(typed_value) => {
                     let status = match typed_value.get_optional(&Path::from_key("status")) {
                         Some(typed_value) => get_status_code(&typed_value),
                         None => Ok(StatusCode::OK),
@@ -98,7 +98,7 @@ mod internal {
                         headers,
                     })
                 }
-                RibInterpreterResult::Unit => Ok(IntermediateHttpResponse {
+                RibInterpreterStackValue::Unit => Ok(IntermediateHttpResponse {
                     body: None,
                     status: StatusCode::default(),
                     headers: ResolvedResponseHeaders::default(),
@@ -256,7 +256,7 @@ mod test {
     use crate::worker_bridge_execution::to_response::ToResponse;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
-    use rib::RibInterpreterResult;
+    use rib::RibInterpreterStackValue;
     use std::collections::HashMap;
 
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
@@ -301,7 +301,7 @@ mod test {
             ),
         ]);
 
-        let evaluation_result: RibInterpreterResult = RibInterpreterResult::Val(record);
+        let evaluation_result: RibInterpreterStackValue = RibInterpreterStackValue::Val(record);
 
         let http_response: poem::Response =
             evaluation_result.to_response(&RequestDetails::Http(HttpRequestDetails::empty()));
@@ -326,8 +326,8 @@ mod test {
 
     #[test]
     async fn test_evaluation_result_to_response_with_no_http_specifics() {
-        let evaluation_result: RibInterpreterResult =
-            RibInterpreterResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
+        let evaluation_result: RibInterpreterStackValue =
+            RibInterpreterStackValue::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
         let http_response: poem::Response =
             evaluation_result.to_response(&RequestDetails::Http(HttpRequestDetails::empty()));

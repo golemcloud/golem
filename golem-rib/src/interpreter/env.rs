@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::interpreter::result::RibInterpreterResult;
+use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::VariableId;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
@@ -22,7 +22,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct InterpreterEnv {
-    pub env: HashMap<EnvironmentKey, RibInterpreterResult>,
+    pub env: HashMap<EnvironmentKey, RibInterpreterStackValue>,
     pub call_worker_function_async: RibFunctionInvoke,
 }
 
@@ -54,7 +54,7 @@ impl Default for InterpreterEnv {
 
 impl InterpreterEnv {
     pub fn new(
-        env: HashMap<EnvironmentKey, RibInterpreterResult>,
+        env: HashMap<EnvironmentKey, RibInterpreterStackValue>,
         call_worker_function_async: RibFunctionInvoke,
     ) -> Self {
         InterpreterEnv {
@@ -74,7 +74,12 @@ impl InterpreterEnv {
     pub fn from_input(env: HashMap<String, TypeAnnotatedValue>) -> Self {
         let env = env
             .into_iter()
-            .map(|(k, v)| (EnvironmentKey::from_global(k), RibInterpreterResult::Val(v)))
+            .map(|(k, v)| {
+                (
+                    EnvironmentKey::from_global(k),
+                    RibInterpreterStackValue::Val(v),
+                )
+            })
             .collect();
 
         InterpreterEnv {
@@ -92,11 +97,11 @@ impl InterpreterEnv {
         env
     }
 
-    pub fn insert(&mut self, key: EnvironmentKey, value: RibInterpreterResult) {
+    pub fn insert(&mut self, key: EnvironmentKey, value: RibInterpreterStackValue) {
         self.env.insert(key, value);
     }
 
-    pub fn lookup(&self, key: &EnvironmentKey) -> Option<&RibInterpreterResult> {
+    pub fn lookup(&self, key: &EnvironmentKey) -> Option<&RibInterpreterStackValue> {
         self.env.get(key)
     }
 }

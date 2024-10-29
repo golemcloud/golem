@@ -23,35 +23,24 @@ use std::fmt;
 // A result can be a type_annotated_value
 // A result can be a sink where it collects only the required elements from a possible iterable
 // A result can also be stored as an iterator, that in the future, we rely on the same mechanism to support streams without change of code.
-pub enum RibInterpreterResult {
+pub enum RibInterpreterStackValue {
     Unit,
     Val(TypeAnnotatedValue),
     Iterator(Box<dyn Iterator<Item = TypeAnnotatedValue>>),
     Sink(Vec<TypeAnnotatedValue>, AnalysedType),
 }
 
-impl fmt::Debug for RibInterpreterResult {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            RibInterpreterResult::Unit => write!(f, "Unit"),
-            RibInterpreterResult::Val(value) => write!(f, "val:{:?}", value),
-            RibInterpreterResult::Iterator(_) => write!(f, "Iterator:(...)"),
-            RibInterpreterResult::Sink(value, _) => write!(f, "sink:{}", value.len()),
-        }
-    }
-}
-
-impl RibInterpreterResult {
+impl RibInterpreterStackValue {
     pub fn is_sink(&self) -> bool {
-        matches!(self, RibInterpreterResult::Sink(_, _))
+        matches!(self, RibInterpreterStackValue::Sink(_, _))
     }
     pub fn is_iterator(&self) -> bool {
-        matches!(self, RibInterpreterResult::Iterator(_))
+        matches!(self, RibInterpreterStackValue::Iterator(_))
     }
 
     pub fn evaluate_math_op<F>(
         &self,
-        right: &RibInterpreterResult,
+        right: &RibInterpreterStackValue,
         op: F,
     ) -> Result<CoercedNumericValue, String>
     where
@@ -74,19 +63,21 @@ impl RibInterpreterResult {
 
     pub fn compare<F>(
         &self,
-        right: &RibInterpreterResult,
+        right: &RibInterpreterStackValue,
         compare: F,
-    ) -> Result<RibInterpreterResult, String>
+    ) -> Result<RibInterpreterStackValue, String>
     where
         F: Fn(LiteralValue, LiteralValue) -> bool,
     {
         if self.is_unit() && right.is_unit() {
-            Ok(RibInterpreterResult::Val(TypeAnnotatedValue::Bool(true)))
+            Ok(RibInterpreterStackValue::Val(TypeAnnotatedValue::Bool(
+                true,
+            )))
         } else {
             match (self.get_val(), right.get_val()) {
                 (Some(left), Some(right)) => {
                     let result = internal::compare_typed_value(&left, &right, compare)?;
-                    Ok(RibInterpreterResult::Val(result))
+                    Ok(RibInterpreterStackValue::Val(result))
                 }
                 _ => Err("Values are not literals and cannot be compared".to_string()),
             }
@@ -95,42 +86,42 @@ impl RibInterpreterResult {
 
     pub fn get_bool(&self) -> Option<bool> {
         match self {
-            RibInterpreterResult::Val(TypeAnnotatedValue::Bool(bool)) => Some(*bool),
-            RibInterpreterResult::Val(_) => None,
-            RibInterpreterResult::Unit => None,
-            RibInterpreterResult::Iterator(_) => None,
-            RibInterpreterResult::Sink(_, _) => None,
+            RibInterpreterStackValue::Val(TypeAnnotatedValue::Bool(bool)) => Some(*bool),
+            RibInterpreterStackValue::Val(_) => None,
+            RibInterpreterStackValue::Unit => None,
+            RibInterpreterStackValue::Iterator(_) => None,
+            RibInterpreterStackValue::Sink(_, _) => None,
         }
     }
     pub fn get_val(&self) -> Option<TypeAnnotatedValue> {
         match self {
-            RibInterpreterResult::Val(val) => Some(val.clone()),
-            RibInterpreterResult::Unit => None,
-            RibInterpreterResult::Iterator(_) => None,
-            RibInterpreterResult::Sink(_, _) => None,
+            RibInterpreterStackValue::Val(val) => Some(val.clone()),
+            RibInterpreterStackValue::Unit => None,
+            RibInterpreterStackValue::Iterator(_) => None,
+            RibInterpreterStackValue::Sink(_, _) => None,
         }
     }
 
     pub fn get_literal(&self) -> Option<LiteralValue> {
         match self {
-            RibInterpreterResult::Val(val) => val.get_literal(),
-            RibInterpreterResult::Unit => None,
-            RibInterpreterResult::Iterator(_) => None,
-            RibInterpreterResult::Sink(_, _) => None,
+            RibInterpreterStackValue::Val(val) => val.get_literal(),
+            RibInterpreterStackValue::Unit => None,
+            RibInterpreterStackValue::Iterator(_) => None,
+            RibInterpreterStackValue::Sink(_, _) => None,
         }
     }
 
     pub fn is_unit(&self) -> bool {
-        matches!(self, RibInterpreterResult::Unit)
+        matches!(self, RibInterpreterStackValue::Unit)
     }
 
     pub fn val(val: TypeAnnotatedValue) -> Self {
-        RibInterpreterResult::Val(val)
+        RibInterpreterStackValue::Val(val)
     }
 
     pub fn unwrap(&self) -> Option<TypeAnnotatedValue> {
         match self {
-            RibInterpreterResult::Val(val) => match val {
+            RibInterpreterStackValue::Val(val) => match val {
                 TypeAnnotatedValue::Option(option) => option
                     .value
                     .as_deref()
@@ -152,9 +143,20 @@ impl RibInterpreterResult {
                     .and_then(|x| x.type_annotated_value.clone()),
                 _ => None,
             },
-            RibInterpreterResult::Unit => None,
-            RibInterpreterResult::Iterator(_) => None,
-            RibInterpreterResult::Sink(_, _) => None,
+            RibInterpreterStackValue::Unit => None,
+            RibInterpreterStackValue::Iterator(_) => None,
+            RibInterpreterStackValue::Sink(_, _) => None,
+        }
+    }
+}
+
+impl fmt::Debug for RibInterpreterStackValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RibInterpreterStackValue::Unit => write!(f, "Unit"),
+            RibInterpreterStackValue::Val(value) => write!(f, "val:{:?}", value),
+            RibInterpreterStackValue::Iterator(_) => write!(f, "Iterator:(...)"),
+            RibInterpreterStackValue::Sink(value, _) => write!(f, "sink:{}", value.len()),
         }
     }
 }
