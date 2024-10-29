@@ -61,8 +61,8 @@ pub enum RibIR {
     Throw(String),
     GetTag,
     Concat(usize),
-    Add(AnalysedType),
-    Subtract(AnalysedType),
+    Plus(AnalysedType),
+    Minus(AnalysedType),
     Divide(AnalysedType),
     Multiply(AnalysedType),
     Negate,
@@ -296,8 +296,8 @@ impl TryFrom<ProtoRibIR> for RibIR {
                     |_| "Failed to convert CreateAndPushRecord".to_string(),
                 )?))
             }
-            Instruction::Add(value) => {
-                Ok(RibIR::Add((&value).try_into().map_err(|_| {
+            Instruction::Plus(value) => {
+                Ok(RibIR::Plus((&value).try_into().map_err(|_| {
                     "Failed to convert CreateAndPushRecord".to_string()
                 })?))
             }
@@ -306,8 +306,8 @@ impl TryFrom<ProtoRibIR> for RibIR {
                     "Failed to convert CreateAndPushRecord".to_string()
                 })?))
             }
-            Instruction::Subtract(value) => {
-                Ok(RibIR::Subtract((&value).try_into().map_err(|_| {
+            Instruction::Minus(value) => {
+                Ok(RibIR::Minus((&value).try_into().map_err(|_| {
                     "Failed to convert CreateAndPushRecord".to_string()
                 })?))
             }
@@ -488,8 +488,8 @@ impl From<RibIR> for ProtoRibIR {
             RibIR::AssignVar(value) => Instruction::AssignVar(value.into()),
             RibIR::LoadVar(value) => Instruction::LoadVar(value.into()),
             RibIR::CreateAndPushRecord(value) => Instruction::CreateAndPushRecord((&value).into()),
-            RibIR::Add(value) => Instruction::Add((&value).into()),
-            RibIR::Subtract(value) => Instruction::Subtract((&value).into()),
+            RibIR::Plus(value) => Instruction::Plus((&value).into()),
+            RibIR::Minus(value) => Instruction::Minus((&value).into()),
             RibIR::Multiply(value) => Instruction::Multiply((&value).into()),
             RibIR::Divide(value) => Instruction::Divide((&value).into()),
             RibIR::UpdateRecord(value) => Instruction::UpdateRecord(value),

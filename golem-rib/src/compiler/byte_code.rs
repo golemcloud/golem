@@ -155,14 +155,14 @@ mod internal {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
-                instructions.push(RibIR::Add(analysed_type));
+                instructions.push(RibIR::Plus(analysed_type));
             }
             Expr::Minus(lhs, rhs, inferred_type) => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;
 
                 stack.push(ExprState::from_expr(rhs.deref()));
                 stack.push(ExprState::from_expr(lhs.deref()));
-                instructions.push(RibIR::Subtract(analysed_type));
+                instructions.push(RibIR::Minus(analysed_type));
             }
             Expr::Divide(lhs, rhs, inferred_type) => {
                 let analysed_type = convert_to_analysed_type(expr, inferred_type)?;

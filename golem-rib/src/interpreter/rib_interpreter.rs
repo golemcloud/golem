@@ -94,14 +94,14 @@ impl Interpreter {
                 RibIR::LessThanOrEqualTo => {
                     internal::run_compare_instruction(&mut stack, |left, right| left <= right)?;
                 }
-                RibIR::Add(analysed_type) => {
+                RibIR::Plus(analysed_type) => {
                     internal::run_math_instruction(
                         &mut stack,
                         |left, right| left + right,
                         &analysed_type,
                     )?;
                 }
-                RibIR::Subtract(analysed_type) => {
+                RibIR::Minus(analysed_type) => {
                     internal::run_math_instruction(
                         &mut stack,
                         |left, right| left - right,

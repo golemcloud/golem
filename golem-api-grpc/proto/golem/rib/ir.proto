@@ -48,8 +48,8 @@ message RibIR {
         AdvanceIterator advance_iterator = 36;
         SinkToList sink_to_list = 37;
         PushToSink push_to_sink = 38;
-        wasm.ast.Type add = 39;
-        wasm.ast.Type subtract = 40;
+        wasm.ast.Type plus = 39;
+        wasm.ast.Type minus = 40;
         wasm.ast.Type multiply = 41;
         wasm.ast.Type divide = 42;
         IsEmpty is_empty = 43;
