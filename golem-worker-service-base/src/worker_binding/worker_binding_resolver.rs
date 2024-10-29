@@ -7,7 +7,7 @@ use crate::worker_service_rib_interpreter::WorkerServiceRibInterpreter;
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
 use golem_service_base::model::VersionedComponentId;
-use rib::RibInterpreterStackValue;
+use rib::RibResult;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -84,7 +84,7 @@ impl ResolvedWorkerBindingFromRequest {
         evaluator: &Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
     ) -> R
     where
-        RibInterpreterStackValue: ToResponse<R>,
+        RibResult: ToResponse<R>,
         EvaluationError: ToResponse<R>,
         RibInputTypeMismatch: ToResponse<R>,
     {
