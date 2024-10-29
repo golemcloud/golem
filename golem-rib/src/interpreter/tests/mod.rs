@@ -2273,7 +2273,7 @@ mod comprehensive_test {
             interpreter_env_input: HashMap<String, TypeAnnotatedValue>,
         ) -> Interpreter {
             Interpreter::new(
-                RibInput::new(interpreter_env_input),
+                &RibInput::new(interpreter_env_input),
                 dynamic_worker_invoke(functions_and_result),
             )
         }

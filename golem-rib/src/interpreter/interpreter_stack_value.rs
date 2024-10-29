@@ -18,7 +18,6 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 use std::fmt;
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use poem_openapi::types::ToJSON;
 
 // A result of a function can be unit, which is not representable using type_annotated_value
