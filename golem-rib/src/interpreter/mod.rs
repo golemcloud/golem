@@ -14,7 +14,6 @@
 
 pub use env::RibFunctionInvoke;
 pub use interpreter_result::*;
-pub use interpreter_stack_value::*;
 pub use literal::*;
 pub use rib_interpreter::*;
 

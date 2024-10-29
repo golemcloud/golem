@@ -1,4 +1,4 @@
-use crate::RibInterpreterStackValue;
+use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 pub enum RibResult {
