@@ -18,6 +18,8 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 use std::fmt;
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+use poem_openapi::types::ToJSON;
 
 // A result of a function can be unit, which is not representable using type_annotated_value
 // A result can be a type_annotated_value
@@ -54,10 +56,10 @@ impl RibInterpreterStackValue {
                 ) {
                     Ok(op(left_lit, right_lit))
                 } else {
-                    Err("Failed to perform math operation".to_string())
+                    Err(format!("Unable to complete the math operation on {}, {}", left.to_json_string(), right.to_json_string()))
                 }
             }
-            _ => Err("Unable to perform math op as the values are not numbers".to_string()),
+            _ => Err("Failed to obtain values to complete the math operation".to_string()),
         }
     }
 
