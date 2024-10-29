@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
+use crate::{GetLiteralValue, LiteralValue};
 use golem_wasm_ast::analysis::protobuf::NameTypePair;
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -48,6 +49,11 @@ impl InterpreterStack {
         self.stack.pop()
     }
 
+    pub fn try_pop(&mut self) -> Result<RibInterpreterStackValue, String> {
+        self.pop()
+            .ok_or("Internal Error: Failed to pop value from the interpreter stack".to_string())
+    }
+
     pub fn pop_sink(&mut self) -> Option<Vec<TypeAnnotatedValue>> {
         match self.pop() {
             Some(RibInterpreterStackValue::Sink(vec, _)) => Some(vec.clone()),
@@ -63,6 +69,39 @@ impl InterpreterStack {
         Some(results)
     }
 
+    pub fn try_pop_n(&mut self, n: usize) -> Result<Vec<RibInterpreterStackValue>, String> {
+        self.pop_n(n).ok_or(format!(
+            "Internal Error: Failed to pop {} values from the interpreter stack",
+            n
+        ))
+    }
+
+    pub fn try_pop_n_val(&mut self, n: usize) -> Result<Vec<TypeAnnotatedValue>, String> {
+        let stack_values = self.try_pop_n(n)?;
+
+        stack_values
+            .iter()
+            .map(|interpreter_result| {
+                interpreter_result
+                    .get_val()
+                    .ok_or(format!("Internal Error: Failed to convert last {} in the stack to type_annotated_value", n))
+            })
+            .collect::<Result<Vec<TypeAnnotatedValue>, String>>()
+    }
+
+    pub fn try_pop_n_literals(&mut self, n: usize) -> Result<Vec<LiteralValue>, String> {
+        let values = self.try_pop_n_val(n)?;
+        values
+            .iter()
+            .map(|type_value| {
+                type_value.get_literal().ok_or(format!(
+                    "Internal Error: Failed to convert last {} in the stack to literals",
+                    n
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()
+    }
+
     pub fn pop_str(&mut self) -> Option<String> {
         self.pop_val().and_then(|v| match v {
             TypeAnnotatedValue::Str(s) => Some(s),
@@ -72,6 +111,33 @@ impl InterpreterStack {
 
     pub fn pop_val(&mut self) -> Option<TypeAnnotatedValue> {
         self.stack.pop().and_then(|v| v.get_val())
+    }
+
+    pub fn try_pop_val(&mut self) -> Result<TypeAnnotatedValue, String> {
+        self.try_pop().and_then(|x| {
+            x.get_val().ok_or(
+                "Internal Error: Failed to pop type_annotated_value from the interpreter stack"
+                    .to_string(),
+            )
+        })
+    }
+
+    pub fn try_pop_record(&mut self) -> Result<TypedRecord, String> {
+        let value = self.try_pop_val()?;
+
+        match value {
+            TypeAnnotatedValue::Record(record) => Ok(record),
+
+            _ => Err("Internal Error: Failed to pop a record from the interpreter".to_string()),
+        }
+    }
+
+    pub fn try_pop_bool(&mut self) -> Result<bool, String> {
+        self.try_pop_val().and_then(|val| {
+            val.get_literal().and_then(|x| x.get_bool()).ok_or(
+                "Internal Error: Failed to pop boolean from the interpreter stack".to_string(),
+            )
+        })
     }
 
     pub fn push(&mut self, interpreter_result: RibInterpreterStackValue) {

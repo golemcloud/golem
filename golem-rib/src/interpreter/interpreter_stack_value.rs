@@ -17,8 +17,8 @@ use crate::CoercedNumericValue;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
-use std::fmt;
 use poem_openapi::types::ToJSON;
+use std::fmt;
 
 // A result of a function can be unit, which is not representable using type_annotated_value
 // A result can be a type_annotated_value
@@ -55,7 +55,11 @@ impl RibInterpreterStackValue {
                 ) {
                     Ok(op(left_lit, right_lit))
                 } else {
-                    Err(format!("Unable to complete the math operation on {}, {}", left.to_json_string(), right.to_json_string()))
+                    Err(format!(
+                        "Unable to complete the math operation on {}, {}",
+                        left.to_json_string(),
+                        right.to_json_string()
+                    ))
                 }
             }
             _ => Err("Failed to obtain values to complete the math operation".to_string()),

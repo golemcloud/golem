@@ -270,9 +270,8 @@ mod internal {
     use crate::interpreter::literal::LiteralValue;
     use crate::interpreter::stack::InterpreterStack;
     use crate::{
-        CoercedNumericValue, FunctionReferenceType, GetLiteralValue, InstructionId,
-        ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke,
-        VariableId,
+        CoercedNumericValue, FunctionReferenceType, InstructionId, ParsedFunctionName,
+        ParsedFunctionReference, ParsedFunctionSite, RibFunctionInvoke, VariableId,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_ast::analysis::TypeResult;
@@ -522,7 +521,12 @@ mod internal {
                     typ: Some((&field.typ).into()),
                 })
                 .collect(),
-            _ => return Err("Expected a Record type".to_string()),
+            _ => {
+                return Err(format!(
+                    "Internal Error: Expected a record type to create a record. But obtained {:?}",
+                    analysed_type
+                ))
+            }
         };
 
         interpreter_stack.create_record(name_type_pair);
@@ -533,40 +537,26 @@ mod internal {
         field_name: String,
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        //  The value of field_name
-        let last_record = interpreter_stack
-            .pop_val()
-            .ok_or("Expected a value on the stack".to_string())?;
+        let current_record = interpreter_stack.try_pop_record()?;
 
-        let value = interpreter_stack
-            .pop_val()
-            .ok_or("Expected a record on the stack".to_string())?;
+        let value = interpreter_stack.try_pop_val()?;
 
-        match last_record {
-            TypeAnnotatedValue::Record(record) => {
-                let mut existing_fields = record.value;
+        let mut existing_fields = current_record.value;
 
-                let name_value_pair = NameValuePair {
-                    name: field_name.clone(),
-                    value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                        type_annotated_value: Some(value),
-                    }),
-                };
+        let name_value_pair = NameValuePair {
+            name: field_name.clone(),
+            value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
+                type_annotated_value: Some(value),
+            }),
+        };
 
-                existing_fields.push(name_value_pair);
-                interpreter_stack.push_val(TypeAnnotatedValue::Record(TypedRecord {
-                    value: existing_fields,
-                    typ: record.typ,
-                }));
+        existing_fields.push(name_value_pair);
+        interpreter_stack.push_val(TypeAnnotatedValue::Record(TypedRecord {
+            value: existing_fields,
+            typ: current_record.typ,
+        }));
 
-                Ok(())
-            }
-
-            _ => Err(format!(
-                "Failed to get a record from the stack to set the field {}",
-                field_name
-            )),
-        }
+        Ok(())
     }
 
     pub(crate) fn run_push_list_instruction(
@@ -574,30 +564,18 @@ mod internal {
         analysed_type: AnalysedType,
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        // TODO; This type of check is actually un-necessary
-        // Avoid these checks - and allow compiler to directly form the instruction with the inner type
         match analysed_type {
             AnalysedType::List(inner_type) => {
-                // Last updated value in stack should be a list to update the list
-                let last_list = interpreter_stack
-                    .pop_n(list_size)
-                    .ok_or(format!("Expected {} value on the stack", list_size))?;
+                let type_annotated_values =
+                    interpreter_stack.try_pop_n_val(list_size)?;
 
-                let type_annotated_values = last_list
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result
-                            .get_val()
-                            .ok_or("Internal Error: Failed to construct list".to_string())
-                    })
-                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
                 interpreter_stack.push_list(type_annotated_values, inner_type.inner.deref());
 
                 Ok(())
             }
 
-            _ => Err("Expected a List type".to_string()),
+            _ =>  Err(format!("Internal Error: Failed to create tuple due to mismatch in types. Expected: list, Actual: {:?}", analysed_type)),
         }
     }
 
@@ -606,59 +584,36 @@ mod internal {
         analysed_type: AnalysedType,
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        // TODO; This type of check is actually un-necessary
-        // Avoid these checks - and allow compiler to directly form the instruction with the inner type
         match analysed_type {
             AnalysedType::Tuple(inner_type) => {
-                // Last updated value in stack should be a list to update the list
+                let type_annotated_values =
+                    interpreter_stack.try_pop_n_val(list_size)?;
 
-                let last_list = interpreter_stack
-                    .pop_n(list_size)
-                    .ok_or(format!("Expected {} value on the stack", list_size))?;
-
-                let type_annotated_values = last_list
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result
-                            .get_val()
-                            .ok_or("Internal Error: Failed to construct tuple".to_string())
-                    })
-                    .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
                 interpreter_stack.push_tuple(type_annotated_values, &inner_type.items);
 
                 Ok(())
             }
 
-            _ => Err("Expected a List type".to_string()),
+            _ => Err(format!("Internal Error: Failed to create tuple due to mismatch in types. Expected: tuple, Actual: {:?}", analysed_type)),
         }
     }
 
     pub(crate) fn run_negate_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let value = interpreter_stack
-            .pop_val()
-            .ok_or("Failed to get a value from the stack to negate".to_string())?;
+        let bool = interpreter_stack.try_pop_bool()?;
+        let negated = !bool;
 
-        let result = value
-            .get_literal()
-            .and_then(|literal| literal.get_bool())
-            .ok_or("Failed to get a boolean value from the stack to negate".to_string())?;
-
-        interpreter_stack.push_val(TypeAnnotatedValue::Bool(!result));
+        interpreter_stack.push_val(TypeAnnotatedValue::Bool(negated));
         Ok(())
     }
 
     pub(crate) fn run_and_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let left = interpreter_stack
-            .pop()
-            .ok_or("Internal Error: Failed to get LHS &&".to_string())?;
-        let right = interpreter_stack
-            .pop()
-            .ok_or("Internal Error: Failed to get RHS of &&".to_string())?;
+        let left = interpreter_stack.try_pop()?;
+        let right = interpreter_stack.try_pop()?;
 
         let result = left.compare(&right, |a, b| match (a.get_bool(), b.get_bool()) {
             (Some(a), Some(b)) => a && b,
@@ -673,12 +628,8 @@ mod internal {
     pub(crate) fn run_or_instruction(
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let left = interpreter_stack
-            .pop()
-            .ok_or("Internal Error: Failed to get LHS &&".to_string())?;
-        let right = interpreter_stack
-            .pop()
-            .ok_or("Internal Error: Failed to get RHS of &&".to_string())?;
+        let left = interpreter_stack.try_pop()?;
+        let right = interpreter_stack.try_pop()?;
 
         let result = left.compare(&right, |a, b| match (a.get_bool(), b.get_bool()) {
             (Some(a), Some(b)) => a || b,
@@ -695,12 +646,8 @@ mod internal {
         compare_fn: fn(CoercedNumericValue, CoercedNumericValue) -> CoercedNumericValue,
         target_numerical_type: &AnalysedType,
     ) -> Result<(), String> {
-        let left = interpreter_stack.pop().ok_or(
-            "Empty stack and failed to get a value to do the comparison operation".to_string(),
-        )?;
-        let right = interpreter_stack.pop().ok_or(
-            "Failed to get a value from the stack to do the comparison operation".to_string(),
-        )?;
+        let left = interpreter_stack.try_pop()?;
+        let right = interpreter_stack.try_pop()?;
 
         let result = left.evaluate_math_op(&right, compare_fn)?;
         let numerical_type = result.cast_to(target_numerical_type).ok_or(format!(
@@ -717,12 +664,8 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         compare_fn: fn(LiteralValue, LiteralValue) -> bool,
     ) -> Result<(), String> {
-        let left = interpreter_stack.pop().ok_or(
-            "Empty stack and failed to get a value to do the comparison operation".to_string(),
-        )?;
-        let right = interpreter_stack.pop().ok_or(
-            "Failed to get a value from the stack to do the comparison operation".to_string(),
-        )?;
+        let left = interpreter_stack.try_pop()?;
+        let right = interpreter_stack.try_pop()?;
 
         let result = left.compare(&right, compare_fn)?;
 
@@ -735,9 +678,7 @@ mod internal {
         field_name: String,
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let record = interpreter_stack
-            .pop()
-            .ok_or("Failed to get a record from the stack to select a field".to_string())?;
+        let record = interpreter_stack.try_pop()?;
 
         match record {
             RibInterpreterStackValue::Val(TypeAnnotatedValue::Record(record)) => {
@@ -839,13 +780,10 @@ mod internal {
 
                 let variant_arg_typ = variant.typ.clone();
 
-                let arg_value =
-                    match variant_arg_typ {
-                        Some(_) => Some(interpreter_stack.pop_val().ok_or(
-                            "Failed to get the variant argument from the stack".to_string(),
-                        )?),
-                        None => None,
-                    };
+                let arg_value = match variant_arg_typ {
+                    Some(_) => Some(interpreter_stack.try_pop_val()?),
+                    None => None,
+                };
 
                 interpreter_stack.push_variant(
                     variant_name.clone(),
@@ -856,7 +794,7 @@ mod internal {
             }
 
             _ => Err(format!(
-                "Expected a Variant type for the variant {}, but obtained {:?}",
+                "Internal Error: Expected a variant type for {}, but obtained {:?}",
                 variant_name, analysed_type
             )),
         }
@@ -1056,7 +994,7 @@ mod internal {
             .pop_n(arg_size)
             .ok_or("Internal Error: Failed to get arguments for the function call".to_string())?;
 
-        let type_anntoated_values = last_n_elements
+        let type_annotated_values = last_n_elements
             .iter()
             .map(|interpreter_result| {
                 interpreter_result.get_val().ok_or(format!(
@@ -1067,7 +1005,7 @@ mod internal {
             .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
 
         let result = interpreter_env
-            .invoke_worker_function_async(function_name, type_anntoated_values)
+            .invoke_worker_function_async(function_name, type_annotated_values)
             .await?;
 
         let interpreter_result = match result {
@@ -1135,16 +1073,17 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         analysed_type: AnalysedType,
     ) -> Result<(), String> {
-        let value = interpreter_stack
-            .pop_val()
-            .ok_or("Failed to get a value from the stack to wrap in Some".to_string())?;
+        let value = interpreter_stack.try_pop_val()?;
 
         match analysed_type {
             AnalysedType::Option(analysed_type) => {
                 interpreter_stack.push_some(value, analysed_type.inner.deref());
                 Ok(())
             }
-            _ => Err("Expected an Option type".to_string()),
+            _ => Err(format!(
+                "Internal Error: Expected option type to create `some` value. But obtained {:?}",
+                analysed_type
+            )),
         }
     }
 
@@ -1157,7 +1096,10 @@ mod internal {
                 interpreter_stack.push_none(analysed_type);
                 Ok(())
             }
-            _ => Err("Expected an Option type".to_string()),
+            _ => Err(format!(
+                "Internal Error: Expected option type to create `none` value. But obtained {:?}",
+                analysed_type
+            )),
         }
     }
 
@@ -1165,16 +1107,35 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         analysed_type: AnalysedType,
     ) -> Result<(), String> {
-        let value = interpreter_stack
-            .pop_val()
-            .ok_or("Failed to get a value from the stack to wrap in Ok".to_string())?;
+        let value = interpreter_stack.try_pop_val()?;
 
         match analysed_type {
             AnalysedType::Result(TypeResult { ok, err }) => {
                 interpreter_stack.push_ok(value, ok.as_deref(), err.as_deref());
                 Ok(())
             }
-            _ => Err("Expected a Result type".to_string()),
+            _ => Err(format!(
+                "Internal Error: Expected result type to create `ok` value. But obtained {:?}",
+                analysed_type
+            )),
+        }
+    }
+
+    pub(crate) fn run_create_err_instruction(
+        interpreter_stack: &mut InterpreterStack,
+        analysed_type: AnalysedType,
+    ) -> Result<(), String> {
+        let value = interpreter_stack.try_pop_val()?;
+
+        match analysed_type {
+            AnalysedType::Result(TypeResult { ok, err }) => {
+                interpreter_stack.push_err(value, ok.as_deref(), err.as_deref());
+                Ok(())
+            }
+            _ => Err(format!(
+                "Internal Error: Expected result type to create `err` value. But obtained {:?}",
+                analysed_type
+            )),
         }
     }
 
@@ -1182,48 +1143,17 @@ mod internal {
         interpreter_stack: &mut InterpreterStack,
         arg_size: usize,
     ) -> Result<(), String> {
-        let last_n_elements = interpreter_stack
-            .pop_n(arg_size)
-            .ok_or("Internal Error: Failed to get arguments for concatenation".to_string())?;
-
-        let type_annotated_values = last_n_elements
-            .iter()
-            .map(|interpreter_result| {
-                interpreter_result
-                    .get_val()
-                    .ok_or("Internal Error: Failed to execute concatenation".to_string())
-            })
-            .collect::<Result<Vec<TypeAnnotatedValue>, String>>()?;
+        let literals = interpreter_stack.try_pop_n_literals(arg_size)?;
 
         let mut str = String::new();
-        for value in type_annotated_values {
-            let result = value
-                .get_literal()
-                .ok_or("Expected a literal value".to_string())?
-                .as_string();
-            str.push_str(&result);
+
+        for literal in literals {
+            str.push_str(&literal.as_string());
         }
 
         interpreter_stack.push_val(TypeAnnotatedValue::Str(str));
 
         Ok(())
-    }
-
-    pub(crate) fn run_create_err_instruction(
-        interpreter_stack: &mut InterpreterStack,
-        analysed_type: AnalysedType,
-    ) -> Result<(), String> {
-        let value = interpreter_stack
-            .pop_val()
-            .ok_or("Failed to get a value from the stack to wrap in Err".to_string())?;
-
-        match analysed_type {
-            AnalysedType::Result(TypeResult { ok, err }) => {
-                interpreter_stack.push_err(value, ok.as_deref(), err.as_deref());
-                Ok(())
-            }
-            _ => Err("Expected a Result type".to_string()),
-        }
     }
 }
 
