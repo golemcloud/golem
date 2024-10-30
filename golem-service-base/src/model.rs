@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use bincode::{Decode, Encode};
+use futures::Stream;
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
@@ -22,9 +23,11 @@ use golem_common::model::{
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use poem::Body;
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::{ApiResponse, Enum, NewType, Object, ResponseContent, Union};
 use serde::{Deserialize, Serialize};
+use std::pin::Pin;
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
 
@@ -1052,58 +1055,38 @@ impl TryFrom<PublicOplogEntryWithIndex>
     }
 }
 
-#[derive(Debug, Clone, ApiResponse)]
+#[derive(Debug, ApiResponse)]
 pub enum GetFileApiResponse {
     #[oai(status = 200)]
     Ok(GetFileResponseContent),
 }
 
-#[derive(Debug, Clone, ResponseContent)]
+#[derive(Debug, ResponseContent)]
 pub enum GetFileResponseContent {
     Directory(Json<GetFilesResponse>),
-    File(Binary<Vec<u8>>),
+    File(Binary<Body>),
 }
 
 impl From<GetFileResponse> for GetFileResponseContent {
     fn from(value: GetFileResponse) -> Self {
         match value {
             GetFileResponse::Directory(directory) => Self::Directory(Json(directory)),
-            GetFileResponse::File(file) => Self::File(Binary(file)),
+            GetFileResponse::File(file_stream) => Self::File(Binary(Body::from_bytes_stream(file_stream))),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Union)]
+/// Serves as an intermediary to convert to the actual poem response ([GetFileResponseContent])
 pub enum GetFileResponse {
     Directory(GetFilesResponse),
-    File(Vec<u8>),
+    File(Pin<Box<dyn Stream<Item=Result<Vec<u8>, std::io::Error>> + Send + 'static>>),
 }
 
-impl GetFileResponse {
-    pub fn try_fold(a: Option<Self>, b: Self) -> Result<Option<Self>, String> {
-        if let Some(a) = a {
-            if let (GetFileResponse::File(mut a), GetFileResponse::File(mut b)) = (a, b) {
-                a.append(&mut b);
-                Ok(Some(GetFileResponse::File(a)))
-            } else {
-                Err(format!("Mismatched response types"))
-            }
-        } else {
-            Ok(Some(b))
-        }
-    }
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSuccessResponse> for GetFileResponse {
-    type Error = String;
-
-    fn try_from(value: golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSuccessResponse) -> Result<Self, Self::Error> {
-        let ty = value.node_type
-            .ok_or("Missing node_type")?;
-
-        match ty {
-            golem_api_grpc::proto::golem::workerexecutor::v1::get_file_success_response::NodeType::Directory(get_files_response) => Ok(Self::Directory(get_files_response.into())),
-            golem_api_grpc::proto::golem::workerexecutor::v1::get_file_success_response::NodeType::File(file_chunk) => Ok(Self::File(file_chunk.content)),
+impl std::fmt::Debug for GetFileResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Directory(arg0) => f.debug_tuple("Directory").field(arg0).finish(),
+            Self::File(_) => f.debug_tuple("File").finish(),
         }
     }
 }

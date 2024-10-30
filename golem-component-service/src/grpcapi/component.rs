@@ -21,7 +21,7 @@ use golem_api_grpc::proto::golem::component::v1::CreateComponentRequestChunk;
 use golem_api_grpc::proto::golem::component::v1::DownloadInitialFilesRequest;
 use golem_api_grpc::proto::golem::component::v1::DownloadInitialFilesResponse;
 use golem_api_grpc::proto::golem::component::v1::UpdateComponentRequestChunk;
-use golem_common::file_system::PackagedFiles;
+use golem_common::file_system::PackagedFileSet;
 use tracing::Instrument;
 
 use futures_util::stream::BoxStream;
@@ -171,7 +171,10 @@ impl ComponentGrpcApi {
     async fn download_initial_files(
         &self,
         request: DownloadInitialFilesRequest,
-    ) -> Result<ByteStream, ComponentError> {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
+        ComponentError,
+    > {
         let permission_type = request.permission_type().into();
 
         let id: ComponentId = request
@@ -191,8 +194,7 @@ impl ComponentGrpcApi {
         component_id: ComponentId,
         request: CreateComponentRequestHeader,
         data: Vec<u8>,
-        files_ro: Option<PackagedFiles>,
-        files_rw: Option<PackagedFiles>,
+        initial_files: PackagedFileSet,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
         let component_type = request.component_type().into();
@@ -205,8 +207,7 @@ impl ComponentGrpcApi {
                 component_type,
                 data,
                 &DefaultNamespace::default(),
-                files_ro,
-                files_rw,
+                initial_files
             )
             .await?;
         Ok(result.into())
@@ -216,8 +217,7 @@ impl ComponentGrpcApi {
         &self,
         request: UpdateComponentRequestHeader,
         data: Vec<u8>,
-        files_ro: Option<PackagedFiles>,
-        files_rw: Option<PackagedFiles>,
+        initial_files: PackagedFileSet,
     ) -> Result<Component, ComponentError> {
         let id: ComponentId = request
             .component_id
@@ -238,8 +238,7 @@ impl ComponentGrpcApi {
                 data, 
                 component_type, 
                 &DefaultNamespace::default(),
-                files_ro,
-                files_rw,
+                initial_files,
             ).await?;
         Ok(result.into())
     }
@@ -327,10 +326,9 @@ impl ComponentService for ComponentGrpcApi {
 
                 tracing::debug!("Received initial files: {} ro bytes, {} rw bytes", files_ro.len(), files_rw.len());
 
-                let files_ro = PackagedFiles::from_vec(files_ro);
-                let files_rw = PackagedFiles::from_vec(files_rw);
+                let initial_files = PackagedFileSet::from_vecs(files_ro, files_rw);
 
-                self.create(component_id, request, data, files_ro, files_rw)
+                self.create(component_id, request, data, initial_files)
                     .instrument(record.span.clone())
                     .await
             }
@@ -541,14 +539,12 @@ impl ComponentService for ComponentGrpcApi {
                         }
                     );
 
-                let files_ro = PackagedFiles::from_vec(files_ro);
-                let files_rw = PackagedFiles::from_vec(files_rw);
+                let initial_files = PackagedFileSet::from_vecs(files_ro, files_rw);
 
                 self.update(
                     request, 
                     data,
-                    files_ro,
-                    files_rw,
+                    initial_files
                 )
                 .instrument(record.span.clone())
                 .await

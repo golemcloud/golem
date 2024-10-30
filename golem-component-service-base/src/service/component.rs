@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
-use golem_common::file_system::PackagedFiles;
+use golem_common::file_system::{PackagedFileSet, PackagedFiles};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::{ComponentId, ComponentType, FileSystemPermission};
@@ -162,8 +162,7 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
-        files_ro: Option<PackagedFiles>,
-        files_rw: Option<PackagedFiles>,
+        initial_files: PackagedFileSet,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn update(
@@ -172,8 +171,7 @@ pub trait ComponentService<Namespace> {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
-        files_ro: Option<PackagedFiles>,
-        files_rw: Option<PackagedFiles>,
+        initial_files: PackagedFileSet,
     ) -> Result<Component<Namespace>, ComponentError>;
 
     async fn download(
@@ -429,8 +427,7 @@ where
         component_type: ComponentType,
         data: Vec<u8>,
         namespace: &Namespace,
-        files_ro: Option<PackagedFiles>,
-        files_rw: Option<PackagedFiles>,
+        initial_files: PackagedFileSet,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Create component");
 
@@ -445,6 +442,8 @@ where
             &data,
             namespace,
         )?;
+
+        let (files_ro, files_rw) = initial_files.split();
 
         info!(namespace = %namespace,"Uploaded component - exports {:?}",component.metadata.exports
         );
@@ -478,8 +477,7 @@ where
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         namespace: &Namespace,
-        files_ro: Option<PackagedFiles>,
-        files_rw: Option<PackagedFiles>,
+        initial_files: PackagedFileSet,
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
 
@@ -517,6 +515,8 @@ where
         let component_size: u64 = data.len().try_into().map_err(|e: TryFromIntError| {
             ComponentError::conversion_error("data length", e.to_string())
         })?;
+
+        let (files_ro, files_rw) = initial_files.split();
 
         tokio::try_join!(
             self.upload_user_component(&next_component.versioned_component_id, data.clone()),

@@ -1,3 +1,4 @@
+use golem_common::file_system::PackagedFileSet;
 use test_r::test;
 
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
@@ -149,6 +150,7 @@ async fn test_component_constraint_incompatible_updates(
             ComponentType::Durable,
             get_component_data("shopping-cart"),
             &DefaultNamespace::default(),
+            PackagedFileSet::empty(),
         )
         .await
         .unwrap();
@@ -180,6 +182,7 @@ async fn test_component_constraint_incompatible_updates(
             get_component_data("shopping-cart"),
             None,
             &DefaultNamespace::default(),
+            PackagedFileSet::empty(),
         )
         .await
         .unwrap_err()
@@ -233,8 +236,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             ComponentType::Durable,
             get_component_data("shopping-cart"),
             &DefaultNamespace::default(),
-                None,
-                None,
+                PackagedFileSet::empty()
         )
         .await
         .unwrap();
@@ -246,8 +248,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             ComponentType::Durable,
             get_component_data("rust-echo"),
             &DefaultNamespace::default(),
-                None,
-                None,
+                PackagedFileSet::empty(),
         )
         .await
         .unwrap();
@@ -335,8 +336,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             get_component_data("shopping-cart"),
             None,
             &DefaultNamespace::default(),
-                None,
-                None,
+                PackagedFileSet::empty(),
         )
         .await
         .unwrap();

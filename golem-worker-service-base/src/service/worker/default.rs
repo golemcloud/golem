@@ -15,6 +15,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
+use futures::{StreamExt as _, TryStreamExt as _};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
@@ -249,7 +250,7 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
-    ) -> Result<GetFilesResponse, WorkerServiceError>;
+    ) -> WorkerResult<GetFilesResponse>;
 
     async fn get_file(
         &self,
@@ -257,7 +258,7 @@ pub trait WorkerService<AuthCtx> {
         path: &str,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
-    ) -> Result<GetFileResponse, WorkerServiceError>;
+    ) -> WorkerResult<GetFileResponse>;
 }
 
 pub struct TypedResult {
@@ -1010,7 +1011,7 @@ where
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
-    ) -> Result<GetFilesResponse, WorkerServiceError> {
+    ) -> WorkerResult<GetFilesResponse> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
             worker_id.clone(),
@@ -1044,7 +1045,7 @@ where
         path: &str,
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
-    ) -> Result<GetFileResponse, WorkerServiceError> {
+    ) -> WorkerResult<GetFileResponse> {
         let worker_id = worker_id.clone();
         let path = path.to_string();
         let streaming = self.call_worker_executor(
@@ -1065,32 +1066,54 @@ where
             WorkerServiceError::InternalCallError,
         )
         .await?;
-        
-        fn try_into_model(response: golem_api_grpc::proto::golem::workerexecutor::v1::GetFileResponse) -> Result<GetFileResponse, WorkerServiceError> {
+
+        use golem_api_grpc::proto::golem::workerexecutor::v1 as grpc_api;
+        fn flatten_grpc(response: WorkerResult<grpc_api::GetFileResponse>) -> WorkerResult<grpc_api::get_file_success_response::NodeType> {
+            let response = response?;
             match response.result {
-                Some(golem_api_grpc::proto::golem::workerexecutor::v1::get_file_response::Result::Success(success)) =>
-                    GetFileResponse::try_from(success)
-                        .map_err(WorkerServiceError::Internal),
-                Some(golem_api_grpc::proto::golem::workerexecutor::v1::get_file_response::Result::Failure(failure)) => 
-                    Err(GolemError::try_from(failure)
-                        .map(WorkerServiceError::Golem)
-                        .map_err(WorkerServiceError::Internal)
-                        .map_or_else(std::convert::identity, std::convert::identity)),
-                None => Err(WorkerServiceError::Internal("Empty response".to_string())),
+                Some(result) => match result {
+                    grpc_api::get_file_response::Result::Success(success) => match success.node_type {
+                        Some(node_type) => Ok(node_type),
+                        None => Err(WorkerServiceError::Internal(format!("invalid response"))),
+                    },
+                    grpc_api::get_file_response::Result::Failure(_) => Err(WorkerServiceError::Internal(format!("get file failure"))),
+                },
+                None => Err(WorkerServiceError::Internal(format!("invalid response").into())),
             }
         }
 
-        // Fold the grpc stream into a single model response
-        streaming
-            .map_err(CallWorkerExecutorError::FailedToConnectToPod)
-            .map_err(WorkerServiceError::InternalCallError)
-            .try_fold(None, |acc, response| async {
-                let response = try_into_model(response)?;
-                GetFileResponse::try_fold(acc, response)
-                    .map_err(WorkerServiceError::Internal)
-            })
-            .await?
-            .ok_or(WorkerServiceError::Internal("Empty response stream".to_string()))
+        // We have either a single Directory listing which can returned without streaming,
+        // or we have any number of File chunks we need to collect into a `Stream<Item=Result<Vec<u8>, io::Error>>`
+        let mut streaming = streaming
+            .map_err(|e| WorkerServiceError::Internal(e.to_string()))
+            .map(flatten_grpc);
+
+        // Peek at our first message to determine the type
+        let Some(first) = streaming.next().await else {
+            // No messages indicates an empty file
+            return Ok(GetFileResponse::File(Box::pin(futures::stream::empty())));
+        };
+
+        let response = match first? {
+            grpc_api::get_file_success_response::NodeType::Directory(dir) => GetFileResponse::Directory(dir.into()),
+            grpc_api::get_file_success_response::NodeType::File(file) => {
+                // If the first message was a file chunk, prepend it to the stream once again
+                let first = futures::stream::once(async move { Ok(file.content) });
+                let rest = streaming
+                    .map(|res| {
+                        match res {
+                            Ok(ok) => match ok {
+                                grpc_api::get_file_success_response::NodeType::File(file) => Ok(file.content),
+                                grpc_api::get_file_success_response::NodeType::Directory(_) => Err(std::io::Error::new(std::io::ErrorKind::Other, "invalid response")),
+                            },
+                            Err(err) => Err(std::io::Error::new(std::io::ErrorKind::Other, err)),
+                        }
+                    });
+                GetFileResponse::File(Box::pin(first.chain(rest)))
+            }
+        };
+        
+        Ok(response)
     }
 }
 

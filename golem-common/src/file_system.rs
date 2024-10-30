@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::FileSystemPermission;
 
+/// An in-memory file archive. Currently a Deflate zip file
 #[derive(Clone)]
 pub struct PackagedFiles {
     data: Vec<u8>,
@@ -73,7 +74,8 @@ impl std::fmt::Debug for PackagedFiles {
     }
 }
 
-
+/// A pair of `PackagedFiles`, one with read-only files, 
+/// the other with read-write. Both are optional.
 #[derive(Debug, Clone)]
 pub struct PackagedFileSet {
     files_ro: Option<PackagedFiles>,
@@ -119,8 +121,4 @@ pub struct InitialFile {
 #[derive(Debug, Default)]
 pub struct InitialFileSet {
     pub files: Vec<InitialFile>,
-}
-
-impl InitialFileSet {
-    
 }

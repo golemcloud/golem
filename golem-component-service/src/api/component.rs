@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use futures_util::TryStreamExt;
-use golem_common::file_system::PackagedFiles;
+use golem_common::file_system::PackagedFileSet;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_component_service_base::service::component::{
     ComponentError as ComponentServiceError, ComponentService,
@@ -179,13 +179,15 @@ impl ComponentApi {
             let component_name = payload.name;
 
             let files_ro = match payload.files_ro {
-                Some(files_ro) => PackagedFiles::from_vec(files_ro.into_vec().await?),
-                None => None,
+                Some(files_ro) => files_ro.into_vec().await?,
+                None => vec![],
             };
             let files_rw = match payload.files_rw {
-                Some(files_rw) => PackagedFiles::from_vec(files_rw.into_vec().await?),
-                None => None,
+                Some(files_rw) => files_rw.into_vec().await?,
+                None => vec![],
             };
+
+            let initial_files = PackagedFileSet::from_vecs(files_ro, files_rw);
 
             self.component_service
                 .create(
@@ -194,8 +196,7 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     &DefaultNamespace::default(),
-                    files_ro,
-                    files_rw,
+                    initial_files,
                 )
                 .instrument(record.span.clone())
                 .await
@@ -226,8 +227,8 @@ impl ComponentApi {
         );
         
         let response = {
-            let mut files_ro = None;
-            let mut files_rw = None;
+            let mut files_ro = vec![];
+            let mut files_rw = vec![];
             let data;
             
             match request_body {
@@ -236,15 +237,17 @@ impl ComponentApi {
                 }
                 UpdateRequest::Multipart(multipart) => {
                     if let Some(f_ro) = multipart.files_ro {
-                        files_ro = PackagedFiles::from_vec(f_ro.into_vec().await?);
+                        files_ro = f_ro.into_vec().await?;
                     }
                     if let Some(f_rw) = multipart.files_rw {
-                        files_rw = PackagedFiles::from_vec(f_rw.into_vec().await?);
+                        files_rw = f_rw.into_vec().await?;
                     }
                     
                     data = multipart.component.into_vec().await?;
                 }
             }
+
+            let initial_files = PackagedFileSet::from_vecs(files_ro, files_rw);
 
             self.component_service
                 .update(
@@ -252,8 +255,7 @@ impl ComponentApi {
                     data,
                     component_type.0,
                     &DefaultNamespace::default(),
-                    files_ro,
-                    files_rw,
+                    initial_files,
                 )
                 .instrument(record.span.clone())
                 .await

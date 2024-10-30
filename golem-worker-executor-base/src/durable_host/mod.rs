@@ -1927,7 +1927,8 @@ impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> PublicFileSystem for PublicDurableWorkerState<Ctx> {
-    async fn read_at(&self, path: &Path) -> std::io::Result<()> {
+    async fn read_at(&self, _path: &Path) -> std::io::Result<()> {
+        todo!();
         Err(std::io::ErrorKind::NotFound.into())
     }
 }

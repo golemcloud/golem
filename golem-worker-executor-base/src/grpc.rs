@@ -1274,30 +1274,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let path = PathBuf::from(path);
 
-        // self.get_or_create_pending(request)
-
-        // match tokio::fs::read_dir(path).await {
-        //     Ok(read_dir) => ,
-        //     Err(err) => match err.kind() {
-        //         io::ErrorKind::N
-        //     }
-        // }
-        // let file = tokio::fs::File::open(path)
-
-        // golem::workerexecutor::v1::GetFileContentsRequest
-
-        unimplemented!();
-
-        // Ok(GetFileResponse {
-        //     // result: Some(
-        //     //     golem::workerexecutor::v1::get_files_response::Result::Success(
-        //     //         golem::workerexecutor::v1::GetFilesSuccessResponse {
-                        
-        //     //         },
-        //     //     ),
-        //     // ),
-        //     result: None,
-        // })
+        todo!();
     }
 
     fn create_proto_metadata(
