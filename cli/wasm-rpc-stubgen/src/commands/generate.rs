@@ -69,11 +69,6 @@ pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<Resolv
     stub_def
         .resolve_target_wit()
         .context("Failed to resolve the result WIT root")
-        .inspect_err(|_| {
-            let _ = std::process::Command::new("code")
-                .args([stub_def.config.target_root.to_string_lossy().to_string()])
-                .status();
-        })
 }
 
 pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Result<PathBuf> {
