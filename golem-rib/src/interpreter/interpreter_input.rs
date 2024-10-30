@@ -22,12 +22,6 @@ pub struct RibInput {
 }
 
 impl RibInput {
-    pub fn empty() -> RibInput {
-        RibInput {
-            input: HashMap::default(),
-        }
-    }
-
     pub fn new(input: HashMap<String, TypeAnnotatedValue>) -> RibInput {
         RibInput { input }
     }
