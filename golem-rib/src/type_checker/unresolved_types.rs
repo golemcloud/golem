@@ -97,6 +97,10 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
                 internal::unresolved_type_for_binary_op(left, right)?;
             }
             Expr::And(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
+            Expr::Plus(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
+            Expr::Minus(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
+            Expr::Multiply(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
+            Expr::Divide(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
             Expr::Or(left, right, _) => internal::unresolved_type_for_binary_op(left, right)?,
             Expr::GreaterThanOrEqualTo(left, right, _) => {
                 internal::unresolved_type_for_binary_op(left, right)?;
@@ -133,6 +137,21 @@ pub fn check_unresolved_types(expr: &Expr) -> Result<(), UnResolvedTypesError> {
             Expr::Unwrap(_, _) => {}
             Expr::Throw(_, _) => {}
             Expr::GetTag(_, _) => {}
+            Expr::ListComprehension {
+                iterable_expr,
+                yield_expr,
+                ..
+            } => internal::unresolved_type_for_list_comprehension(iterable_expr, yield_expr)?,
+            Expr::ListReduce {
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+                ..
+            } => internal::unresolved_type_for_list_aggregation(
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+            )?,
         }
     }
 
@@ -197,6 +216,56 @@ mod internal {
             return Err(UnResolvedTypesError::new(right));
         } else {
             check_unresolved_types(right)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn unresolved_type_for_list_comprehension(
+        iterable_expr: &Expr,
+        yield_expr: &Expr,
+    ) -> Result<(), UnResolvedTypesError> {
+        let iterable_type = iterable_expr.inferred_type();
+        if iterable_type.un_resolved() {
+            return Err(UnResolvedTypesError::new(iterable_expr));
+        } else {
+            check_unresolved_types(iterable_expr)?;
+        }
+
+        let yield_expr_type = yield_expr.inferred_type();
+        if yield_expr_type.un_resolved() {
+            return Err(UnResolvedTypesError::new(yield_expr));
+        } else {
+            check_unresolved_types(yield_expr)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn unresolved_type_for_list_aggregation(
+        iterable_expr: &Expr,
+        yield_expr: &Expr,
+        init_value_expr: &Expr,
+    ) -> Result<(), UnResolvedTypesError> {
+        let iterable_type = iterable_expr.inferred_type();
+        if iterable_type.un_resolved() {
+            return Err(UnResolvedTypesError::new(iterable_expr));
+        } else {
+            check_unresolved_types(iterable_expr)?;
+        }
+
+        let yield_expr_type = yield_expr.inferred_type();
+        if yield_expr_type.un_resolved() {
+            return Err(UnResolvedTypesError::new(yield_expr));
+        } else {
+            check_unresolved_types(yield_expr)?;
+        }
+
+        let init_value_expr_type = init_value_expr.inferred_type();
+        if init_value_expr_type.un_resolved() {
+            return Err(UnResolvedTypesError::new(init_value_expr));
+        } else {
+            check_unresolved_types(init_value_expr)?;
         }
 
         Ok(())

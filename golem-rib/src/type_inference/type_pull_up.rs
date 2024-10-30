@@ -15,6 +15,38 @@
 use crate::{Expr, InferredType};
 use std::collections::VecDeque;
 
+// Initialize a queue with all expr in the tree, with the root node first:
+// Example queue:
+// [select_field(select_field(a, b), c), select_field(a, b), identifier(a)]
+//
+// The goal is to assign inferred types to each expression
+// in the queue by working with a stack.
+//
+// Process:
+//
+// 1. Pop from the back of the queue and push to the front of
+//    an inferred type stack, assigning inferred types along the way.
+//
+// Example Walkthrough:
+//
+// 1. Pop the back element in the queue to get `identifier(a)`.
+//    - Check the `inferred_type_stack` by popping from the front.
+//    - If it's `None`, push `identifier(a)`'s inferred type to the stack:
+//      - `Record(b -> Record(c -> u64))`.
+//
+// 2. Pop the back element in the queue again to get `select_field(a, b)`.
+//    - Check the `inferred_type_stack`, which now has
+//      `Record(b -> Record(c -> u64))` at the front.
+//    - Retrieve the type for `b` from `Record(b -> Record(c -> u64))`
+//      and push it to the front of the stack.
+//
+// 3. Pop the final element from the queue: `select_field(select_field(a, b), c)`.
+//    - Check the `inferred_type_stack`, which has `Record(c -> u64)` at the front.
+//    - Retrieve the type for `c` from `Record(c -> u64)`
+//      and push it to the stack as `u64`.
+//
+// At the end of this process, each expression has an assigned
+// inferred type, created by traversing in a queue and stack order.
 pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
     let mut expr_queue = VecDeque::new();
     internal::make_expr_nodes_queue(expr, &mut expr_queue);
@@ -87,6 +119,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 );
             }
 
+            //
             Expr::PatternMatch(predicate, match_arms, current_inferred_type) => {
                 internal::handle_pattern_match(
                     predicate,
@@ -109,7 +142,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
             }
 
             Expr::GreaterThan(left, right, current_inferred_type) => {
-                internal::handle_binary(
+                internal::handle_comparison_op(
                     left,
                     right,
                     current_inferred_type,
@@ -119,7 +152,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
             }
 
             Expr::GreaterThanOrEqualTo(left, right, current_inferred_type) => {
-                internal::handle_binary(
+                internal::handle_comparison_op(
                     left,
                     right,
                     current_inferred_type,
@@ -129,7 +162,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
             }
 
             Expr::LessThanOrEqualTo(left, right, current_inferred_type) => {
-                internal::handle_binary(
+                internal::handle_comparison_op(
                     left,
                     right,
                     current_inferred_type,
@@ -137,9 +170,48 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                     Expr::LessThanOrEqualTo,
                 );
             }
+            Expr::Plus(left, right, current_inferred_type) => {
+                internal::handle_math_op(
+                    left,
+                    right,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                    Expr::Plus,
+                );
+            }
+
+            Expr::Minus(left, right, current_inferred_type) => {
+                internal::handle_math_op(
+                    left,
+                    right,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                    Expr::Minus,
+                );
+            }
+
+            Expr::Multiply(left, right, current_inferred_type) => {
+                internal::handle_math_op(
+                    left,
+                    right,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                    Expr::Multiply,
+                );
+            }
+
+            Expr::Divide(left, right, current_inferred_type) => {
+                internal::handle_math_op(
+                    left,
+                    right,
+                    current_inferred_type,
+                    &mut inferred_type_stack,
+                    Expr::Divide,
+                );
+            }
 
             Expr::EqualTo(left, right, current_inferred_type) => {
-                internal::handle_binary(
+                internal::handle_comparison_op(
                     left,
                     right,
                     current_inferred_type,
@@ -149,7 +221,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
             }
 
             Expr::LessThan(left, right, current_inferred_type) => {
-                internal::handle_binary(
+                internal::handle_comparison_op(
                     left,
                     right,
                     current_inferred_type,
@@ -183,7 +255,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
                 inferred_type_stack.push_front(expr.clone());
             }
             Expr::And(left, right, _) => {
-                internal::handle_binary(
+                internal::handle_comparison_op(
                     left,
                     right,
                     &InferredType::Bool,
@@ -193,7 +265,7 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
             }
 
             Expr::Or(left, right, _) => {
-                internal::handle_binary(
+                internal::handle_comparison_op(
                     left,
                     right,
                     &InferredType::Bool,
@@ -217,6 +289,39 @@ pub fn type_pull_up(expr: &Expr) -> Result<Expr, String> {
             Expr::GetTag(_, inferred_type) => {
                 internal::handle_get_tag(expr, inferred_type, &mut inferred_type_stack);
             }
+
+            Expr::ListComprehension {
+                iterated_variable,
+                iterable_expr,
+                yield_expr,
+                inferred_type,
+                ..
+            } => {
+                internal::handle_list_comprehension(
+                    iterated_variable,
+                    iterable_expr,
+                    yield_expr,
+                    inferred_type,
+                    &mut inferred_type_stack,
+                );
+            }
+
+            Expr::ListReduce {
+                reduce_variable,
+                iterated_variable,
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+                inferred_type,
+            } => internal::handle_list_reduce(
+                reduce_variable,
+                iterated_variable,
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+                inferred_type,
+                &mut inferred_type_stack,
+            ),
         }
     }
 
@@ -244,6 +349,62 @@ mod internal {
 
             current_expr.visit_children_bottom_up(&mut stack)
         }
+    }
+
+    pub(crate) fn handle_list_comprehension(
+        variable_id: &VariableId,
+        current_iterable_expr: &Expr,
+        current_yield_expr: &Expr,
+        current_comprehension_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let yield_expr_inferred = inferred_type_stack
+            .pop_front()
+            .unwrap_or(current_yield_expr.clone());
+        let iterable_expr_inferred = inferred_type_stack
+            .pop_front()
+            .unwrap_or(current_iterable_expr.clone());
+
+        let list_expr = InferredType::List(Box::new(yield_expr_inferred.inferred_type()));
+        let comprehension_type = current_comprehension_type.merge(list_expr);
+
+        inferred_type_stack.push_front(Expr::typed_list_comprehension(
+            variable_id.clone(),
+            iterable_expr_inferred,
+            yield_expr_inferred,
+            comprehension_type,
+        ))
+    }
+
+    pub(crate) fn handle_list_reduce(
+        reduce_variable: &VariableId,
+        iterated_variable: &VariableId,
+        iterable_expr: &Expr,
+        initial_value_expr: &Expr,
+        yield_expr: &Expr,
+        reduce_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+    ) {
+        let new_yield_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(yield_expr.clone());
+        let new_init_value_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(initial_value_expr.clone());
+        let new_iterable_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(iterable_expr.clone());
+
+        let new_reduce_type = reduce_type.merge(new_init_value_expr.inferred_type());
+
+        inferred_type_stack.push_front(Expr::typed_list_reduce(
+            reduce_variable.clone(),
+            iterated_variable.clone(),
+            new_iterable_expr,
+            new_init_value_expr,
+            new_yield_expr,
+            new_reduce_type,
+        ))
     }
 
     pub(crate) fn handle_tuple(
@@ -525,10 +686,39 @@ mod internal {
         inferred_type_stack.push_front(new_not);
     }
 
-    pub(crate) fn handle_binary<F>(
+    pub(crate) fn handle_math_op<F>(
         original_left_expr: &Expr,
         original_right_expr: &Expr,
-        current_inferred_type: &InferredType,
+        result_type: &InferredType,
+        inferred_type_stack: &mut VecDeque<Expr>,
+        f: F,
+    ) where
+        F: Fn(Box<Expr>, Box<Expr>, InferredType) -> Expr,
+    {
+        let right_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_right_expr.clone());
+        let left_expr = inferred_type_stack
+            .pop_front()
+            .unwrap_or(original_left_expr.clone());
+
+        let right_expr_type = right_expr.inferred_type();
+        let left_expr_type = left_expr.inferred_type();
+        let new_result_type = result_type.merge(right_expr_type).merge(left_expr_type);
+
+        let new_math_op = f(
+            Box::new(left_expr),
+            Box::new(right_expr),
+            new_result_type.clone(),
+        );
+
+        inferred_type_stack.push_front(new_math_op);
+    }
+
+    pub(crate) fn handle_comparison_op<F>(
+        original_left_expr: &Expr,
+        original_right_expr: &Expr,
+        result_type: &InferredType,
         inferred_type_stack: &mut VecDeque<Expr>,
         f: F,
     ) where
@@ -543,7 +733,7 @@ mod internal {
         let new_binary = f(
             Box::new(left_expr),
             Box::new(right_expr),
-            current_inferred_type.clone(),
+            result_type.clone(),
         );
         inferred_type_stack.push_front(new_binary);
     }
@@ -1023,14 +1213,14 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_equal_to() {
-        let expr = Expr::equal_to(Expr::number(1f64), Expr::number(2f64));
+        let expr = Expr::equal_to(Expr::untyped_number(1f64), Expr::untyped_number(2f64));
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
 
     #[test]
     pub fn test_pull_up_for_less_than() {
-        let expr = Expr::less_than(Expr::number(1f64), Expr::number(2f64));
+        let expr = Expr::less_than(Expr::untyped_number(1f64), Expr::untyped_number(2f64));
         let new_expr = expr.pull_types_up().unwrap();
         assert_eq!(new_expr.inferred_type(), InferredType::Bool);
     }
@@ -1039,7 +1229,7 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_call() {
         let expr = Expr::call(
             DynamicParsedFunctionName::parse("global_fn").unwrap(),
-            vec![Expr::number(1f64)],
+            vec![Expr::untyped_number(1f64)],
         );
         expr.pull_types_up().unwrap();
         assert_eq!(expr.inferred_type(), InferredType::Unknown);
@@ -1117,7 +1307,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_unwrap() {
-        let mut number = Expr::number(1f64);
+        let mut number = Expr::untyped_number(1f64);
         number.override_type_type_mut(InferredType::F64);
         let expr = Expr::option(Some(number)).unwrap();
         let expr = expr.pull_types_up().unwrap();
@@ -1129,7 +1319,7 @@ mod type_pull_up_tests {
 
     #[test]
     pub fn test_pull_up_for_tag() {
-        let mut number = Expr::number(1f64);
+        let mut number = Expr::untyped_number(1f64);
         number.override_type_type_mut(InferredType::F64);
         let expr = Expr::get_tag(Expr::option(Some(number)));
         let expr = expr.pull_types_up().unwrap();

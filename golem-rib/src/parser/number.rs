@@ -39,9 +39,12 @@ where
                     match primitive {
                         Ok(primitive) => {
                             if let Some(typ_name) = typ_name {
-                                Ok(Expr::number_with_type_name(primitive, typ_name.clone()))
+                                Ok(Expr::untyped_number_with_type_name(
+                                    primitive,
+                                    typ_name.clone(),
+                                ))
                             } else {
-                                Ok(Expr::number(primitive))
+                                Ok(Expr::untyped_number(primitive))
                             }
                         }
                         Err(_) => {
@@ -65,28 +68,28 @@ mod tests {
     fn test_number() {
         let input = "123";
         let result = number().easy_parse(input);
-        assert_eq!(result, Ok((Expr::number(123f64), "")));
+        assert_eq!(result, Ok((Expr::untyped_number(123f64), "")));
     }
 
     #[test]
     fn test_negative_number() {
         let input = "-123";
         let result = number().easy_parse(input);
-        assert_eq!(result, Ok((Expr::number(-123f64), "")));
+        assert_eq!(result, Ok((Expr::untyped_number(-123f64), "")));
     }
 
     #[test]
     fn test_float_number() {
         let input = "123.456";
         let result = number().easy_parse(input);
-        assert_eq!(result, Ok((Expr::number(123.456f64), "")));
+        assert_eq!(result, Ok((Expr::untyped_number(123.456f64), "")));
     }
 
     #[test]
     fn test_number_with_binding_positive() {
         let input = "123u32";
         let result = number().easy_parse(input);
-        let expected = Expr::number_with_type_name(123f64, TypeName::U32);
+        let expected = Expr::untyped_number_with_type_name(123f64, TypeName::U32);
         assert_eq!(result, Ok((expected, "")));
     }
 
@@ -94,7 +97,7 @@ mod tests {
     fn test_number_with_binding_negative() {
         let input = "-123s64";
         let result = number().easy_parse(input);
-        let expected = Expr::number_with_type_name(-123f64, TypeName::S64);
+        let expected = Expr::untyped_number_with_type_name(-123f64, TypeName::S64);
         assert_eq!(result, Ok((expected, "")));
     }
 
@@ -102,7 +105,7 @@ mod tests {
     fn test_number_with_binding_float() {
         let input = "-123.0f64";
         let result = number().easy_parse(input);
-        let expected = Expr::number_with_type_name(-123f64, TypeName::F64);
+        let expected = Expr::untyped_number_with_type_name(-123f64, TypeName::F64);
         assert_eq!(result, Ok((expected, "")));
     }
 }

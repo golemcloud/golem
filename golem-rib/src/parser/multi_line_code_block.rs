@@ -57,7 +57,7 @@ mod internal {
                     if expressions.len() == 1 {
                         expressions.first().unwrap().clone()
                     } else {
-                        Expr::multiple(expressions)
+                        Expr::expr_block(expressions)
                     }
                 },
             ),
@@ -85,9 +85,9 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let expected = Expr::multiple(vec![
-            Expr::let_binding("x", Expr::number(1f64)),
-            Expr::let_binding("y", Expr::number(2f64)),
+        let expected = Expr::expr_block(vec![
+            Expr::let_binding("x", Expr::untyped_number(1f64)),
+            Expr::let_binding("y", Expr::untyped_number(2f64)),
             Expr::call(
                 DynamicParsedFunctionName::parse("foo").unwrap(),
                 vec![Expr::identifier("x")],
@@ -116,9 +116,9 @@ mod tests {
 
         let expected = Expr::cond(
             Expr::boolean(true),
-            Expr::multiple(vec![
-                Expr::let_binding("x", Expr::number(1f64)),
-                Expr::let_binding("y", Expr::number(2f64)),
+            Expr::expr_block(vec![
+                Expr::let_binding("x", Expr::untyped_number(1f64)),
+                Expr::let_binding("y", Expr::untyped_number(2f64)),
                 Expr::call(
                     DynamicParsedFunctionName::parse("foo").unwrap(),
                     vec![Expr::identifier("x")],
@@ -128,7 +128,7 @@ mod tests {
                     vec![Expr::identifier("y")],
                 ),
             ]),
-            Expr::number(1f64),
+            Expr::untyped_number(1f64),
         );
 
         assert_eq!(expr, expected);
@@ -156,9 +156,9 @@ mod tests {
                     "some".to_string(),
                     vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                 ),
-                Expr::multiple(vec![
-                    Expr::let_binding("x", Expr::number(1f64)),
-                    Expr::let_binding("y", Expr::number(2f64)),
+                Expr::expr_block(vec![
+                    Expr::let_binding("x", Expr::untyped_number(1f64)),
+                    Expr::let_binding("y", Expr::untyped_number(2f64)),
                     Expr::call(
                         DynamicParsedFunctionName::parse("foo").unwrap(),
                         vec![Expr::identifier("x")],
@@ -190,8 +190,8 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let expected = Expr::multiple(vec![
-            Expr::let_binding("foo", Expr::option(Some(Expr::number(1f64)))),
+        let expected = Expr::expr_block(vec![
+            Expr::let_binding("foo", Expr::option(Some(Expr::untyped_number(1f64)))),
             Expr::pattern_match(
                 Expr::identifier("foo"),
                 vec![MatchArm::new(
@@ -199,9 +199,9 @@ mod tests {
                         "some".to_string(),
                         vec![ArmPattern::Literal(Box::new(Expr::identifier("x")))],
                     ),
-                    Expr::multiple(vec![
-                        Expr::let_binding("x", Expr::number(1f64)),
-                        Expr::let_binding("y", Expr::number(2f64)),
+                    Expr::expr_block(vec![
+                        Expr::let_binding("x", Expr::untyped_number(1f64)),
+                        Expr::let_binding("y", Expr::untyped_number(2f64)),
                         Expr::call(
                             DynamicParsedFunctionName::parse("foo").unwrap(),
                             vec![Expr::identifier("x")],
