@@ -15,12 +15,13 @@
 use crate::command::api_definition::ApiDefinitionSubcommand;
 use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
+use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubCommand;
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
 use crate::completion;
 use crate::completion::PrintCompletion;
 use crate::diagnose;
-use crate::model::{ComponentUriArg, Format, HasFormatConfig, HasVerbosity};
+use crate::model::{ComponentUriArg, Format, HasFormatConfig, HasVerbosity, OssPluginScopeArgs};
 use crate::oss::model::OssContext;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
@@ -76,6 +77,13 @@ pub enum OssCommand<ProfileAdd: clap::Args> {
     ApiDeployment {
         #[command(subcommand)]
         subcommand: ApiDeploymentSubcommand<OssContext>,
+    },
+
+    /// Manage plugins
+    #[command()]
+    Plugin {
+        #[command(subcommand)]
+        subcommand: PluginSubcommand<OssPluginScopeArgs>,
     },
 
     /// Manage profiles

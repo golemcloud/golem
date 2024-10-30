@@ -18,22 +18,19 @@ pub mod invoke_result_view;
 pub mod text;
 pub mod wave;
 
-use chrono::{DateTime, Utc};
-use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::fmt::{Debug, Display, Formatter};
-use std::path::PathBuf;
-use std::str::FromStr;
-
 use crate::cloud::AccountId;
 use crate::model::text::fmt::TextFormat;
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Arg, ArgMatches, Error, FromArgMatches};
 use clap_verbosity_flag::Verbosity;
 use derive_more::{Display, FromStr};
 use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
+use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope};
 use golem_common::model::trim_date::TrimDateTime;
+use golem_common::model::{ComponentId, Empty};
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_common::uri::oss::urn::WorkerUrn;
@@ -41,6 +38,11 @@ use golem_examples::model::{Example, ExampleName, GuestLanguage, GuestLanguageTi
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::fmt::{Debug, Display, Formatter};
+use std::path::PathBuf;
+use std::str::FromStr;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use uuid::Uuid;
@@ -679,4 +681,74 @@ impl From<golem_client::model::ApiDeployment> for ApiDeployment {
 
 pub trait HasVerbosity {
     fn verbosity(&self) -> Verbosity;
+}
+
+#[async_trait]
+pub trait ComponentIdResolver<ComponentRef> {
+    async fn resolve(&self, component: ComponentRef) -> Result<ComponentId, GolemError>;
+}
+
+/// Represents a CLI argument data type describing a plugin scope
+#[async_trait]
+pub trait PluginScopeArgs {
+    type PluginScope;
+    type ComponentRef;
+
+    async fn into(
+        self,
+        resolver: impl ComponentIdResolver<Self::ComponentRef> + Send,
+    ) -> Result<Option<Self::PluginScope>, GolemError>;
+}
+
+#[derive(clap::Args, Debug, Clone)]
+#[group(required = false, multiple = false)]
+pub struct OssPluginScopeArgs {
+    /// Global scope
+    #[arg(long, group = "plugin-scope-args")]
+    global: bool,
+
+    /// Component URI. Either URN or URL.
+    #[arg(long, short = 'C', value_name = "URI", group = "plugin-scope-args")]
+    component: Option<ComponentUri>,
+
+    /// Component name
+    #[arg(long, short = 'c', group = "plugin-scope-args")]
+    component_name: Option<String>,
+}
+
+#[async_trait]
+impl PluginScopeArgs for OssPluginScopeArgs {
+    type PluginScope = DefaultPluginScope;
+    type ComponentRef = ComponentUriArg;
+
+    async fn into(
+        self,
+        resolver: impl ComponentIdResolver<ComponentUriArg> + Send,
+    ) -> Result<Option<DefaultPluginScope>, GolemError> {
+        if self.global {
+            Ok(Some(DefaultPluginScope::Global(Empty)))
+        } else if let Some(uri) = self.component {
+            let component_id = resolver
+                .resolve(ComponentUriArg {
+                    uri,
+                    explicit_name: false,
+                })
+                .await?;
+            Ok(Some(DefaultPluginScope::Component(ComponentPluginScope {
+                component_id,
+            })))
+        } else if let Some(name) = self.component_name {
+            let component_id = resolver
+                .resolve(ComponentUriArg {
+                    uri: ComponentUri::URL(ComponentUrl { name }),
+                    explicit_name: true,
+                })
+                .await?;
+            Ok(Some(DefaultPluginScope::Component(ComponentPluginScope {
+                component_id,
+            })))
+        } else {
+            Ok(None)
+        }
+    }
 }

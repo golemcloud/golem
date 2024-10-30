@@ -1215,3 +1215,65 @@ pub mod worker {
         type_annotated_value_to_string(&tav).expect("Failed to convert value to string")
     }
 }
+
+pub mod plugin {
+    use crate::model::text::fmt::TextFormat;
+    use cli_table::{print_stdout, Table, WithTitle};
+    use golem_client::model::{
+        DefaultPluginScope, PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
+        PluginTypeSpecificDefinition,
+    };
+
+    #[derive(Table)]
+    struct PluginDefinitionTableView {
+        #[table(title = "Plugin name")]
+        pub name: String,
+        #[table(title = "Plugin version")]
+        pub version: String,
+        #[table(title = "Description")]
+        pub description: String,
+        #[table(title = "Homepage")]
+        pub homepage: String,
+        #[table(title = "Type")]
+        pub typ: String,
+        #[table(title = "Scope")]
+        pub scope: String,
+    }
+
+    impl From<&PluginDefinitionDefaultPluginOwnerDefaultPluginScope> for PluginDefinitionTableView {
+        fn from(value: &PluginDefinitionDefaultPluginOwnerDefaultPluginScope) -> Self {
+            Self {
+                name: value.name.clone(),
+                version: value.version.clone(),
+                description: value.description.clone(),
+                homepage: value.homepage.clone(),
+                typ: match &value.specs {
+                    PluginTypeSpecificDefinition::ComponentTransformer(_) => {
+                        "Component Transformer".to_string()
+                    }
+                    PluginTypeSpecificDefinition::OplogProcessor(_) => {
+                        "Oplog Processor".to_string()
+                    }
+                },
+                scope: match &value.scope {
+                    DefaultPluginScope::Global(_) => "Global".to_string(),
+                    DefaultPluginScope::Component(component_scope) => {
+                        format!("Component {}", component_scope.component_id)
+                    }
+                },
+            }
+        }
+    }
+
+    impl TextFormat for Vec<PluginDefinitionDefaultPluginOwnerDefaultPluginScope> {
+        fn print(&self) {
+            print_stdout(
+                self.iter()
+                    .map(PluginDefinitionTableView::from)
+                    .collect::<Vec<_>>()
+                    .with_title(),
+            )
+            .unwrap()
+        }
+    }
+}

@@ -12,10 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod api_definition;
-pub mod api_deployment;
-pub mod component;
-pub mod errors;
-pub mod health_check;
-pub mod plugin;
-pub mod worker;
+use crate::model::GolemError;
+use async_trait::async_trait;
+
+#[async_trait]
+pub trait PluginClient {
+    type ProjectContext;
+    type PluginDefinition;
+    type PluginScope;
+
+    async fn list_plugins(
+        &self,
+        scope: Option<Self::PluginScope>,
+    ) -> Result<Vec<Self::PluginDefinition>, GolemError>;
+}

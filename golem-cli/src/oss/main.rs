@@ -129,6 +129,18 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             diagnose(command);
             Ok(GolemResult::Str("".to_string()))
         }
+        OssCommand::Plugin { subcommand } => {
+            let factory = factory().await?;
+
+            subcommand
+                .handle(
+                    format,
+                    factory.plugin_client(),
+                    factory.project_resolver(),
+                    factory.component_service(),
+                )
+                .await
+        }
     }
 }
 
