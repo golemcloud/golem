@@ -21,6 +21,7 @@ pub mod model;
 pub mod naming;
 pub mod rust;
 pub mod stub;
+pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
 pub mod wit_transform;
