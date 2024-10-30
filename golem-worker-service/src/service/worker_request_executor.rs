@@ -32,7 +32,7 @@ mod internal {
     use super::UnauthorisedWorkerRequestExecutor;
     use crate::empty_worker_metadata;
 
-    use golem_common::model::{TargetWorkerId, WorkerId};
+    use golem_common::model::{TargetWorkerId};
     use golem_service_base::model::validate_worker_name;
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
@@ -60,7 +60,7 @@ mod internal {
         info!(
             "Executing request for component: {}, worker: {}, function: {:?}",
             component_id,
-            worker_name_opt_validated,
+            worker_name_opt_validated.clone().unwrap_or("<na/ephemeral>".to_string()),
             worker_request_params.function_name
         );
 
