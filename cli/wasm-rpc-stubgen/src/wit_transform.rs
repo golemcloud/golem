@@ -327,6 +327,7 @@ pub fn visit_package(package: &mut Package, visitor: &mut impl VisitPackage) {
     }
 }
 
+// TODO: use wit transform everywhere
 pub fn import_remover(
     package_name: &wit_parser::PackageName,
 ) -> impl Fn(String) -> anyhow::Result<String> {

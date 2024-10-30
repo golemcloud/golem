@@ -19,14 +19,26 @@ use indexmap::IndexMap;
 use itertools::Itertools;
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use wit_parser::{
     Function, FunctionKind, Interface, InterfaceId, Package, PackageId, PackageName, Resolve,
     Results, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, World, WorldId, WorldItem, WorldKey,
 };
 
+pub struct StubConfig {
+    pub source_wit_root: PathBuf,
+    pub transformed_source_wit_root: Option<PathBuf>, // TODO
+    pub target_root: PathBuf,
+    pub selected_world: Option<String>,
+    pub stub_crate_version: String,
+    pub wasm_rpc_override: WasmRpcOverride,
+    pub inline_source_types: bool,
+}
+
 /// All the gathered information for generating the stub crate.
 pub struct StubDefinition {
+    pub config: StubConfig,
+
     resolve: Resolve,
     source_world_id: WorldId,
     package_sources: IndexMap<PackageId, PackageSource>,
@@ -37,27 +49,15 @@ pub struct StubDefinition {
 
     pub source_package_id: PackageId,
     pub source_package_name: PackageName,
-    pub source_wit_root: PathBuf,
-    pub target_root: PathBuf,
-    pub stub_crate_version: String,
-    pub wasm_rpc_override: WasmRpcOverride,
-    pub always_inline_types: bool,
 }
 
 impl StubDefinition {
-    pub fn new(
-        source_wit_root: &Path,
-        target_root: &Path,
-        selected_world: &Option<String>,
-        stub_crate_version: &str,
-        wasm_rpc_override: &WasmRpcOverride,
-        always_inline_types: bool,
-    ) -> anyhow::Result<Self> {
-        let resolved_source = ResolvedWitDir::new(source_wit_root)?;
+    pub fn new(config: StubConfig) -> anyhow::Result<Self> {
+        let resolved_source = ResolvedWitDir::new(&config.source_wit_root)?;
 
         let source_world_id = resolved_source
             .resolve
-            .select_world(resolved_source.package_id, selected_world.as_deref())?;
+            .select_world(resolved_source.package_id, config.selected_world.as_deref())?;
 
         let source_package_name = resolved_source
             .resolve
@@ -73,6 +73,7 @@ impl StubDefinition {
             .clone();
 
         Ok(Self {
+            config,
             resolve: resolved_source.resolve,
             source_world_id,
             package_sources: resolved_source.package_sources,
@@ -81,11 +82,6 @@ impl StubDefinition {
             stub_dep_package_ids: OnceCell::new(),
             source_package_id: resolved_source.package_id,
             source_package_name,
-            source_wit_root: source_wit_root.to_path_buf(),
-            target_root: target_root.to_path_buf(),
-            stub_crate_version: stub_crate_version.to_string(),
-            wasm_rpc_override: wasm_rpc_override.clone(),
-            always_inline_types,
         })
     }
 
@@ -135,7 +131,7 @@ impl StubDefinition {
     }
 
     pub fn target_cargo_path(&self) -> PathBuf {
-        self.target_root.join("Cargo.toml")
+        self.config.target_root.join("Cargo.toml")
     }
 
     pub fn target_crate_name(&self) -> String {
@@ -143,19 +139,21 @@ impl StubDefinition {
     }
 
     pub fn target_rust_path(&self) -> PathBuf {
-        self.target_root.join("src/lib.rs")
+        self.config.target_root.join("src/lib.rs")
     }
 
     pub fn target_interface_name(&self) -> String {
+        // TODO: naming
         format!("stub-{}", self.source_world_name())
     }
 
     pub fn target_world_name(&self) -> String {
+        // TODO: naming
         format!("wasm-rpc-stub-{}", self.source_world_name())
     }
 
     pub fn target_wit_root(&self) -> PathBuf {
-        self.target_root.join(naming::wit::WIT_DIR)
+        self.config.target_root.join(naming::wit::WIT_DIR)
     }
 
     pub fn target_wit_path(&self) -> PathBuf {
@@ -177,7 +175,7 @@ impl StubDefinition {
     fn is_inlined(&self, typedef: &TypeDef) -> bool {
         match &typedef.owner {
             TypeOwner::Interface(interface_id) => {
-                if self.always_inline_types {
+                if self.config.inline_source_types {
                     if let Some(resolved_owner_interface) =
                         self.resolve.interfaces.get(*interface_id)
                     {
@@ -301,7 +299,7 @@ impl StubDefinition {
                             None => format!("{}-{}", interface_name, type_name),
                         });
 
-                        let inlined = self.always_inline_types
+                        let inlined = self.config.inline_source_types
                             && interface.package == Some(self.source_package_id);
 
                         let inlined_type_def = match type_def.kind {
@@ -526,36 +524,6 @@ impl StubDefinition {
         (used_types, resource_interfaces)
     }
 
-    // TODO:
-    /*
-    fn type_def_to_stub(
-        &self,
-        owner_interface: &Interface,
-        type_name: String,
-        type_def: TypeDef,
-    ) -> InterfaceStubTypeDef {
-        let package = owner_interface
-            .package
-            .and_then(|id| self.resolve.packages.get(id));
-
-        let interface_name = owner_interface
-            .name
-            .clone()
-            .unwrap_or_else(|| panic!("Failed to get owner interface name"));
-
-        let interface_path = package
-            .map(|p| p.name.interface_id(&interface_name))
-            .unwrap_or(interface_name);
-
-        InterfaceStubTypeDef {
-            name: type_name,
-            path: interface_path,
-            package_id: owner_interface.package,
-            type_def,
-        }
-    }
-    */
-
     fn resource_interface_stub(
         &self,
         owner_interface: &Interface,
@@ -730,6 +698,7 @@ pub struct FunctionStub {
 
 impl FunctionStub {
     pub fn as_method(&self) -> Option<FunctionStub> {
+        // TODO: duplicated code
         self.name.strip_prefix("[method]").and_then(|method_name| {
             let parts = method_name.split('.').collect::<Vec<_>>();
             if parts.len() != 2 {

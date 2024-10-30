@@ -46,7 +46,7 @@ pub async fn build(
     fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
 
     fs_extra::dir::copy(
-        stub_def.target_root.join(naming::wit::WIT_DIR),
+        stub_def.config.target_root.join(naming::wit::WIT_DIR),
         dest_wit_root,
         &CopyOptions::new().content_only(true).overwrite(true),
     )
@@ -58,7 +58,10 @@ pub async fn build(
 pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
     log_action(
         "Generating",
-        format!("stub WIT directory to {}", stub_def.target_root.display()),
+        format!(
+            "stub WIT directory to {}",
+            stub_def.config.target_root.display()
+        ),
     );
     let _indent = LogIndent::new();
     generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
@@ -68,7 +71,7 @@ pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<Resolv
         .context("Failed to resolve the result WIT root")
         .inspect_err(|_| {
             let _ = std::process::Command::new("code")
-                .args([stub_def.target_root.to_string_lossy().to_string()])
+                .args([stub_def.config.target_root.to_string_lossy().to_string()])
                 .status();
         })
 }
@@ -78,11 +81,12 @@ pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Resul
     generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(stub_def).context("Failed to generate the stub Rust source")?;
 
-    compile(&stub_def.target_root)
+    compile(&stub_def.config.target_root)
         .await
         .context("Failed to compile the generated stub")?;
 
     let wasm_path = stub_def
+        .config
         .target_root
         .join("target")
         .join("wasm32-wasi")
