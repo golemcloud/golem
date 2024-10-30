@@ -129,12 +129,27 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<u64, Error>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "execute");
-        // let address = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<PostgresDbConnection>(&self_)?
-        //     .address
-        //     .clone();
+        let worker_id = self.state.owned_worker_id.clone();
+        let address = self
+            .as_wasi_view()
+            .table()
+            .get::<PostgresDbConnection>(&self_)?
+            .address
+            .clone();
+
+        let _ = self
+            .state
+            .rdbms_service
+            .postgres()
+            .execute(
+                &worker_id,
+                &address,
+                &statement,
+                params.into_iter().map(|v| v.into()).collect(),
+            )
+            .await
+            .map_err(Error::Error)?;
+
         Ok(Ok(0))
     }
 

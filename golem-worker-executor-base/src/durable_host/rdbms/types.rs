@@ -161,6 +161,14 @@ impl From<rdbms_types::DbValue> for DbValue {
     }
 }
 
+impl From<rdbms_types::DbRow> for DbRow {
+    fn from(value: rdbms_types::DbRow) -> Self {
+        Self {
+            values: value.values.into_iter().map(|v| v.into()).collect(),
+        }
+    }
+}
+
 impl From<rdbms_types::DbColumnTypePrimitive> for DbColumnTypePrimitive {
     fn from(value: rdbms_types::DbColumnTypePrimitive) -> Self {
         match value {
