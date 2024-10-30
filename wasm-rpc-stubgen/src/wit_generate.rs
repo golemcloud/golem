@@ -14,12 +14,12 @@
 
 use crate::commands::log::{log_action, log_warn_action, LogIndent};
 use crate::fs::{copy, copy_transformed, get_file_name};
+use crate::naming;
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubTypeDef,
-    StubDefinition,
+    StubConfig, StubDefinition,
 };
 use crate::wit_transform::import_remover;
-use crate::{naming, WasmRpcOverride};
 use std::fs;
 use std::path::Path;
 use wit_encoder::{
@@ -41,16 +41,17 @@ pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
 
 pub fn generate_stub_wit_from_wit_dir(
     source_wit_root: &Path,
-    inline_root_types: bool,
+    inline_source_types: bool,
 ) -> anyhow::Result<String> {
-    generate_stub_wit_from_stub_def(&StubDefinition::new(
-        source_wit_root,
-        source_wit_root,             // Not used
-        &None,                       // Not used
-        "0.0.1",                     // Not used
-        &WasmRpcOverride::default(), // Not used
-        inline_root_types,
-    )?)
+    generate_stub_wit_from_stub_def(&StubDefinition::new(StubConfig {
+        source_wit_root: source_wit_root.to_path_buf(),
+        transformed_source_wit_root: None,
+        target_root: source_wit_root.to_path_buf(), // Not used
+        selected_world: None,                       // TODO: would this fail with multiple worlds?
+        stub_crate_version: "".to_string(),         // Not used
+        wasm_rpc_override: Default::default(),      // Not used
+        inline_source_types,
+    })?)
 }
 
 pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<String> {
@@ -221,8 +222,8 @@ pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
         "Adding",
         format!(
             "WIT dependencies from {} to {}",
-            def.source_wit_root.display(),
-            def.target_root.display()
+            def.config.source_wit_root.display(),
+            def.config.target_root.display()
         ),
     );
 
@@ -266,7 +267,7 @@ pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
                 );
                 copy_transformed(source, &dest, &remove_stub_imports)?;
             } else {
-                let relative = source.strip_prefix(&def.source_wit_root)?;
+                let relative = source.strip_prefix(&def.config.source_wit_root)?;
                 let dest = target_wit_root.join(relative);
                 log_action(
                     "  Copying",

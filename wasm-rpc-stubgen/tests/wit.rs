@@ -17,7 +17,7 @@
 use test_r::test;
 
 use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
-use golem_wasm_rpc_stubgen::stub::StubDefinition;
+use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
 use tempfile::tempdir;
@@ -30,14 +30,15 @@ fn all_wit_types() {
     let source_wit_root = Path::new("test-data/all-wit-types");
     let target_root = tempdir().unwrap();
 
-    let def = StubDefinition::new(
-        source_wit_root,
-        target_root.path(),
-        &None,
-        "1.0.0",
-        &WasmRpcOverride::default(),
-        false,
-    )
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root: source_wit_root.to_path_buf(),
+        transformed_source_wit_root: None,
+        target_root: target_root.path().to_path_buf(),
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: WasmRpcOverride::default(),
+        inline_source_types: false,
+    })
     .unwrap();
     let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
 
@@ -103,14 +104,15 @@ fn all_wit_types_inlined() {
     let source_wit_root = Path::new("test-data/all-wit-types");
     let target_root = tempdir().unwrap();
 
-    let def = StubDefinition::new(
-        source_wit_root,
-        target_root.path(),
-        &None,
-        "1.0.0",
-        &WasmRpcOverride::default(),
-        true,
-    )
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root: source_wit_root.to_path_buf(),
+        transformed_source_wit_root: None,
+        target_root: target_root.path().to_path_buf(),
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: WasmRpcOverride::default(),
+        inline_source_types: true,
+    })
     .unwrap();
     let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
 
@@ -186,14 +188,15 @@ fn many_ways_to_export() {
     let source_wit_root = Path::new("test-data/many-ways-to-export");
     let target_root = tempdir().unwrap();
 
-    let def = StubDefinition::new(
-        source_wit_root,
-        target_root.path(),
-        &None,
-        "1.0.0",
-        &WasmRpcOverride::default(),
-        false,
-    )
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root: source_wit_root.to_path_buf(),
+        transformed_source_wit_root: None,
+        target_root: target_root.path().to_path_buf(),
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: WasmRpcOverride::default(),
+        inline_source_types: false,
+    })
     .unwrap();
     let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
 
@@ -215,14 +218,15 @@ fn many_ways_to_export_inlined() {
     let source_wit_root = Path::new("test-data/many-ways-to-export");
     let target_root = tempdir().unwrap();
 
-    let def = StubDefinition::new(
-        source_wit_root,
-        target_root.path(),
-        &None,
-        "1.0.0",
-        &WasmRpcOverride::default(),
-        true,
-    )
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root: source_wit_root.to_path_buf(),
+        transformed_source_wit_root: None,
+        target_root: target_root.path().to_path_buf(),
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: WasmRpcOverride::default(),
+        inline_source_types: true,
+    })
     .unwrap();
     let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
 

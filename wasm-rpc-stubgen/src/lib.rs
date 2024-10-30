@@ -26,7 +26,7 @@ pub mod wit_resolve;
 pub mod wit_transform;
 
 use crate::commands::dependencies::UpdateCargoToml;
-use crate::stub::StubDefinition;
+use crate::stub::{StubConfig, StubDefinition};
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -220,12 +220,15 @@ pub struct DeclarativeBuildArgs {
 
 pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
     let stub_def = StubDefinition::new(
-        &args.source_wit_root,
-        &args.dest_crate_root,
-        &args.world,
-        &args.stub_crate_version,
-        &args.wasm_rpc_override,
-        args.always_inline_types,
+        StubConfig {
+            source_wit_root: args.source_wit_root,
+            transformed_source_wit_root: None,
+            target_root: args.dest_crate_root,
+            selected_world: args.world,
+            stub_crate_version: args.stub_crate_version,
+            wasm_rpc_override: args.wasm_rpc_override,
+            inline_source_types: args.always_inline_types,
+        }
     )
         .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
     commands::generate::generate(&stub_def)
@@ -235,14 +238,15 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     let target_root = TempDir::new()?;
     let canonical_target_root = target_root.path().canonicalize()?;
 
-    let stub_def = StubDefinition::new(
-        &args.source_wit_root,
-        &canonical_target_root,
-        &args.world,
-        &args.stub_crate_version,
-        &args.wasm_rpc_override,
-        args.always_inline_types,
-    )
+    let stub_def = StubDefinition::new(StubConfig {
+        source_wit_root: args.source_wit_root,
+        transformed_source_wit_root: None,
+        target_root: canonical_target_root,
+        selected_world: args.world,
+        stub_crate_version: args.stub_crate_version,
+        wasm_rpc_override: args.wasm_rpc_override,
+        inline_source_types: args.always_inline_types,
+    })
     .context("Failed to gather information for the stub generator")?;
 
     commands::generate::build(&stub_def, &args.dest_wasm, &args.dest_wit_root).await

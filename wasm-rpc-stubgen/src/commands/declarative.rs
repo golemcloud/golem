@@ -8,7 +8,7 @@ use crate::model::validation::ValidatedResult;
 use crate::model::wasm_rpc::{
     include_glob_patter_from_yaml_file, init_oam_app, Application, DEFAULT_CONFIG_FILE_NAME,
 };
-use crate::stub::StubDefinition;
+use crate::stub::{StubConfig, StubDefinition};
 use crate::{commands, WasmRpcOverride};
 use anyhow::{anyhow, Context, Error};
 use colored::Colorize;
@@ -76,17 +76,18 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
             let target_root = TempDir::new()?;
             let canonical_target_root = target_root.path().canonicalize()?;
 
-            let stub_def = StubDefinition::new(
-                &app.component_wit(&component_name),
-                &canonical_target_root,
-                &app.stub_world(&component_name),
-                &app.stub_crate_version(&component_name),
-                &WasmRpcOverride {
+            let stub_def = StubDefinition::new(StubConfig {
+                source_wit_root: app.component_wit(&component_name),
+                transformed_source_wit_root: None,
+                target_root: canonical_target_root,
+                selected_world: app.stub_world(&component_name),
+                stub_crate_version: app.stub_crate_version(&component_name),
+                wasm_rpc_override: WasmRpcOverride {
                     wasm_rpc_path_override: app.stub_wasm_rpc_path(&component_name),
                     wasm_rpc_version_override: app.stub_wasm_rpc_version(&component_name),
                 },
-                app.stub_always_inline_types(&component_name),
-            )
+                inline_source_types: app.stub_always_inline_types(&component_name),
+            })
             .context("Failed to gather information for the stub generator")?;
 
             commands::generate::build(
