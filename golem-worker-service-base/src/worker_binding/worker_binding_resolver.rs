@@ -52,7 +52,7 @@ pub struct ResolvedWorkerBindingFromRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerDetail {
     pub component_id: VersionedComponentId,
-    pub worker_name: String,
+    pub worker_name: Option<String>,
     pub idempotency_key: Option<IdempotencyKey>,
 }
 
@@ -63,7 +63,14 @@ impl WorkerDetail {
             "component_id".to_string(),
             Value::String(self.component_id.component_id.0.to_string()),
         );
-        worker_detail_content.insert("name".to_string(), Value::String(self.worker_name.clone()));
+
+        if let Some(worker_name) = &self.worker_name {
+            worker_detail_content.insert(
+                "name".to_string(),
+                Value::String(worker_name.to_string()),
+            );
+        }
+
         if let Some(idempotency_key) = &self.idempotency_key {
             worker_detail_content.insert(
                 "idempotency_key".to_string(),

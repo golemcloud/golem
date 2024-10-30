@@ -46,7 +46,7 @@ mod internal {
 
         let worker_name_opt_validated =
             worker_request_params.worker_name.map(|w| {
-                validate_worker_name(w.as_str()).map(|| w)
+                validate_worker_name(w.as_str()).map(|_| w)
             }).transpose()?;
 
 
