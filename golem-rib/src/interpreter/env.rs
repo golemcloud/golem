@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::interpreter::result::RibInterpreterResult;
-use crate::VariableId;
+use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
+use crate::{RibInput, VariableId};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -22,14 +22,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 pub struct InterpreterEnv {
-    pub env: HashMap<EnvironmentKey, RibInterpreterResult>,
+    pub env: HashMap<EnvironmentKey, RibInterpreterStackValue>,
     pub call_worker_function_async: RibFunctionInvoke,
 }
 
 impl Debug for InterpreterEnv {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("InterpreterEnv")
-            .field("env", &self.env)
+            .field("env", &self.env.iter())
             .finish()
     }
 }
@@ -53,16 +53,6 @@ impl Default for InterpreterEnv {
 }
 
 impl InterpreterEnv {
-    pub fn new(
-        env: HashMap<EnvironmentKey, RibInterpreterResult>,
-        call_worker_function_async: RibFunctionInvoke,
-    ) -> Self {
-        InterpreterEnv {
-            env,
-            call_worker_function_async,
-        }
-    }
-
     pub fn invoke_worker_function_async(
         &self,
         function_name: String,
@@ -71,10 +61,17 @@ impl InterpreterEnv {
         (self.call_worker_function_async)(function_name, args)
     }
 
-    pub fn from_input(env: HashMap<String, TypeAnnotatedValue>) -> Self {
+    pub fn from_input(env: &RibInput) -> Self {
         let env = env
+            .input
+            .clone()
             .into_iter()
-            .map(|(k, v)| (EnvironmentKey::from_global(k), RibInterpreterResult::Val(v)))
+            .map(|(k, v)| {
+                (
+                    EnvironmentKey::from_global(k),
+                    RibInterpreterStackValue::Val(v),
+                )
+            })
             .collect();
 
         InterpreterEnv {
@@ -83,21 +80,18 @@ impl InterpreterEnv {
         }
     }
 
-    pub fn from(
-        input: HashMap<String, TypeAnnotatedValue>,
-        call_worker_function_async: RibFunctionInvoke,
-    ) -> Self {
+    pub fn from(input: &RibInput, call_worker_function_async: &RibFunctionInvoke) -> Self {
         let mut env = Self::from_input(input);
-        env.call_worker_function_async = call_worker_function_async;
+        env.call_worker_function_async = call_worker_function_async.clone();
         env
     }
 
-    pub fn insert(&mut self, key: EnvironmentKey, value: RibInterpreterResult) {
+    pub fn insert(&mut self, key: EnvironmentKey, value: RibInterpreterStackValue) {
         self.env.insert(key, value);
     }
 
-    pub fn lookup(&self, key: &EnvironmentKey) -> Option<RibInterpreterResult> {
-        self.env.get(key).cloned()
+    pub fn lookup(&self, key: &EnvironmentKey) -> Option<&RibInterpreterStackValue> {
+        self.env.get(key)
     }
 }
 

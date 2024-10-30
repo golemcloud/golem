@@ -36,6 +36,12 @@ message Expr {
     UnwrapExpr unwrap = 27;
     ThrowExpr throw = 28;
     OrExpr or = 29;
+    ListComprehensionExpr list_comprehension = 30;
+    ListReduceExpr list_reduce = 31;
+    AddExpr add = 32;
+    SubtractExpr subtract = 33;
+    MultiplyExpr multiply = 34;
+    DivideExpr divide = 35;
   }
 }
 
@@ -148,6 +154,26 @@ message EqualToExpr {
 }
 
 message LessThanExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message AddExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message MultiplyExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message SubtractExpr {
+  Expr left = 1;
+  Expr right = 2;
+}
+
+message DivideExpr {
   Expr left = 1;
   Expr right = 2;
 }
@@ -289,4 +315,18 @@ message DynamicIndexedResourceStaticMethodFunctionReference {
 message DynamicIndexedResourceDropFunctionReference {
   string resource = 1;
   repeated golem.rib.Expr resource_params = 2;
+}
+
+message ListComprehensionExpr {
+  string iterated_variable = 1;
+  Expr iterable_expr = 2;
+  Expr yield_expr = 3;
+}
+
+message ListReduceExpr {
+  string reduce_variable = 1;
+  string iterated_variable = 2;
+  Expr iterable_expr = 3;
+  Expr init_value_expr = 4;
+  Expr yield_expr = 5;
 }

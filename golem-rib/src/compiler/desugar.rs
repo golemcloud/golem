@@ -165,7 +165,7 @@ mod internal {
                     inferred_type.clone(),
                 );
 
-                let block = Expr::multiple(vec![assign_var, resolution.clone()]);
+                let block = Expr::expr_block(vec![assign_var, resolution.clone()]);
 
                 let branch = IfThenBranch {
                     condition: tag.unwrap_or(Expr::boolean(true)),
@@ -258,7 +258,7 @@ mod internal {
                             c
                         }
                     },
-                    body: Expr::multiple(resolution_body),
+                    body: Expr::expr_block(resolution_body),
                 })
             }
 
@@ -440,7 +440,7 @@ mod internal {
                             c
                         }
                     },
-                    body: Expr::multiple(resolution_body),
+                    body: Expr::expr_block(resolution_body),
                 })
             }
 
@@ -488,7 +488,7 @@ mod internal {
                             c
                         }
                     },
-                    body: Expr::multiple(resolution_body),
+                    body: Expr::expr_block(resolution_body),
                 })
             }
 
@@ -515,7 +515,7 @@ mod internal {
             pred_expr.inferred_type(),
         );
 
-        let block = Expr::multiple(vec![binding, resolution.clone()]);
+        let block = Expr::expr_block(vec![binding, resolution.clone()]);
         get_conditions(
             &MatchArm::new(inner_pattern.clone(), block),
             pred_expr,

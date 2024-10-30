@@ -63,6 +63,10 @@ mod internal {
             | Expr::LessThanOrEqualTo(_, _, inferred_type)
             | Expr::EqualTo(_, _, inferred_type)
             | Expr::LessThan(_, _, inferred_type)
+            | Expr::Plus(_, _, inferred_type)
+            | Expr::Minus(_, _, inferred_type)
+            | Expr::Divide(_, _, inferred_type)
+            | Expr::Multiply(_, _, inferred_type)
             | Expr::Cond(_, _, _, inferred_type)
             | Expr::PatternMatch(_, _, inferred_type)
             | Expr::Option(_, inferred_type)
@@ -72,6 +76,8 @@ mod internal {
             | Expr::GetTag(_, inferred_type)
             | Expr::And(_, _, inferred_type)
             | Expr::Or(_, _, inferred_type)
+            | Expr::ListComprehension { inferred_type, .. }
+            | Expr::ListReduce { inferred_type, .. }
             | Expr::Call(_, _, inferred_type) => {
                 *inferred_type = new_type;
             }

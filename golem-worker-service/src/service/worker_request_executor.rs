@@ -32,7 +32,7 @@ mod internal {
     use super::UnauthorisedWorkerRequestExecutor;
     use crate::empty_worker_metadata;
 
-    use golem_common::model::WorkerId;
+    use golem_common::model::TargetWorkerId;
     use golem_service_base::model::validate_worker_name;
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
@@ -43,20 +43,24 @@ mod internal {
         default_executor: &UnauthorisedWorkerRequestExecutor,
         worker_request_params: WorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        validate_worker_name(&worker_request_params.worker_name)?;
-        let worker_name = worker_request_params.worker_name;
+        let worker_name_opt_validated = worker_request_params
+            .worker_name
+            .map(|w| validate_worker_name(w.as_str()).map(|_| w))
+            .transpose()?;
 
         let component_id = worker_request_params.component_id;
 
-        let worker_id = WorkerId {
+        let worker_id = TargetWorkerId {
             component_id: component_id.clone(),
-            worker_name: worker_name.clone(),
+            worker_name: worker_name_opt_validated.clone(),
         };
 
         info!(
             "Executing request for component: {}, worker: {}, function: {:?}",
             component_id,
-            worker_name.clone(),
+            worker_name_opt_validated
+                .clone()
+                .unwrap_or("<NA/ephemeral>".to_string()),
             worker_request_params.function_name
         );
 
@@ -71,7 +75,7 @@ mod internal {
         // TODO: check if these are already added from span
         info!(
             component_id = component_id.to_string(),
-            worker_name,
+            worker_name_opt_validated,
             function_name = worker_request_params.function_name.to_string(),
             idempotency_key = idempotency_key_str,
             "Executing request",
@@ -80,7 +84,7 @@ mod internal {
         // TODO: check if these are already added from span
         debug!(
             component_id = component_id.to_string(),
-            worker_name,
+            worker_name_opt_validated,
             function_name = worker_request_params.function_name.to_string(),
             idempotency_key = idempotency_key_str,
             invocation_params = format!("{:?}", invoke_parameters),
@@ -90,7 +94,7 @@ mod internal {
         let type_annotated_value = default_executor
             .worker_service
             .validate_and_invoke_and_await_typed(
-                &worker_id.into_target_worker_id(),
+                &worker_id,
                 worker_request_params.idempotency_key,
                 worker_request_params.function_name,
                 invoke_parameters,

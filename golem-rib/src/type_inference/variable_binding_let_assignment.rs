@@ -15,7 +15,7 @@
 use crate::Expr;
 use std::collections::VecDeque;
 
-pub fn name_binding_local_variables(expr: &mut Expr) {
+pub fn bind_variables_of_let_assignment(expr: &mut Expr) {
     let mut identifier_id_state = internal::IdentifierVariableIdState::new();
     let mut queue = VecDeque::new();
     queue.push_front(expr);
@@ -89,12 +89,12 @@ mod name_binding_tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         // Bind x in let with the x in foo
-        expr.name_binding_local_variables();
+        expr.bind_variables_of_let_assignment();
 
         let let_binding = Expr::Let(
             VariableId::local("x", 0),
             None,
-            Box::new(Expr::number(1f64)),
+            Box::new(Expr::untyped_number(1f64)),
             InferredType::Unknown,
         );
 
@@ -112,7 +112,7 @@ mod name_binding_tests {
             InferredType::Unknown,
         );
 
-        let expected = Expr::multiple(vec![let_binding, call_expr]);
+        let expected = Expr::expr_block(vec![let_binding, call_expr]);
 
         assert_eq!(expr, expected);
     }
@@ -129,19 +129,19 @@ mod name_binding_tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         // Bind x in let with the x in foo
-        expr.name_binding_local_variables();
+        expr.bind_variables_of_let_assignment();
 
         let let_binding1 = Expr::Let(
             VariableId::local("x", 0),
             None,
-            Box::new(Expr::number(1f64)),
+            Box::new(Expr::untyped_number(1f64)),
             InferredType::Unknown,
         );
 
         let let_binding2 = Expr::Let(
             VariableId::local("y", 0),
             None,
-            Box::new(Expr::number(2f64)),
+            Box::new(Expr::untyped_number(2f64)),
             InferredType::Unknown,
         );
 
@@ -173,7 +173,7 @@ mod name_binding_tests {
             InferredType::Unknown,
         );
 
-        let expected = Expr::multiple(vec![let_binding1, let_binding2, call_expr1, call_expr2]);
+        let expected = Expr::expr_block(vec![let_binding1, let_binding2, call_expr1, call_expr2]);
 
         assert_eq!(expr, expected);
     }
@@ -190,19 +190,19 @@ mod name_binding_tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         // Bind x in let with the x in foo
-        expr.name_binding_local_variables();
+        expr.bind_variables_of_let_assignment();
 
         let let_binding1 = Expr::Let(
             VariableId::local("x", 0),
             None,
-            Box::new(Expr::number(1f64)),
+            Box::new(Expr::untyped_number(1f64)),
             InferredType::Unknown,
         );
 
         let let_binding2 = Expr::Let(
             VariableId::local("x", 1),
             None,
-            Box::new(Expr::number(2f64)),
+            Box::new(Expr::untyped_number(2f64)),
             InferredType::Unknown,
         );
 
@@ -234,7 +234,7 @@ mod name_binding_tests {
             InferredType::Unknown,
         );
 
-        let expected = Expr::multiple(vec![let_binding1, call_expr1, let_binding2, call_expr2]);
+        let expected = Expr::expr_block(vec![let_binding1, call_expr1, let_binding2, call_expr2]);
 
         assert_eq!(expr, expected);
     }

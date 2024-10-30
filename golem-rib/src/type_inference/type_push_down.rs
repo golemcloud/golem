@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::type_inference::type_push_down::internal::{
+    handle_list_comprehension, handle_list_reduce,
+};
 use crate::{Expr, InferredType, MatchArm};
 use std::collections::VecDeque;
 
@@ -92,6 +95,43 @@ pub fn push_types_down(expr: &mut Expr) -> Result<(), String> {
                 internal::handle_call(call_type, expressions, inferred_type, &mut queue);
             }
 
+            Expr::ListComprehension {
+                iterated_variable,
+                iterable_expr,
+                yield_expr,
+                inferred_type,
+            } => {
+                handle_list_comprehension(
+                    iterated_variable,
+                    iterable_expr,
+                    yield_expr,
+                    inferred_type,
+                )?;
+                queue.push_back(iterable_expr);
+                queue.push_back(yield_expr);
+            }
+
+            Expr::ListReduce {
+                reduce_variable,
+                iterated_variable,
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+                inferred_type,
+            } => {
+                handle_list_reduce(
+                    reduce_variable,
+                    iterated_variable,
+                    iterable_expr,
+                    init_value_expr,
+                    yield_expr,
+                    inferred_type,
+                )?;
+                queue.push_back(iterable_expr);
+                queue.push_back(init_value_expr);
+                queue.push_back(yield_expr);
+            }
+
             _ => expr.visit_children_mut_bottom_up(&mut queue),
         }
     }
@@ -103,8 +143,128 @@ mod internal {
     use crate::call_type::CallType;
     use crate::type_refinement::precise_types::*;
     use crate::type_refinement::TypeRefinement;
-    use crate::{ArmPattern, Expr, InferredType};
+    use crate::{ArmPattern, Expr, InferredType, VariableId};
     use std::collections::VecDeque;
+
+    pub(crate) fn handle_list_comprehension(
+        variable_id: &mut VariableId,
+        iterable_expr: &mut Expr,
+        yield_expr: &mut Expr,
+        comprehension_result_type: &InferredType,
+    ) -> Result<(), String> {
+        // If the iterable_expr is List<Y> , the identifier with the same variable name within yield should be Y
+        update_yield_expr_in_list_comprehension(
+            variable_id,
+            &iterable_expr.inferred_type(),
+            yield_expr,
+        )?;
+
+        // If the outer inferred_type is List<X> this implies, the yield expression should be X
+        let refined_list_type = ListType::refine(comprehension_result_type)
+            .ok_or("The result of a comprehension should be of type list".to_string())?;
+
+        let inner_type = refined_list_type.inner_type();
+
+        yield_expr.add_infer_type_mut(inner_type.clone());
+
+        Ok(())
+    }
+
+    pub(crate) fn handle_list_reduce(
+        result_variable_id: &mut VariableId,
+        reduce_variable_id: &mut VariableId,
+        iterable_expr: &mut Expr,
+        init_value_expr: &mut Expr,
+        yield_expr: &mut Expr,
+        aggregation_result_type: &InferredType,
+    ) -> Result<(), String> {
+        // If the iterable_expr is List<Y> , the identifier with the same variable name within yield should be Y
+        update_yield_expr_in_list_reduce(
+            result_variable_id,
+            reduce_variable_id,
+            iterable_expr,
+            yield_expr,
+            init_value_expr,
+        )?;
+
+        // If the outer_expr is X this implies, the yield expression should be X, and therefore initial expression should be X
+        yield_expr.add_infer_type_mut(aggregation_result_type.clone());
+        init_value_expr.add_infer_type_mut(aggregation_result_type.clone());
+
+        Ok(())
+    }
+
+    fn update_yield_expr_in_list_comprehension(
+        variable_id: &mut VariableId,
+        iterable_type: &InferredType,
+        yield_expr: &mut Expr,
+    ) -> Result<(), String> {
+        if !iterable_type.is_unknown() {
+            let refined_iterable =
+                ListType::refine(iterable_type).ok_or("Expected list type".to_string())?;
+
+            let iterable_variable_type = refined_iterable.inner_type();
+
+            let mut queue = VecDeque::new();
+            queue.push_back(yield_expr);
+
+            while let Some(expr) = queue.pop_back() {
+                match expr {
+                    Expr::Identifier(v, existing_inferred_type) => {
+                        if let VariableId::ListComprehension(l) = v {
+                            if l.name == variable_id.name() {
+                                *existing_inferred_type =
+                                    existing_inferred_type.merge(iterable_variable_type.clone())
+                            }
+                        }
+                    }
+                    _ => expr.visit_children_mut_bottom_up(&mut queue),
+                }
+            }
+        }
+        Ok(())
+    }
+    fn update_yield_expr_in_list_reduce(
+        reduce_variable: &mut VariableId,
+        iterated_variable: &mut VariableId,
+        iterable_expr: &Expr,
+        yield_expr: &mut Expr,
+        init_value_expr: &mut Expr,
+    ) -> Result<(), String> {
+        let iterable_inferred_type = iterable_expr.inferred_type();
+
+        if !iterable_expr.inferred_type().is_unknown() {
+            let refined_iterable = ListType::refine(&iterable_inferred_type)
+                .ok_or("Expected list type".to_string())?;
+
+            let iterable_variable_type = refined_iterable.inner_type();
+
+            let init_value_expr_type = init_value_expr.inferred_type();
+            let mut queue = VecDeque::new();
+            queue.push_back(yield_expr);
+
+            while let Some(expr) = queue.pop_back() {
+                match expr {
+                    Expr::Identifier(v, existing_inferred_type) => {
+                        if let VariableId::ListComprehension(l) = v {
+                            if l.name == iterated_variable.name() {
+                                *existing_inferred_type =
+                                    existing_inferred_type.merge(iterable_variable_type.clone())
+                            }
+                        } else if let VariableId::ListReduce(l) = v {
+                            if l.name == reduce_variable.name() {
+                                *existing_inferred_type =
+                                    existing_inferred_type.merge(init_value_expr_type.clone())
+                            }
+                        }
+                    }
+
+                    _ => expr.visit_children_mut_bottom_up(&mut queue),
+                }
+            }
+        }
+        Ok(())
+    }
 
     pub(crate) fn handle_option(
         inner_expr: &mut Expr,

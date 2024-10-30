@@ -283,7 +283,11 @@ pub mod api_definition {
                     id: ComponentId(value.binding.component_id.component_id),
                 }
                 .to_string(),
-                worker_name: value.binding.worker_name.to_string(),
+                worker_name: value
+                    .binding
+                    .worker_name
+                    .clone()
+                    .unwrap_or("<NA/ephemeral>".to_string()),
             }
         }
     }
