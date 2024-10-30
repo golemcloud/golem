@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::fmt::Display;
 
 // `RibInputValueResolver` is responsible
-// for converting to RibInputValue which is in the right shape
-// to act as input for Rib Script. Example: HttpRequestDetails
-// can be converted to RibInputValue
+// for extracting `RibInputValue` from any input, given the requirements as `RibInputTypeInfo`.
+// Example: HttpRequestDetails can be converted to RibInputValue
+// Note that `RibInputTypeInfo` is obtained from compiling a rib script.
 pub trait RibInputValueResolver {
     fn resolve_rib_input_value(
         &self,

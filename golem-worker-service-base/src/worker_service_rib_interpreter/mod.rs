@@ -19,7 +19,7 @@ pub trait WorkerServiceRibInterpreter {
     // RibByteCode may have actual function calls.
     async fn evaluate(
         &self,
-        worker_name: &str,
+        worker_name: Option<&str>,
         component_id: &ComponentId,
         idempotency_key: &Option<IdempotencyKey>,
         rib_byte_code: &RibByteCode,
@@ -60,7 +60,7 @@ impl DefaultRibInterpreter {
 impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
     async fn evaluate(
         &self,
-        worker_name: &str,
+        worker_name: Option<&str>,
         component_id: &ComponentId,
         idempotency_key: &Option<IdempotencyKey>,
         expr: &RibByteCode,
@@ -68,13 +68,12 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
     ) -> Result<RibResult, EvaluationError> {
         let executor = self.worker_request_executor.clone();
 
-        let worker_name = worker_name.to_string();
-        let component_id = component_id.clone();
-        let idempotency_key = idempotency_key.clone();
+        let worker_invoke_function: RibFunctionInvoke = Arc::new({
+            let component_id = component_id.clone();
+            let idempotency_key = idempotency_key.clone();
+            let worker_name = worker_name.map(|s| s.to_string()).clone();
 
-        let worker_invoke_function: RibFunctionInvoke = Arc::new(
             move |function_name: String, parameters: Vec<TypeAnnotatedValue>| {
-                let worker_name = worker_name.to_string();
                 let component_id = component_id.clone();
                 let worker_name = worker_name.clone();
                 let idempotency_key = idempotency_key.clone();
@@ -96,8 +95,8 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
                         .map_err(|e| e.to_string())
                 }
                 .boxed() // This ensures the future is boxed with the correct type
-            },
-        );
+            }
+        });
         rib::interpret(expr, rib_input, worker_invoke_function)
             .await
             .map_err(EvaluationError)

@@ -3380,7 +3380,6 @@ components:
           type: string
       required:
       - componentId
-      - workerName
       - response
     GolemWorkerBindingWithTypeInfo:
       type: object
@@ -3401,7 +3400,6 @@ components:
           $ref: '#/components/schemas/RibInputTypeInfo'
       required:
       - componentId
-      - workerName
       - response
     GrowMemoryParameters:
       type: object

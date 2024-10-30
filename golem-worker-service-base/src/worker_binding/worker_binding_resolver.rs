@@ -2,6 +2,9 @@ use crate::api_definition::http::{CompiledHttpApiDefinition, VarInfo};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
+use crate::worker_binding::rib_input_value_resolver::RibInputValueResolver;
+use crate::worker_binding::{RequestDetails, ResponseMappingCompiled, RibInputTypeMismatch};
+use crate::worker_bridge_execution::to_response::ToResponse;
 use crate::worker_service_rib_interpreter::EvaluationError;
 use crate::worker_service_rib_interpreter::WorkerServiceRibInterpreter;
 use async_trait::async_trait;
@@ -12,10 +15,6 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
-
-use crate::worker_binding::rib_input_value_resolver::RibInputValueResolver;
-use crate::worker_binding::{RequestDetails, ResponseMappingCompiled, RibInputTypeMismatch};
-use crate::worker_bridge_execution::to_response::ToResponse;
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // to resolve a single worker-binding is then executed with the help of worker_service_rib_interpreter, which internally
@@ -53,7 +52,7 @@ pub struct ResolvedWorkerBindingFromRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerDetail {
     pub component_id: VersionedComponentId,
-    pub worker_name: String,
+    pub worker_name: Option<String>,
     pub idempotency_key: Option<IdempotencyKey>,
 }
 
@@ -64,7 +63,12 @@ impl WorkerDetail {
             "component_id".to_string(),
             Value::String(self.component_id.component_id.0.to_string()),
         );
-        worker_detail_content.insert("name".to_string(), Value::String(self.worker_name.clone()));
+
+        if let Some(worker_name) = &self.worker_name {
+            worker_detail_content
+                .insert("name".to_string(), Value::String(worker_name.to_string()));
+        }
+
         if let Some(idempotency_key) = &self.idempotency_key {
             worker_detail_content.insert(
                 "idempotency_key".to_string(),
@@ -101,7 +105,7 @@ impl ResolvedWorkerBindingFromRequest {
                 let rib_input = request_rib_input.merge(worker_rib_input);
                 let result = evaluator
                     .evaluate(
-                        &self.worker_detail.worker_name,
+                        self.worker_detail.worker_name.as_deref(),
                         &self.worker_detail.component_id.component_id,
                         &self.worker_detail.idempotency_key,
                         &self.compiled_response_mapping.compiled_response.clone(),
@@ -162,53 +166,68 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
         )
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
-        let resolve_rib_input = http_request_details
-            .resolve_rib_input_value(&binding.worker_name_compiled.rib_input_type_info)
-            .map_err(|err| {
-                format!(
-                    "Failed to resolve rib input value from http request details {}",
-                    err
-                )
-            })?;
+        let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
+            let resolve_rib_input = http_request_details
+                .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
+                .map_err(|err| {
+                    format!(
+                        "Failed to resolve rib input value from http request details {}",
+                        err
+                    )
+                })?;
 
-        // To evaluate worker-name, most probably
-        let worker_name: String = rib::interpret_pure(
-            &binding.worker_name_compiled.compiled_worker_name,
-            &resolve_rib_input,
-        )
-        .await
-        .map_err(|err| format!("Failed to evaluate worker name rib expression. {}", err))?
-        .get_literal()
-        .ok_or("Worker name is not a Rib expression that resolves to String".to_string())?
-        .as_string();
+            let worker_name = rib::interpret_pure(
+                &worker_name_compiled.compiled_worker_name,
+                &resolve_rib_input,
+            )
+            .await
+            .map_err(|err| format!("Failed to evaluate worker name rib expression. {}", err))?
+            .get_literal()
+            .ok_or("Worker name is not a Rib expression that resolves to String".to_string())?
+            .as_string();
+
+            Some(worker_name)
+        } else {
+            None
+        };
 
         let component_id = &binding.component_id;
 
-        let idempotency_key =
-            if let Some(idempotency_key_compiled) = &binding.idempotency_key_compiled {
-                let idempotency_key_value = rib::interpret_pure(
-                    &idempotency_key_compiled.compiled_idempotency_key,
-                    &resolve_rib_input,
-                )
-                .await
-                .map_err(|err| err.to_string())?;
+        let idempotency_key = if let Some(idempotency_key_compiled) =
+            &binding.idempotency_key_compiled
+        {
+            let resolve_rib_input = http_request_details
+                    .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+                    .map_err(|err| {
+                        format!(
+                            "Failed to resolve rib input value from http request details {} for idemptency key",
+                            err
+                        )
+                    })?;
 
-                let idempotency_key = idempotency_key_value
-                    .get_literal()
-                    .ok_or("Idempotency Key is not a string")?
-                    .as_string();
+            let idempotency_key_value = rib::interpret_pure(
+                &idempotency_key_compiled.compiled_idempotency_key,
+                &resolve_rib_input,
+            )
+            .await
+            .map_err(|err| err.to_string())?;
 
-                Some(IdempotencyKey::new(idempotency_key))
-            } else {
-                headers
-                    .get("idempotency-key")
-                    .and_then(|h| h.to_str().ok())
-                    .map(|value| IdempotencyKey::new(value.to_string()))
-            };
+            let idempotency_key = idempotency_key_value
+                .get_literal()
+                .ok_or("Idempotency Key is not a string")?
+                .as_string();
+
+            Some(IdempotencyKey::new(idempotency_key))
+        } else {
+            headers
+                .get("idempotency-key")
+                .and_then(|h| h.to_str().ok())
+                .map(|value| IdempotencyKey::new(value.to_string()))
+        };
 
         let worker_detail = WorkerDetail {
             component_id: component_id.clone(),
-            worker_name,
+            worker_name: worker_name_opt,
             idempotency_key,
         };
 

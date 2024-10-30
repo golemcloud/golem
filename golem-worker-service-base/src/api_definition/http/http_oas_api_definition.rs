@@ -212,14 +212,17 @@ mod internal {
         Ok(ResponseMapping(response.clone()))
     }
 
-    pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Expr, String> {
-        let worker_id = worker_bridge_info
+    pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
+        let worker_id_str_opt = worker_bridge_info
             .get("worker-name")
-            .ok_or("No worker-name found")?
-            .as_str()
-            .ok_or("worker-name is not a string")?;
+            .map(|json_value| json_value.as_str().ok_or("worker-name is not a string"))
+            .transpose()?;
 
-        rib::from_string(worker_id).map_err(|err| err.to_string())
+        let worker_id_expr_opt = worker_id_str_opt
+            .map(|worker_id| rib::from_string(worker_id).map_err(|err| err.to_string()))
+            .transpose()?;
+
+        Ok(worker_id_expr_opt)
     }
 
     pub(crate) fn get_idempotency_key(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
@@ -275,7 +278,7 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_name: Expr::expr_block(vec![
+                    worker_name: Some(Expr::expr_block(vec![
                         Expr::let_binding_with_type(
                             "x",
                             rib::TypeName::Str,
@@ -285,7 +288,7 @@ mod tests {
                             )
                         ),
                         Expr::concat(vec![Expr::literal("worker-"), Expr::identifier("x"),])
-                    ]),
+                    ])),
                     component_id: golem_service_base::model::VersionedComponentId {
                         component_id: ComponentId(Uuid::nil()),
                         version: 0

@@ -8,7 +8,7 @@ use rib::{Expr, RibByteCode, RibInputTypeInfo, WorkerFunctionsInRib};
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledGolemWorkerBinding {
     pub component_id: VersionedComponentId,
-    pub worker_name_compiled: WorkerNameCompiled,
+    pub worker_name_compiled: Option<WorkerNameCompiled>,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub response_compiled: ResponseMappingCompiled,
 }
@@ -18,10 +18,14 @@ impl CompiledGolemWorkerBinding {
         golem_worker_binding: &GolemWorkerBinding,
         export_metadata: &[AnalysedExport],
     ) -> Result<Self, String> {
-        let worker_name_compiled = WorkerNameCompiled::from_worker_name(
-            &golem_worker_binding.worker_name,
-            export_metadata,
-        )?;
+        let worker_name_compiled: Option<WorkerNameCompiled> = golem_worker_binding
+            .worker_name
+            .clone()
+            .map(|worker_name_expr| {
+                WorkerNameCompiled::from_worker_name(&worker_name_expr, export_metadata)
+            })
+            .transpose()?;
+
         let idempotency_key_compiled = match &golem_worker_binding.idempotency_key {
             Some(idempotency_key) => Some(IdempotencyKeyCompiled::from_idempotency_key(
                 idempotency_key,
@@ -55,12 +59,12 @@ impl WorkerNameCompiled {
         worker_name: &Expr,
         exports: &[AnalysedExport],
     ) -> Result<Self, String> {
-        let worker_name_compiled = DefaultRibCompiler::compile(worker_name, exports)?;
+        let compiled_worker_name = DefaultRibCompiler::compile(worker_name, exports)?;
 
         Ok(WorkerNameCompiled {
             worker_name: worker_name.clone(),
-            compiled_worker_name: worker_name_compiled.byte_code,
-            rib_input_type_info: worker_name_compiled.global_input_type_info,
+            compiled_worker_name: compiled_worker_name.byte_code,
+            rib_input_type_info: compiled_worker_name.global_input_type_info,
         })
     }
 }
@@ -123,14 +127,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             .component
             .ok_or("Missing component".to_string())
             .and_then(VersionedComponentId::try_from)?;
-        let worker_name_compiled = value
-            .compiled_worker_name_expr
-            .ok_or("Missing compiled worker name expr".to_string())
-            .and_then(RibByteCode::try_from)?;
-        let worker_name_input = value
-            .worker_name_rib_input
-            .ok_or("Missing worker name rib input".to_string())
-            .and_then(RibInputTypeInfo::try_from)?;
+
         let idempotency_key_compiled = match value.compiled_idempotency_key_expr {
             Some(x) => Some(RibByteCode::try_from(x)?),
             None => None,
@@ -149,13 +146,25 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             .ok_or("Missing response rib input".to_string())
             .and_then(RibInputTypeInfo::try_from)?;
 
-        let worker_name_compiled = WorkerNameCompiled {
-            worker_name: value
-                .worker_name
-                .ok_or("Missing worker name".to_string())
-                .and_then(Expr::try_from)?,
-            compiled_worker_name: worker_name_compiled,
-            rib_input_type_info: worker_name_input,
+        let worker_name_expr_opt = value.worker_name.map(Expr::try_from).transpose()?;
+
+        let worker_name_compiled = if let Some(worker_name) = worker_name_expr_opt {
+            let worker_name_byte_code = value
+                .compiled_worker_name_expr
+                .ok_or("Missing compiled worker name expr".to_string())
+                .and_then(RibByteCode::try_from)?;
+            let worker_name_rib_input = value
+                .worker_name_rib_input
+                .ok_or("Missing worker name rib input".to_string())
+                .and_then(RibInputTypeInfo::try_from)?;
+
+            Some(WorkerNameCompiled {
+                worker_name,
+                compiled_worker_name: worker_name_byte_code,
+                rib_input_type_info: worker_name_rib_input,
+            })
+        } else {
+            None
         };
 
         let idempotency_key_compiled = match (idempotency_key_compiled, idempotency_key_input) {
@@ -206,10 +215,17 @@ impl TryFrom<CompiledGolemWorkerBinding>
 
     fn try_from(value: CompiledGolemWorkerBinding) -> Result<Self, Self::Error> {
         let component = Some(value.component_id.into());
-        let worker_name = Some(value.worker_name_compiled.worker_name.into());
-        let compiled_worker_name_expr =
-            Some(value.worker_name_compiled.compiled_worker_name.into());
-        let worker_name_rib_input = Some(value.worker_name_compiled.rib_input_type_info.into());
+        let worker_name = value
+            .worker_name_compiled
+            .clone()
+            .map(|w| w.worker_name.into());
+        let compiled_worker_name_expr = value
+            .worker_name_compiled
+            .clone()
+            .map(|w| w.compiled_worker_name.into());
+        let worker_name_rib_input = value
+            .worker_name_compiled
+            .map(|w| w.rib_input_type_info.into());
         let (idempotency_key, compiled_idempotency_key_expr, idempotency_key_rib_input) =
             match value.idempotency_key_compiled {
                 Some(x) => (

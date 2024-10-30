@@ -121,7 +121,7 @@ mod tests {
                         component_id: ComponentId::new_v4(),
                         version: 1,
                     },
-                    worker_name: Expr::identifier("request"),
+                    worker_name: Some(Expr::identifier("request")),
                     idempotency_key: None,
                     response: ResponseMapping(Expr::literal("sample")),
                 },

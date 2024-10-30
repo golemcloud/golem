@@ -125,17 +125,20 @@ impl From<CompiledRoute> for RouteWithTypeInfo {
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
     pub component_id: VersionedComponentId,
-    pub worker_name: String,
+    pub worker_name: Option<String>,
     pub idempotency_key: Option<String>,
     pub response: String,
 }
 
+// GolemWorkerBindingWithTypeInfo is a subset of CompiledGolemWorkerBinding
+// that it doesn't expose internal details such as byte code to be exposed
+// to the user.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBindingWithTypeInfo {
     pub component_id: VersionedComponentId,
-    pub worker_name: String,
+    pub worker_name: Option<String>,
     pub idempotency_key: Option<String>,
     pub response: String,
     pub response_mapping_input: Option<RibInputTypeInfo>,
@@ -149,7 +152,10 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
 
         GolemWorkerBindingWithTypeInfo {
             component_id: worker_binding.component_id,
-            worker_name: worker_binding.worker_name_compiled.worker_name.to_string(),
+            worker_name: worker_binding
+                .worker_name_compiled
+                .clone()
+                .map(|compiled| compiled.worker_name.to_string()),
             idempotency_key: worker_binding.idempotency_key_compiled.map(
                 |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
             ),
@@ -158,7 +164,9 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
                 .response_rib_expr
                 .to_string(),
             response_mapping_input: Some(worker_binding.response_compiled.rib_input),
-            worker_name_input: Some(worker_binding.worker_name_compiled.rib_input_type_info),
+            worker_name_input: worker_binding
+                .worker_name_compiled
+                .map(|compiled| compiled.rib_input_type_info),
             idempotency_key_input: value
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
@@ -265,7 +273,10 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
         let response: String = rib::to_string(&value.response.0).map_err(|e| e.to_string())?;
 
-        let worker_id = rib::to_string(&value.worker_name).map_err(|e| e.to_string())?;
+        let worker_id = value
+            .worker_name
+            .map(|expr| rib::to_string(&expr).map_err(|e| e.to_string()))
+            .transpose()?;
 
         let idempotency_key = if let Some(key) = &value.idempotency_key {
             Some(rib::to_string(key).map_err(|e| e.to_string())?)
@@ -291,8 +302,10 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             crate::worker_binding::ResponseMapping(r)
         };
 
-        let worker_name: Expr =
-            rib::from_string(self.worker_name.as_str()).map_err(|e| e.to_string())?;
+        let worker_name = self
+            .worker_name
+            .map(|name| rib::from_string(name.as_str()).map_err(|e| e.to_string()))
+            .transpose()?;
 
         let idempotency_key = if let Some(key) = &self.idempotency_key {
             Some(rib::from_string(key).map_err(|e| e.to_string())?)
@@ -489,7 +502,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
     fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
         let response = Some(value.response.0.into());
 
-        let worker_name = Some(value.worker_name.into());
+        let worker_name = value.worker_name.map(|w| w.into());
 
         let idempotency_key = value.idempotency_key.map(|key| key.into());
 
@@ -513,10 +526,7 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             crate::worker_binding::ResponseMapping(r)
         };
 
-        let worker_name = value
-            .worker_name
-            .ok_or("worker name is missing")?
-            .try_into()?;
+        let worker_name = value.worker_name.map(|expr| expr.try_into()).transpose()?;
 
         let component_id = value.component.ok_or("component is missing")?.try_into()?;
 
