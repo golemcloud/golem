@@ -32,7 +32,6 @@ fn all_wit_types() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.to_path_buf(),
-        transformed_source_wit_root: None,
         target_root: target_root.path().to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
@@ -106,7 +105,6 @@ fn all_wit_types_inlined() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.to_path_buf(),
-        transformed_source_wit_root: None,
         target_root: target_root.path().to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
@@ -190,7 +188,6 @@ fn many_ways_to_export() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.to_path_buf(),
-        transformed_source_wit_root: None,
         target_root: target_root.path().to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
@@ -220,7 +217,6 @@ fn many_ways_to_export_inlined() {
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.to_path_buf(),
-        transformed_source_wit_root: None,
         target_root: target_root.path().to_path_buf(),
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),

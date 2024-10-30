@@ -27,7 +27,6 @@ use wit_parser::{
 
 pub struct StubConfig {
     pub source_wit_root: PathBuf,
-    pub transformed_source_wit_root: Option<PathBuf>, // TODO
     pub target_root: PathBuf,
     pub selected_world: Option<String>,
     pub stub_crate_version: String,
