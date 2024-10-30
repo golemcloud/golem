@@ -1139,11 +1139,12 @@ mod internal {
     ) -> Result<(), String> {
         let literals = interpreter_stack.try_pop_n_literals(arg_size)?;
 
-        let mut str = String::new();
-
-        for literal in literals {
-            str.push_str(&literal.as_string());
-        }
+        let str = literals
+            .into_iter()
+            .fold(String::new(), |mut acc, literal| {
+                acc.push_str(&literal.as_string());
+                acc
+            });
 
         interpreter_stack.push_val(TypeAnnotatedValue::Str(str));
 
