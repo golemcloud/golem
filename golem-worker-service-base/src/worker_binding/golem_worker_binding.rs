@@ -24,7 +24,9 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBinding {
 
         GolemWorkerBinding {
             component_id: worker_binding.component_id,
-            worker_name: worker_binding.worker_name_compiled.map(|compiled| compiled.worker_name),
+            worker_name: worker_binding
+                .worker_name_compiled
+                .map(|compiled| compiled.worker_name),
             idempotency_key: worker_binding
                 .idempotency_key_compiled
                 .map(|compiled| compiled.idempotency_key),

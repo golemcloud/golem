@@ -32,7 +32,7 @@ mod internal {
     use super::UnauthorisedWorkerRequestExecutor;
     use crate::empty_worker_metadata;
 
-    use golem_common::model::{TargetWorkerId};
+    use golem_common::model::TargetWorkerId;
     use golem_service_base::model::validate_worker_name;
     use golem_worker_service_base::worker_bridge_execution::{
         WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
@@ -43,12 +43,10 @@ mod internal {
         default_executor: &UnauthorisedWorkerRequestExecutor,
         worker_request_params: WorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-
-        let worker_name_opt_validated =
-            worker_request_params.worker_name.map(|w| {
-                validate_worker_name(w.as_str()).map(|_| w)
-            }).transpose()?;
-
+        let worker_name_opt_validated = worker_request_params
+            .worker_name
+            .map(|w| validate_worker_name(w.as_str()).map(|_| w))
+            .transpose()?;
 
         let component_id = worker_request_params.component_id;
 
@@ -60,7 +58,9 @@ mod internal {
         info!(
             "Executing request for component: {}, worker: {}, function: {:?}",
             component_id,
-            worker_name_opt_validated.clone().unwrap_or("<NA/ephemeral>".to_string()),
+            worker_name_opt_validated
+                .clone()
+                .unwrap_or("<NA/ephemeral>".to_string()),
             worker_request_params.function_name
         );
 

@@ -146,10 +146,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             .ok_or("Missing response rib input".to_string())
             .and_then(RibInputTypeInfo::try_from)?;
 
-        let worker_name_expr_opt = value
-            .worker_name
-            .map(Expr::try_from)
-            .transpose()?;
+        let worker_name_expr_opt = value.worker_name.map(Expr::try_from).transpose()?;
 
         let worker_name_compiled = if let Some(worker_name) = worker_name_expr_opt {
             let worker_name_byte_code = value

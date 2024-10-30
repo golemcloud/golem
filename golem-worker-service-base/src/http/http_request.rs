@@ -217,15 +217,16 @@ mod tests {
             ),
         ];
 
-
         if let Some(worker_name) = worker_request.clone().worker_name {
             record_elems.push(("name".to_string(), TypeAnnotatedValue::Str(worker_name)))
         };
 
         if let Some(idempotency_key) = worker_request.clone().idempotency_key {
-            record_elems.push(("idempotency-key".to_string(), TypeAnnotatedValue::Str(idempotency_key.to_string())))
+            record_elems.push((
+                "idempotency-key".to_string(),
+                TypeAnnotatedValue::Str(idempotency_key.to_string()),
+            ))
         };
-
 
         create_record(record_elems).unwrap()
     }

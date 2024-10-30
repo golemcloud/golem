@@ -215,11 +215,12 @@ mod internal {
     pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
         let worker_id_str_opt = worker_bridge_info
             .get("worker-name")
-            .map(|json_value|  json_value.as_str().ok_or("worker-name is not a string")).transpose()?;
+            .map(|json_value| json_value.as_str().ok_or("worker-name is not a string"))
+            .transpose()?;
 
-        let worker_id_expr_opt =
-            worker_id_str_opt.map(|worker_id|
-                rib::from_string(worker_id).map_err(|err| err.to_string())).transpose()?;
+        let worker_id_expr_opt = worker_id_str_opt
+            .map(|worker_id| rib::from_string(worker_id).map_err(|err| err.to_string()))
+            .transpose()?;
 
         Ok(worker_id_expr_opt)
     }

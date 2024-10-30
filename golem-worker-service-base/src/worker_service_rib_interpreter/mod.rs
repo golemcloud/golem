@@ -94,7 +94,7 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
                         .map(|v| v.result)
                         .map_err(|e| e.to_string())
                 }
-                    .boxed() // This ensures the future is boxed with the correct type
+                .boxed() // This ensures the future is boxed with the correct type
             }
         });
         rib::interpret(expr, rib_input, worker_invoke_function)
