@@ -150,7 +150,7 @@ fn golem_def_with_response(
                     component_id: Uuid::parse_str(component_id).unwrap(),
                     version: 0,
                 },
-                worker_name: "\"foo\"".to_string(),
+                worker_name: Some("\"foo\"".to_string()),
                 idempotency_key: None,
                 response,
             },
