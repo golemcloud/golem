@@ -228,7 +228,7 @@ impl BlobOplogArchive {
         info!("So started creating as it does not exists");
 
         if !exists {
-            match blob_storage
+            blob_storage
                 .with("blob_oplog", "new")
                 .create_dir(
                     BlobStorageNamespace::CompressedOplog {
@@ -239,31 +239,13 @@ impl BlobOplogArchive {
                     Path::new(&owned_worker_id.worker_name()),
                 )
                 .await
-            {
-                Ok(_) => {
-                    info!("Successfully created compressed oplog directory for worker {}", owned_worker_id.worker_id);
-
-                    // Attempt to initialize the IFS for the worker
-                    match blob_storage.initialize_ifs(owned_worker_id.clone().worker_id).await {
-                        Ok(_) => {
-                            info!("Successfully initialized IFS for worker {}", owned_worker_id.worker_id);
-                        },
-                        Err(err) => {
-                            error!("Failed to initialize IFS for worker {}: {}", owned_worker_id.worker_id, err);
-                        }
-                    }
-                },
-                Err(err) => {
+                .unwrap_or_else(|err| {
                     panic!(
-                        "Failed to create compressed oplog directory for worker {} in blob storage: {err}",
+                        "failed to check existence of compressed oplog for worker {} in blob storage: {err}",
                         owned_worker_id.worker_id
-                    );
-                }
-            }
+                    )
+                });
         }
-
-
-
 
         let entries = Arc::new(RwLock::new(
             Self::entries(owned_worker_id.clone(), blob_storage.clone(), level).await,

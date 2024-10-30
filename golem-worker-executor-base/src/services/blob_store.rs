@@ -23,14 +23,16 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
+use tokio::{fs, task};
 use tokio_stream::StreamExt;
 use tonic::metadata::Binary;
 use tracing::{error, info};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{FileNode, NodeType};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
-
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
+use crate::services::ifs::InitialFileSystem;
+use crate::storage::blob::{BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult};
+use zip::ZipArchive;
+use crate::error::GolemError;
 
 /// Interface for storing blobs in a persistent storage.
 #[async_trait]
@@ -152,6 +154,33 @@ pub trait BlobStoreService {
         owned_worker_id: OwnedWorkerId,
         path: PathBuf
     ) -> Result<Vec<FileNode>, String>;
+
+    async fn initialize_worker_ifs(
+        &self,
+        owned_worker_id: OwnedWorkerId
+    ) -> Result<(), String>;
+
+    async fn setup_ifs_source(
+        &self,
+        component_id: ComponentId
+    ) -> Result<String, String>;
+
+    async fn generate_path(
+        &self,
+        component_id: ComponentId
+    ) -> Result<String, String>;
+
+    async fn save_ifs_zip(
+        &self,
+        initial_file_system :Vec<u8> ,
+        component_id: ComponentId,
+        version: u64
+    ) -> Result<String , String>;
+    async fn decompress_ifs(&self,
+                            component_id: ComponentId,
+                            version: u64,
+    ) -> Result<(), String>;
+    async fn set_permissions(&self, path: &Path) -> Result<(), GolemError>;
 }
 
 pub enum FileOrDirectoryResponse {
@@ -269,32 +298,6 @@ pub fn convert_to_file_nodes(node: &Node) -> Vec<FileNode> {
     files
 }
 
-
-// pub fn convert_to_file_nodes(node: &Node) -> Vec<FileNode> {
-//     let mut files = Vec::new();
-//
-//     // Determine the node type based on the NodeTypeSerializeable
-//     let node_type = match node.node_type {
-//         NodeTypeSerializeable::Directory => NodeType::Directory as i32,
-//         NodeTypeSerializeable::File => NodeType::File as i32,
-//     };
-//
-//     // Push the current node as a FileNode with its full path as the name
-//     files.push(FileNode {
-//         name: node.full_path.to_str().unwrap().to_string(),
-//         r#type: node_type,
-//         permission: node.node_type.to_string(),
-//     });
-//
-//     // Recursively add child nodes if it's a directory
-//     if node.node_type == NodeTypeSerializeable::Directory {
-//         for child in &node.children {
-//             files.extend(convert_to_file_nodes(child));
-//         }
-//     }
-//
-//     files
-// }
 
 
 
@@ -656,6 +659,137 @@ impl BlobStoreService for DefaultBlobStoreService {
 
     }
 
+
+    async fn initialize_worker_ifs(&self, owned_worker_id: OwnedWorkerId) -> Result<(), String> {
+        // Store the component ID string to avoid temporary value issues
+        let component_id_str = owned_worker_id.worker_id.component_id.to_string();
+        let parent_folder = Path::new(&component_id_str);
+        let source_path = parent_folder.join("extracted");
+        let target_path = parent_folder.join(&owned_worker_id.worker_id.worker_name);
+
+        let account_id = owned_worker_id.clone().account_id;
+
+        // Ensure source directory exists in BlobStorage
+        if self
+            .blob_storage
+            .with("initialize_worker_ifs", "check_source_dir")
+            .exists(BlobStorageNamespace::InitialFileSystem(account_id.clone()), &source_path)
+            .await?
+            == ExistsResult::DoesNotExist
+        {
+            info!("Source directory does not exist. Creating directory at {:?}", source_path);
+            self.blob_storage
+                .with("initialize_worker_ifs", "create_source_dir")
+                .create_dir(BlobStorageNamespace::InitialFileSystem(account_id.clone()), &source_path)
+                .await
+                .map_err(|e| format!("Failed to create source directory {:?}: {}", source_path, e))?;
+        } else {
+            info!("Source directory already exists at {:?}", source_path);
+        }
+
+        // Ensure target directory exists in BlobStorage
+        if self
+            .blob_storage
+            .with("initialize_worker_ifs", "check_target_dir")
+            .exists(BlobStorageNamespace::CustomStorage(account_id.clone()), &target_path)
+            .await?
+            == ExistsResult::DoesNotExist
+        {
+            info!("Target directory does not exist. Creating directory at {:?}", target_path);
+            self.blob_storage
+                .with("initialize_worker_ifs", "create_target_dir")
+                .create_dir(BlobStorageNamespace::CustomStorage(account_id), &target_path)
+                .await
+                .map_err(|e| format!("Failed to create target directory {:?}: {}", target_path, e))?;
+        } else {
+            info!("Target directory already exists at {:?}", target_path);
+        }
+
+        // Copy contents from the source to the target directory in BlobStorage
+        self.blob_storage
+            .initialize_worker_ifs(owned_worker_id)
+            .await
+    }
+
+    async fn setup_ifs_source(&self, component_id: ComponentId) -> Result<String, String> {
+        todo!()
+    }
+
+    async fn generate_path(&self, component_id: ComponentId) -> Result<String, String> {
+        todo!()
+    }
+
+    async fn save_ifs_zip(&self, initial_file_system: Vec<u8>, component_id: ComponentId, version: u64) -> Result<String, String> {
+        let path = Path::new(&component_id.to_string())
+            .join(format!("{}/{}.ifs", component_id, version));
+        let account_id = AccountId{
+            value: "-1".to_string()
+        };
+        self.blob_storage.with("upload_initial_file_system","create_extracted_dir")
+            .create_dir(BlobStorageNamespace::InitialFileSystem(account_id.clone()), Path::new("extracted")).await
+            .map_err(|err| format!("Failed to create compressed oplog directory: {:?}", err))?;
+
+        self.blob_storage.with("upload_initial_file_system","store_ifs_data")
+            .put_raw(BlobStorageNamespace::InitialFileSystem(account_id), &path.as_path(), &initial_file_system).await
+            .map_err(|err| format!("Failed to store initial file contents: {:?}", err))?;
+
+        Ok(path.as_path().to_str().unwrap().to_string())
+
+
+    }
+
+    async fn decompress_ifs(&self, component_id: ComponentId, version: u64) -> Result<(), String> {
+        let account_id = AccountId{
+            value: "-1".to_string()
+        };
+        let compressed_path = Path::new(&component_id.to_string())
+            .join(format!("{}/{}.ifs", component_id, version));
+
+        // Retrieve the compressed IFS data from BlobStorage
+        let ifs_data = self.blob_storage.with("decompress_ifs", "retrieve_ifs_data")
+            .get_raw(BlobStorageNamespace::InitialFileSystem(account_id.clone()), &compressed_path)
+            .await
+            .map_err(|err| format!("Failed to retrieve initial file system data: {:?}", err))?
+            .ok_or_else(|| format!("Compressed IFS not found at {:?}", compressed_path))?;
+
+        // Perform decompression in a blocking synchronous context
+        let extracted_files: Vec<(String, Vec<u8>)> = task::block_in_place(|| {
+            let cursor = std::io::Cursor::new(ifs_data);
+            let mut zip = ZipArchive::new(cursor).map_err(|e| format!("Failed to open ZipArchive: {:?}", e))?;
+            let mut files = Vec::new();
+
+            for i in 0..zip.len() {
+                let mut file = zip.by_index(i).map_err(|e| format!("Failed to read ZipArchive file at index {}: {:?}", i, e))?;
+                let file_name = file.name().to_string();
+                let mut file_content = Vec::new();
+                std::io::copy(&mut file, &mut file_content).map_err(|e| format!("Failed to read contents of {} in zip: {:?}", file_name, e))?;
+                files.push((file_name, file_content));
+            }
+            Ok::<_, String>(files)
+        })?;
+
+        // Prepare the extraction directory path in BlobStorage
+        let extracted_dir = Path::new(&component_id.to_string()).join("extracted");
+        self.blob_storage.with("decompress_ifs", "create_extracted_dir")
+            .create_dir(BlobStorageNamespace::InitialFileSystem(account_id.clone()), &extracted_dir)
+            .await
+            .map_err(|err| format!("Failed to create extracted directory: {:?}", err))?;
+
+        // Upload each extracted file asynchronously
+        for (file_name, file_content) in extracted_files {
+            let extracted_file_path = extracted_dir.join(&file_name);
+            self.blob_storage.with("decompress_ifs", "store_extracted_file")
+                .put_raw(BlobStorageNamespace::InitialFileSystem(account_id.clone()), &extracted_file_path, &file_content)
+                .await
+                .map_err(|err| format!("Failed to store extracted file {}: {:?}", extracted_file_path.display(), err))?;
+        }
+
+        Ok(())
+    }
+
+    async fn set_permissions(&self, path: &Path) -> Result<(), GolemError> {
+        todo!()
+    }
 }
 
 // Function to build the directory tree asynchronously

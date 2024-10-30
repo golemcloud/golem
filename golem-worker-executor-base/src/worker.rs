@@ -230,6 +230,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let stopping = AtomicBool::new(false);
 
+        info!("000000000000000000000000000000000000000000000000000000000");
+
+        deps.blob_store_service().initialize_worker_ifs(owned_worker_id.clone()).await.expect("TODO: panic message");
         Ok(Worker {
             owned_worker_id,
             oplog,

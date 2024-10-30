@@ -2468,6 +2468,7 @@ impl FromStr for ComponentType {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use test_r::test;

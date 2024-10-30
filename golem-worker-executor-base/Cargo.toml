@@ -88,6 +88,7 @@ wasmtime-wasi-http = { workspace = true }
 windows-sys = "0.52.0"
 zstd = "0.13"
 sqlx = { workspace = true }
+zip = "2.2.0"
 
 [dev-dependencies]
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }

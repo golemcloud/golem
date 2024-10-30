@@ -76,6 +76,7 @@ impl WorkerApi {
             let WorkerCreationRequest { name, args, env } = request.0;
 
             let worker_id = make_worker_id(component_id, name)?;
+
             let worker_id = self
                 .worker_service
                 .create(

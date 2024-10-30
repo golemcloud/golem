@@ -63,7 +63,6 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        info!("gettting or adding ");
         let worker_id = owned_worker_id.worker_id();
 
         let owned_worker_id = owned_worker_id.clone();

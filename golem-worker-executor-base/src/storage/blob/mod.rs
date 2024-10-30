@@ -19,8 +19,8 @@ use anyhow::Error;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
-
-use golem_common::model::{AccountId, ComponentId, Timestamp, WorkerId};
+use tracing::info;
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use crate::services::blob_store::FileOrDirectoryResponse;
 
@@ -116,6 +116,8 @@ pub trait BlobStorage: Debug {
         path: &Path,
     ) -> Result<(), String>;
 
+
+
     async fn list_dir(
         &self,
         target_label: &'static str,
@@ -172,17 +174,21 @@ pub trait BlobStorage: Debug {
             .await?;
         self.delete(target_label, op_label, namespace, from).await
     }
-    async fn initialize_ifs(
+    async fn initialize_worker_ifs(
         &self,
-        worker_id: WorkerId
+        worker_id: OwnedWorkerId
     ) -> anyhow::Result<(), String>;
     async fn copy_dir_contents(
         &self,
         target_label: &'static str,
-        op_label: &'static str,
+        source_label: &'static str,
         from: &Path,
         to: &Path,
+        source: BlobStorageNamespace,
+        target: BlobStorageNamespace
     ) -> Result<(), String>;
+
+
 }
 
 pub trait BlobStorageLabelledApi<S: BlobStorage + ?Sized + Sync> {

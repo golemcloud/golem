@@ -22,7 +22,9 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use wasmtime::Engine;
 use golem_api_grpc::proto::golem::component::v1::ifs_service_server::IfsService;
-use golem_worker_executor_base::services::ifs::InitialFileSystemService;
+use golem_worker_executor_base::services::blob_store::BlobStoreService;
+// use golem_worker_executor_base::services::ifs::InitialFileSystemService;
+// use golem_worker_executor_base::services::ifs::InitialFileSystemService;
 use crate::service::ifs_worker::InitialFileSystemWorker;
 
 #[async_trait]
@@ -47,7 +49,8 @@ impl ComponentCompilationServiceImpl {
         engine: Engine,
 
         compiled_component_service: Arc<dyn CompiledComponentService + Send + Sync>,
-        ifs_service : Arc<dyn InitialFileSystemService + Send + Sync>
+        // ifs_service : Arc<dyn InitialFileSystemService + Send + Sync>
+        ifs_service: Arc<dyn BlobStoreService + Send + Sync>
     ) -> Self {
         let (compile_tx, compile_rx) = mpsc::channel(100);
         let (upload_tx, upload_rx) = mpsc::channel(100);

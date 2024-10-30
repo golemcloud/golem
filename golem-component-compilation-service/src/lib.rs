@@ -97,6 +97,7 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
         "Component Compilation Service is running",
     );
 
+
     let compilation_service = ComponentCompilationServiceImpl::new(
         config.compile_worker,
         config.component_service,
