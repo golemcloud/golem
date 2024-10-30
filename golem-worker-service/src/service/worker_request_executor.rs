@@ -60,7 +60,7 @@ mod internal {
         info!(
             "Executing request for component: {}, worker: {}, function: {:?}",
             component_id,
-            worker_name_opt_validated.clone().unwrap_or("<na/ephemeral>".to_string()),
+            worker_name_opt_validated.clone().unwrap_or("<NA/ephemeral>".to_string()),
             worker_request_params.function_name
         );
 
