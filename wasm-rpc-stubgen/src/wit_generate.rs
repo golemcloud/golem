@@ -45,7 +45,6 @@ pub fn generate_stub_wit_from_wit_dir(
 ) -> anyhow::Result<String> {
     generate_stub_wit_from_stub_def(&StubDefinition::new(StubConfig {
         source_wit_root: source_wit_root.to_path_buf(),
-        transformed_source_wit_root: None,
         target_root: source_wit_root.to_path_buf(), // Not used
         selected_world: None,                       // TODO: would this fail with multiple worlds?
         stub_crate_version: "".to_string(),         // Not used

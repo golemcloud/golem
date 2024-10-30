@@ -78,7 +78,6 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
 
             let stub_def = StubDefinition::new(StubConfig {
                 source_wit_root: app.component_wit(&component_name),
-                transformed_source_wit_root: None,
                 target_root: canonical_target_root,
                 selected_world: app.stub_world(&component_name),
                 stub_crate_version: app.stub_crate_version(&component_name),
