@@ -21,7 +21,7 @@ use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
 use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
-use golem_wasm_rpc_stubgen::stub::StubDefinition;
+use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use semver::Version;
@@ -617,28 +617,28 @@ fn init_stub_internal(name: &str, always_inline_types: bool) -> TempDir {
     let canonical_target_root = tempdir.path().canonicalize().unwrap();
 
     let source_wit_root = Path::new("test-data").join(name);
-    let def = StubDefinition::new(
-        &source_wit_root,
-        &canonical_target_root,
-        &None,
-        "1.0.0",
-        &WasmRpcOverride::default(),
-        always_inline_types,
-    )
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root,
+        target_root: canonical_target_root,
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: WasmRpcOverride::default(),
+        inline_source_types: always_inline_types,
+    })
     .unwrap();
     let _ = generate_stub_wit_dir(&def).unwrap();
     tempdir
 }
 
 fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
-    let def = StubDefinition::new(
-        source_wit_root,
-        stub_dir,
-        &None,
-        "1.0.0",
-        &WasmRpcOverride::default(),
-        false,
-    )
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root: source_wit_root.to_path_buf(),
+        target_root: stub_dir.to_path_buf(),
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: WasmRpcOverride::default(),
+        inline_source_types: false,
+    })
     .unwrap();
     let _ = generate_stub_wit_dir(&def).unwrap();
 }
