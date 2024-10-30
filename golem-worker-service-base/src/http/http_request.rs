@@ -202,14 +202,10 @@ mod tests {
     }
 
     fn convert_to_worker_response(worker_request: &WorkerRequest) -> TypeAnnotatedValue {
-        let mut required = create_record(vec![
+        let mut record_elems = vec![
             (
                 "component_id".to_string(),
                 TypeAnnotatedValue::Str(worker_request.component_id.0.to_string()),
-            ),
-            (
-                "name".to_string(),
-                TypeAnnotatedValue::Str(worker_request.worker_name.clone()),
             ),
             (
                 "function_name".to_string(),
@@ -219,35 +215,19 @@ mod tests {
                 "function_params".to_string(),
                 create_tuple(worker_request.function_params.clone()),
             ),
-        ])
-        .unwrap();
+        ];
 
-        let optional_idempotency_key = worker_request.clone().idempotency_key.map(|x| {
-            create_record(vec![(
-                "idempotency-key".to_string(),
-                TypeAnnotatedValue::Str(x.to_string()),
-            )])
-            .unwrap()
-        });
 
-        if let Some(idempotency_key) = optional_idempotency_key {
-            required = match required {
-                TypeAnnotatedValue::Record(type_record) => {
-                    let mut record = type_record.clone();
-                    record.value.push(NameValuePair {
-                        name: "idempotency_key".to_string(),
-                        value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                            type_annotated_value: Some(idempotency_key),
-                        }),
-                    });
+        if let Some(worker_name) = worker_request.clone().worker_name {
+            record_elems.push(("name".to_string(), TypeAnnotatedValue::Str(worker_name)))
+        };
 
-                    TypeAnnotatedValue::Record(record)
-                }
-                _ => panic!("Failed to create record"),
-            }
-        }
+        if let Some(idempotency_key) = worker_request.clone().idempotency_key {
+            record_elems.push(("idempotency-key".to_string(), TypeAnnotatedValue::Str(idempotency_key.to_string())))
+        };
 
-        required
+
+        create_record(record_elems).unwrap()
     }
 
     fn get_test_evaluator() -> Arc<dyn WorkerServiceRibInterpreter + Sync + Send> {

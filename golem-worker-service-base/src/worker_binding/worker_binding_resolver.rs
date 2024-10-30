@@ -107,7 +107,7 @@ impl ResolvedWorkerBindingFromRequest {
                 let rib_input = request_rib_input.merge(worker_rib_input);
                 let result = evaluator
                     .evaluate(
-                        &self.worker_detail.worker_name,
+                        self.worker_detail.worker_name.as_deref(),
                         &self.worker_detail.component_id.component_id,
                         &self.worker_detail.idempotency_key,
                         &self.compiled_response_mapping.compiled_response.clone(),
@@ -168,18 +168,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
         )
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
-        // Obtain the rib input from http request to resolve worker name
-        let rib_input_for_worker_name =
-            &binding.worker_name_compiled.clone().map(|w|http_request_details
-                .resolve_rib_input_value(&w.rib_input_type_info)
-                .map_err(|err| {
-                    format!(
-                        "Failed to resolve rib input value from http request details {} to form worker name",
-                        err
-                    )
-                })).transpose()?;
-
-        let worker_name = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
+        let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
                 .map_err(|err| {
@@ -238,7 +227,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
 
         let worker_detail = WorkerDetail {
             component_id: component_id.clone(),
-            worker_name,
+            worker_name: worker_name_opt,
             idempotency_key,
         };
 

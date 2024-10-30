@@ -148,7 +148,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
 
         let worker_name_expr_opt = value
             .worker_name
-            .map(|worker_name| Expr::try_from(worker_name))
+            .map(Expr::try_from)
             .transpose()?;
 
         let worker_name_compiled = if let Some(worker_name) = worker_name_expr_opt {

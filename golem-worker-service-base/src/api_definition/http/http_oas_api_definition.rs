@@ -277,7 +277,7 @@ mod tests {
                 path: path_pattern,
                 method: MethodPattern::Get,
                 binding: GolemWorkerBinding {
-                    worker_name: Expr::expr_block(vec![
+                    worker_name: Some(Expr::expr_block(vec![
                         Expr::let_binding_with_type(
                             "x",
                             rib::TypeName::Str,
@@ -287,7 +287,7 @@ mod tests {
                             )
                         ),
                         Expr::concat(vec![Expr::literal("worker-"), Expr::identifier("x"),])
-                    ]),
+                    ])),
                     component_id: golem_service_base::model::VersionedComponentId {
                         component_id: ComponentId(Uuid::nil()),
                         version: 0
