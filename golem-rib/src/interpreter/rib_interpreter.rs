@@ -346,16 +346,10 @@ mod internal {
         instruction_stack: &mut RibByteCodeCursor,
         interpreter_stack: &mut InterpreterStack,
     ) -> Result<(), String> {
-        let rib_result = interpreter_stack.pop().ok_or(
-            "Internal Error: Failed to get a value from the stack to do the comparison operation"
-                .to_string(),
-        )?;
+        let predicate = interpreter_stack.try_pop_bool()?;
 
-        let predicate_bool = rib_result
-            .get_bool()
-            .ok_or("Internal Error: Expecting a value that can be converted to bool".to_string())?;
-
-        if !predicate_bool {
+        // Jump if predicate is false
+        if !predicate {
             instruction_stack.move_to(&instruction_id).ok_or(format!(
                 "Internal Error: Failed to move to the instruction at {}",
                 instruction_id.index
