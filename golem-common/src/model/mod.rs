@@ -52,6 +52,7 @@ pub mod component_metadata;
 pub mod exports;
 pub mod lucene;
 pub mod oplog;
+pub mod plugin;
 pub mod public_oplog;
 pub mod regions;
 pub mod trim_date;
@@ -67,6 +68,11 @@ newtype_uuid!(
 );
 
 newtype_uuid!(ProjectId, golem_api_grpc::proto::golem::common::ProjectId);
+
+newtype_uuid!(
+    PluginInstallationId,
+    golem_api_grpc::proto::golem::common::PluginInstallationId
+);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -2481,6 +2487,9 @@ impl FromStr for ComponentType {
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct Empty;
 
 #[cfg(test)]
 mod tests {

@@ -106,9 +106,6 @@ impl std::fmt::Display for VersionedComponentId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-pub struct Empty {}
-
 pub fn validate_worker_name(name: &str) -> Result<(), &'static str> {
     let length = name.len();
     if !(1..=100).contains(&length) {

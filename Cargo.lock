@@ -3693,6 +3693,9 @@ dependencies = [
  "golem-service-base",
  "golem-wasm-ast",
  "http 0.2.12",
+ "http 1.1.0",
+ "poem",
+ "poem-openapi",
  "prost",
  "prost-types",
  "serde 1.0.213",
@@ -3736,9 +3739,7 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "430154af3448f9b904f0fabd64ea2946100d9fea6fc04ef76533b836b6115321"
+version = "0.0.0"
 dependencies = [
  "clap 4.5.20",
  "convert_case 0.6.0",
@@ -8745,9 +8746,9 @@ dependencies = [
 
 [[package]]
 name = "test-r"
-version = "0.0.14"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b97c81438c4b60ff0131f17d01fc400435eab2adac69b3477d9b545ffaed7138"
+checksum = "44cb89ffb54910951973d2cdbc92e1e951b4f4c6efe8a4e27520a1e85a7392ba"
 dependencies = [
  "ctor",
  "test-r-core",
@@ -8757,12 +8758,14 @@ dependencies = [
 
 [[package]]
 name = "test-r-core"
-version = "0.0.13"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60f5030f61cebd6462fecb1487e0969afbe0e9df052e0f152adf74ca487e701d"
+checksum = "5d30293ff8ca5c0ad50e03ec969f05d8bc533a3d98a3bdd92469595107388efa"
 dependencies = [
  "anstream",
  "anstyle",
+ "anstyle-query",
+ "anstyle-wincon",
  "bincode",
  "clap 4.5.20",
  "escape8259",
@@ -8778,9 +8781,9 @@ dependencies = [
 
 [[package]]
 name = "test-r-macro"
-version = "0.0.14"
+version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd11f2cbb74f89f591419dd2fb9d99b8d7dd151f983b05e957625dcba300db6e"
+checksum = "99e25dfec5a39d37e6838cb321031f27fee92da0048440710c90a73729d8bf9e"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",

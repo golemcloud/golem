@@ -18,12 +18,12 @@ use std::path::Path;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbConfig, DbSqliteConfig, HasConfigExamples,
 };
+use golem_common::model::Empty;
 use golem_common::tracing::TracingConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_service_base::config::{
     ComponentStoreConfig, ComponentStoreLocalConfig, ComponentStoreS3Config,
 };
-use golem_service_base::model::Empty;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComponentServiceConfig {
@@ -64,7 +64,7 @@ impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
                     bucket_name: "bucket".to_string(),
                     object_prefix: "object_prefix".to_string(),
                 }),
-                compilation: ComponentCompilationConfig::Disabled(Empty {}),
+                compilation: ComponentCompilationConfig::Disabled(Empty),
                 ..ComponentServiceConfig::default()
             },
         )]

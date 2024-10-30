@@ -16,7 +16,7 @@ use crate::config::RetryConfig;
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
 use crate::model::regions::OplogRegion;
-use crate::model::{AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId};
+use crate::model::{AccountId, ComponentVersion, Empty, IdempotencyKey, Timestamp, WorkerId};
 use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -27,9 +27,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
-pub struct Empty;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct SnapshotBasedUpdateParameters {
@@ -1571,7 +1568,7 @@ impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
 mod tests {
 
     use super::{
-        ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, Empty,
+        ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters,
         EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
         ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
         GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters,
@@ -1582,7 +1579,7 @@ mod tests {
     };
     use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
     use crate::model::regions::OplogRegion;
-    use crate::model::{AccountId, ComponentId, IdempotencyKey, Timestamp, WorkerId};
+    use crate::model::{AccountId, ComponentId, Empty, IdempotencyKey, Timestamp, WorkerId};
     use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
     use golem_wasm_rpc::{Value, ValueAndType};
     use poem_openapi::types::ToJSON;

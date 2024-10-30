@@ -7,4 +7,5 @@ pub enum ApiTags {
     Component,
     Worker,
     HealthCheck,
+    Plugin,
 }

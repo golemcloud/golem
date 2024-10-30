@@ -23,7 +23,10 @@ bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
+http = { workspace = true }
 http_02 = { workspace = true }
+poem = { workspace = true }
+poem-openapi = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 serde = { workspace = true }

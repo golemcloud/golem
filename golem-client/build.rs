@@ -52,9 +52,18 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
             (
+                "DefaultPluginOwner",
+                "golem_common::model::plugin::DefaultPluginOwner",
+            ),
+            (
+                "DefaultPluginScope",
+                "golem_common::model::plugin::DefaultPluginScope",
+            ),
+            (
                 "OplogCursor",
                 "golem_common::model::public_oplog::OplogCursor",
             ),
+            ("Empty", "golem_common::model::Empty"),
             ("PromiseId", "golem_common::model::PromiseId"),
             ("ShardId", "golem_common::model::ShardId"),
             (
