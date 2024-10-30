@@ -14,9 +14,10 @@
 
 use crate::commands::log::{log_action, log_action_plan, log_warn_action, LogIndent};
 use crate::fs::{get_file_name, strip_path_prefix, OverwriteSafeAction, OverwriteSafeActions};
+use crate::wit_encode::EncodedWitDir;
 use crate::wit_generate::generate_stub_wit_from_wit_dir;
 use crate::wit_resolve::ResolvedWitDir;
-use crate::wit_transform::WitTransformer;
+use crate::wit_transform::{add_import_to_all_world, remove_imports_from_package_all_worlds};
 use crate::{cargo, naming};
 use anyhow::{anyhow, bail, Context};
 use std::collections::BTreeMap;
@@ -48,13 +49,13 @@ pub fn add_stub_dependency(
     let _indent = LogIndent::new();
 
     let stub_resolved_wit_root = ResolvedWitDir::new(stub_wit_root)?;
-    let mut stub_transformer = WitTransformer::new(&stub_resolved_wit_root.resolve)?;
+    let mut stub_encoded_wit_root = EncodedWitDir::new(&stub_resolved_wit_root.resolve)?;
     let stub_package = stub_resolved_wit_root.main_package()?;
     let stub_wit = stub_wit_root.join(naming::wit::STUB_WIT_FILE_NAME);
 
     let dest_deps_dir = dest_wit_root.join(naming::wit::DEPS_DIR);
     let dest_resolved_wit_root = ResolvedWitDir::new(dest_wit_root)?;
-    let mut dest_transformer = WitTransformer::new(&dest_resolved_wit_root.resolve)?;
+    let mut dest_encoded_wit_root = EncodedWitDir::new(&dest_resolved_wit_root.resolve)?;
     let dest_package = dest_resolved_wit_root.main_package()?;
     let dest_stub_package_name = naming::wit::stub_package_name(&dest_package.name);
 
@@ -125,13 +126,12 @@ pub fn add_stub_dependency(
         // Handle other package by copying while removing cyclic imports
         } else {
             package_names_to_package_path.insert(package_name.clone(), package_path);
-            stub_transformer.remove_imports_from_package_all_worlds(
-                *package_id,
-                &dest_stub_package_import_prefix,
-            )?;
-            stub_transformer
-                .remove_imports_from_package_all_worlds(*package_id, &dest_package_import_prefix)?;
-            let content = stub_transformer.render_package(*package_id)?;
+
+            let package = stub_encoded_wit_root.package(*package_id)?;
+            remove_imports_from_package_all_worlds(package, &dest_stub_package_import_prefix);
+            remove_imports_from_package_all_worlds(package, &dest_package_import_prefix);
+            let content = package.to_string();
+
             let first_source = package_sources.files.first().ok_or_else(|| {
                 anyhow!(
                     "Expected at least one source for stub package: {}",
@@ -185,11 +185,9 @@ pub fn add_stub_dependency(
             );
         }
 
-        dest_transformer.add_import_to_all_world(
-            dest_main_package_id,
-            &naming::wit::stub_import_name(stub_package)?,
-        )?;
-        let content = dest_transformer.render_package(dest_main_package_id)?;
+        let package = dest_encoded_wit_root.package(dest_main_package_id)?;
+        add_import_to_all_world(package, &naming::wit::stub_import_name(stub_package)?);
+        let content = package.to_string();
 
         actions.add(OverwriteSafeAction::WriteFile {
             content,

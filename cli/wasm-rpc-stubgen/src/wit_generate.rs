@@ -257,7 +257,7 @@ pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
                     .join(naming::wit::package_dep_dir_name(&def.source_package_name))
                     .join(get_file_name(source)?);
                 log_action(
-                    "  Copying",
+                    "Copying",
                     format!(
                         "(with source imports removed) {} to {}",
                         source.display(),
@@ -269,7 +269,7 @@ pub fn add_wit_dependencies(def: &StubDefinition) -> anyhow::Result<()> {
                 let relative = source.strip_prefix(&def.config.source_wit_root)?;
                 let dest = target_wit_root.join(relative);
                 log_action(
-                    "  Copying",
+                    "Copying",
                     format!("{} to {}", source.display(), dest.display()),
                 );
                 copy(source, &dest)?;
