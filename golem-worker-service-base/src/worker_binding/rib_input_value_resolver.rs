@@ -45,7 +45,7 @@ impl RibInputValueResolver for RequestDetails {
                     input: rib_input_map,
                 })
             }
-            None => Ok(RibInput::empty()),
+            None => Ok(RibInput::default()),
         }
     }
 }
@@ -70,7 +70,7 @@ impl RibInputValueResolver for WorkerDetail {
                     input: rib_input_map,
                 })
             }
-            None => Ok(RibInput::empty()),
+            None => Ok(RibInput::default()),
         }
     }
 }
