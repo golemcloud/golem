@@ -46,6 +46,11 @@ interface iface11 {
 }
 
 world api {
+    // TODO:
+    // use test:sub2/iface10.{rec1};
+
+    // TODO: include
+
     export func1: func();
     export iface1;
     export iface2;
