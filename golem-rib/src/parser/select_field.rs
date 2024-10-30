@@ -224,7 +224,7 @@ mod tests {
             Ok((
                 Expr::greater_than(
                     Expr::select_field(Expr::identifier("foo"), "bar"),
-                    Expr::number(1f64)
+                    Expr::untyped_number(1f64)
                 ),
                 ""
             ))
@@ -241,7 +241,7 @@ mod tests {
                 Expr::cond(
                     Expr::greater_than(
                         Expr::select_field(Expr::identifier("foo"), "bar"),
-                        Expr::number(1f64)
+                        Expr::untyped_number(1f64)
                     ),
                     Expr::select_field(Expr::identifier("foo"), "bar"),
                     Expr::select_field(Expr::identifier("foo"), "baz")

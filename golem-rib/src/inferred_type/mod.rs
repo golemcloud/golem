@@ -63,6 +63,21 @@ pub enum InferredType {
 }
 
 impl InferredType {
+    pub fn number() -> InferredType {
+        InferredType::OneOf(vec![
+            InferredType::U64,
+            InferredType::U32,
+            InferredType::U8,
+            InferredType::U16,
+            InferredType::S64,
+            InferredType::S32,
+            InferredType::S8,
+            InferredType::S16,
+            InferredType::F64,
+            InferredType::F32,
+        ])
+    }
+
     pub fn un_resolved(&self) -> bool {
         self.is_unknown() || self.is_one_of()
     }

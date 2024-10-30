@@ -43,6 +43,16 @@ message RibIR {
         And and = 31;
         CreateFunctionNameInstruction create_function_name = 32;
         Or or = 33;
+        ListToIterator list_to_iterator = 34;
+        CreateSink create_sink = 35;
+        AdvanceIterator advance_iterator = 36;
+        SinkToList sink_to_list = 37;
+        PushToSink push_to_sink = 38;
+        wasm.ast.Type plus = 39;
+        wasm.ast.Type minus = 40;
+        wasm.ast.Type multiply = 41;
+        wasm.ast.Type divide = 42;
+        IsEmpty is_empty = 43;
     }
 }
 
@@ -116,6 +126,7 @@ message GetTag {}
 message Negate {}
 message And {}
 message Or {}
+message IsEmpty{}
 
 message FunctionReferenceType {
   oneof type {
@@ -174,3 +185,14 @@ message IndexedResourceDrop {
   string resource_name = 1;
   uint32 arg_size = 2;
 }
+
+message SinkToList {}
+
+message PushToSink {}
+
+message AdvanceIterator {}
+
+message CreateSink {
+   wasm.ast.Type list_type = 1;
+}
+message ListToIterator {}
