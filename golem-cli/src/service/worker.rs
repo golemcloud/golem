@@ -173,7 +173,7 @@ pub trait WorkerService {
         filter: Option<Vec<String>>,
         target_version: u64,
         mode: WorkerUpdateMode,
-        project: Option<Self::ProjectContext>,
+        project: Option<Self::ProjectContext>
     ) -> Result<GolemResult, GolemError>;
 
     async fn update_many_by_urn(
@@ -181,7 +181,7 @@ pub trait WorkerService {
         component_urn: ComponentUrn,
         filter: Option<Vec<String>>,
         target_version: u64,
-        mode: WorkerUpdateMode,
+        mode: WorkerUpdateMode
     ) -> Result<GolemResult, GolemError>;
 
     async fn list_worker_metadata(

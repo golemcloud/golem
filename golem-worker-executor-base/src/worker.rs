@@ -222,6 +222,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )));
         let instance = Arc::new(Mutex::new(WorkerInstance::Unloaded));
 
+        deps.blob_store_service().initialize_worker_ifs(worker_metadata.clone()).await.expect("TODO: panic message");
+
         let execution_status = Arc::new(RwLock::new(ExecutionStatus::Suspended {
             last_known_status: worker_metadata.last_known_status.clone(),
             component_type: initial_component_metadata.component_type,
@@ -230,9 +232,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let stopping = AtomicBool::new(false);
 
-        info!("000000000000000000000000000000000000000000000000000000000");
-
-        deps.blob_store_service().initialize_worker_ifs(owned_worker_id.clone()).await.expect("TODO: panic message");
         Ok(Worker {
             owned_worker_id,
             oplog,
@@ -1881,6 +1880,7 @@ where
             successful_updates,
             component_version,
             component_size,
+            fs_version
         ) = calculate_update_fields(
             last_known.pending_updates,
             last_known.failed_updates,
@@ -1888,6 +1888,7 @@ where
             last_known.component_version,
             last_known.component_size,
             &new_entries,
+            last_known.fs_version
         );
 
         if let Some(TimestampedUpdateDescription {
@@ -1927,6 +1928,7 @@ where
             component_size,
             owned_resources,
             total_linear_memory_size,
+            fs_version
         };
         Ok(result)
     }
@@ -2117,18 +2119,21 @@ fn calculate_update_fields(
     initial_version: u64,
     initial_component_size: u64,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
+    file_system_version: u64
 ) -> (
     VecDeque<TimestampedUpdateDescription>,
     Vec<FailedUpdateRecord>,
     Vec<SuccessfulUpdateRecord>,
     u64,
     u64,
+    u64
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
     let mut successful_updates = initial_successful_updates;
     let mut version = initial_version;
     let mut component_size = initial_component_size;
+    let mut file_system_version = file_system_version;
     for (oplog_idx, entry) in entries {
         match entry {
             OplogEntry::Create {
@@ -2181,6 +2186,7 @@ fn calculate_update_fields(
         successful_updates,
         version,
         component_size,
+        file_system_version
     )
 }
 

@@ -19,7 +19,7 @@ use tokio::fs::File;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, Timestamp, WorkerId};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use anyhow::Error;
@@ -390,9 +390,9 @@ impl BlobStorage for FileSystemBlobStorage {
         Ok(())
     }
 
-    async fn initialize_worker_ifs(&self, owned_worker_id: OwnedWorkerId) -> Result<(), String> {
-        let source_path = Path::new(&owned_worker_id.worker_id.component_id.to_string()).join("extracted");
-        let target_path = Path::new(&owned_worker_id.worker_id.component_id.to_string()).join(&owned_worker_id.worker_id.worker_name);
+    async fn initialize_worker_ifs(&self, worker_metadata: WorkerMetadata) -> anyhow::Result<(), String> {
+        let source_path = Path::new(&worker_metadata.worker_id.component_id.to_string()).join("extracted");
+        let target_path = Path::new(&worker_metadata.worker_id.component_id.to_string()).join(&worker_metadata.worker_id.worker_name);
 
 
         self.copy_dir_contents(
@@ -400,8 +400,8 @@ impl BlobStorage for FileSystemBlobStorage {
             "copy_dir_contents",
             &PathBuf::from(source_path),
             &PathBuf::from(target_path),
-            BlobStorageNamespace::InitialFileSystem(owned_worker_id.clone().account_id),
-            BlobStorageNamespace::CustomStorage(owned_worker_id.clone().account_id),
+            BlobStorageNamespace::InitialFileSystem(worker_metadata.clone().account_id),
+            BlobStorageNamespace::CustomStorage(worker_metadata.clone().account_id),
         )
             .await
     }

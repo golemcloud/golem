@@ -305,7 +305,6 @@ message GetFilesSuccessResponse {
 message FileNode {
   string name = 1;       // File or directory name
   NodeType type = 2;     // Type (file or directory)
-  string permission = 3;
 }
 
 enum NodeType {

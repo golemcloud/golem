@@ -424,6 +424,10 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         /// The new version of the updated worker
         #[arg(short = 't', long)]
         target_version: u64,
+
+        ///The required version of file system
+        #[arg(short = 'f', long)]
+        fs_version: Option<u64>
     },
     /// Updates a set of workers
     #[command()]
@@ -446,6 +450,9 @@ pub enum WorkerSubcommand<ComponentRef: clap::Args, WorkerRef: clap::Args> {
         /// The new version of the updated workers
         #[arg(short = 't', long)]
         target_version: u64,
+
+        #[arg(short = 'f', long)]
+        fs_version: Option<u64>
     },
     /// Queries and dumps a worker's full oplog
     #[command()]
@@ -641,6 +648,7 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                 worker_ref,
                 target_version,
                 mode,
+                fs_version
             } => {
                 let (worker_uri, project_ref) = worker_ref.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
@@ -653,6 +661,7 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                 filter,
                 mode,
                 target_version,
+                fs_version
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
@@ -662,7 +671,7 @@ impl<ComponentRef: clap::Args, WorkerRef: clap::Args> WorkerSubcommand<Component
                         filter,
                         target_version,
                         mode,
-                        project_id,
+                        project_id
                     )
                     .await
             }

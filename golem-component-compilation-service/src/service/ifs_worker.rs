@@ -45,17 +45,12 @@ impl InitialFileSystemWorker {
             component_and_version
         } = initial_file;
 
-        let upload_result = self.initial_file_system_service.
+        self.initial_file_system_service.
             save_ifs_zip(
                 initial_file_system,
                 component_and_version.clone().id,
                 component_and_version.version
-            ).await;
-
-        let decompress = self.initial_file_system_service.decompress_ifs(
-            component_and_version.id,
-            component_and_version.version
-        ).await;
+            ).await.expect("Failed to save ifs");
 
     }
 }

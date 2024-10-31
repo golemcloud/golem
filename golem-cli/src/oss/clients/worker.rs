@@ -472,7 +472,7 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
                 &worker_name_required(&worker_urn)?,
                 &UpdateWorkerRequest {
                     mode: update_mode,
-                    target_version,
+                    target_version
                 },
             )
             .await?;

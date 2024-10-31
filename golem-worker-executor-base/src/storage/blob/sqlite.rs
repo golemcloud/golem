@@ -21,7 +21,7 @@ use crate::storage::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::{ComponentId, OwnedWorkerId, WorkerId};
+use golem_common::model::WorkerMetadata;
 use crate::services::blob_store::FileOrDirectoryResponse;
 
 #[derive(Debug)]
@@ -198,7 +198,7 @@ impl BlobStorage for SqliteBlobStorage {
             .map_err(|err| err.to_string())
     }
 
-    async fn initialize_worker_ifs(&self, worker_id: OwnedWorkerId) -> anyhow::Result<(), String> {
+    async fn initialize_worker_ifs(&self, worker_metadata: WorkerMetadata) -> anyhow::Result<(), String> {
         todo!()
     }
 

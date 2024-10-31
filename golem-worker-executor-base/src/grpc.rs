@@ -1182,7 +1182,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 info!("Successfully retrieved directory listing for worker {:?}", owned_worker_id.worker_id);
                 let files_response = files.into_iter().map(|(name, is_directory)|FileNode{
                     name,
-                    permission: "rw".to_string(),
                     r#type: if is_directory { NodeType::Directory as i32 } else{
                         NodeType::File as i32
                     }

@@ -1704,7 +1704,6 @@ pub struct ApiGetFilesResponse {
 pub struct ApiFileNode {
     pub name: String,       // File or directory name
     pub node_type: ApiNodeType, // Type (file or directory)
-    pub permission: String, // Permissions as a string (e.g., "read-only" or "read-write")
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
@@ -1735,7 +1734,6 @@ impl TryFrom<FileNode> for ApiFileNode {
         Ok(ApiFileNode {
             name: file_node.name,
             node_type,
-            permission: file_node.permission,
         })
     }
 }
@@ -1763,7 +1761,6 @@ pub struct GetFileOrDirectoryResponse {
 pub struct FileOrDirectoryNode {
     pub name: String,
     pub node_type: NodeType,
-    pub permission: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]

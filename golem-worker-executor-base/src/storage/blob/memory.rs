@@ -17,7 +17,7 @@ use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, Exis
 use async_trait::async_trait;
 use bytes::Bytes;
 use dashmap::DashMap;
-use golem_common::model::{ComponentId, OwnedWorkerId, Timestamp, WorkerId};
+use golem_common::model::{ComponentId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata};
 use std::path::{Path, PathBuf};
 use anyhow::Error;
 use tracing::info;
@@ -284,7 +284,7 @@ impl BlobStorage for InMemoryBlobStorage {
         }
     }
 
-    async fn initialize_worker_ifs(&self, worker_id: OwnedWorkerId) -> anyhow::Result<(), String> {
+    async fn initialize_worker_ifs(&self, worker_metadata: WorkerMetadata) -> anyhow::Result<(), String> {
         todo!()
     }
 

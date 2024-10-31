@@ -1021,6 +1021,7 @@ pub struct WorkerStatusRecord {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
+    pub fs_version: u64
 }
 
 impl Default for WorkerStatusRecord {
@@ -1040,6 +1041,7 @@ impl Default for WorkerStatusRecord {
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
+            fs_version: 0
         }
     }
 }
@@ -2667,6 +2669,7 @@ mod tests {
             parent: None,
             last_known_status: WorkerStatusRecord {
                 component_version: 1,
+                fs_version: 1,
                 ..WorkerStatusRecord::default()
             },
         };

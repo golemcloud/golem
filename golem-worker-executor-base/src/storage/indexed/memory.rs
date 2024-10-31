@@ -19,6 +19,7 @@ use dashmap::DashMap;
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
 use std::time::Duration;
+use tracing::info;
 
 #[derive(Debug)]
 pub struct InMemoryIndexedStorage {

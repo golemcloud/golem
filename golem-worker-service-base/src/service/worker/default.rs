@@ -1024,7 +1024,6 @@ where
                                                 details: "Unknown node type".to_string(),
                                             })),
                                         },
-                                        permission: file.permission,
                                     })
                                 })
                                 .collect();
@@ -1062,8 +1061,8 @@ fn generate_html_response(worker_id: WorkerId, base_path: String, entries: Vec<F
         let link_path = generate_link_path(&worker_id, &entry);
         let display_name = format_display_name(&entry);
         html.push_str(&format!(
-            r#"<li><a href="{}">{}</a> - {}</li>"#,
-            link_path, display_name, entry.permission
+            r#"<li><a href="{}">{}</a></li>"#,
+            link_path, display_name
         ));
     }
 

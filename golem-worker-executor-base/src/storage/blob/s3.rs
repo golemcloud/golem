@@ -23,7 +23,7 @@ use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
 use bytes::Bytes;
-use golem_common::model::{ComponentId, OwnedWorkerId, Timestamp, WorkerId};
+use golem_common::model::{ComponentId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata};
 use golem_common::retries::with_retries_customized;
 use std::error::Error;
 use std::io;
@@ -856,7 +856,7 @@ impl BlobStorage for S3BlobStorage {
         Ok(())
     }
 
-    async fn initialize_worker_ifs(&self, worker_id: OwnedWorkerId) -> anyhow::Result<(), String> {
+    async fn initialize_worker_ifs(&self, worker_metadata: WorkerMetadata) -> anyhow::Result<(), String> {
         todo!()
     }
 

@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use tracing::info;
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, Timestamp, WorkerId};
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, Timestamp, WorkerId, WorkerMetadata};
 use golem_common::serialization::{deserialize, serialize};
 use crate::services::blob_store::FileOrDirectoryResponse;
 
@@ -176,7 +176,7 @@ pub trait BlobStorage: Debug {
     }
     async fn initialize_worker_ifs(
         &self,
-        worker_id: OwnedWorkerId
+        worker_metadata: WorkerMetadata
     ) -> anyhow::Result<(), String>;
     async fn copy_dir_contents(
         &self,
