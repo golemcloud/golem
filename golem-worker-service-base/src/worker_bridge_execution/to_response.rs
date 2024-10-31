@@ -323,7 +323,7 @@ mod internal {
                 Self::Ok { content, .. } => poem::Body::from_bytes(bytes::Bytes::from(content.clone())),
                 Self::SimpleErr(err) => poem::Body::from_string(err.clone()),
                 Self::Err(err) => {
-                    match IntermediateHttpResponse::from(&RibInterpreterResult::Val(err.clone())) {
+                    match IntermediateHttpResponse::from(&RibResult::Val(err.clone())) {
                         Ok(intermediate) => intermediate
                             .to_http_response(&RequestDetails::Http(HttpRequestDetails::empty()))
                             .into_body(),

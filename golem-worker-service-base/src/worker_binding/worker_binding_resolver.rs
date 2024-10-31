@@ -13,7 +13,6 @@ use golem_service_base::model::VersionedComponentId;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions as _;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
-use rib::RibInterpreterResult;
 use rib::RibResult;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -137,13 +136,13 @@ impl ResolvedWorkerBindingFromRequest {
         }
     }
 
-    fn get_file_server_result(worker_response: RibInterpreterResult) -> FileServerResult<String> {
+    fn get_file_server_result(worker_response: RibResult) -> FileServerResult<String> {
         Self::get_file_server_result_internal(worker_response)
             .unwrap_or_else(FileServerResult::SimpleErr)
     }
 
-    fn get_file_server_result_internal(worker_response: RibInterpreterResult) -> Result<FileServerResult<String>, String> {
-        let RibInterpreterResult::Val(value) = worker_response else {
+    fn get_file_server_result_internal(worker_response: RibResult) -> Result<FileServerResult<String>, String> {
+        let RibResult::Val(value) = worker_response else {
             return Err(format!("Response value expected"));
         };
 
@@ -315,37 +314,37 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
 mod file_server_result_test {
     use super::*;
 
-    async fn into_result(interpreter: &mut rib::Interpreter, s: &str) -> FileServerResult<String> {
-        let value = interpreter.run(
-            rib::compile(
+    async fn into_result(s: &str) -> FileServerResult<String> {
+        let value = rib::interpret_pure(
+            &rib::compile(
                 &rib::from_string(
                     s.to_string()
                 ).unwrap(),
-            &vec![]).unwrap().byte_code
+            &vec![],
+            ).unwrap().byte_code,
+            &rib::RibInput::new(HashMap::new()),
         ).await.unwrap();
         ResolvedWorkerBindingFromRequest::get_file_server_result(value)
     }
 
     #[tokio::test]
     async fn file_server_result() {
-        let mut interpreter = rib::Interpreter::pure(Default::default());
-
-        let res0 = into_result(&mut interpreter, r#"
+        let res0 = into_result(r#"
             "./my_file.txt"
         "#).await;
         assert_eq!(res0, FileServerResult::Ok { content: format!("./my_file.txt"), response_details: None });
 
-        let res1 = into_result(&mut interpreter, r#"
+        let res1 = into_result(r#"
             ok("./my_file.txt")
         "#).await;
         assert_eq!(res1, FileServerResult::Ok { content: format!("./my_file.txt"), response_details: None });
 
-        let res2 = into_result(&mut interpreter, r#"
+        let res2 = into_result(r#"
             err("no file for you")
         "#).await;
         assert_eq!(res2, FileServerResult::SimpleErr("no file for you".to_string()));
 
-        let res3 = into_result(&mut interpreter, r#"
+        let res3 = into_result(r#"
             {
                 file-path: "./my_file.txt",
                 status: 418u32
@@ -358,7 +357,7 @@ mod file_server_result_test {
         assert_eq!(&content, "./my_file.txt");
         assert!(response_details.is_some());
         
-        let res4 = into_result(&mut interpreter, r#"
+        let res4 = into_result(r#"
             {
                 status: 418u32
             }
