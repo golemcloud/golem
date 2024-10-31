@@ -9,83 +9,124 @@ Rib uses the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealli
 `rib-expr` below defines the grammar of **Rib**.
 
 ```bash filename="Terminal" copy
-rib-expr           ::= request
-                     | let_binding
-                     | select_field
-                     | select_index
-                     | sequence
-                     | record
-                     | tuple
-                     | literal
-                     | number
-                     | flags
-                     | variable
-                     | boolean
-                     | concat
-                     | multiple
-                     | not
-                     | greater_than
-                     | greater_than_or_equal_to
-                     | less_than_or_equal_to
-                     | equal_to
-                     | less_than
-                     | conditional
-                     | pattern_match
-                     | option
-                     | result
-                     | function-call
+rib_expr         ::= simple_expr rib_expr_rest
 
-let_binding        ::= "let" variable (':' type_name)? '=' rib-expr ';'
-select_field       ::= request_field | worker_field | (record | variable) '.' variable_sequence
-worker_field       ::= "worker.response" | "worker.response." variable_sequence
-request_field      ::= request_body | request_path | request_header
-request_body       ::= "request.body" | "request.body." variable_sequence
-request_path       ::= "request.path" | "request.path." variable_sequence
-request_header     ::= "request.header." variable_sequence
-variable_sequence  ::= variable ('.' variable)*
-select_index       ::= (sequence | variable) ('[' rib-expr ']')+
-sequence           ::= '[' rib-expr (',' rib-expr)* ']'
-record             ::= '{' field (',' field)* '}'
-tuple              ::= '(' rib-expr (',' rib-expr)* ')'
-literal            ::= '"' [a-zA-Z0-9]* '"'
-variable           ::= [a-zA-Z0-9_]+
-number             ::= DIGITS(number_type_suffix)?
-flags              ::= '{' STRING (',' STRING)* '}'
-boolean            ::= "boolean" '(' BOOLEAN ')'
-concat             ::= concat-elem*
-concat-elem        ::= text | '${' variable '}'
-text               ::= '[^${}]*'
-multiple           ::= "multiple" '(' rib-expr* ')'
-not                ::= "not" '(' rib-expr ')'
-gt                 ::= rib-expr '>' rib-expr
-gt_or_eq_to        ::= rib-expr ">=" rib-expr
-lt                 ::= rib-expr '<' rib-expr
-lt_or_eq_to        ::= rib-expr "<=" rib-expr
-eq_to              ::= rib-expr "==" rib-expr
-conditional        ::= "if" rib-expr "then" rib-expr "else" rib-expr
-pattern_match      ::= "match" rib-expr '{' match_arms '}'
-match_arms         ::= match_arm (',' match_arm)*
-match_arm          ::= pattern '=>' rib-expr
-pattern            ::= variable | ok | some | none | err | '_'
-option             ::= "some" '(' rib-expr ')' | "none"
-result             ::= "ok" '(' rib-expr ')' | "err" '(' rib-expr ')'
-field_list         ::= field (',' field)*
-field              ::= variable ':' rib-expr
-pattern            ::= variable
-                      | literal
-                      | '_' // wildcard pattern
-type_name          ::= "bool"
-                     | "s8" | "u8"
-                     | "s16" | "u16"
-                     | "s32" | "u32"
-                     | "s64" | "u64"
-                     | "f32" | "f64"
-                     | "chr" | "str"
-                     | "list" '<' type_name '>'
-                     | "tuple" '<' type_name (',' type_name)* '>'
-                     | "option" '<' type_name '>'
+rib_expr_rest    ::= (binary_op simple_expr)*
 
-number_type_suffix ::= "s8"|"s16"|"s32"|"s64"|"u8"|"u16"|"u32"|"u64"|"f32"|"f64"
+simple_expr ::=
+      list_comprehension
+    | list_reduce
+    | pattern_match
+    | let_binding
+    | conditional
+    | selection_expr
+    | flag
+    | record
+    | code_block
+    | tuple
+    | sequence
+    | boolean_literal
+    | literal
+    | not
+    | option
+    | result
+    | identifier
+    | call
+    | number
+
+let_binding         ::= "let" let_variable (":" type_name)? "=" rib_expr
+
+conditional         ::= "if" rib_expr "then" rib_expr "else" rib_expr
+
+selection_expr      ::= select_field | select_index
+
+select_field        ::= selection_base_expr "." identifier
+
+select_index        ::= selection_base_expr "[" pos_num "]"
+
+nested_indices      ::= "[" pos_num "]" ("," "[" pos_num "]")*
+
+flag                ::= "{" flag_names "}"
+
+flag_names          ::= flag_name ("," flag_name)*
+
+flag_name           ::= (letter | "_" | digit | "-")+
+
+record              ::= "{" record_fields "}"
+
+record_fields       ::= field ("," field)*
+
+field               ::= field_key ":" rib_expr
+
+field_key           ::= (letter | "_" | digit | "-")+
+
+code_block          ::= rib_expr (";" rib_expr)*
+
+code_block_unit     ::= code_block ";"
+
+selection_base_expr ::= select_index | select_field | identifier | sequence | tuple
+
+tuple               ::= "("  ib_expr ("," rib_expr)* ")"
+
+sequence            ::= "["  rib_expr ("," rib_expr)* "]"
+
+call                ::= function_name ("(" argument ("," argument)* ")")?
+
+function_name       ::= variant | enum | worker_function_call
+
+enum                ::= identifier
+
+variant             ::= identifier ( "(" rib_expr ")" )   ?
+
+argument            ::= rib_expr
+
+list_comprehension  ::= "for" identifier_text "in" expr "{"
+                           code_block_unit?
+                           "yield" expr ";"
+                         "}"
+
+list_reduce         ::= "reduce" identifier_text"," identifier_text "in" expr "from" expr "{"
+                       code_block_unit?
+                       "yield" expr ";"
+                     "}"
+
+binary_op           ::=  ">=" | "<=" | "==" | "<" | ">" | "&&" | "||" | "+" | "-" | "*" | "/"
+
+text                ::= letter (letter | digit | "_" | "-")*
+
+pos_num             ::= digit+
+
+number              ::= pos_num (":" type_name)?
+
+literal             ::= "\"" (static_term | dynamic_term)* "\""
+
+static_term         ::= (letter | space | digit | "_" | "-" | "." | "/" | ":" | "@")+
+
+dynamic_term        ::= "${" rib_expr "}"
+
+boolean_literal     ::= "true" | "false"
+
+not                 ::= "!" rib_expr
+
+option              ::= "some" "(" rib_expr ")" | "none"
+
+result              ::= "ok" "(" rib_expr ")" | "error" "(" rib_expr ")"
+
+identifier          ::= identifier_text
+
+identifier_text     ::= letter (letter | digit | "_" | "-")*
+
+type_name           := basic_type | list_type | tuple_type | option_type | result_type
+
+basic_type          ::= "bool" | "s8" | "u8" | "s16" | "u16" | "s32" | "u32" | "s64" | "u64" | "f32" | "f64" | "chr" | "str"
+
+list_type           ::= "list" "<" (basic_type | list_type | tuple_type | option_type | result_type) ">"
+
+tuple_type          ::= "tuple" "<" (basic_type | list_type | tuple_type | option_type | result_type) ("," (basic_type | list_type | tuple_type | option_type | result_type))* ">"
+
+option_type         ::= "option" "<" (basic_type | list_type | tuple_type | option_type | result_type) ">"
+
+result_type         ::= "result" "<" (basic_type | list_type | tuple_type | option_type | result_type) "," (basic_type | list_type | tuple_type | option_type | result_type) ">"
 
 ```
 
@@ -93,26 +134,20 @@ The following sections show some examples of each construct.
 
 ## Examples
 
-Note that Rib expressions in the below examples need to be wrapped in code block using `${` `}`. This is to differentiate between raw text and an actual Rib program.
-As we progress, we may try to avoid the need of it, and being able to write `Rib` program in IDE without code-blocks.
-Example: `${1}` is evaluated as a `Number` while `1` is evaluated as text.
+Rib scripts can be multiline, and it should be separated by `;`.
 
-Rib scripts can be multiline, and it should be separated by `;`. The last expression in the Rib script is the return value of the script.
+### Return type of a Rib script
+
+The last expression in the Rib script is the return value of the script. The last line in Rib script
+shouldn't end with a `;`, as this is a syntax error.
 
 ### Numbers
 
 ```bash filename="Terminal" copy
-
-1
+1u16
 ```
 
-However, most of the time you need to specify the type of the number as it can be u8, u16, f32 or any of the WASM types representing numbers.
-
-Example:
-
-```bash filename="Terminal" copy
-1f64
-```
+Most of the time you need to specify the type of the number as it can be u8, u16, f32 or any of the WASM types representing numbers.
 
 Another way to annotate type is
 
@@ -122,6 +157,9 @@ let x: f64 = 1;
 
 This is a parsed as a number of type u64. Similarly `-1` is parsed as a number of type i64 and `1.1` is parsed as a number of type f64.
 
+Sometimes, you may not need to explicitly specify the type if you are passing the variable to a function
+that expects a specific number type. In this case, Rib can infer the types. Otherwise, you need to explicitly mention it.
+
 ### String
 
 ```bash filename="Terminal" copy
@@ -129,7 +167,8 @@ This is a parsed as a number of type u64. Similarly `-1` is parsed as a number o
 "Hello"
 ```
 
-This is parsed as a string literal. If the strings are not wrapped with quotes, then it is considered as a variable.
+This is parsed as a string literal.
+If the strings are not wrapped with quotes, then it is considered as a identifier.
 
 ### Boolean
 
@@ -139,16 +178,21 @@ true
 
 This is parsed as a boolean true. Similarly `false` is parsed as a boolean literal.
 
-### Variables
+### Variable identifier
 
 ```bash filename="Terminal" copy
 foo
 ```
 
 This is parsed as a `Rib` variable expression and evaluating such an expression can fail if the value of this variable is not available in the context of evaluation.
-Usually `variables` are used to refer to the values in the context of evaluation. The context can mostly be `let binding` or `pattern matching` or `request` or `worker` or `response` etc.
+This implies, if you are running Rib specifying a wasm `component` through `worker-gateway` in `golem`, then `Rib` has the access to look at component metadata.
+If `Rib` finds this variable `foo` in the component metadata,then it tries to infer its types.
 
-More explanations on variables can be found in other examples.
+If such a variable is not present in the wasm component (i.e, you can cross check this in WIT file of the component),
+then technically there are two possibilities. Rib will choose to fail the compilation or consider it as a global variable input.
+A global input is nothing but `Rib` expects `foo` to be passed in to the evaluator of Rib script (somehow).
+Since you are using `Rib` from the worker-gateway part of `golem` the only valid global variable supported is `request` and nothing else.
+This would mean, it will fail compilation.
 
 ### Sequence
 
@@ -174,25 +218,31 @@ In other words, `Rib` evaluator do expect the values in a sequence to be of the 
 
 ```bash filename="Terminal" copy
 
-{ name: "John", age: 30u32 }
-{ city: "New York", population: 8000000u64 }
-{ country: "France", capital: "Paris" }
-{ fruits: ["apple"", "banana"", "orange""], count: 3u32 }
+{ name: "John", age: 30u16 }
 
+{ city: "New York", population: 8000000u64 }
+
+{ name: "John", age: 30u16, { country: "France", capital: "Paris" } }
 ```
 
-This is parsed as a `WASM` Record. The syntax is inspired from `WASM-WAVE`. The minor difference here is strings are wrapped with single quotes instead of double quotes.
-Note that keys are not considered as variables. They are considered as literals (even in the absence of single quotes) if they are part of Record.
+This is parsed as a `WASM` Record. The syntax is inspired from `WASM-WAVE`.
+
+Note that keys are not considered as variables.
+They are considered as literal strings (representing key name of a record element), even in the absence of quotes.
+
+Why age is `30u16` instead of `30` ? If Rib infers the overall type of record (from the context), then you may not need to explicitly specify the type of `30` in the above example.
+However most of the times, you will need to specify the number types. We will try to be improve this part of Rib
+by providing some flexibility.
 
 ### Tuple
 
-```
+```bash filename="Terminal" copy
 (1u8, 100u32, 20.1f32)
 ```
 
 This is also equivalent to the following in Rib.
 
-```
+```bash filename="Terminal" copy
 let k: (u8, u32, f32) = (1, 100, 20.1);
 k
 ```
@@ -217,6 +267,13 @@ A field can be selected from an `Rib` expression if it is a `Record` type. For e
 is a valid selection given `foo` is a variable that gets evaluated to a record value.
 
 ```bash filename="Terminal" copy
+let foo = { name: "John", age: 30u16 };
+foo.name
+```
+
+You can also inline as given below:
+
+```bash filename="Terminal" copy
 { name: "John", age: 30u16 }.name
 ```
 
@@ -225,15 +282,23 @@ is a valid selection given `foo` is a variable that gets evaluated to a record v
 This is selecting an index from a sequence value.
 
 ```bash filename="Terminal" copy
+let x = [1, 2, 3];
+x[0]
+```
+
+You can also inline as given below
+
+```bash filename="Terminal" copy
 [1, 2, 3][0]
 ```
 
-For example `foo[10]` is valid given `foo` is an `Rib` variable that gets evaluated to a sequence.
-
 ### Request and selection of Fields
 
-If using worker-bridge of golem OSS, you can use the variable `request` as this is available in the runtime context of Rib in worker-bridge
-that points to the input request.
+If you are using worker-gatway to upload API definitions, you can use the variable `request` in your Rib script,
+and that will be considered as a global input. `worker-gateway` will ensure to pass the value of `request` to the
+rib evaluator internally.
+
+Please refer to worker-gateway documents for more details.
 
 ```bash filename="Terminal" copy
 request
@@ -246,9 +311,31 @@ To select the body field in request,
 request.body
 ```
 
-Note that Rib infers types of the values only if the value is being passed to a worker function, where in it looks up the component metadata.
-However, in situations where you have a standalone script such as `request.body`, it cannot infer the types and fail to compile. The best way
-to fix this and ensure there are no compile time errors is to annotate it the type.
+To select a header from the request
+
+```bash filename="Terminal" copy
+
+request.headers
+
+```
+
+To select the value of a path or query variable in your http request.
+
+```bash filename="Terminal" copy
+request.path.user
+
+```
+
+Please note that Rib by itself don't support a keyword such as `request`, or `path` or `body` or `headers`.
+However these values are fed by the worker gateway. Please refer to worker-gateway documentations for more details.
+
+### Type Inference with Request Variables
+
+Note that Rib infers types of the values only if the value is being passed to a worker function directly or indirectly. This is
+because Rib knows the argument types of a worker function and it can infer the values based on these types.
+
+However, in situations where you have a standalone script such as `request.body`, it cannot infer the types and it will fail to compile. The best way
+to fix the compil time errors is to annotate it the type.
 
 ```
 let x: str = request.body;
@@ -305,13 +392,6 @@ A `Result` can be `Ok` of a value, or an `Err` of a value.
  err("error")
 ```
 
-This is again, using the same syntax followed in wasm-wave.
-A worker's response can be at times a `Result` type, where it can either `ok(x)` or `err(y)`
-and if we use `Rib` language to peek/unwrap this result.
-
-This can exist anywhere. If needed, user can embed a result in the request body and worker-bridge consider them to be a `Result` within the Record.
-More on these details can be found under worker-bridge's documentation
-
 ```bash filename="Terminal" copy
 
 {
@@ -339,24 +419,28 @@ The syntax is inspired from wasm wave.
 ### Comparison Operators
 
 ```bash filename="Terminal" copy
-5 > 3
+let x: u8 = 1;
+let y: u8 = 2;
+x + y
 
 ```
 
-The left side rib expression is evaluated as a Number 5, and the right side rib expression is evaluated as a Number 3.
-The comparison operator `>` is used to compare the two numbers, resulting in `true`.
+### Math operations
+
+```bash filename="Terminal" copy
+let x: u8 = 1;
+let y: u8 = 2;
+x + y
+```
 
 Similarly, we can use other comparison operators like `>=`, `<=`, `==`, `<` etc.
 Both operands should be a valid Rib code that points/evaluated to a number or string.
-
-Trying to compare complex values will result in evaluation error. Example : `[1, 2, 3] > [4, 5, 6]` will result in error.
-We will add support for these in Expr language.
 
 ### Conditional Statement
 
 ```bash filename="Terminal" copy
 
- let id: u32 = request.user.id;
+ let id: u32 = 10;
  if id > 3 then "higher" else "lower"
 
 ```
@@ -372,58 +456,79 @@ The `then-rib-expr` or `else-rib-expr` can be an any valid rib code, which could
 
 ```
 
-If branch and then branch are not type checked as of now.
-Meaning similar to other dynamic languages like python, they may get evaluated to different types of WASM values.
+You must ensure that the branches (then branch and else branch) resolve to the same type. Otherwise, Rib
+will fail to compile.
 
 ### Pattern Matching
 
 ```bash filename="Terminal" copy
 
-match <expr> {
-    <pattern> => <expr>,
-    <pattern> => <expr>
+let res: result<str, str> = ok("foo");
+
+match res {
+    ok(v) => v,
+    err(msg) => msg
 }
 
 ```
 
-Here are few examples that gives you an idea of what can be done with the current support of pattern matching.
-This would probably be your go-to construct when you are dealing with complex data structures like `Result` or `Option` or other custom `variant` (WASM Variant)
-that comes out as worker.response.
+This would probably be your go-to construct when you are dealing with complex data structures like `result` or `option` or other custom `variant` (WASM Variant)
+that comes out as the response of a worker function
 
 ```bash filename="Terminal" copy
   let worker_result = my_worker_function_name(1, "jon");
-  match worker_result { ok(x) => "foo", err(msg) => "error" }
+  match worker_result {
+     ok(x) => "foo",
+     err(msg) => "error"
+  }
 ```
 
-You can bring them in multiple lines as follows:
+### Exhaustive pattern matching
+
+If the pattern match is not exhaustive, then it will throw compilation errors
+
+Example: The following pattern matching is invalid
 
 ```bash filename="Terminal" copy
   match worker_result {
-    ok(x) => "foo",
-    err(msg) => "error"
+    some(x) => "found",
   }
 ```
+
+This will result in following error:
 
 ```bash filename="Terminal" copy
-  match worker.response {
-    some(x) => "found",
-    none => "not found"
-  }
+Error: Non-exhaustive pattern match. The following patterns are not covered: `none`.
+To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.
 ```
 
-Say your worker responded with a `variant`.
+Now, let's say your worker responded with a `variant`.
 Note on variant: A variant statement defines a new type where instances of the type match exactly one of the variants listed for the type.
 This is similar to a "sum" type in algebraic datatype (or an enum in Rust if you're familiar with it).
 Variants can be thought of as tagged unions as well.
 
-Let's say we have a variant of type as given below responded from the `worker`. The `worker-bridge` is aware of the type
-of response from the `worker`.
+### Pattern Match on Variants
+
+Given you are using Rib through worker bridge, which knows about component metadata,
+then, let's say we have a variant of type as given below responded from the `worker`, when invoking a function called `foo`:
 
 ```bash filename="Terminal" copy
 variant my_variant {
     bar( {a: u32,b: string }),
     foo(list<string>),
 }
+```
+
+then, the following will work:
+
+```
+let x = foo("abc");
+
+match x {
+  bar({a: _, b: _}) => "success",
+  foo(some_list) => some_list[0]
+}
+
 ```
 
 #### Variables in the context of pattern matching
@@ -457,11 +562,9 @@ and will result in "a" if the `worker.response` was variant value `bar({a: 1, b:
 
 ```
 
-More on let binding below
-
 #### Wild card patterns
 
-In some of the above examples, the binding variables are unused. In this case, we can use `_` as a wildcard pattern to indicate that we don't care about the value.
+In some of the above examples, the binding variables are unused. We can use `_` as a wildcard pattern to indicate that we don't care about the value.
 
 ```bash filename="Terminal" copy
   match worker.response {
@@ -472,14 +575,15 @@ In some of the above examples, the binding variables are unused. In this case, w
 
 ### Let Binding
 
-We have already seen `let` binding in the above examples. Here is another simple example of `let` binding.
+We have already seen `let` binding in the above examples. Here is another set of examples.
 
 ```bash filename="Terminal" copy
 
- let a = { age: worker.response.age, city: "New York", name: request.body.name };
+ let worker_response = foo("bar");
+ let a = { age: 10u8, city: "New York", name: "foo" };
 
- match worker.response.admin {
-   Admin(_) => "admin",
+ match worker_response {
+   Admin(_) => {age: "**",  city: "***", name: "***" },
    User(x) => a
  }
 
@@ -496,23 +600,12 @@ Or even as simple as:
 
 ```
 
-The return value of the script is the last expression in the script, and is of the type boolean.
+As mentioned above, return value of the script is the last expression in the script, and in this case, it is of the type boolean.
 
 ## Known issues and Limitations
 
 Rib has become a typed script as part of 1.0 release, and is probably the newest entry into the whole ecosystem of Golem.
 We are making great improvements in this space and there will be constant release especially in the space of Rib.
-
-Following are some known issues and how to fix them if you encounter them
-
-- Stack overflow when inlining record or nested complex expressions. The solution is to use let binding expressions and use variables instead of inlining records.
-
-```
-let d: str = request.path.id;
-let x = { a: 1u32, b: 2u32, c: d };
-call(x)
-
-```
 
 - Incomplete syntax errors. We are working on this. For the most part a syntax (parser errors) comes from the following:
 

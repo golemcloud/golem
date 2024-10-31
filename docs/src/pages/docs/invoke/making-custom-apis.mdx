@@ -20,30 +20,34 @@ Exports:
 	golem:component/api.{get-cart-contents}() -> list<record { product-id: string, name: string, price: float32, quantity: u32 }>
 ```
 
-The following API definition exposes the `get-cart-contents` function as a custom http endpoint.
+Here is an example of an API definition, which we will use to expose an HTTP API over the function `golem:component/api.{get-cart-contents}`.
 
 ```json
 {
   "id": "my-shopping-cart-v1",
   "draft": true,
-  "version": "0.0.3",
+  "version": "0.0.4",
   "routes": [
     {
       "method": "Get",
-      "path": "/{user-id}/get-cart-contents",
+      "path": "/v4/{user-id}/get-cart-contents",
       "binding": {
         "type": "wit-worker",
         "componentId": {
-          "componentId": "94b657f6-238f-4737-9fc3-2b25ff2f60da",
+          "componentId": "dba38841-013a-49fa-a1dc-064949832f0c",
           "version": 0
         },
-        "workerName": "${let user: u64 = request.body.user-id; \"my-worker-${user}\" }",
-        "response": "${let result = golem:it/api.{get-cart-contents}(); {status: 200u64, body: result}}"
+        "workerName": "let user: u64 = request.path.user-id; \"my-worker-${user}\"",
+        "response": "let result = golem:it/api.{get-cart-contents}(); {status: 200u64, body: result}"
       }
     }
   ]
 }
 ```
+
+Please use this as a reference instead of using it with zero changes. For example, you might need to give a different
+version, componentId etc (explained below). You can get the `component` details including `componentId`
+by running `golem-cli component list` command.
 
 The API definition's fields have the following meaning:
 
@@ -56,7 +60,7 @@ The API definition's fields have the following meaning:
 | `path`    | Specifies the URL path pattern for the route. It may include path parameters enclosed in curly braces. Here, the path is `/{user-id}/get-cart-contents`, indicating that this route handles requests to retrieve the contents of a shopping cart for a specific user. |
 | `binding` | This object contains information about how the request should be handled by the Golem worker.                                                                                                                                                                         |
 
-### Golem Worker Binding
+## Golem Worker Binding
 
 Let's break down the binding object.
 
@@ -67,8 +71,10 @@ Let's break down the binding object.
 | `workerName`  | Specifies the Name of the Golem worker responsible for handling the request. Here it is `my-worker-${request.path.user-id}`. The value that is wrapped in code block (starting with `${` and ending with `}`) will be a Rib expression. Here `request.path.user-id` is a valid Rib expression where it selects the field `path` from the `request` block, and further selects `user-id` from it. |
 | `response`    | The `response` field here is a Rib expression (therefore wrapped in a code block) that allows you to call any worker function and manipulates its output.                                                                                                                                                                                                                                        |
 
-Note that anything wrapped in this block is an `Rib Expression` which gets evaluated at runtime and in this case, it gets evaluated to actual user-id which is then concatenated with the text "my-worker-". If you pass complex Rib expressions to be concatenated with a worker-id (for example: It is evaluated to a WASM record) then you will get a response back saying invalid worker-name.
-If your worker name is a constant, you can avoid interpolations `${}` and directly write the worker name as a text.
+Note that workerName and response are actually rib expressions. It gives you the flexibility to make necessary changes to the input and output to a worker function,
+as well as dynamically create a worker name.
+
+If your worker name is a constant, the you can simply make it a constant string such as `"foo"`. Please note that it has to be quoted for it a valid Rib string.
 See the [Rib reference](rib) for the full reference of the binding language.
 
 In this example, the following Rib expression defines the request:
@@ -79,15 +85,17 @@ let result = golem:it/api.{get-cart-contents}();
 
 ```
 
-The first line is about calling the worker-function and assigning its reuslt to the variable `result`. The last line is a WASM record where you are mapping to the response. Here body is `result` itself.
+The first line is about calling the worker-function and assigning its result to the variable `result`. The last line is a WASM record where you are mapping to the response. Here body is `result` itself.
 That means, we are not manipulating the result returned by the function, and simply forward it as response body. Status is 200u64. `u64` is the type of the number
-as Rib is typed and it needs to the full type of the WASM record. `200u64` is equivalent to `let x: u64 = 200; x;` in Rib.
+as Rib is typed and it needs to know the full type of the WASM record. `200u64` is equivalent to `let x: u64 = 200; x;` in Rib.
+
+As mentioned above, see the [Rib reference](rib) to know more about Rib language.
 
 There are various possibilities here to manipulate the data using Rib
 language, such as selecting only a particular field from the result of the function invocation. Say for example, the result is a WASM `result` which can be `ok` or `err`. In this case you
 can have a complex Rib expression as below
 
-```
+```bash filename="Terminal" copy
 let result = golem:it/api.{get-cart-contents}();
 
 let response_status = match result {
@@ -105,8 +113,9 @@ let response_body = match result {
 ```
 
 The result of the Rib expression is whatever the result of the last line/expression in the above Rib program, similar to many programming languages.
+Note, the last line of Rib is not ending with a `;`.
 
-### Upload API definition
+## Upload API definition
 
 The API definitions can be uploaded to Golem using one of the following methods:
 
@@ -123,17 +132,58 @@ golem-cli api-definition add api-definition.json
 
 This returns:
 
-```
-API Definition created with ID my-shopping-cart-v1 and version 0.0.2.
-Routes:
-+--------+------------------------------+---------------+-----------------------------------+
-| Method | Path                         | Component URN | Worker Name                       |
-+--------+------------------------------+---------------+-----------------------------------+
-| Get    | /{user-id}/get-cart-contents | *908addc8aa44 | my-worker-${request.path.user-id} |
-+--------+------------------------------+---------------+-----------------------------------+
+```bash filename="Terminal" copy
+{
+  "id": "my-shopping-cart-v1",
+  "version": "0.0.4",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "/v4/{user-id}/get-cart-contents",
+      "binding": {
+        "componentId": {
+          "componentId": "dba38841-013a-49fa-a1dc-064949832f0c",
+          "version": 0
+        },
+        "workerName": "let user: u64 = request.path.user-id;\n\"my-worker-${user}\"",
+        "idempotencyKey": null,
+        "response": "let result = golem:it/api.{get-cart-contents}();\n{status: 200u64, body: result}",
+        "responseMappingInput": {
+          "types": {}
+        },
+        "workerNameInput": {
+          "types": {
+            "request": {
+              "type": "Record",
+              "fields": [
+                {
+                  "name": "path",
+                  "typ": {
+                    "type": "Record",
+                    "fields": [
+                      {
+                        "name": "user-id",
+                        "typ": {
+                          "type": "U64"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "idempotencyKeyInput": null
+      }
+    }
+  ],
+  "draft": true,
+  "createdAt": "2024-10-31T07:40:16.239763054Z"
+}
 ```
 
-This API definition is still a **draft** since it is still not `deployed` and have the endpoint of `get-cart-contents` exposed.
+This API definition is still a **draft** since it is still not `deployed` yet.
 Once it is deployed you cannot further update this definition unless you change the version, to avoid breaking your public API.
 
 The API definition can also be uploaded directly using REST APIs.
@@ -142,21 +192,36 @@ The API definition can also be uploaded directly using REST APIs.
 curl -X POST http://localhost:9881/v1/api/definitions -H "Content-Type: application/json" -d @api-definition.json
 ```
 
-Here `localhost:9881` is where worker-service (that implements the Worker Gateway) is running, ready to accept these API management requests. The docker-compose example (explained in quick-start) currently exposes the port 9881 for worker-service.
+Here `localhost:9881` is where worker-service (that implements the Worker Gateway) is running, ready to accept these API management requests.
+The docker-compose example (explained in quick-start) currently exposes the port 9881 for worker-service.
 
-### Deploy the API Definition
+## Deploy the API Definition
 
 Using golem-cli, deploying the API definition is straight forward.
 
 ```bash filename="Terminal" copy
-golem-cli api-deployment deploy --definition my-shopping-cart-v1/0.0.2 --host localhost:9006
+golem-cli api-deployment deploy --definition my-shopping-cart-v1/0.0.4 --host localhost:9006
 
 ```
 
 The above command returns the following:
 
-```
-API deployment on localhost:9006 with definition my-shopping-cart-v1/0.0.2
+```bash filename="Terminal" copy
+
+{
+  "apiDefinitions": [
+    {
+      "id": "my-shopping-cart-v1",
+      "version": "0.0.4"
+    }
+  ],
+  "site": {
+    "host": "localhost:9006",
+    "subdomain": null
+  },
+  "createdAt": "2024-10-31T07:36:47.497267721Z"
+}
+
 ```
 
 Here we deploy the definition and now the endpoints should be available at `host` `localhost:9006`. If you were following docker examples to spin up Golem, then the port has to be 9006.
@@ -164,49 +229,110 @@ Refer to `.env` in docker-examples folder in Golem OSS.
 
 You can test the deployment now, by trying to call the endpoint defined in the API definition.
 
+## Watch out for errors during deployment
+
+Please note the following: If you already deployed an API definition before with the same path `/{user-id}/get-cart-contents`,
+then you will receive a conflict error as given below, instead of the response above.
+
+```bash filename="Terminal" copy
+API deployment definitions conflict error: /{user-id}/get-cart-contents
 ```
-curl -H "Accept: application/json" -X GET http://localhost:9006/afsal/get-cart-contents
+
+This implies, when you update the version, you have to update the path as well, such as `/v5/{user-id}/get-cart-contents`
+under the `path` field in `route`.
+
+## Use the deployed API
+
+Given, you have successfully deployed, now you can try to invoke the following:
+
+```bash filename="Terminal" copy
+curl -H "Accept: application/json" -X GET http://localhost:9006/v4/100/get-cart-contents
 []
 ```
 
-Alternatively you can use REST APIs to deploy the API definition.
+Here the worker-gateway identifies the user to be `100`
+and evaluates the worker-name expr to be `my-worker-100`
+by evaluating `workerName` Rib expression.
 
-Let's create a `deployment.json` as given below. Based on the example above, the apiDefinitionId is `shopping-cart-v1` and version is `0.0.2`.
+Once it identifies the worker-name, it goes on evaluating the `response` Rib expression which internally invokes the worker function function `golem:it/api.{get-cart-contents}`
+with empty parameters, and simply get the worker-response (which is a WASM value)
+and converts it to `Json` and sends it back to the client.
+
+## Watch out for errors when using API
+
+Given the Rib script is strongly typed, tere are chances of failures if you break the types.
+Here is an example:
+
+Based on the workerName script that is deployed above (specified below for quick reference), the `user-id` in the path
+should be `u64`
+
+```bash filename="Terminal" copy
+let user: u64 = request.path.user-id; \"my-worker-${user}\""
+```
+
+This implies Rib expects the input `user-id` to be `u64`. Otherwise, it will fail with type-error.
+If you are using golem-OSS, you can see the following in docker logs
+
+```bash filename="Terminal" copy
+Failed to resolve the API definition; error: Worker binding resolution error: Failed to resolve rib input value from http request details Rib input type mismatch:
+Input request details don't match the requirements for rib expression to execute:
+Invalid value for the key path.
+Error: Invalid value for the key user-id. Error: Expected function parameter type is u64.
+But found String.
+Requirements. Record(TypeRecord { fields: [NameTypePair { name: "path", typ: Record(TypeRecord { fields: [NameTypePair { name: "user-id", typ: U64(TypeU64) }] }) }] })
+```
+
+This implies the `request` input should have a field called `path` in it, which in turn has a field called `user-id`,
+and its type _should be_ u64.
+
+This could have been a `BadRequest` error. But sometimes, the route may not be resolved due to wrong types.
+and this time client may not get back the reason for error. We will try to improve this as we go.
+In any case, during development phase, you will need to investigate errors like this by inspecting the logs
+in worker-service docker container.
+
+## REST API to deploy API
+
+As of now, we have deployed the API using golem-cli.
+We can do the same using REST APIs as an alternative.
+
+For this, let's create a `deployment.json` as given below.
+Based on the example above, the apiDefinitionId is `shopping-cart-v1` and version is `0.0.4`.
 
 If you were having a domain registered such as `my-site.com`, you would replace `localhost:9006` with `my-site.com`,
 that in turn redirects to `localhost:9006`, or wherever the worker-service is running (perhaps AWS).
 
 ```json
 {
-  "apiDefinitionId": "shopping-cart-v1",
-  "version": "0.0.3",
-  "site": "localhost:9006"
+  "apiDefinitions": [
+    {
+      "id": "my-shopping-cart-v1",
+      "version": "0.0.6"
+    }
+  ],
+  "site": {
+    "host": "locahost:9006"
+  }
 }
 ```
 
-```bash filename="Terminal" copy
-
-curl -X POST http://localhost:9881/v1/api/deployments/deploy -H "Content-Type: application/json"  -d @deployment.json
-
-```
-
-### Start using the API
-
-As you have seen before, after the deployment, we call the endpoint.
+`subdomain` field under `site` is optional. But you can provide this if its backed by a valid `host`.
+For `localhost` subdomain doesn't make much sense.
 
 ```bash filename="Terminal" copy
 
-curl -X GET http://localhost:9006/123/get-cart-contents
+curl -X POST http://localhost:9881/v1/api/deployments/deploy -H "Content-Type: application/json"  -d @api-deployment.json
 
+{"apiDefinitions":[{"id":"my-shopping-cart-v1","version":"0.0.4"}],"createdAt":"2024-10-31T07:59:00.390103588+00:00","site":{"host":"locahost:9006","subdomain":null}}⏎
 ```
 
-Now the Worker Gateway identifies the user to be `123` and evaluates the worker-name expr to be `worker-123`. It then forwards the request to the worker with id `worker-123` and invokes the function `golem:it/api.{get-cart-contents}` with empty parameters, and simply get the worker-response (which is a WASM value) and converts it to `Json` and sends it back to the client.
+## More details on Response Mapping
 
-### Response Mapping
+Response Mapping is under the `response` field under each binding. This is written using [Rib](/docs/rib) to call the worker function and manipulate it's results and return a value that's understandable for each protocol we use.
 
-Response Mapping is under the `response` field under each binding. This is written using [Rib](rib) to call the worker function and manipulate it's results and return a value that's understandable for each protocol we use.
+Here is a more complex example of an API definition that gives you more idea on
+what can be achieved with Rib expression under response field.
 
-Here is a more complex example of an API definition that gives you more idea on what can be achieved with Rib expression under response field.
+Please use this as a reference instead of using it with zero changes.
 
 ```json
 {
@@ -218,19 +344,17 @@ Here is a more complex example of an API definition that gives you more idea on 
       "method": "Get",
       "path": "/{user-id}/get-cart-contents",
       "binding": {
-        "type": "wit-worker",
-        "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-        "workerName": "my-worker",
-        "response": "${let result = golem:it/api.{get-cart-contents}(); {status: 200u64, body: result}}"
+        ..
+        "workerName": "\"my-worker\"",
+        "response": "let result = golem:it/api.{get-cart-contents}(); {status: 200u64, body: result}"
       }
     },
     {
       "method": "Post",
       "path": "/{user-id}/initialize-cart",
       "binding": {
-        "type": "wit-worker",
-        "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-        "workerName": "my-worker",
+        ..
+        "workerName": "\"my-worker\"",
         "response": "let empty: list<u16> = []; ${golem:it/api.{initialize-cart}(request.path.user-id); {status: 200u64, body: empty}}"
       }
     },
@@ -238,20 +362,18 @@ Here is a more complex example of an API definition that gives you more idea on 
       "method": "Post",
       "path": "/{user-id}/add-item",
       "binding": {
-        "type": "wit-worker",
-        "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-        "workerName": "my-worker",
-        "response": "${let quantity: f64 = request.body.quantity; let product_id: u64 = request.body.product-id; let name: str = request.body.name; let price: f64 = request.body.price; let input = {product-id: product_id, name: name, price: price, quantity: quantity}; golem:it/api.{add-item}(input); {status: 200u64, body: \"success\"}}"
+        ..
+        "workerName": "\"my-worker\"",
+        "response": "let quantity: f64 = request.body.quantity; let product_id: u64 = request.body.product-id; let name: str = request.body.name; let price: f64 = request.body.price; let input = {product-id: product_id, name: name, price: price, quantity: quantity}; golem:it/api.{add-item}(input); {status: 200u64, body: \"success\"}"
       }
     },
     {
       "method": "Post",
       "path": "/{user-id}/checkout",
       "binding": {
-        "type": "wit-worker",
-        "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-        "workerName": "my-worker",
-        "response": "${let result = golem:it/api.{checkout}(); {status: 200u64, body: match result { success(resp) => resp.order-id, error(msg) => msg }}}"
+        ..
+        "workerName": "\"my-worker\"",
+        "response": "let result = golem:it/api.{checkout}(); {status: 200u64, body: match result { success(resp) => resp.order-id, error(msg) => msg }}"
       }
     }
   ]
@@ -259,26 +381,29 @@ Here is a more complex example of an API definition that gives you more idea on 
 ```
 
 This example exposes multiple functions of the shopping-cart component through a custom HTTP API.
-Some of these examples include longer Rib scripts under `response` field. While this is not user friendly,
-with golem cloud console exposing an editor, you can write in a far more better way. Improvements in this space are in progress.
+Some of these examples include longer Rib scripts under `response` field. Also since you are not using `golem console` (from golem cloud),
+and relying on directly encoding `Rib` in a Http request, everything had to be in 1 single line, since multi-line doesn't work in JSON
+body in http request. Improvements in this space are in progress.
 
 Note that each line in Rib code block is separated by `;` and the last line in the Rib script is the return value which shouldn't have `;`.
 
 Most of the above examples are self explanatory, but worth pointing out a few details.
 
-The examples show how you can pass parameters to the function. This is more or less same as many programming languages - a comma separated list of arguments.
+Some of the `response` fields above have Rib script where we pass parameters to the function.
+This is more or less same as many programming languages - a comma separated list of arguments.
+Arguments are valid Rib code.
 
-```
+```bash filename="Terminal" copy
 
 golem:it/api.{initialize-cart}(request.path.user-id)
 
 ```
 
-Here Rib compiler knows the requirement of initialize-cart function and infers that request.path.user-id should be U64.
-This is a hint, that Rib is aware of the types in the code. In places where it find hard to infer these typs, you may face
-some compile time error (when uploading API definition), and the best solution is to be explicit about types. For example
+Here Rib compiler knows the requirement of initialize-cart function and infers that request.path.user-id should be u64.
+This is a hint, that Rib is aware of the types in the code. In places where it find hard to infer these types, you may face
+some compile time errors (when uploading API definition), and the best solution is to be explicit about types. For example
 
-```
+```bash filename="Terminal" copy
 let user_id: u64 = request.path.user-id;
 golem:it/api.{initialize-cart}(user_id)
 
@@ -288,14 +413,14 @@ The most interesting example out of all the endpoints is the `checkout` endpoint
 
 Here the response mapping in Rib is this:
 
-```
+```bash filename="Terminal" copy
 let result = golem:it/api.{checkout}();
 
 {status: 200u64, body: match result { success(resp) => resp.order-id, error(msg) => msg }}
 
 ```
 
-This can also be written as the following for more readability:
+This can also be written as the following for more readability (with [golem console](https://console.golem.cloud):
 
 ```
 let result = golem:it/api.{checkout}();
@@ -305,10 +430,10 @@ let body =  match result { success(resp) => resp.order-id, error(msg) => msg };
 
 ```
 
-Here we manipulate the result from worker function using a match expression. More details on match expression is explained under `Rib` documentation.
+Here we manipulate the result from worker function using a match expression. More details on match expression is explained under [Rib](/docs/rib) documentation.
 It matches on `success` and `error` variants because the result type of `golem:it/api.{checkout}` is a variant which can be either success or error.
 
-### Looking up data from the request body and path
+## Looking up data from the request body and path
 
 In the above example, we have an endpoint to add products into the cart.
 
@@ -317,73 +442,54 @@ In the above example, we have an endpoint to add products into the cart.
   "method": "Post",
   "path": "/{user-id}/add-item",
   "binding": {
-    "type": "wit-worker",
-    "componentId": "c57de1ee-fbe5-4068-a67d-908addc8aa44",
-    "workerName": "${let user_id: u64 = request.path.user-id; \"my-worker-${user_id}\"",
+    ....
     "response": "${let product_id: u64 = request.body.product-id; golem:it/api.{add-item}({product-id: product_id}); let empty_body: list<u16> = []; {status: 200u64, body: empty_body}}"
   }
 }
 ```
 
 This implies, the http request should be method `POST` with request body having the following fields: `product-id`, `name`, `price` and `quantity`.
-Similarly, yoiu can select field from the request path in Rib expression. We already used this to fetch `user-id` to form the worker name.
 
-### Test the API endpoints
+## Input `request`
 
-Once you upload and deploy the API definition above, you can try the following:
+Worker gateway allows you to look up the values of request path or query variables using `request.path.*` syntax.
+For request body, you can use `request.body.*` syntax. Similarly for headers it is `request.headers.*`
 
-With the following request body saved in a file request_body.json
+## Constraints on Components after deployment
 
-```json
-{
-  "product-id": "foo",
-  "name": "iphone",
-  "price": 2500,
-  "quantity": 1
-}
-```
+Please note that, once you have deployed an API using a specific component-version, then
+you may not be able to update the component-version (ex: `golem-cli component update`) unless
+the arguments to the functions used in the Rib script in the deployed API definition is backward compatible.
 
-```
-curl -H "Accept: application/json" -X POST http://localhost:9006/afsal/initialize-cart
-#[]
+If there are conflicts (i.e, backward incompatible) then you will get a conflict report message,
+which details especially the missing functions and conflicting functions, where conflicting functions
+detail about existing parameter types, new parameter types, existing return type, and new return type.
 
+## Support to import OpenAPI spec
 
-curl -H "Accept: application/json" -X POST http://localhost:9006/afsal/add-item -d @request_body.json
-
-[]%
-
-curl -H "Accept: application/json" -X GET http://localhost:9006/afsal/get-cart-contents
-[{"name":"foo","price": 2500,"product-id":"foo","quantity":1}]%
-
-curl -H "Accept: application/json" -X POST http://localhost:9006/afsal/checkout
-#238738674%
-
-```
-
-Note that there is currently no way to express unit in `Rib` as Rib is mostly WASM-WAVE syntax. This is why for certain endpoints we simply returned `[]`.
-You can also prefer to return an empty string `""`.
-
-### Support to import OpenAPI spec
-
-Golem allows you to import API definition in OpenAPI spec format. This is because, users may have already written an OpenAPI spec for their endpoints for various purposes. By adding extra details of into the same spec, we can use it as an API definition. Internally it gets converted to the Worker Gateway's native format of API definition, discussed in the beginning of this documentation.
+Until now, we used the native API definition format of Golem.
+Golem allows you to import API definition in OpenAPI spec format too.
+This is because, users may have already written an OpenAPI spec for their endpoints for various purposes.
+By adding extra details of into the same spec, we can use it as an API definition. Internally it gets converted to the Worker Gateway's native format of API definition, discussed in the beginning of this documentation.
 
 The main advantage of this feature is the re-usability of the same endpoint definitions across your system. For example, you can use the same file now to register with Golem's Worker Gateway and register with another external API gateway. More on this below. However once deployed, it returns native format then onwards, and updates needs to be done in the native format.
 
 ```json
 {
   "openapi": "3.0.0",
-  "x-golem-api-definition-version": "0.0.3",
-  "x-golem-api-definition-id": "shopping-cart-v1",
   "info": {
-    "title": "Sample API",
+    "title": "MyOpenAPISpec",
     "version": "1.0.2"
   },
+  "x-golem-api-definition-id": "my-shopping-cart-v1",
+  "x-golem-api-definition-version": "0.0.7",
   "paths": {
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {
-        "worker-name": "my-worker",
-        "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "response": "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200u64 } }"
+        "worker-name": "\"foo\"",
+        "component-id": "dba38841-013a-49fa-a1dc-064949832f0c",
+        "component-version": 0,
+        "response": "let x = golem:it/api.{checkout}();\nlet status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
       },
       "get": {
         "summary": "Get Cart Contents",
@@ -441,17 +547,46 @@ To import OpenAPI spec using Golem CLI,
 
 ```bash filename="Terminal" copy
 
-golem-cli api-definition import @open_api_spec.json
+golem-cli api-definition import open_api.json
 
 ```
 
-Alternatively, you can use REST API endpoint
+This will return
 
 ```bash filename="Terminal" copy
-curl -X POST http://localhost:9881/v1/api/definitions/oas -H "Content-Type: application/json"  -d @openapi_spec.json
+
+{
+  "id": "my-shopping-cart-v1",
+  "version": "0.0.7",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "/{user-id}/get-cart-contents",
+      "binding": {
+        "componentId": {
+          "componentId": "dba38841-013a-49fa-a1dc-064949832f0c",
+          "version": 0
+        },
+        "workerName": "\"foo\"",
+        "idempotencyKey": null,
+        "response": "let x = golem:it/api.{checkout}();\nlet status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}",
+        "responseMappingInput": {
+          "types": {}
+        },
+        "workerNameInput": {
+          "types": {}
+        },
+        "idempotencyKeyInput": null
+      }
+    }
+  ],
+  "draft": true,
+  "createdAt": "2024-10-31T08:56:02.412860043Z"
+}
+
 ```
 
-## Integrating Golem with existing API Gateways
+## Integrating worker-gateway with existing API Gateways
 
 Note that, while the Golem's Worker Gateway is a powerful tool for defining and managing API endpoints, it is not a full-fledged API Gateway.
 However, it can be used conjunction with existing API Gateways, allowing you to leverage the capabilities of both systems.
@@ -462,10 +597,14 @@ In this scenario, the third party API Gateway would route incoming requests to G
 
 This section shows how to integrate with [Tyk API gateway](https://tyk.io).
 
-Note that Tyk allows users to upload OpenAPI spec similar to Golem. You can upload the same OpenAPI spec with worker-bridge info to Tyk,
-with 1 more extra information which is `servers` block with the value of the URL of the Golem Worker Gateway, that tells the API gateway to route the request to worker-bridge.
-Obviously, it depends on how you installed Tyk. If you installed Tyk in the same network as worker-bridge, you can use the localhost as servers. If you are using a separate docker network with Tyk,
-you will need to give the machine IP address to reach the Worker Gateway URL.
+Note that Tyk allows users to upload OpenAPI spec similar to Golem. You can upload the same OpenAPI spec with worker-gateway info to Tyk,
+with 1 more extra information which is `servers` block with the value of the URL of the Golem Worker Gateway (which is the URL of the worker-service service in docker),
+that tells the Tyk API gateway of Tyk to route the request to worker-gateway.
+
+Please note, the above set up will work depending on how you installed Tyk.
+If you installed Tyk in the same network as worker-gateway, you can use the localhost as servers.
+
+If you are using a separate docker network with Tyk, you will need to give the machine IP address to reach the Worker Gateway URL.
 
 ```json
 {
@@ -484,9 +623,10 @@ you will need to give the machine IP address to reach the Worker Gateway URL.
   "paths": {
     "/{user-id}/get-cart-contents": {
       "x-golem-worker-bridge": {
-        "worker-name": "worker-${request.path.user-id}",
-        "component-id": "2696abdc-df3a-4771-8215-d6af7aa4c408",
-        "response": "${ { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(), status: 200u64 } }"
+        "worker-name": "\"foo\"",
+        "component-id": "dba38841-013a-49fa-a1dc-064949832f0c",
+        "component-version": 0,
+        "response": "let x = golem:it/api.{checkout}();\nlet status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
       },
       "get": {
         "summary": "Get Cart Contents",
