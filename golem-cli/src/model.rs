@@ -15,6 +15,7 @@
 pub mod component;
 pub mod deploy;
 pub mod invoke_result_view;
+pub mod plugin_manifest;
 pub mod text;
 pub mod wave;
 
@@ -703,15 +704,15 @@ pub trait PluginScopeArgs {
 #[derive(clap::Args, Debug, Clone)]
 #[group(required = false, multiple = false)]
 pub struct OssPluginScopeArgs {
-    /// Global scope
+    /// Global scope (plugin available for all components)
     #[arg(long, group = "plugin-scope-args")]
     global: bool,
 
-    /// Component URI. Either URN or URL.
+    /// Component scope given by a component URN or URL (plugin only available for this component)
     #[arg(long, short = 'C', value_name = "URI", group = "plugin-scope-args")]
     component: Option<ComponentUri>,
 
-    /// Component name
+    /// Component scope given by the component's name (plugin only available for this component)
     #[arg(long, short = 'c', group = "plugin-scope-args")]
     component_name: Option<String>,
 }

@@ -25,4 +25,21 @@ pub trait PluginClient {
         &self,
         scope: Option<Self::PluginScope>,
     ) -> Result<Vec<Self::PluginDefinition>, GolemError>;
+
+    async fn get_plugin(
+        &self,
+        plugin_name: &str,
+        plugin_version: &str,
+    ) -> Result<Self::PluginDefinition, GolemError>;
+
+    async fn register_plugin(
+        &self,
+        definition: Self::PluginDefinition,
+    ) -> Result<Self::PluginDefinition, GolemError>;
+
+    async fn unregister_plugin(
+        &self,
+        plugin_name: &str,
+        plugin_version: &str,
+    ) -> Result<(), GolemError>;
 }

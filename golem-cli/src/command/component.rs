@@ -21,6 +21,7 @@ use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 use golem_client::model::ComponentType;
+use golem_common::model::PluginInstallationId;
 use std::sync::Arc;
 
 #[derive(Subcommand, Debug)]
@@ -122,6 +123,43 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         #[arg(short = 'y', long)]
         non_interactive: bool,
     },
+    /// Install a plugin for this component
+    #[command()]
+    InstallPlugin {
+        /// The component to install the plugin for
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// The plugin to install
+        #[arg(long)]
+        plugin_name: String,
+
+        /// The version of the plugin to install
+        #[arg(long)]
+        version: String,
+    },
+    /// Get the installed plugins of the component
+    #[command()]
+    GetInstallations {
+        /// The component to list plugin installations for
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// The version of the component
+        #[arg(short = 't', long)]
+        version: Option<u64>,
+    },
+    /// Uninstall a plugin for this component
+    #[command()]
+    UninstallPlugin {
+        /// The component to install the plugin for
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// The plugin to install
+        #[arg(long)]
+        installation_id: PluginInstallationId,
+    },
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -191,7 +229,7 @@ impl<
                 non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
-                service
+                let component = service
                     .add(
                         component_name,
                         component_file,
@@ -200,7 +238,9 @@ impl<
                         non_interactive,
                         format,
                     )
-                    .await
+                    .await?;
+                let result: GolemResult = component.into();
+                Ok(result)
             }
             ComponentSubCommand::Update {
                 component_name_or_uri,
@@ -267,6 +307,15 @@ impl<
                 deploy_service
                     .redeploy(component_name_or_uri, project_id, non_interactive, format)
                     .await
+            }
+            ComponentSubCommand::InstallPlugin { .. } => {
+                todo!()
+            }
+            ComponentSubCommand::GetInstallations { .. } => {
+                todo!()
+            }
+            ComponentSubCommand::UninstallPlugin { .. } => {
+                todo!()
             }
         }
     }

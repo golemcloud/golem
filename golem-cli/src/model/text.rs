@@ -1217,7 +1217,10 @@ pub mod worker {
 }
 
 pub mod plugin {
-    use crate::model::text::fmt::TextFormat;
+    use crate::model::text::fmt::{
+        format_id, format_main_id, format_message_highlight, FieldsBuilder, MessageWithFields,
+        TextFormat,
+    };
     use cli_table::{print_stdout, Table, WithTitle};
     use golem_client::model::{
         DefaultPluginScope, PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
@@ -1274,6 +1277,51 @@ pub mod plugin {
                     .with_title(),
             )
             .unwrap()
+        }
+    }
+
+    impl MessageWithFields for PluginDefinitionDefaultPluginOwnerDefaultPluginScope {
+        fn message(&self) -> String {
+            format!(
+                "Got metadata for plugin {} version {}",
+                format_message_highlight(&self.name),
+                format_message_highlight(&self.version),
+            )
+        }
+
+        fn fields(&self) -> Vec<(&'static str, String)> {
+            let mut fields = FieldsBuilder::new();
+
+            //     pub name: String,
+            //     pub version: String,
+            //     pub description: String,
+            //     pub icon: Vec<u8>,
+            //     pub homepage: String,
+            //     pub specs: PluginTypeSpecificDefinition,
+            //     pub scope: DefaultPluginScope,
+            //     pub owner: DefaultPluginOwner,
+
+            fields
+                .fmt_field("Name", &self.name, format_main_id)
+                .fmt_field("Version", &self.version, format_main_id)
+                .fmt_field("Description", &self.description, format_id)
+                .fmt_field("Homepage", &self.homepage, format_id)
+                .fmt_field("Scope", &self.scope, format_id);
+
+            match &self.specs {
+                PluginTypeSpecificDefinition::ComponentTransformer(specs) => {
+                    fields.fmt_field("Type", &"Component Transformer".to_string(), format_id);
+                    fields.fmt_field("Validate URL", &specs.validate_url, format_id);
+                    fields.fmt_field("Transform URL", &specs.transform_url, format_id);
+                }
+                PluginTypeSpecificDefinition::OplogProcessor(specs) => {
+                    fields.fmt_field("Type", &"Oplog Processor".to_string(), format_id);
+                    fields.fmt_field("Component ID", &specs.component_id, format_id);
+                    fields.fmt_field("Component Version", &specs.component_version, format_id);
+                }
+            }
+
+            fields.build()
         }
     }
 }

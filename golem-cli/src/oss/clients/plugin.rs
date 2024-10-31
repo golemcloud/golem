@@ -39,4 +39,41 @@ impl<C: golem_client::api::PluginClient + Sync + Send> PluginClient for PluginCl
 
         Ok(self.client.list_plugins(scope.as_ref()).await?)
     }
+
+    async fn get_plugin(
+        &self,
+        plugin_name: &str,
+        plugin_version: &str,
+    ) -> Result<Self::PluginDefinition, GolemError> {
+        info!("Getting plugin {} version {}", plugin_name, plugin_version);
+
+        Ok(self.client.get_plugin(plugin_name, plugin_version).await?)
+    }
+
+    async fn register_plugin(
+        &self,
+        definition: Self::PluginDefinition,
+    ) -> Result<Self::PluginDefinition, GolemError> {
+        info!("Registering plugin {}", definition.name);
+
+        let _ = self.client.create_plugin(&definition).await?;
+        Ok(definition)
+    }
+
+    async fn unregister_plugin(
+        &self,
+        plugin_name: &str,
+        plugin_version: &str,
+    ) -> Result<(), GolemError> {
+        info!(
+            "Unregistering plugin {} version {}",
+            plugin_name, plugin_version
+        );
+
+        let _ = self
+            .client
+            .delete_plugin(plugin_name, plugin_version)
+            .await?;
+        Ok(())
+    }
 }

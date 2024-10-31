@@ -38,7 +38,7 @@ pub trait ComponentService {
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
-    ) -> Result<GolemResult, GolemError>;
+    ) -> Result<Component, GolemError>;
     async fn update(
         &self,
         component_uri: ComponentUri,
@@ -93,7 +93,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
-    ) -> Result<GolemResult, GolemError> {
+    ) -> Result<Component, GolemError> {
         let result = self
             .client
             .add(

@@ -14,16 +14,26 @@
 
 use crate::clients::plugin::PluginClient;
 use crate::command::ComponentRefSplit;
+use crate::model::plugin_manifest::{
+    FromPluginManifest, PluginManifest, PluginTypeSpecificManifest,
+};
+use crate::model::text::fmt::MessageWithFields;
 use crate::model::{
-    ComponentIdResolver, Format, GolemError, GolemResult, PluginScopeArgs, PrintRes,
+    ComponentIdResolver, ComponentName, Format, GolemError, GolemResult, PathBufOrStdin,
+    PluginScopeArgs, PrintRes,
 };
 use crate::service::component::ComponentService;
 use crate::service::project::ProjectResolver;
 use async_trait::async_trait;
 use clap::Subcommand;
-use golem_common::model::ComponentId;
+use golem_client::model::{
+    ComponentTransformerDefinition, OplogProcessorDefinition, PluginTypeSpecificDefinition,
+};
+use golem_common::model::{ComponentId, ComponentType};
 use serde::Serialize;
+use std::path::PathBuf;
 use std::sync::Arc;
+use tracing::{debug, info};
 
 #[derive(Subcommand, Debug)]
 #[command()]
@@ -35,17 +45,54 @@ pub enum PluginSubcommand<PluginScopeRef: clap::Args> {
         #[command(flatten)]
         scope: PluginScopeRef,
     },
+    /// Get information about a registered plugin
+    #[command()]
+    Get {
+        /// Plugin name
+        #[arg(long)]
+        plugin_name: String,
+
+        /// Plugin version
+        #[arg(long)]
+        version: String,
+    },
+    /// Register a new plugin
+    #[command()]
+    Register {
+        /// The project to list components from
+        #[command(flatten)]
+        scope: PluginScopeRef,
+
+        /// Path to the plugin manifest JSON
+        manifest: PathBuf,
+
+        /// Do not ask for confirmation for performing an update in case the component already exists
+        #[arg(short = 'y', long)]
+        non_interactive: bool,
+    },
+    /// Unregister a plugin
+    #[command()]
+    Unregister {
+        /// Plugin name
+        #[arg(long)]
+        plugin_name: String,
+
+        /// Plugin version
+        #[arg(long)]
+        version: String,
+    },
 }
 
 impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
     pub async fn handle<
-        PluginDefinition: Serialize + 'static,
+        PluginDefinition: Serialize + MessageWithFields + FromPluginManifest + 'static,
         ProjectRef: Send + Sync + 'static,
-        PluginScope: Send,
+        PluginScope: Default + Send,
+        PluginOwner: Send,
         ProjectContext: Send + Sync,
     >(
         self,
-        _format: Format,
+        format: Format,
         client: Arc<
             dyn PluginClient<
                     PluginDefinition = PluginDefinition,
@@ -73,6 +120,85 @@ impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
                 let scope = scope.into(resolver).await?;
                 let plugins = client.list_plugins(scope).await?;
                 Ok(GolemResult::Ok(Box::new(plugins)))
+            }
+            PluginSubcommand::Get {
+                plugin_name,
+                version,
+            } => {
+                let plugin = client.get_plugin(&plugin_name, &version).await?;
+                Ok(GolemResult::Ok(Box::new(plugin)))
+            }
+            PluginSubcommand::Register {
+                scope,
+                manifest,
+                non_interactive,
+            } => {
+                let manifest = std::fs::read_to_string(manifest)
+                    .map_err(|err| GolemError(format!("Failed to read plugin manifest: {err}")))?;
+                let manifest: PluginManifest = serde_yaml::from_str(&manifest).map_err(|err| {
+                    GolemError(format!("Failed to decode plugin manifest: {err}"))
+                })?;
+
+                let spec = match &manifest.specs {
+                    PluginTypeSpecificManifest::ComponentTransformer(spec) => {
+                        PluginTypeSpecificDefinition::ComponentTransformer(
+                            ComponentTransformerDefinition {
+                                provided_wit_package: spec.provided_wit_package.clone(),
+                                json_schema: spec.json_schema.clone(),
+                                validate_url: spec.validate_url.clone(),
+                                transform_url: spec.transform_url.clone(),
+                            },
+                        )
+                    }
+                    PluginTypeSpecificManifest::OplogProcessor(spec) => {
+                        let component_name = ComponentName(format!(
+                            "oplog_processor:{}:{}",
+                            manifest.name, manifest.version
+                        ));
+                        let component_file = PathBufOrStdin::Path(spec.component.clone());
+
+                        info!("Uploading oplog processor component: {}", component_name);
+                        let component = components
+                            .add(
+                                component_name,
+                                component_file,
+                                ComponentType::Durable, // TODO: do we want to support ephemeral oplog processors?
+                                None,
+                                non_interactive,
+                                format,
+                            )
+                            .await?;
+
+                        debug!(
+                            "Uploaded oplog processor component {} as {}",
+                            component_name, component.versioned_component_id
+                        );
+
+                        PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+                            component_id: component.versioned_component_id.component_id,
+                            component_version: component.versioned_component_id.version,
+                        })
+                    }
+                };
+
+                let icon = std::fs::read(&manifest.icon)
+                    .map_err(|err| GolemError(format!("Failed to read plugin icon: {err}")))?;
+
+                let resolver = Resolver {
+                    projects: projects.clone(),
+                    components: components.clone(),
+                    _phantom: std::marker::PhantomData,
+                };
+                let scope = scope.into(resolver).await?.unwrap_or_default();
+
+                let def = manifest.into_definition(scope, owner, spec, icon);
+
+            }
+            PluginSubcommand::Unregister {
+                plugin_name,
+                version,
+            } => {
+                todo!()
             }
         }
     }
