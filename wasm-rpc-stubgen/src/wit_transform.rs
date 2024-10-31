@@ -5,7 +5,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use wit_encoder::{Ident, Interface, Package, PackageItem, StandaloneFunc, WorldItem};
 
-// TODO: use wit encoder based one
+// TODO: delete
 pub fn import_remover(
     package_name: &wit_parser::PackageName,
 ) -> impl Fn(String) -> anyhow::Result<String> {
@@ -14,9 +14,9 @@ pub fn import_remover(
             r"import\s+{}(/[^;]*)?;",
             regex::escape(&package_name.to_string())
         )
-        .as_str(),
+            .as_str(),
     )
-    .unwrap_or_else(|err| panic!("Failed to compile package import regex: {}", err));
+        .unwrap_or_else(|err| panic!("Failed to compile package import regex: {}", err));
 
     move |src: String| -> anyhow::Result<String> {
         Ok(pattern_import_stub_package_name
@@ -25,22 +25,45 @@ pub fn import_remover(
     }
 }
 
-// TODO: make the import name matcher more precise
-pub fn remove_world_named_interface_imports(package: &mut Package, import_prefix: &str) {
-    for world_item in package.items_mut() {
-        if let PackageItem::World(world) = world_item {
-            world.items_mut().retain(|item| {
-                if let WorldItem::NamedInterfaceImport(import) = &item {
-                    !import.name().raw_name().starts_with(import_prefix)
-                } else {
-                    true
-                }
-            });
+pub fn world_named_interface_import_remover(
+    package_name: &wit_parser::PackageName,
+) -> impl Fn(&mut Package) {
+    let import_ident_matcher = {
+        match package_name.version.as_ref() {
+            Some(version) => Regex::new(&format!(
+                r"{}/.+@{}",
+                regex::escape(&package_name.to_string()),
+                regex::escape(&version.to_string())
+            ))
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Failed to compile package import ident (with version) regex: {}",
+                    err
+                )
+            }),
+            None => Regex::new(&format!(r"{}/.+", regex::escape(&package_name.to_string())))
+                .unwrap_or_else(|err| {
+                    panic!("Failed to compile package import ident regex: {}", err)
+                }),
+        }
+    };
+
+    move |package: &mut Package| {
+        for world_item in package.items_mut() {
+            if let PackageItem::World(world) = world_item {
+                world.items_mut().retain(|item| {
+                    if let WorldItem::NamedInterfaceImport(import) = &item {
+                        !import_ident_matcher.is_match(import.name().raw_name())
+                    } else {
+                        true
+                    }
+                });
+            }
         }
     }
 }
 
-pub fn add_import_to_all_world(package: &mut Package, import_name: &str) {
+pub fn add_world_named_interface_import(package: &mut Package, import_name: &str) {
     for world_item in package.items_mut() {
         if let PackageItem::World(world) = world_item {
             let is_already_imported = world.items_mut().iter().any(|item| {

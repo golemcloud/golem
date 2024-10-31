@@ -26,8 +26,8 @@ pub mod wit_generate;
 pub mod wit_resolve;
 pub mod wit_transform;
 
-use crate::commands::dependencies::UpdateCargoToml;
 use crate::stub::{StubConfig, StubDefinition};
+use crate::wit_generate::UpdateCargoToml;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;

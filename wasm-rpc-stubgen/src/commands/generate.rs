@@ -19,7 +19,7 @@ use crate::fs::copy;
 use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
-use crate::wit_generate::{add_wit_dependencies, generate_stub_wit_to_target};
+use crate::wit_generate::{add_dependencies_to_stub_wit_dir, generate_stub_wit_to_target};
 use crate::wit_resolve::ResolvedWitDir;
 use anyhow::Context;
 use fs_extra::dir::CopyOptions;
@@ -65,9 +65,14 @@ pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<Resolv
     );
     let _indent = LogIndent::new();
     generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
-    add_wit_dependencies(stub_def).context("Failed to copy the dependent wit files")?;
+    add_dependencies_to_stub_wit_dir(stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .resolve_target_wit()
+        .inspect_err(|_| {
+            let _ = std::process::Command::new("code")
+                .args([stub_def.config.target_root.to_string_lossy().to_string()])
+                .status();
+        })
         .context("Failed to resolve the result WIT root")
 }
 
