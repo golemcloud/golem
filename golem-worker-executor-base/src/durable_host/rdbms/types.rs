@@ -17,37 +17,29 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::types::{
     DbColumnType, DbColumnTypeFlags, DbColumnTypeMeta, DbColumnTypePrimitive, DbRow, DbValue,
-    DbValuePrimitive, HostDbResultSet,
+    DbValuePrimitive, Error, HostDbResultSet,
 };
 use crate::services::rdbms::types as rdbms_types;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use std::sync::Arc;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
 pub struct DbResultSetEntry {
     pub rdbms_type: RdbmsType,
-    pub statement: String,
-    pub params: Vec<DbValue>,
-    pub columns: Vec<DbColumnTypeMeta>,
-    pub rows: Option<Vec<DbRow>>,
+    pub internal: Arc<dyn rdbms_types::DbResultSet + Send + Sync>,
 }
 
 impl DbResultSetEntry {
     pub fn new(
         rdbms_type: RdbmsType,
-        statement: String,
-        params: Vec<DbValue>,
-        columns: Vec<DbColumnTypeMeta>,
-        rows: Option<Vec<DbRow>>,
+        internal: Arc<dyn rdbms_types::DbResultSet + Send + Sync>,
     ) -> Self {
         Self {
             rdbms_type,
-            statement,
-            params,
-            columns,
-            rows,
+            internal,
         }
     }
 }
@@ -60,12 +52,13 @@ impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Vec<DbColumnTypeMeta>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::types::db-result-set", "get-column-metadata");
-        let columns = self
+        let internal = self
             .as_wasi_view()
             .table()
             .get::<DbResultSetEntry>(&self_)
-            .map(|e| e.columns.clone())?;
-
+            .map(|e| e.internal.clone())?;
+        let columns = internal.get_column_metadata().await.map_err(Error::Error)?;
+        let columns = columns.into_iter().map(|c| c.into()).collect();
         Ok(columns)
     }
 
@@ -75,12 +68,14 @@ impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Option<Vec<DbRow>>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::types::db-result-set", "get-next");
-        let rows = self
+        let internal = self
             .as_wasi_view()
             .table()
             .get::<DbResultSetEntry>(&self_)
-            .map(|e| e.rows.clone())?;
+            .map(|e| e.internal.clone())?;
 
+        let rows = internal.get_next().await.map_err(Error::Error)?;
+        let rows = rows.map(|r| r.into_iter().map(|r| r.into()).collect());
         Ok(rows)
     }
 

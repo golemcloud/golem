@@ -14,14 +14,12 @@
 
 use crate::durable_host::rdbms::types::DbResultSetEntry;
 use crate::durable_host::rdbms::RdbmsType;
-use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::HostDbConnection;
 use crate::preview2::wasi::rdbms::types::{DbResultSet, DbValue, Error};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::oplog::WrappedFunctionType;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
 
@@ -83,41 +81,34 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
         self_: Resource<PostgresDbConnection>,
         statement: String,
         params: Vec<DbValue>,
-    ) -> anyhow::Result<Result<Resource<DbResultSet>, Error>> {
+    ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "query");
-        // let address = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<PostgresDbConnection>(&self_)?
-        //     .address
-        //     .clone();
-        // let result = Durability::<Ctx, (String, String), String, SerializableError>::wrap(
-        //     self,
-        //     WrappedFunctionType::ReadRemote,
-        //     "golem rdbms::postgres::db-connection::query",
-        //     (address.clone(), statement.clone()),
-        //     |ctx| ctx.state.rdbms_service.query(address, statement),
-        // )
-        //     .await;
-        // match result {
-        //     Ok(_) => {
-        //         let db_result_set = self
-        //             .as_wasi_view()
-        //             .table()
-        //             .push(DbResultSetEntry::new(RdbmsType::Postgres, statement.clone(), params, vec![], vec![]))?;
-        //         Ok(Ok(db_result_set))
-        //     },
-        //     Err(e) => Ok(Err(Error::Error(format!("{:?}", e)))),
-        // }
+        let worker_id = self.state.owned_worker_id.clone();
+        let address = self
+            .as_wasi_view()
+            .table()
+            .get::<PostgresDbConnection>(&self_)?
+            .address
+            .clone();
 
-        let db_result_set = self.as_wasi_view().table().push(DbResultSetEntry::new(
-            RdbmsType::Postgres,
-            statement.clone(),
-            params,
-            vec![],
-            None,
-        ))?;
+        let result = self
+            .state
+            .rdbms_service
+            .postgres()
+            .query(
+                &worker_id,
+                &address,
+                &statement,
+                params.into_iter().map(|v| v.into()).collect(),
+            )
+            .await
+            .map_err(Error::Error)?;
+
+        let db_result_set = self
+            .as_wasi_view()
+            .table()
+            .push(DbResultSetEntry::new(RdbmsType::Postgres, result))?;
         Ok(Ok(db_result_set))
     }
 
@@ -137,7 +128,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
             .address
             .clone();
 
-        let _ = self
+        let result = self
             .state
             .rdbms_service
             .postgres()
@@ -148,9 +139,9 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
                 params.into_iter().map(|v| v.into()).collect(),
             )
             .await
-            .map_err(Error::Error)?;
+            .map_err(Error::Error);
 
-        Ok(Ok(0))
+        Ok(result)
     }
 
     fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {

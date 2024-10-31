@@ -68,6 +68,7 @@ pub mod postgres {
     use sqlx::{Column, Execute, Pool, Row};
     use std::collections::HashSet;
     use std::ops::Deref;
+    use std::sync::Arc;
     use tracing::info;
     use uuid::Uuid;
 
@@ -90,7 +91,7 @@ pub mod postgres {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<Box<dyn DbResultSet>, String>;
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
     }
 
     #[derive(Clone)]
@@ -180,7 +181,7 @@ pub mod postgres {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<Box<dyn DbResultSet>, String> {
+        ) -> Result<Arc<dyn DbResultSet  + Send + Sync>, String> {
             let key = RdbmsPoolKey::new(address.to_string());
             let pool = self.pool_cache.get(&key).await;
             if let Some(pool) = pool {
@@ -193,13 +194,13 @@ pub mod postgres {
                 let result = query.fetch_all(&pool).await.map_err(|e| e.to_string())?;
 
                 if result.is_empty() {
-                    Ok(Box::new(SimpleDbResultSet::empty()))
+                    Ok(Arc::new(SimpleDbResultSet::empty()))
                 } else {
                     let first = &result[0];
                     let _columns = first.columns();
                     let columns = vec![];
                     let values = vec![];
-                    Ok(Box::new(SimpleDbResultSet::new(columns, Some(values))))
+                    Ok(Arc::new(SimpleDbResultSet::new(columns, Some(values))))
                 }
             } else {
                 Err("DB Connection not found".to_string())
