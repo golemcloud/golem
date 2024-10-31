@@ -37,12 +37,13 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::workerctx::{
-    ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement, PublicFileSystem, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx
+    ExternalOperations, FileSystemNode, IndexedResourceStore, InvocationHooks, InvocationManagement, PublicWorkerFileSystem, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::config::RetryConfig;
+use golem_common::file_system::{READ_ONLY_FILES_PATH_ABSOLUTE, READ_ONLY_FILES_PATH_RELATIVE};
 use golem_common::model::oplog::{
     IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError,
     WorkerResourceId, WrappedFunctionType,
@@ -112,8 +113,6 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub owned_worker_id: OwnedWorkerId,
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
-    _temp_dir: Arc<TempDir>,
-    _temp_dir_ro: Option<Arc<TempDir>>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
@@ -163,6 +162,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             );
         }
 
+        let directories = FileSystemDirectories {
+            dir_ro: temp_dir_ro,
+            dir_rw: temp_dir,
+        };
+
         debug!(
             "Worker {} initialized with deleted regions {}",
             owned_worker_id.worker_id, worker_config.deleted_regions
@@ -177,8 +181,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let (wasi, table) = wasi_host::create_context(
             &worker_config.args,
             &worker_config.env,
-            temp_dir.path().to_path_buf(),
-            temp_dir_ro.as_ref().map(|dir| dir.path()),
+            &directories,
             stdin,
             stdout,
             stderr,
@@ -197,6 +200,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 event_service,
                 invocation_queue,
                 oplog: oplog.clone(),
+                directories,
             },
             state: PrivateDurableWorkerState::new(
                 oplog_service,
@@ -218,8 +222,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.total_linear_memory_size,
             )
             .await,
-            _temp_dir: temp_dir,
-            _temp_dir_ro: temp_dir_ro,
             execution_status,
         })
     }
@@ -1901,8 +1903,7 @@ pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     event_service: Arc<dyn WorkerEventService + Send + Sync>,
     invocation_queue: Weak<Worker<Ctx>>,
     oplog: Arc<dyn Oplog + Send + Sync>,
-    // temp_dir: Arc<TempDir>,
-    // temp_dir_ro: Option<Arc<TempDir>>,
+    directories: FileSystemDirectories,
 }
 
 impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
@@ -1912,8 +1913,7 @@ impl<Ctx: WorkerCtx> Clone for PublicDurableWorkerState<Ctx> {
             event_service: self.event_service.clone(),
             invocation_queue: self.invocation_queue.clone(),
             oplog: self.oplog.clone(),
-            // temp_dir: self.temp_dir.clone(),
-            // temp_dir_ro: self.temp_dir_ro.clone(),
+            directories: self.directories.clone(),
         }
     }
 }
@@ -1926,10 +1926,9 @@ impl<Ctx: WorkerCtx> PublicWorkerIo for PublicDurableWorkerState<Ctx> {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> PublicFileSystem for PublicDurableWorkerState<Ctx> {
-    async fn read_at(&self, _path: &Path) -> std::io::Result<()> {
-        todo!();
-        Err(std::io::ErrorKind::NotFound.into())
+impl<Ctx: WorkerCtx> PublicWorkerFileSystem for PublicDurableWorkerState<Ctx> {
+    fn directories(&self) -> FileSystemDirectories {
+        self.directories.clone()
     }
 }
 
@@ -2031,4 +2030,43 @@ macro_rules! get_oplog_entry {
             }
         }
     };
+}
+
+#[derive(Debug, Clone)]
+pub struct FileSystemDirectories {
+    pub dir_ro: Option<Arc<TempDir>>,
+    pub dir_rw: Arc<TempDir>,
+}
+
+impl FileSystemDirectories {
+    pub async fn get_node(&self, path: &Path) -> std::io::Result<FileSystemNode> {
+        let is_ro = path.strip_prefix(READ_ONLY_FILES_PATH_ABSOLUTE).is_ok() 
+            || path.strip_prefix(READ_ONLY_FILES_PATH_RELATIVE).is_ok();
+
+        let dir_path = if let (Some(dir_ro), true) = (self.dir_ro.as_ref(), is_ro) {
+            dir_ro
+        } else {
+            &self.dir_rw
+        }.path();
+        let dir = tokio::fs::File::open(dir_path)
+            .await?;
+        let dir = cap_std::fs::Dir::from_std_file(dir.into_std().await);
+        
+        let path = path.to_path_buf();
+        let node = tokio::task::spawn_blocking::<_, std::io::Result<_>>(move || {
+            let metadata = dir.metadata(&path)?;
+
+            let node = if metadata.is_dir() {
+                let dir = dir.open_dir(&path)?;
+                FileSystemNode::Directory(dir.entries()?)
+            } else {
+                let file = dir.open(&path)?;
+                FileSystemNode::File(file)
+            };
+
+            Ok(node)
+        }).await??;
+
+        Ok(node)
+    }
 }

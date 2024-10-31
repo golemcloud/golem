@@ -21,7 +21,7 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
-use std::path::PathBuf;
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -38,8 +38,7 @@ use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    get_file_response, get_file_success_response, ConnectWorkerRequest, DeleteWorkerRequest, GetFileRequest, GetFileResponse, GetFilesRequest, GetFilesResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse
+    ConnectWorkerRequest, DeleteWorkerRequest, GetFileRequest, GetFileResponse, GetFilesRequest, GetFilesResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse
 };
 use golem_common::grpc::{
     proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
@@ -62,10 +61,10 @@ use crate::services::events::Event;
 use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActivator};
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps
+    All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService, UsesAllDeps
 };
 use crate::worker::Worker;
-use crate::workerctx::WorkerCtx;
+use crate::workerctx::{FileSystemNode, WorkerCtx};
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -1231,9 +1230,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.validate_worker_status(&owned_worker_id, &metadata)
             .await?;
 
-        let metadata = metadata.unwrap();
-
-        let worker = Worker::get_or_create_suspended(
+        let worker = Worker::get_or_create_running(
             self,
             &owned_worker_id,
             None,
@@ -1243,11 +1240,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         )
         .await?;
 
-        todo!();
+        let node = worker.get_file_system_node(Path::new("/"))
+            .await?;
 
-        Ok(GetFilesResponse {
-            result: None,
-        })
+        let FileSystemNode::Directory(read_dir) = node else {
+            unreachable!("'/' must be a directory")
+        };
+
+        Ok(FileSystemNode::get_files_grpc(read_dir))
     }
 
     async fn get_file_internal(
@@ -1272,9 +1272,24 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
-        let path = PathBuf::from(path);
+        let metadata = self.worker_service().get(&owned_worker_id).await;
+        self.validate_worker_status(&owned_worker_id, &metadata)
+            .await?;
 
-        todo!();
+        let worker = Worker::get_or_create_running(
+            self,
+            &owned_worker_id,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
+
+        let node = worker.get_file_system_node(Path::new(&path))
+            .await?;
+
+        Ok(node.get_file_grpc())
     }
 
     fn create_proto_metadata(

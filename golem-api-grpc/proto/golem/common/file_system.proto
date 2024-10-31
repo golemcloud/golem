@@ -14,10 +14,10 @@ enum FileSystemPermission {
 
 message FileSystemNode {
   string name = 1;
-  FileSystemNodeType node_type = 2;
-  FileSystemPermission permissions = 3;
+  optional FileSystemNodeType node_type = 2;
+  optional FileSystemPermission permissions = 3;
   // Unix timestamp
-  int64 last_modified = 4;
+  optional int64 last_modified = 4;
   // Size in bytes, file nodes only
   optional uint64 size = 5;
 }

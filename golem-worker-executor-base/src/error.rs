@@ -97,8 +97,8 @@ pub enum GolemError {
         details: String,
     },
     ShardingNotReady,
-    FileNotFound {
-        path: String,
+    FileSystem {
+        details: String,
     }
 }
 
@@ -265,8 +265,8 @@ impl Display for GolemError {
             GolemError::ShardingNotReady => {
                 write!(f, "Sharding not ready")
             }
-            GolemError::FileNotFound { path } => {
-                write!(f, "File not found: {path}")
+            GolemError::FileSystem { details } => {
+                write!(f, "File system error: {details}")
             }
         }
     }
@@ -300,7 +300,7 @@ impl Error for GolemError {
             GolemError::PreviousInvocationExited => "The previously invoked function exited",
             GolemError::Unknown { .. } => "Unknown error",
             GolemError::ShardingNotReady => "Sharding not ready",
-            GolemError::FileNotFound { .. } => "File not found",
+            GolemError::FileSystem { .. } => "File not found",
         }
     }
 }
@@ -333,7 +333,7 @@ impl TraceErrorKind for GolemError {
             GolemError::PreviousInvocationExited => "PreviousInvocationExited",
             GolemError::Unknown { .. } => "Unknown",
             GolemError::ShardingNotReady => "ShardingNotReady",
-            GolemError::FileNotFound { .. } => "FileNotFound",
+            GolemError::FileSystem { .. } => "FileSystem",
         }
     }
 }
@@ -595,11 +595,11 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
-            GolemError::FileNotFound { path } => golem::worker::v1::WorkerExecutionError {
+            GolemError::FileSystem { details } => golem::worker::v1::WorkerExecutionError {
                 error: Some(
-                    golem::worker::v1::worker_execution_error::Error::FileNotFound(
-                        golem::worker::v1::FileNotFound {
-                            path,
+                    golem::worker::v1::worker_execution_error::Error::FileSystem(
+                        golem::worker::v1::FileSystem {
+                            details,
                         },
                     ),
                 ),
@@ -772,9 +772,9 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             Some(golem::worker::v1::worker_execution_error::Error::ShardingNotReady(_)) => {
                 Ok(GolemError::ShardingNotReady)
             }
-            Some(golem::worker::v1::worker_execution_error::Error::FileNotFound(file_not_found)) => 
-                Ok(GolemError::FileNotFound {
-                    path: file_not_found.path,
+            Some(golem::worker::v1::worker_execution_error::Error::FileSystem(file_system)) => 
+                Ok(GolemError::FileSystem {
+                    details: file_system.details,
                 }),
         }
     }

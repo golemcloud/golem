@@ -16,9 +16,15 @@ use std::path::Path;
 use std::sync::{Arc, RwLock, Weak};
 
 use async_trait::async_trait;
+use cap_fs_ext::OsMetadataExt as _;
+use futures::stream::BoxStream;
+use futures::stream;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::Value;
+use itertools::Itertools as _;
+use tokio_stream::StreamExt as _;
+use tonic::Status;
 use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use golem_common::model::oplog::WorkerResourceId;
@@ -27,6 +33,7 @@ use golem_common::model::{
     WorkerStatus, WorkerStatusRecord,
 };
 
+use crate::durable_host::FileSystemDirectories;
 use crate::error::GolemError;
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
@@ -69,7 +76,7 @@ pub trait WorkerCtx:
     /// PublicState is a subset of the worker context which is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
-    type PublicState: PublicWorkerIo + PublicFileSystem + HasWorker<Self> + HasOplog + Clone + Send + Sync;
+    type PublicState: PublicWorkerIo + PublicWorkerFileSystem + HasWorker<Self> + HasOplog + Clone + Send + Sync;
 
     /// Creates a new worker context
     ///
@@ -375,9 +382,119 @@ pub trait PublicWorkerIo {
 
 /// A required interface to be implemented by the worker context's public state.
 ///
-/// It is used to read from the worker's filesystem
+/// Provides the host directories used by the worker file system
 #[async_trait]
-pub trait PublicFileSystem {
-    /// Reads a file or directory at the given path in the worker's filesystem.
-    async fn read_at(&self, path: &Path) -> std::io::Result<()>;
+pub trait PublicWorkerFileSystem {
+    fn directories(&self) -> FileSystemDirectories;
 }
+
+#[async_trait]
+pub trait FileSystemAccess {
+    /// Reads a file or directory at the given path in the worker's filesystem.
+    async fn read_at(&self, path: &Path) -> std::io::Result<FileSystemNode>;
+}
+
+#[derive(Debug)]
+pub enum FileSystemNode {
+    File(cap_std::fs::File),
+    Directory(cap_std::fs::ReadDir),
+}
+
+use golem_api_grpc::proto::golem as grpc_api;
+
+impl FileSystemNode {
+    pub fn get_file_grpc(self) -> BoxStream<'static, Result<grpc_api::workerexecutor::v1::GetFileResponse, Status>> {
+        match self {
+            FileSystemNode::File(file) => {
+                let file = file.into_std();
+                
+                fn chunk_to_grpc(bytes: std::io::Result<bytes::Bytes>) -> Result<grpc_api::workerexecutor::v1::GetFileResponse, Status> {
+                    let result = match bytes {
+                        Ok(ok) => {
+                            let chunk = grpc_api::workerexecutor::v1::FileChunk {
+                                content: ok.to_vec(),
+                            };
+                            let success = grpc_api::workerexecutor::v1::GetFileSuccessResponse {
+                                node_type: Some(grpc_api::workerexecutor::v1::get_file_success_response::NodeType::File(chunk)),
+                            };
+
+                            grpc_api::workerexecutor::v1::get_file_response::Result::Success(success)
+                        }
+                        Err(err) => grpc_api::workerexecutor::v1::get_file_response::Result::Failure(GolemError::FileSystem { details: err.to_string() }.into()),
+                    };
+                    Ok(grpc_api::workerexecutor::v1::GetFileResponse {
+                        result: Some(result),
+                    })
+                }
+
+                let file = tokio::fs::File::from_std(file);
+                Box::pin(tokio_util::io::ReaderStream::new(file)
+                    .map(chunk_to_grpc))
+            },
+            FileSystemNode::Directory(read_dir) => {
+                let result = match Self::get_files_grpc_internal(read_dir) {
+                    Ok(get_files_response) => {
+                        let node_type = Some(grpc_api::workerexecutor::v1::get_file_success_response::NodeType::Directory(get_files_response));
+                        let success_response = grpc_api::workerexecutor::v1::GetFileSuccessResponse { node_type };
+                        grpc_api::workerexecutor::v1::get_file_response::Result::Success(success_response)
+                    }
+                    Err(err) => grpc_api::workerexecutor::v1::get_file_response::Result::Failure(err.into()),
+                };
+
+                Box::pin(stream::once(async { Ok(grpc_api::workerexecutor::v1::GetFileResponse { result: Some(result) }) }))
+            }
+        }
+    }
+
+    pub fn get_files_grpc(read_dir: cap_std::fs::ReadDir) -> grpc_api::workerexecutor::v1::GetFilesResponse {
+        let result = match Self::get_files_grpc_internal(read_dir) {
+            Ok(ok) => grpc_api::workerexecutor::v1::get_files_response::Result::Success(ok),
+            Err(err) => grpc_api::workerexecutor::v1::get_files_response::Result::Failure(err.into()),
+        };
+
+        grpc_api::workerexecutor::v1::GetFilesResponse {
+            result: Some(result),
+        }
+    }
+
+    fn get_files_grpc_internal(read_dir: cap_std::fs::ReadDir) -> Result<grpc_api::workerexecutor::v1::GetFilesSuccessResponse, GolemError> {
+        let nodes = read_dir
+            .map_ok(Self::convert_metadata)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| GolemError::FileSystem { details: e.to_string() })?;
+
+        Ok(grpc_api::workerexecutor::v1::GetFilesSuccessResponse { nodes })
+    }
+
+    fn convert_metadata(dir_entry: cap_std::fs::DirEntry) -> grpc_api::common::FileSystemNode {
+        let mut use_size = false;
+    
+        let mut node = grpc_api::common::FileSystemNode::default();
+        node.name = dir_entry.file_name().to_string_lossy().into_owned();
+        if let Ok(file_type) = dir_entry.file_type() {
+            let file_type = if file_type.is_dir() {
+                grpc_api::common::FileSystemNodeType::Directory
+            } else {
+                use_size = true;
+                grpc_api::common::FileSystemNodeType::File
+            };
+            node.set_node_type(file_type);
+        }
+        if let Ok(metadata) = dir_entry.metadata() {
+            // TODO get actual permissions
+            node.set_permissions(grpc_api::common::FileSystemPermission::ReadWrite);
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(modified) = modified.into_std().duration_since(std::time::UNIX_EPOCH) {
+                    node.last_modified = Some(modified.as_secs() as i64);
+                }
+            }
+            
+            if use_size {
+                node.size = Some(metadata.size());
+            }
+        }
+        
+        node
+    }    
+}
+

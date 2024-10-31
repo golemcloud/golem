@@ -122,3 +122,6 @@ pub struct InitialFile {
 pub struct InitialFileSet {
     pub files: Vec<InitialFile>,
 }
+
+pub const READ_ONLY_FILES_PATH_ABSOLUTE: &str = "/static";
+pub const READ_ONLY_FILES_PATH_RELATIVE: &str = "./static";

@@ -3100,7 +3100,7 @@ components:
           Unknown: '#/components/schemas/GolemError_GolemErrorUnknown'
           InvalidAccount: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
           ShardingNotReady: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
-          FileNotFound: '#/components/schemas/GolemError_GolemErrorFileNotFound'
+          FileSystem: '#/components/schemas/GolemError_GolemErrorFileSystem'
       type: object
       oneOf:
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
@@ -3126,7 +3126,7 @@ components:
       - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
       - $ref: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
-      - $ref: '#/components/schemas/GolemError_GolemErrorFileNotFound'
+      - $ref: '#/components/schemas/GolemError_GolemErrorFileSystem'
     GolemErrorBody:
       type: object
       properties:
@@ -3164,13 +3164,13 @@ components:
       required:
       - workerId
       - reason
-    GolemErrorFileNotFound:
+    GolemErrorFileSystem:
       type: object
       properties:
-        path:
+        details:
           type: string
       required:
-      - path
+      - details
     GolemErrorGetLatestVersionOfComponentFailed:
       type: object
       properties:
@@ -3342,18 +3342,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
-    GolemError_GolemErrorFileNotFound:
+    GolemError_GolemErrorFileSystem:
       allOf:
       - type: object
         properties:
           type:
-            example: FileNotFound
+            example: FileSystem
             type: string
             enum:
-            - FileNotFound
+            - FileSystem
         required:
         - type
-      - $ref: '#/components/schemas/GolemErrorFileNotFound'
+      - $ref: '#/components/schemas/GolemErrorFileSystem'
     GolemError_GolemErrorGetLatestVersionOfComponentFailed:
       allOf:
       - type: object

@@ -191,7 +191,9 @@ impl FileServerResult<String> {
     pub async fn get_file(self) -> FileServerResult<Vec<u8>> {
         match self {
             Self::Ok { content: _path, response_details } => {
-                // TODO actually get file
+                
+                todo!();
+
                 let content = std::io::Result::Ok(vec![0u8; 0]);
 
                 match content {

@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::{DurableWorkerCtx, FileSystemDirectories};
 use crate::workerctx::WorkerCtx;
+use golem_common::file_system::{READ_ONLY_FILES_PATH_ABSOLUTE, READ_ONLY_FILES_PATH_RELATIVE};
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 use wasmtime_wasi::{
@@ -87,14 +87,18 @@ where
 pub fn create_context(
     args: &[impl AsRef<str>],
     env: &[(impl AsRef<str>, impl AsRef<str>)],
-    root_dir: PathBuf,
-    read_only_dir: Option<&Path>,
+    directories: &FileSystemDirectories,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
     stderr: impl StdoutStream + Sized + 'static,
     suspend_signal: impl Fn(Duration) -> anyhow::Error + Send + Sync + 'static,
     suspend_threshold: Duration,
 ) -> Result<(WasiCtx, ResourceTable), anyhow::Error> {
+    let FileSystemDirectories {
+        dir_ro,
+        dir_rw,
+    } = directories;
+
     let table = ResourceTable::new();
     let mut wasi_builder = WasiCtxBuilder::new();
     wasi_builder
@@ -104,14 +108,14 @@ pub fn create_context(
         .stdout(stdout)
         .stderr(stderr)
         .monotonic_clock(helpers::clocks::monotonic_clock())
-        .preopened_dir(&root_dir, "/", DirPerms::all(), FilePerms::all())?
-        .preopened_dir(&root_dir, ".", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(dir_rw.path(), "/", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(dir_rw.path(), ".", DirPerms::all(), FilePerms::all())?
         .set_suspend(suspend_threshold, suspend_signal)
         .allow_ip_name_lookup(true);
 
-    if let Some(read_only_dir) = read_only_dir {
-        wasi_builder.preopened_dir(&read_only_dir, "/static", DirPerms::READ, FilePerms::READ)?;
-        wasi_builder.preopened_dir(&read_only_dir, "./static", DirPerms::READ, FilePerms::READ)?;
+    if let Some(dir_ro) = dir_ro {
+        wasi_builder.preopened_dir(dir_ro.path(), READ_ONLY_FILES_PATH_ABSOLUTE, DirPerms::READ, FilePerms::READ)?;
+        wasi_builder.preopened_dir(dir_ro.path(), READ_ONLY_FILES_PATH_RELATIVE, DirPerms::READ, FilePerms::READ)?;
     }
 
     let wasi = wasi_builder.build();

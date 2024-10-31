@@ -258,11 +258,13 @@ async fn file_initial(
 
     tracing::debug!("{:?}", view);
 
+    use golem_common::file_system::READ_ONLY_FILES_PATH_ABSOLUTE;
+
     check!(
         results
             == vec![
                 Value::Result(Ok(Some(Box::new(Value::String("THE QUICK BROWN FOX JUMPS OVER T".to_string()))))),
-                Value::Result(Err(Some(Box::new(Value::String("Write /static/ro/lorem.txt: Operation not permitted (os error 63)".to_string()))))),
+                Value::Result(Err(Some(Box::new(Value::String(format!("Write {READ_ONLY_FILES_PATH_ABSOLUTE}/ro/lorem.txt: Operation not permitted (os error 63)")))))),
             ]
     );
 

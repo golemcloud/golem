@@ -964,29 +964,29 @@ impl From<crate::model::GolemErrorShardingNotReady>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
-#[error("File not found: '{path}'")]
-pub struct GolemErrorFileNotFound {
-    pub path: String,
+#[error("File system error: '{details}'")]
+pub struct GolemErrorFileSystem {
+    pub details: String,
 }
 
-impl SafeDisplay for GolemErrorFileNotFound {
+impl SafeDisplay for GolemErrorFileSystem {
     fn to_safe_string(&self) -> String {
         self.to_string()
     }
 }
 
-impl From<golem_api_grpc::proto::golem::worker::v1::FileNotFound> for GolemErrorFileNotFound {
-    fn from(value: golem_api_grpc::proto::golem::worker::v1::FileNotFound) -> Self {
+impl From<golem_api_grpc::proto::golem::worker::v1::FileSystem> for GolemErrorFileSystem {
+    fn from(value: golem_api_grpc::proto::golem::worker::v1::FileSystem) -> Self {
         Self {
-            path: value.path,
+            details: value.details,
         }
     }
 }
 
-impl From<GolemErrorFileNotFound> for golem_api_grpc::proto::golem::worker::v1::FileNotFound {
-    fn from(value: GolemErrorFileNotFound) -> Self {
+impl From<GolemErrorFileSystem> for golem_api_grpc::proto::golem::worker::v1::FileSystem {
+    fn from(value: GolemErrorFileSystem) -> Self {
         Self {
-            path: value.path,
+            details: value.details,
         }
     }
 }
@@ -1118,7 +1118,7 @@ pub struct FileSystemNode {
     pub node_type: FileSystemNodeType,
     pub name: String,
     pub permissions: FileSystemPermission,
-    pub last_modified: i64,
+    pub last_modified: Option<i64>,
     pub size: Option<u64>,
 }
 
@@ -1504,7 +1504,7 @@ pub enum GolemError {
     #[error(transparent)]
     ShardingNotReady(GolemErrorShardingNotReady),
     #[error(transparent)]
-    FileNotFound(GolemErrorFileNotFound),
+    FileSystem(GolemErrorFileSystem),
 }
 
 impl SafeDisplay for GolemError {
@@ -1533,7 +1533,7 @@ impl SafeDisplay for GolemError {
             GolemError::Unknown(inner) => inner.to_safe_string(),
             GolemError::InvalidAccount(inner) => inner.to_safe_string(),
             GolemError::ShardingNotReady(inner) => inner.to_safe_string(),
-            GolemError::FileNotFound(inner) => inner.to_safe_string(),
+            GolemError::FileSystem(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -1618,8 +1618,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError> for
             Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err)) => {
                 Ok(GolemError::ShardingNotReady(err.into()))
             }
-            Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::FileNotFound(err)) => {
-                Ok(GolemError::FileNotFound(err.into()))
+            Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::FileSystem(err)) => {
+                Ok(GolemError::FileSystem(err.into()))
             }
             None => Err("Missing field: error".to_string()),
         }
@@ -1706,8 +1706,8 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::v1::worker_execu
             GolemError::ShardingNotReady(err) => {
                 golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err.into())
             }
-            GolemError::FileNotFound(err) => {
-                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::FileNotFound(err.into())
+            GolemError::FileSystem(err) => {
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::FileSystem(err.into())
             }
         }
     }

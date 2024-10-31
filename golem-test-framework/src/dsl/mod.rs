@@ -1068,8 +1068,8 @@ pub fn worker_error_message(error: &Error) -> String {
                 worker_execution_error::Error::ShardingNotReady(_error) => {
                     "Sharing not ready".to_string()
                 }
-                worker_execution_error::Error::FileNotFound(error) => {
-                    format!("File not found: {}", error.path)
+                worker_execution_error::Error::FileSystem(error) => {
+                    format!("File system error: {}", error.details)
                 }
             },
         },

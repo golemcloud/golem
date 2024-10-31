@@ -15,11 +15,12 @@
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::mem;
 use std::ops::DerefMut;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use crate::durable_host::recover_stderr_logs;
+use crate::durable_host::{recover_stderr_logs, FileSystemDirectories};
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::function_result_interpreter::interpret_function_results;
 use crate::invocation::{invoke_worker, InvokeResult};
@@ -34,7 +35,7 @@ use crate::services::{
     HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService, HasWorkerProxy,
     HasWorkerService, UsesAllDeps,
 };
-use crate::workerctx::{PublicWorkerIo, WorkerCtx};
+use crate::workerctx::{FileSystemNode, PublicWorkerFileSystem, PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
 use golem_common::config::RetryConfig;
 use golem_common::model::oplog::{
@@ -54,7 +55,7 @@ use golem_wasm_rpc::Value;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tokio::sync::{Mutex, MutexGuard, OwnedSemaphorePermit};
+use tokio::sync::{watch, Mutex, MutexGuard, OwnedSemaphorePermit};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
@@ -84,6 +85,8 @@ pub struct Worker<Ctx: WorkerCtx> {
     pending_updates: Arc<RwLock<VecDeque<TimestampedUpdateDescription>>>,
     invocation_results: Arc<RwLock<HashMap<IdempotencyKey, InvocationResult>>>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
+    directories_send: watch::Sender<Option<FileSystemDirectories>>,
+    directories_recv: watch::Receiver<Option<FileSystemDirectories>>,
     initial_worker_metadata: WorkerMetadata,
     stopping: AtomicBool,
     worker_estimate_coefficient: f64,
@@ -229,6 +232,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         let stopping = AtomicBool::new(false);
 
+        let (directories_send, directories_recv) = watch::channel(None);
+
         Ok(Worker {
             owned_worker_id,
             oplog,
@@ -242,6 +247,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             invocation_results,
             instance,
             execution_status,
+            directories_send,
+            directories_recv,
             stopping,
             initial_worker_metadata: worker_metadata,
             worker_estimate_coefficient: deps.config().memory.worker_estimate_coefficient,
@@ -288,6 +295,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             this.clone(),
             this.oplog(),
             this.execution_status.clone(),
+            this.directories_send.clone(),
             permit,
             oom_retry_count,
         ));
@@ -991,6 +999,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }),
         }
     }
+
+    pub async fn get_file_system_node(&self, path: &Path) -> std::io::Result<FileSystemNode> {
+        let mut recv = self.directories_recv.clone();
+        let directories = loop {
+            if let Some(directories) = recv
+                .borrow_and_update()
+                .as_ref()
+            {
+                break directories.clone();
+            }
+
+            // Context is still initializing
+            recv.changed().await
+                .map_err(|_| std::io::ErrorKind::ConnectionAborted)?;
+        };
+
+        directories
+            .get_node(path)
+            .await
+    }
 }
 
 enum WorkerInstance {
@@ -1075,6 +1103,7 @@ impl RunningWorker {
         parent: Arc<Worker<Ctx>>,
         oplog: Arc<dyn Oplog + Send + Sync>,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        directories_send: watch::Sender<Option<FileSystemDirectories>>,
         permit: OwnedSemaphorePermit,
         oom_retry_count: u64,
     ) -> Self {
@@ -1099,6 +1128,7 @@ impl RunningWorker {
             RunningWorker::invocation_loop(
                 receiver,
                 active_clone,
+                directories_send,
                 owned_worker_id_clone,
                 parent,
                 waiting_for_command_clone,
@@ -1279,6 +1309,7 @@ impl RunningWorker {
     async fn invocation_loop<Ctx: WorkerCtx>(
         mut receiver: UnboundedReceiver<WorkerCommand>,
         active: Arc<RwLock<VecDeque<TimestampedWorkerInvocation>>>,
+        directories_send: watch::Sender<Option<FileSystemDirectories>>,
         owned_worker_id: OwnedWorkerId,
         parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
         waiting_for_command: Arc<AtomicBool>,
@@ -1287,7 +1318,7 @@ impl RunningWorker {
         loop {
             debug!("Invocation queue loop creating the instance");
 
-            let (instance, store) = match Self::create_instance(parent.clone()).await {
+            let (instance, mut store) = match Self::create_instance(parent.clone()).await {
                 Ok((instance, store)) => {
                     parent.events().publish(Event::WorkerLoaded {
                         worker_id: owned_worker_id.worker_id(),
@@ -1305,6 +1336,12 @@ impl RunningWorker {
                     break; // early return, we can't retry this
                 }
             };
+
+            let directories = store.get_mut()
+                .data()
+                .get_public_state()
+                .directories();
+            let _ = directories_send.send(Some(directories));
 
             debug!("Invocation queue loop preparing the instance");
 
