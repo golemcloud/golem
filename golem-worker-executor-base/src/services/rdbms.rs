@@ -54,17 +54,20 @@ impl RdbmsPoolKey {
 }
 
 pub mod postgres {
-    use crate::services::rdbms::types::{DbValue, DbValuePrimitive};
+    use crate::services::rdbms::types::{
+        DbColumnType, DbColumnTypeMeta, DbColumnTypePrimitive, DbResultSet, DbValue,
+        DbValuePrimitive, SimpleDbResultSet,
+    };
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
+    use chrono::DateTime;
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::model::OwnedWorkerId;
-    use sqlx::postgres::{PgArguments, PgPoolOptions};
-    use sqlx::Pool;
+    use sqlx::postgres::{PgArguments, PgColumn, PgPoolOptions, PgTypeInfo, PgTypeKind};
+    use sqlx::query::Query;
+    use sqlx::{Column, Execute, Pool, Row};
     use std::collections::HashSet;
     use std::ops::Deref;
-    use chrono::DateTime;
-    use sqlx::query::Query;
     use tracing::info;
     use uuid::Uuid;
 
@@ -80,6 +83,14 @@ pub mod postgres {
             statement: &str,
             params: Vec<DbValue>,
         ) -> Result<u64, String>;
+
+        async fn query(
+            &self,
+            worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            params: Vec<DbValue>,
+        ) -> Result<Box<dyn DbResultSet>, String>;
     }
 
     #[derive(Clone)]
@@ -156,46 +167,107 @@ pub mod postgres {
                     query = bind_value(query, param)?;
                 }
 
-                let result = query
-                    .execute(&pool)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let result = query.execute(&pool).await.map_err(|e| e.to_string())?;
                 Ok(result.rows_affected())
+            } else {
+                Err("DB Connection not found".to_string())
+            }
+        }
+
+        async fn query(
+            &self,
+            _worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            params: Vec<DbValue>,
+        ) -> Result<Box<dyn DbResultSet>, String> {
+            let key = RdbmsPoolKey::new(address.to_string());
+            let pool = self.pool_cache.get(&key).await;
+            if let Some(pool) = pool {
+                let mut query: Query<sqlx::Postgres, PgArguments> = sqlx::query(statement);
+
+                for param in params {
+                    query = bind_value(query, param)?;
+                }
+
+                let result = query.fetch_all(&pool).await.map_err(|e| e.to_string())?;
+
+                if result.is_empty() {
+                    Ok(Box::new(SimpleDbResultSet::empty()))
+                } else {
+                    let first = &result[0];
+                    let _columns = first.columns();
+                    let columns = vec![];
+                    let values = vec![];
+                    Ok(Box::new(SimpleDbResultSet::new(columns, Some(values))))
+                }
             } else {
                 Err("DB Connection not found".to_string())
             }
         }
     }
 
+    // fn get_column_types(columns: &[PgColumn]) -> Result<Vec<DbColumnTypeMeta>, String> {
+    //     let mut result = vec![columns.len()];
+    //
+    //     for column in columns {
+    //         result.push(DbColumnTypeMeta {
+    //             name: column.name().to_string(),
+    //             db_type: column.type_info(),
+    //             nullable: column.is_nullable(),
+    //         });
+    //     }
+    //     Ok(result)
+    // }
+    //
+    //
+    // impl TryFrom<PgTypeInfo> for DbColumnType {
+    //     type Error = String;
+    //
+    //     fn try_from(value: PgTypeInfo) -> Result<Self, Self::Error> {
+    //
+    //         let kind = value.kind();
+    //
+    //     }
+    // }
 
-    fn bind_value(query: Query<sqlx::Postgres, PgArguments>, value: DbValue) -> Result<Query<sqlx::Postgres, PgArguments>, String> {
+    fn bind_value(
+        query: Query<sqlx::Postgres, PgArguments>,
+        value: DbValue,
+    ) -> Result<Query<sqlx::Postgres, PgArguments>, String> {
         match value {
             DbValue::Primitive(v) => bind_value_primitive(query, v),
             DbValue::Array(v) => Err("Array param not supported".to_string()),
         }
     }
 
-
-    fn bind_value_primitive(query: Query<sqlx::Postgres, PgArguments>, value: DbValuePrimitive) -> Result<Query<sqlx::Postgres, PgArguments>, String> {
-       match value {
-           DbValuePrimitive::Integer(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Decimal(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Float(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Boolean(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Chars(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Text(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Binary(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Blob(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Json(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Spatial(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Enumeration(v) => Ok(query.bind(v)),
-           DbValuePrimitive::Other(_, v) => Ok(query.bind(v)),
-           DbValuePrimitive::Datetime(v) => Ok(query.bind(chrono::DateTime::from_timestamp_millis(v as i64))),
-           DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v as i64 ))),
-           DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
-       }
+    fn bind_value_primitive(
+        query: Query<sqlx::Postgres, PgArguments>,
+        value: DbValuePrimitive,
+    ) -> Result<Query<sqlx::Postgres, PgArguments>, String> {
+        match value {
+            DbValuePrimitive::Integer(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Decimal(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Float(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Boolean(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Chars(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Text(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Binary(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Blob(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Json(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Spatial(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Enumeration(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Other(_, v) => Ok(query.bind(v)),
+            DbValuePrimitive::Datetime(v) => {
+                Ok(query.bind(chrono::DateTime::from_timestamp_millis(v as i64)))
+            }
+            DbValuePrimitive::Interval(v) => {
+                Ok(query.bind(chrono::Duration::milliseconds(v as i64)))
+            }
+            DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
+        }
     }
 
     async fn create_pool(
@@ -222,9 +294,41 @@ pub mod types {
 
     #[async_trait]
     pub trait DbResultSet {
-        async fn get_column_metadata(&mut self) -> Result<Vec<DbColumnTypeMeta>, String>;
+        async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String>;
 
-        async fn get_next(&mut self) -> Result<Option<Vec<DbRow>>, String>;
+        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String>;
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct SimpleDbResultSet {
+        column_metadata: Vec<DbColumnTypeMeta>,
+        rows: Option<Vec<DbRow>>,
+    }
+
+    impl SimpleDbResultSet {
+        pub fn new(column_metadata: Vec<DbColumnTypeMeta>, rows: Option<Vec<DbRow>>) -> Self {
+            Self {
+                column_metadata,
+                rows,
+            }
+        }
+        pub fn empty() -> Self {
+            Self {
+                column_metadata: vec![],
+                rows: None,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl DbResultSet for SimpleDbResultSet {
+        async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String> {
+            Ok(self.column_metadata.clone())
+        }
+
+        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
+            Ok(self.rows.clone())
+        }
     }
 
     #[derive(Clone, Debug)]
