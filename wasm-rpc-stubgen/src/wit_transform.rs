@@ -25,7 +25,8 @@ pub fn import_remover(
     }
 }
 
-pub fn remove_imports_from_package_all_worlds(package: &mut Package, import_prefix: &str) {
+// TODO: make the import name matcher more precise
+pub fn remove_world_named_interface_imports(package: &mut Package, import_prefix: &str) {
     for world_item in package.items_mut() {
         if let PackageItem::World(world) = world_item {
             world.items_mut().retain(|item| {

@@ -17,7 +17,7 @@ use crate::fs::{get_file_name, strip_path_prefix, OverwriteSafeAction, Overwrite
 use crate::wit_encode::EncodedWitDir;
 use crate::wit_generate::generate_stub_wit_from_wit_dir;
 use crate::wit_resolve::ResolvedWitDir;
-use crate::wit_transform::{add_import_to_all_world, remove_imports_from_package_all_worlds};
+use crate::wit_transform::{add_import_to_all_world, remove_world_named_interface_imports};
 use crate::{cargo, naming};
 use anyhow::{anyhow, bail, Context};
 use std::collections::BTreeMap;
@@ -128,8 +128,8 @@ pub fn add_stub_dependency(
             package_names_to_package_path.insert(package_name.clone(), package_path);
 
             let package = stub_encoded_wit_root.package(*package_id)?;
-            remove_imports_from_package_all_worlds(package, &dest_stub_package_import_prefix);
-            remove_imports_from_package_all_worlds(package, &dest_package_import_prefix);
+            remove_world_named_interface_imports(package, &dest_stub_package_import_prefix);
+            remove_world_named_interface_imports(package, &dest_package_import_prefix);
             let content = package.to_string();
 
             let first_source = package_sources.files.first().ok_or_else(|| {
