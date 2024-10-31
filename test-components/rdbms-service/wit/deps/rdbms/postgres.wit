@@ -1,0 +1,13 @@
+package wasi:rdbms@0.0.1;
+
+interface postgres {
+  use types.{db-result-set, db-value, error};
+
+  resource db-connection {
+    open: static func(address: string) -> result<db-connection, error>;
+
+    query: func(statement: string, params: list<db-value>) -> result<db-result-set, error>;
+
+    execute: func(statement: string, params: list<db-value>) -> result<u64, error>;
+  }
+}

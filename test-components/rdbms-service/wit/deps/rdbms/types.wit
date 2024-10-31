@@ -1,0 +1,98 @@
+package wasi:rdbms@0.0.1;
+
+interface types {
+  type node-index = u32;
+  type table-name = string;
+
+  variant error {
+    error(string)
+  }
+
+  variant db-column-type-primitive {
+    integer(option<u8>),
+    decimal(tuple<u8, u8>),
+    float,
+    boolean,
+    datetime,
+    interval,
+    chars(option<u32>),
+    text,
+    binary(option<u32>),
+    blob,
+    enumeration(list<string>),
+    json,
+    xml,
+    uuid,
+    spatial
+  }
+
+  variant db-column-type {
+    primitive(db-column-type-primitive),
+    array(tuple<list<option<u32>>, db-column-type-primitive>)
+  }
+
+
+  flags db-column-type-flags {
+    // Key constraints
+    primary-key,     // Single or part of composite primary key
+    foreign-key,     // References another table's key
+    unique,          // Unique constraint
+
+    // Core properties
+    nullable,        // If not present, column is NOT NULL
+    generated,       // Value is computed rather than stored directly
+    auto-increment,  // MySQL AUTO_INCREMENT/PostgreSQL SERIAL/SQL Server IDENTITY
+
+    // Common behaviors
+    default-value,   // Has a default value defined
+    indexed         // Participates in an index
+  }
+
+  /// Data types for database columns
+  record db-column-type-meta {
+    name:        string,
+    db-type:     db-column-type,
+    db-type-flags: db-column-type-flags,
+    foreign-key: option<table-name>
+  }
+
+  /// Value descriptor for a single database value
+  variant db-value-primitive {
+    integer(s64),
+    decimal(string),
+    float(float64),
+    boolean(bool),
+    datetime(u64),
+    interval(u64),
+    chars(string),
+    text(string),
+    binary(list<u8>),
+    blob(list<u8>),
+    enumeration(string),
+    json(string),
+    xml(string),
+    uuid(tuple<u64, u64>),
+    spatial(list<float64>),
+    other(tuple<string, list<u8>>),
+    db-null
+  }
+
+  variant db-value {
+    primitive(db-value-primitive),
+    array(list<db-value-primitive>) // Flatteneed
+  }
+
+  /// A single row of values
+  record db-row {
+      values: list<db-value>
+  }
+
+  /// A potentially very large and lazy stream of rows:
+  resource db-result-set {
+        get-column-metadata: func() -> list<db-column-type-meta>;
+        get-next: func() -> option<list<db-row>>;
+  }
+
+
+
+}

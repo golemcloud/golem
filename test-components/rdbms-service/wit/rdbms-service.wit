@@ -1,0 +1,12 @@
+package golem:it;
+
+interface api {
+
+  execute: func(statement: string, params: list<string>) -> result<u64, string>;
+}
+
+world key-value-service {
+  import wasi:rdbms/postgres@0.0.1;
+  import wasi:rdbms/types@0.0.1;
+  export api;
+}
