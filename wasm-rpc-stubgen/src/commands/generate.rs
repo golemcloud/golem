@@ -68,11 +68,6 @@ pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<Resolv
     add_dependencies_to_stub_wit_dir(stub_def).context("Failed to copy the dependent wit files")?;
     stub_def
         .resolve_target_wit()
-        .inspect_err(|_| {
-            let _ = std::process::Command::new("code")
-                .args([stub_def.config.target_root.to_string_lossy().to_string()])
-                .status();
-        })
         .context("Failed to resolve the result WIT root")
 }
 
