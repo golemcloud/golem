@@ -24,6 +24,11 @@ use crate::oss::factory::OssServiceFactory;
 use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use crate::{check_for_newer_server_version, examples, ConfiguredMainArgs, MainArgs, VERSION};
+use golem_client::model::{
+    PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
+    PluginDefinitionWithoutOwnerDefaultPluginScope,
+};
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::uri::oss::uri::{ComponentUri, ResourceUri, WorkerUri};
 use golem_common::uri::oss::url::{ComponentUrl, ResourceUrl, WorkerUrl};
 use golem_common::uri::oss::urn::{ComponentUrn, ResourceUrn, WorkerUrn};
@@ -133,7 +138,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             let factory = factory().await?;
 
             subcommand
-                .handle(
+                .handle::<PluginDefinitionDefaultPluginOwnerDefaultPluginScope, PluginDefinitionWithoutOwnerDefaultPluginScope, OssContext, DefaultPluginScope, DefaultPluginOwner, OssContext>(
                     format,
                     factory.plugin_client(),
                     factory.project_resolver(),

@@ -18,13 +18,15 @@ use crate::model::text::component::{ComponentAddView, ComponentGetView, Componen
 use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
 use async_trait::async_trait;
 use golem_client::model::ComponentType;
-use golem_common::model::ComponentId;
+use golem_common::model::{ComponentId, PluginInstallationId};
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_common::uri::oss::urn::ComponentUrn;
 use indoc::formatdoc;
 use itertools::Itertools;
+use std::collections::HashMap;
 use std::fmt::Display;
+use uuid::Uuid;
 
 #[async_trait]
 pub trait ComponentService {
@@ -39,6 +41,7 @@ pub trait ComponentService {
         non_interactive: bool,
         format: Format,
     ) -> Result<Component, GolemError>;
+
     async fn update(
         &self,
         component_uri: ComponentUri,
@@ -48,31 +51,60 @@ pub trait ComponentService {
         non_interactive: bool,
         format: Format,
     ) -> Result<GolemResult, GolemError>;
+
     async fn list(
         &self,
         component_name: Option<ComponentName>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn get(
         &self,
         component_uri: ComponentUri,
         version: Option<u64>,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
+
     async fn resolve_uri(
         &self,
         uri: ComponentUri,
         project: &Option<Self::ProjectContext>,
     ) -> Result<ComponentUrn, GolemError>;
+
     async fn get_metadata(
         &self,
         component_urn: &ComponentUrn,
         version: u64,
     ) -> Result<Component, GolemError>;
+
     async fn get_latest_metadata(
         &self,
         component_urn: &ComponentUrn,
     ) -> Result<Component, GolemError>;
+
+    async fn install_plugin(
+        &self,
+        component_uri: ComponentUri,
+        project: Option<Self::ProjectContext>,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i16,
+        parameters: HashMap<String, String>,
+    ) -> Result<GolemResult, GolemError>;
+
+    async fn get_installations(
+        &self,
+        component_uri: ComponentUri,
+        project: Option<Self::ProjectContext>,
+        version: Option<u64>,
+    ) -> Result<GolemResult, GolemError>;
+
+    async fn uninstall_plugin(
+        &self,
+        component_uri: ComponentUri,
+        project: Option<Self::ProjectContext>,
+        installation_id: &PluginInstallationId,
+    ) -> Result<GolemResult, GolemError>;
 }
 
 pub struct ComponentServiceLive<ProjectContext> {
@@ -126,7 +158,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                             name: component_name.0.clone(),
                         });
                         let urn = self.resolve_uri(component_uri, &project).await?;
-                        self.client.update(urn, component_file, Some(component_type)).await.map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into()))))
+                        self.client.update(urn, component_file, Some(component_type)).await
 
                     }
                     Ok(false) => Err(GolemError(message)),
@@ -134,9 +166,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                 }
             }
             Err(other) => Err(other),
-            Ok(component) => Ok(GolemResult::Ok(Box::new(ComponentAddView(
-                component.into(),
-            )))),
+            Ok(component) => Ok(component),
         }?;
 
         Ok(result)
@@ -284,5 +314,54 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
 
     async fn get_latest_metadata(&self, urn: &ComponentUrn) -> Result<Component, GolemError> {
         self.client.get_latest_metadata(urn).await
+    }
+
+    async fn install_plugin(
+        &self,
+        component_uri: ComponentUri,
+        project: Option<Self::ProjectContext>,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i16,
+        parameters: HashMap<String, String>,
+    ) -> Result<GolemResult, GolemError> {
+        let urn = self.resolve_uri(component_uri, &project).await?;
+        self.client
+            .install_plugin(&urn, plugin_name, plugin_version, priority, parameters)
+            .await
+            .map(|installation| GolemResult::Ok(Box::new(installation)))
+    }
+
+    async fn get_installations(
+        &self,
+        component_uri: ComponentUri,
+        project: Option<Self::ProjectContext>,
+        version: Option<u64>,
+    ) -> Result<GolemResult, GolemError> {
+        let urn = self.resolve_uri(component_uri, &project).await?;
+
+        let version = match version {
+            Some(v) => v,
+            None => {
+                let component = self.get_latest_metadata(&urn).await?;
+                component.versioned_component_id.version
+            }
+        };
+
+        let installations = self.client.get_installations(&urn, version).await?;
+        Ok(GolemResult::Ok(Box::new(installations)))
+    }
+
+    async fn uninstall_plugin(
+        &self,
+        component_uri: ComponentUri,
+        project: Option<Self::ProjectContext>,
+        installation_id: &PluginInstallationId,
+    ) -> Result<GolemResult, GolemError> {
+        let urn = self.resolve_uri(component_uri, &project).await?;
+        self.client
+            .uninstall_plugin(&urn, &installation_id.0)
+            .await?;
+        Ok(GolemResult::Str("Plugin uninstalled".to_string()))
     }
 }

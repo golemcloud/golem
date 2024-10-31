@@ -29,6 +29,12 @@ impl DefaultPluginScope {
     }
 }
 
+impl Default for DefaultPluginScope {
+    fn default() -> Self {
+        DefaultPluginScope::global()
+    }
+}
+
 impl Display for DefaultPluginScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -42,8 +48,7 @@ impl ParseFromParameter for DefaultPluginScope {
     fn parse_from_parameter(value: &str) -> ParseResult<Self> {
         if value == "global" {
             Ok(Self::global())
-        } else if value.starts_with("component:") {
-            let id_part = &value["component:".len()..];
+        } else if let Some(id_part) = value.strip_prefix("component:") {
             let component_id = ComponentId::try_from(id_part);
             match component_id {
                 Ok(component_id) => Ok(Self::component(component_id)),

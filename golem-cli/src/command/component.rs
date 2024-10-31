@@ -13,15 +13,18 @@
 // limitations under the License.
 
 use crate::command::ComponentRefSplit;
+use crate::model::text::component::ComponentAddView;
 use crate::model::{
     ComponentName, Format, GolemError, GolemResult, PathBufOrStdin, WorkerUpdateMode,
 };
+use crate::parse_key_val;
 use crate::service::component::ComponentService;
 use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 use golem_client::model::ComponentType;
 use golem_common::model::PluginInstallationId;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Subcommand, Debug)]
@@ -136,7 +139,15 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
 
         /// The version of the plugin to install
         #[arg(long)]
-        version: String,
+        plugin_version: String,
+
+        /// Priority of the plugin - largest priority is applied first
+        #[arg(long)]
+        priority: i16,
+
+        /// List of parameters (key-value pairs) passed to the plugin
+        #[arg(short, long, value_parser = parse_key_val, value_name = "KEY=VAL")]
+        parameter: Vec<(String, String)>,
     },
     /// Get the installed plugins of the component
     #[command()]
@@ -239,8 +250,9 @@ impl<
                         format,
                     )
                     .await?;
-                let result: GolemResult = component.into();
-                Ok(result)
+                Ok(GolemResult::Ok(Box::new(ComponentAddView(
+                    component.into(),
+                ))))
             }
             ComponentSubCommand::Update {
                 component_name_or_uri,
@@ -308,14 +320,45 @@ impl<
                     .redeploy(component_name_or_uri, project_id, non_interactive, format)
                     .await
             }
-            ComponentSubCommand::InstallPlugin { .. } => {
-                todo!()
+            ComponentSubCommand::InstallPlugin {
+                component_name_or_uri,
+                plugin_name,
+                plugin_version: version,
+                priority,
+                parameter,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .install_plugin(
+                        component_name_or_uri,
+                        project_id,
+                        &plugin_name,
+                        &version,
+                        priority,
+                        HashMap::from_iter(parameter),
+                    )
+                    .await
             }
-            ComponentSubCommand::GetInstallations { .. } => {
-                todo!()
+            ComponentSubCommand::GetInstallations {
+                component_name_or_uri,
+                version,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .get_installations(component_name_or_uri, project_id, version)
+                    .await
             }
-            ComponentSubCommand::UninstallPlugin { .. } => {
-                todo!()
+            ComponentSubCommand::UninstallPlugin {
+                component_name_or_uri,
+                installation_id,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .uninstall_plugin(component_name_or_uri, project_id, &installation_id)
+                    .await
             }
         }
     }

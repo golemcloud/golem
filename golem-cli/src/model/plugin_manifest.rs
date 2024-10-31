@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use golem_client::model::{
-    PluginDefinitionDefaultPluginOwnerDefaultPluginScope, PluginTypeSpecificDefinition,
+    PluginDefinitionWithoutOwnerDefaultPluginScope, PluginTypeSpecificDefinition,
 };
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_common::model::plugin::DefaultPluginScope;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -57,39 +57,34 @@ impl PluginManifest {
     pub fn into_definition<PluginDefinition: FromPluginManifest>(
         self,
         scope: <PluginDefinition as FromPluginManifest>::PluginScope,
-        owner: <PluginDefinition as FromPluginManifest>::PluginOwner,
         specs: PluginTypeSpecificDefinition,
         icon: Vec<u8>,
     ) -> PluginDefinition {
-        PluginDefinition::from_plugin_manifest(self, scope, owner, specs, icon)
+        PluginDefinition::from_plugin_manifest(self, scope, specs, icon)
     }
 }
 
 pub trait FromPluginManifest {
     type PluginScope;
-    type PluginOwner;
 
     fn from_plugin_manifest(
         manifest: PluginManifest,
         scope: Self::PluginScope,
-        owner: Self::PluginOwner,
         specs: PluginTypeSpecificDefinition,
         icon: Vec<u8>,
     ) -> Self;
 }
 
-impl FromPluginManifest for PluginDefinitionDefaultPluginOwnerDefaultPluginScope {
+impl FromPluginManifest for PluginDefinitionWithoutOwnerDefaultPluginScope {
     type PluginScope = DefaultPluginScope;
-    type PluginOwner = DefaultPluginOwner;
 
     fn from_plugin_manifest(
         manifest: PluginManifest,
         scope: Self::PluginScope,
-        owner: Self::PluginOwner,
         specs: PluginTypeSpecificDefinition,
         icon: Vec<u8>,
     ) -> Self {
-        PluginDefinitionDefaultPluginOwnerDefaultPluginScope {
+        PluginDefinitionWithoutOwnerDefaultPluginScope {
             name: manifest.name,
             version: manifest.version,
             description: manifest.description,
@@ -97,7 +92,6 @@ impl FromPluginManifest for PluginDefinitionDefaultPluginOwnerDefaultPluginScope
             homepage: manifest.homepage,
             specs,
             scope,
-            owner,
         }
     }
 }

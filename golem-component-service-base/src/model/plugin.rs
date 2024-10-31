@@ -15,6 +15,7 @@
 use crate::repo::RowMeta;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::{ComponentId, ComponentVersion, PluginInstallationId};
+use golem_service_base::auth::DefaultNamespace;
 use http::Uri;
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ToJSON, Type};
 use poem_openapi::{Enum, Object, Union};
@@ -37,6 +38,34 @@ pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
     pub specs: PluginTypeSpecificDefinition,
     pub scope: Scope,
     pub owner: Owner,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct PluginDefinitionWithoutOwner<Scope: PluginScope> {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub icon: Vec<u8>,
+    pub homepage: String,
+    pub specs: PluginTypeSpecificDefinition,
+    pub scope: Scope,
+}
+
+impl<Scope: PluginScope> PluginDefinitionWithoutOwner<Scope> {
+    pub fn with_owner<Owner: PluginOwner>(self, owner: Owner) -> PluginDefinition<Owner, Scope> {
+        PluginDefinition {
+            name: self.name,
+            version: self.version,
+            description: self.description,
+            icon: self.icon,
+            homepage: self.homepage,
+            specs: self.specs,
+            scope: self.scope,
+            owner,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
@@ -156,10 +185,14 @@ pub trait PluginOwner:
         + Sync
         + Unpin
         + 'static;
+
+    // Corresponding Namespace type for component services
+    type Namespace: Send + Sync + 'static;
 }
 
 impl PluginOwner for DefaultPluginOwner {
     type Row = crate::repo::plugin::DefaultPluginOwnerRow;
+    type Namespace = DefaultNamespace;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]

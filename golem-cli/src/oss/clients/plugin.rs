@@ -29,6 +29,8 @@ impl<C: golem_client::api::PluginClient + Sync + Send> PluginClient for PluginCl
     type ProjectContext = OssContext;
     type PluginDefinition =
         golem_client::model::PluginDefinitionDefaultPluginOwnerDefaultPluginScope;
+    type PluginDefinitionWithoutOwner =
+        golem_client::model::PluginDefinitionWithoutOwnerDefaultPluginScope;
     type PluginScope = DefaultPluginScope;
 
     async fn list_plugins(
@@ -52,11 +54,15 @@ impl<C: golem_client::api::PluginClient + Sync + Send> PluginClient for PluginCl
 
     async fn register_plugin(
         &self,
-        definition: Self::PluginDefinition,
+        definition: Self::PluginDefinitionWithoutOwner,
     ) -> Result<Self::PluginDefinition, GolemError> {
         info!("Registering plugin {}", definition.name);
 
         let _ = self.client.create_plugin(&definition).await?;
+        let definition = self
+            .client
+            .get_plugin(&definition.name, &definition.version)
+            .await?;
         Ok(definition)
     }
 

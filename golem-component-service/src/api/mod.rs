@@ -158,6 +158,14 @@ impl From<PluginError> for ComponentError {
                     error: value.to_safe_string(),
                 }))
             }
+            PluginError::InternalComponentError(_) => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
+            PluginError::ComponentNotFound { .. } => ComponentError::NotFound(Json(ErrorBody {
+                error: value.to_safe_string(),
+            })),
         }
     }
 }

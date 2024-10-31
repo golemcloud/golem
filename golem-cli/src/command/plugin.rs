@@ -85,7 +85,8 @@ pub enum PluginSubcommand<PluginScopeRef: clap::Args> {
 
 impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
     pub async fn handle<
-        PluginDefinition: Serialize + MessageWithFields + FromPluginManifest + 'static,
+        PluginDefinition: Serialize + MessageWithFields + 'static,
+        PluginDefinitionWithoutOwner: FromPluginManifest<PluginScope = PluginScope> + 'static,
         ProjectRef: Send + Sync + 'static,
         PluginScope: Default + Send,
         PluginOwner: Send,
@@ -96,6 +97,7 @@ impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
         client: Arc<
             dyn PluginClient<
                     PluginDefinition = PluginDefinition,
+                    PluginDefinitionWithoutOwner = PluginDefinitionWithoutOwner,
                     PluginScope = PluginScope,
                     ProjectContext = ProjectContext,
                 > + Send
@@ -160,7 +162,7 @@ impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
                         info!("Uploading oplog processor component: {}", component_name);
                         let component = components
                             .add(
-                                component_name,
+                                component_name.clone(),
                                 component_file,
                                 ComponentType::Durable, // TODO: do we want to support ephemeral oplog processors?
                                 None,
@@ -170,8 +172,10 @@ impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
                             .await?;
 
                         debug!(
-                            "Uploaded oplog processor component {} as {}",
-                            component_name, component.versioned_component_id
+                            "Uploaded oplog processor component {} as {}/{}",
+                            component_name,
+                            component.versioned_component_id.component_id,
+                            component.versioned_component_id.version
                         );
 
                         PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
@@ -191,14 +195,16 @@ impl<PluginScopeRef: clap::Args> PluginSubcommand<PluginScopeRef> {
                 };
                 let scope = scope.into(resolver).await?.unwrap_or_default();
 
-                let def = manifest.into_definition(scope, owner, spec, icon);
-
+                let def: PluginDefinitionWithoutOwner = manifest.into_definition(scope, spec, icon);
+                let result = client.register_plugin(def).await?;
+                Ok(GolemResult::Ok(Box::new(result)))
             }
             PluginSubcommand::Unregister {
                 plugin_name,
                 version,
             } => {
-                todo!()
+                client.unregister_plugin(&plugin_name, &version).await?;
+                Ok(GolemResult::Str("Plugin unregistered".to_string()))
             }
         }
     }

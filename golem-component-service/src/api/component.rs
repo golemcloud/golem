@@ -310,33 +310,29 @@ impl ComponentApi {
 
     /// Installs a new plugin for this component
     #[oai(
-        path = "/:component_id/versions/:version/plugins/installs",
+        path = "/:component_id/latest/plugins/installs",
         method = "post",
         operation_id = "install_plugin"
     )]
     async fn install_plugin(
         &self,
         component_id: Path<ComponentId>,
-        version: Path<String>,
         plugin: Json<PluginInstallationCreation>,
     ) -> Result<Json<PluginInstallation>> {
         let record = recorded_http_api_request!(
             "install_plugin",
             component_id = component_id.0.to_string(),
-            version = version.0,
             plugin_name = plugin.name.clone(),
             plugin_version = plugin.version.clone()
         );
-
-        let version_int = Self::parse_version_path_segment(&version.0)?;
 
         let response = self
             .plugin_service
             .create_plugin_installation_for_component(
                 &DefaultPluginOwner,
                 &component_id.0,
-                version_int,
                 plugin.0,
+                &DefaultNamespace(),
             )
             .await
             .map_err(|e| e.into())
@@ -384,31 +380,28 @@ impl ComponentApi {
 
     /// Uninstalls a plugin from this component
     #[oai(
-        path = "/:component_id/versions/:version/plugins/installs/:installation_id",
+        path = "/:component_id/latest/plugins/installs/:installation_id",
         method = "delete",
         operation_id = "uninstall_plugin"
     )]
     async fn uninstall_plugin(
         &self,
         component_id: Path<ComponentId>,
-        version: Path<String>,
         installation_id: Path<PluginInstallationId>,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
             "uninstall_plugin",
             component_id = component_id.0.to_string(),
-            version = version.0,
             installation_id = installation_id.0.to_string()
         );
 
-        let version_int = Self::parse_version_path_segment(&version.0)?;
         let response = self
             .plugin_service
             .delete_plugin_installation_for_component(
                 &DefaultPluginOwner,
                 &installation_id.0,
                 &component_id.0,
-                version_int,
+                &DefaultNamespace(),
             )
             .await
             .map_err(|e| e.into())

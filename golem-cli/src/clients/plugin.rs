@@ -19,6 +19,7 @@ use async_trait::async_trait;
 pub trait PluginClient {
     type ProjectContext;
     type PluginDefinition;
+    type PluginDefinitionWithoutOwner;
     type PluginScope;
 
     async fn list_plugins(
@@ -34,7 +35,7 @@ pub trait PluginClient {
 
     async fn register_plugin(
         &self,
-        definition: Self::PluginDefinition,
+        definition: Self::PluginDefinitionWithoutOwner,
     ) -> Result<Self::PluginDefinition, GolemError>;
 
     async fn unregister_plugin(

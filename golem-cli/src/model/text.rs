@@ -26,7 +26,7 @@ pub mod fmt {
 
     pub trait MessageWithFields {
         fn message(&self) -> String;
-        fn fields(&self) -> Vec<(&'static str, String)>;
+        fn fields(&self) -> Vec<(String, String)>;
     }
 
     impl<T: MessageWithFields> TextFormat for T {
@@ -50,7 +50,7 @@ pub mod fmt {
         }
     }
 
-    pub struct FieldsBuilder(Vec<(&'static str, String)>);
+    pub struct FieldsBuilder(Vec<(String, String)>);
 
     impl FieldsBuilder {
         #[allow(clippy::new_without_default)]
@@ -58,47 +58,47 @@ pub mod fmt {
             Self(vec![])
         }
 
-        pub fn field<T: ToString>(&mut self, name: &'static str, value: &T) -> &mut Self {
-            self.0.push((name, value.to_string()));
+        pub fn field<T: ToString>(&mut self, name: &str, value: &T) -> &mut Self {
+            self.0.push((name.to_string(), value.to_string()));
             self
         }
 
         pub fn fmt_field<T: ?Sized>(
             &mut self,
-            name: &'static str,
+            name: &str,
             value: &T,
             format: impl Fn(&T) -> String,
         ) -> &mut Self {
-            self.0.push((name, format(value)));
+            self.0.push((name.to_string(), format(value)));
             self
         }
 
         pub fn fmt_field_optional<T: ?Sized>(
             &mut self,
-            name: &'static str,
+            name: &str,
             value: &T,
             cond: bool,
             format: impl Fn(&T) -> String,
         ) -> &mut Self {
             if cond {
-                self.0.push((name, format(value)));
+                self.0.push((name.to_string(), format(value)));
             }
             self
         }
 
         pub fn fmt_field_option<T>(
             &mut self,
-            name: &'static str,
+            name: &str,
             value: &Option<T>,
             format: impl Fn(&T) -> String,
         ) -> &mut Self {
             if let Some(value) = &value {
-                self.0.push((name, format(value)));
+                self.0.push((name.to_string(), format(value)));
             }
             self
         }
 
-        pub fn build(self) -> Vec<(&'static str, String)> {
+        pub fn build(self) -> Vec<(String, String)> {
             self.0
         }
     }
@@ -292,7 +292,7 @@ pub mod api_definition {
         }
     }
 
-    fn api_definition_fields(def: &HttpApiDefinitionWithTypeInfo) -> Vec<(&'static str, String)> {
+    fn api_definition_fields(def: &HttpApiDefinitionWithTypeInfo) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
 
         fields
@@ -322,7 +322,7 @@ pub mod api_definition {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             api_definition_fields(&self.0)
         }
     }
@@ -339,7 +339,7 @@ pub mod api_definition {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             api_definition_fields(&self.0)
         }
     }
@@ -356,7 +356,7 @@ pub mod api_definition {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             api_definition_fields(&self.0)
         }
     }
@@ -373,7 +373,7 @@ pub mod api_definition {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             api_definition_fields(&self.0)
         }
     }
@@ -509,7 +509,7 @@ pub mod component {
         }
     }
 
-    fn component_view_fields(view: &ComponentView) -> Vec<(&'static str, String)> {
+    fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
 
         fields
@@ -535,7 +535,7 @@ pub mod component {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             component_view_fields(&self.0)
         }
     }
@@ -552,7 +552,7 @@ pub mod component {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             component_view_fields(&self.0)
         }
     }
@@ -568,7 +568,7 @@ pub mod component {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             component_view_fields(&self.0)
         }
     }
@@ -647,7 +647,7 @@ pub mod profile {
             }
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             let mut fields = FieldsBuilder::new();
 
             fields
@@ -724,7 +724,7 @@ pub mod worker {
             }
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             let mut fields = FieldsBuilder::new();
 
             fields
@@ -765,7 +765,7 @@ pub mod worker {
             }
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             let mut fields = FieldsBuilder::new();
 
             fields
@@ -1224,8 +1224,9 @@ pub mod plugin {
     use cli_table::{print_stdout, Table, WithTitle};
     use golem_client::model::{
         DefaultPluginScope, PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
-        PluginTypeSpecificDefinition,
+        PluginInstallation, PluginTypeSpecificDefinition,
     };
+    use itertools::Itertools;
 
     #[derive(Table)]
     struct PluginDefinitionTableView {
@@ -1289,17 +1290,8 @@ pub mod plugin {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             let mut fields = FieldsBuilder::new();
-
-            //     pub name: String,
-            //     pub version: String,
-            //     pub description: String,
-            //     pub icon: Vec<u8>,
-            //     pub homepage: String,
-            //     pub specs: PluginTypeSpecificDefinition,
-            //     pub scope: DefaultPluginScope,
-            //     pub owner: DefaultPluginOwner,
 
             fields
                 .fmt_field("Name", &self.name, format_main_id)
@@ -1322,6 +1314,74 @@ pub mod plugin {
             }
 
             fields.build()
+        }
+    }
+
+    impl MessageWithFields for PluginInstallation {
+        fn message(&self) -> String {
+            format!(
+                "Installed plugin {} version {}",
+                format_message_highlight(&self.name),
+                format_message_highlight(&self.version),
+            )
+        }
+
+        fn fields(&self) -> Vec<(String, String)> {
+            let mut fields = FieldsBuilder::new();
+
+            fields
+                .fmt_field("ID", &self.id, format_main_id)
+                .fmt_field("Plugin name", &self.version, format_id)
+                .fmt_field("Plugin version", &self.version, format_id)
+                .fmt_field("Priority", &self.priority, format_id);
+
+            for (k, v) in &self.parameters {
+                fields.fmt_field(k, v, format_id);
+            }
+
+            fields.build()
+        }
+    }
+
+    #[derive(Table)]
+    struct PluginInstallationTableView {
+        #[table(title = "Installation ID")]
+        pub id: String,
+        #[table(title = "Plugin name")]
+        pub name: String,
+        #[table(title = "Plugin version")]
+        pub version: String,
+        #[table(title = "Priority")]
+        pub priority: String,
+        #[table(title = "Parameters")]
+        pub parameters: String,
+    }
+
+    impl From<&PluginInstallation> for PluginInstallationTableView {
+        fn from(value: &PluginInstallation) -> Self {
+            Self {
+                id: value.id.to_string(),
+                name: value.name.clone(),
+                version: value.version.clone(),
+                priority: value.priority.to_string(),
+                parameters: value
+                    .parameters
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .join(", "),
+            }
+        }
+    }
+
+    impl TextFormat for Vec<PluginInstallation> {
+        fn print(&self) {
+            print_stdout(
+                self.iter()
+                    .map(PluginInstallationTableView::from)
+                    .collect::<Vec<_>>()
+                    .with_title(),
+            )
+            .unwrap()
         }
     }
 }

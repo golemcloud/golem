@@ -29,7 +29,7 @@ use crate::oss::clients::plugin::PluginClientLive;
 use crate::oss::clients::worker::WorkerClientLive;
 use crate::oss::model::OssContext;
 use crate::service::project::{ProjectResolver, ProjectResolverOss};
-use golem_client::model::PluginDefinitionDefaultPluginOwnerDefaultPluginScope;
+use golem_client::model::{PluginDefinitionDefaultPluginOwnerDefaultPluginScope, PluginDefinitionWithoutOwnerDefaultPluginScope};
 use golem_client::Context;
 use golem_common::model::plugin::DefaultPluginScope;
 use itertools::Itertools;
@@ -115,6 +115,7 @@ impl ServiceFactory for OssServiceFactory {
     type ProjectRef = OssContext;
     type ProjectContext = OssContext;
     type PluginDefinition = PluginDefinitionDefaultPluginOwnerDefaultPluginScope;
+    type PluginDefinitionWithoutOwner = PluginDefinitionWithoutOwnerDefaultPluginScope;
     type PluginScope = DefaultPluginScope;
 
     fn project_resolver(
@@ -199,6 +200,7 @@ impl ServiceFactory for OssServiceFactory {
     ) -> Arc<
         dyn PluginClient<
                 PluginDefinition = Self::PluginDefinition,
+                PluginDefinitionWithoutOwner = Self::PluginDefinitionWithoutOwner,
                 PluginScope = Self::PluginScope,
                 ProjectContext = Self::ProjectContext,
             > + Send

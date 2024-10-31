@@ -16,7 +16,7 @@ use crate::api::{ComponentError, Result};
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
-use golem_component_service_base::model::PluginDefinition;
+use golem_component_service_base::model::{PluginDefinition, PluginDefinitionWithoutOwner};
 use golem_component_service_base::service::plugin::PluginService;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::ErrorBody;
@@ -83,7 +83,7 @@ impl PluginApi {
     #[oai(path = "/", method = "post", operation_id = "create_plugin")]
     pub async fn create_plugin(
         &self,
-        plugin: Json<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>,
+        plugin: Json<PluginDefinitionWithoutOwner<DefaultPluginScope>>,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
             "create_plugin",
@@ -93,7 +93,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .create_plugin(plugin.0)
+            .create_plugin(plugin.0.with_owner(DefaultPluginOwner))
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

@@ -2339,6 +2339,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/latest/plugins/installs:
     post:
       tags:
       - Component
@@ -2352,14 +2353,6 @@ paths:
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: version
-        required: true
-        deprecated: false
-        schema:
-          type: string
         explode: true
         style: simple
       requestBody:
@@ -2493,6 +2486,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/latest/plugins/installs/{installation_id}:
     delete:
       tags:
       - Component
@@ -2506,14 +2500,6 @@ paths:
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: version
-        required: true
-        deprecated: false
-        schema:
-          type: string
         explode: true
         style: simple
       - in: path
@@ -2636,7 +2622,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+              $ref: '#/components/schemas/PluginDefinitionWithoutOwner<DefaultPluginScope>'
         required: true
       responses:
         '200':
@@ -5656,6 +5642,34 @@ components:
       - specs
       - scope
       - owner
+    PluginDefinitionWithoutOwner<DefaultPluginScope>:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        homepage:
+          type: string
+        specs:
+          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
+        scope:
+          $ref: '#/components/schemas/DefaultPluginScope'
+      required:
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
     PluginInstallation:
       type: object
       properties:

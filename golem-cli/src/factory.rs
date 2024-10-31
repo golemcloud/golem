@@ -32,6 +32,7 @@ pub trait ServiceFactory {
     type ProjectRef: Send + Sync + 'static;
     type ProjectContext: Display + Send + Sync + 'static;
     type PluginDefinition: Send + Sync + 'static;
+    type PluginDefinitionWithoutOwner: Send + Sync + 'static;
     type PluginScope: Send + Sync + 'static;
 
     fn project_resolver(
@@ -113,6 +114,7 @@ pub trait ServiceFactory {
     ) -> Arc<
         dyn PluginClient<
                 PluginDefinition = Self::PluginDefinition,
+                PluginDefinitionWithoutOwner = Self::PluginDefinitionWithoutOwner,
                 PluginScope = Self::PluginScope,
                 ProjectContext = Self::ProjectContext,
             > + Send
