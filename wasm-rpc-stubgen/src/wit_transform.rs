@@ -81,10 +81,12 @@ pub fn extract_main_interface_package(
         .map(|version| format!("@{}", version))
         .unwrap_or_default();
 
+    // Drop all interfaces from original package
     package.items_mut().retain(|item| match item {
         PackageItem::Interface(_) => false,
         PackageItem::World(_) => true,
     });
+    // Drop all worlds from interface package
     interface_package.items_mut().retain(|item| match item {
         PackageItem::Interface(_) => true,
         PackageItem::World(_) => false,
@@ -96,6 +98,7 @@ pub fn extract_main_interface_package(
         if let PackageItem::World(world) = package_item {
             let world_name = world.name().clone();
 
+            // Remove and collect inline exports
             world.items_mut().retain(|world_item| match world_item {
                 WorldItem::InlineInterfaceExport(interface) => {
                     let mut interface = interface.clone();
@@ -120,12 +123,14 @@ pub fn extract_main_interface_package(
                 _ => true,
             });
 
+            // Insert named imports for extracted inline interfaces
             if let Some(interfaces) = inline_interface_exports.get(&world_name) {
                 for interface in interfaces {
                     world.named_interface_export(interface.name().clone());
                 }
             }
 
+            // Insert named import for extracted inline functions
             if inline_function_exports.contains_key(&world_name) {
                 world.named_interface_export(format!(
                     "{}{}{}",
@@ -139,6 +144,7 @@ pub fn extract_main_interface_package(
         }
     }
 
+    // Rename named self imports to use the extracted interface names
     for package_item in package.items_mut() {
         if let PackageItem::World(world) = package_item {
             for world_item in world.items_mut() {
@@ -156,12 +162,14 @@ pub fn extract_main_interface_package(
         }
     }
 
+    // Add inlined exported interfaces to the interface package
     for (_, interfaces) in inline_interface_exports {
         for interface in interfaces {
             interface_package.interface(interface);
         }
     }
 
+    // Add interface for inlined functions to the interface package
     for (world_name, functions) in inline_function_exports {
         let mut interface = Interface::new(
             naming::wit::interface_package_world_inline_functions_interface_name(&world_name),
