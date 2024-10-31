@@ -1,4 +1,3 @@
-use crate::commands::dependencies::UpdateCargoToml;
 use crate::commands::log::{
     log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action,
 };
@@ -9,6 +8,7 @@ use crate::model::wasm_rpc::{
     include_glob_patter_from_yaml_file, init_oam_app, Application, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::stub::{StubConfig, StubDefinition};
+use crate::wit_generate::{add_stub_as_dependency_to_wit_dir, AddStubAsDepConfig, UpdateCargoToml};
 use crate::{commands, WasmRpcOverride};
 use anyhow::{anyhow, Context, Error};
 use colored::Colorize;
@@ -128,12 +128,13 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
                 ),
             );
 
-            commands::dependencies::add_stub_dependency(
-                &app.stub_wit(dep_component_name),
-                &app.component_wit(component_name),
-                true, // NOTE: in declarative mode we always use overwrite
-                UpdateCargoToml::UpdateIfExists,
-            )?
+            add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
+                stub_wit_root: app.stub_wit(dep_component_name),
+                dest_wit_root: app.component_wit(component_name),
+                overwrite: true, // NOTE: in declarative mode we always use overwrite
+                remove_dest_imports: false,
+                update_cargo_toml: UpdateCargoToml::Update,
+            })?
         }
     }
 

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::wit_encode::EncodedWitDir;
 use crate::wit_resolve::{PackageSource, ResolvedWitDir};
 use crate::{naming, WasmRpcOverride};
 use anyhow::anyhow;
@@ -25,6 +26,7 @@ use wit_parser::{
     Results, Type, TypeDef, TypeDefKind, TypeId, TypeOwner, World, WorldId, WorldItem, WorldKey,
 };
 
+#[derive(Clone, Debug)]
 pub struct StubConfig {
     pub source_wit_root: PathBuf,
     pub target_root: PathBuf,
@@ -127,6 +129,10 @@ impl StubDefinition {
 
     pub fn source_world_name(&self) -> &str {
         &self.source_world().name
+    }
+
+    pub fn encode_source(&self) -> anyhow::Result<EncodedWitDir> {
+        EncodedWitDir::new(&self.resolve)
     }
 
     pub fn target_cargo_path(&self) -> PathBuf {
