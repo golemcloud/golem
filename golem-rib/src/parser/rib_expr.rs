@@ -20,7 +20,7 @@ use combine::{parser, sep_by};
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 
-use super::binary_comparison::BinaryOp;
+use super::binary_op::BinaryOp;
 
 // Parse a full Rib Program, and we expect the parser to fully consume the stream
 // unlike rib block expression
@@ -37,7 +37,7 @@ where
                 if expressions.len() == 1 {
                     expressions.first().unwrap().clone()
                 } else {
-                    Expr::multiple(expressions)
+                    Expr::expr_block(expressions)
                 }
             })
             .skip(eof()),
@@ -72,6 +72,10 @@ where
                     BinaryOp::EqualTo => Expr::equal_to(acc, next),
                     BinaryOp::And => Expr::and(acc, next),
                     BinaryOp::Or => Expr::or(acc, next),
+                    BinaryOp::Add => Expr::plus(acc, next),
+                    BinaryOp::Subtract => Expr::minus(acc, next),
+                    BinaryOp::Multiply => Expr::multiply(acc, next),
+                    BinaryOp::Divide => Expr::divide(acc, next),
                 })
             }),
         )
@@ -79,7 +83,7 @@ where
 }
 
 mod internal {
-    use crate::parser::binary_comparison::{binary_op, BinaryOp};
+    use crate::parser::binary_op::{binary_op, BinaryOp};
     use crate::parser::boolean::boolean_literal;
     use crate::parser::call::call;
     use crate::parser::cond::conditional;
@@ -96,6 +100,8 @@ mod internal {
     use crate::parser::record::record;
     use crate::parser::result::result;
 
+    use crate::parser::list_aggregation::list_aggregation;
+    use crate::parser::list_comprehension::list_comprehension;
     use crate::parser::select_field::select_field;
     use crate::parser::select_index::select_index;
     use crate::parser::sequence::sequence;
@@ -114,6 +120,8 @@ mod internal {
     {
         spaces()
             .with(choice((
+                list_comprehension(),
+                list_aggregation(),
                 pattern_match(),
                 let_binding(),
                 conditional(),

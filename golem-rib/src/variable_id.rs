@@ -22,36 +22,23 @@ pub enum VariableId {
     Global(String),
     Local(String, Option<Id>),
     MatchIdentifier(MatchIdentifier),
+    ListComprehension(ListComprehensionIdentifier),
+    ListReduce(ListAggregationIdentifier),
 }
-
-#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct MatchIdentifier {
-    pub name: String,
-    pub match_arm_index: usize, // Every match arm across the program is identified by a non-sharing index value. Within a match arm the identifier names cannot be reused
-}
-
-impl MatchIdentifier {
-    pub fn new(name: String, match_arm_index: usize) -> MatchIdentifier {
-        MatchIdentifier {
-            name,
-            match_arm_index,
-        }
-    }
-}
-
-impl Display for VariableId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            VariableId::Global(name) => write!(f, "{}", name),
-            VariableId::Local(name, _) => write!(f, "{}", name),
-            VariableId::MatchIdentifier(m) => write!(f, "{}", m.name),
-        }
-    }
-}
-#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-pub struct Id(u32);
 
 impl VariableId {
+    pub fn list_comprehension_identifier(name: impl AsRef<str>) -> VariableId {
+        VariableId::ListComprehension(ListComprehensionIdentifier {
+            name: name.as_ref().to_string(),
+        })
+    }
+
+    pub fn list_reduce_identifier(name: impl AsRef<str>) -> VariableId {
+        VariableId::ListReduce(ListAggregationIdentifier {
+            name: name.as_ref().to_string(),
+        })
+    }
+
     pub fn match_identifier(name: String, match_arm_index: usize) -> VariableId {
         VariableId::MatchIdentifier(MatchIdentifier {
             name,
@@ -63,6 +50,8 @@ impl VariableId {
             VariableId::Global(name) => name.clone(),
             VariableId::Local(name, _) => name.clone(),
             VariableId::MatchIdentifier(m) => m.name.clone(),
+            VariableId::ListComprehension(l) => l.name.clone(),
+            VariableId::ListReduce(r) => r.name.clone(),
         }
     }
 
@@ -70,7 +59,9 @@ impl VariableId {
         match self {
             VariableId::Global(_) => true,
             VariableId::Local(_, _) => false,
-            VariableId::MatchIdentifier { .. } => false,
+            VariableId::MatchIdentifier(_) => false,
+            VariableId::ListComprehension(_) => false,
+            VariableId::ListReduce(_) => false,
         }
     }
 
@@ -78,7 +69,9 @@ impl VariableId {
         match self {
             VariableId::Global(_) => false,
             VariableId::Local(_, _) => false,
-            VariableId::MatchIdentifier { .. } => true,
+            VariableId::MatchIdentifier(_) => true,
+            VariableId::ListComprehension(_) => false,
+            VariableId::ListReduce(_) => false,
         }
     }
 
@@ -108,9 +101,50 @@ impl VariableId {
                 VariableId::Local(name.to_string(), new_id)
             }
             VariableId::MatchIdentifier(m) => VariableId::MatchIdentifier(m.clone()),
+            VariableId::ListComprehension(l) => VariableId::ListComprehension(l.clone()),
+            VariableId::ListReduce(l) => VariableId::ListReduce(l.clone()),
         }
     }
 }
+
+#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub struct ListComprehensionIdentifier {
+    pub name: String,
+}
+
+#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub struct ListAggregationIdentifier {
+    pub name: String,
+}
+
+#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub struct MatchIdentifier {
+    pub name: String,
+    pub match_arm_index: usize, // Every match arm across the program is identified by a non-sharing index value. Within a match arm the identifier names cannot be reused
+}
+
+impl MatchIdentifier {
+    pub fn new(name: String, match_arm_index: usize) -> MatchIdentifier {
+        MatchIdentifier {
+            name,
+            match_arm_index,
+        }
+    }
+}
+
+impl Display for VariableId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VariableId::Global(name) => write!(f, "{}", name),
+            VariableId::Local(name, _) => write!(f, "{}", name),
+            VariableId::MatchIdentifier(m) => write!(f, "{}", m.name),
+            VariableId::ListComprehension(l) => write!(f, "{}", l.name),
+            VariableId::ListReduce(r) => write!(f, "{}", r.name),
+        }
+    }
+}
+#[derive(Hash, Eq, Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+pub struct Id(u32);
 
 impl TryFrom<ProtoVariableId> for VariableId {
     type Error = String;
@@ -153,6 +187,20 @@ impl From<VariableId> for ProtoVariableId {
                             name,
                             id: id.map(|x| x.0 as u64),
                         },
+                    ),
+                ),
+            },
+            VariableId::ListComprehension(l) => ProtoVariableId {
+                variable_id: Some(
+                    golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
+                        golem_api_grpc::proto::golem::rib::Global { name: l.name },
+                    ),
+                ),
+            },
+            VariableId::ListReduce(r) => ProtoVariableId {
+                variable_id: Some(
+                    golem_api_grpc::proto::golem::rib::variable_id::VariableId::Global(
+                        golem_api_grpc::proto::golem::rib::Global { name: r.name },
                     ),
                 ),
             },

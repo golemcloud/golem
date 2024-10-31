@@ -119,7 +119,7 @@ mod internal {
                     if expressions.len() == 1 {
                         expressions.first().unwrap().clone()
                     } else {
-                        Expr::multiple(expressions)
+                        Expr::expr_block(expressions)
                     }
                 },
             ),
@@ -194,7 +194,7 @@ mod tests {
                         Expr::identifier("foo"),
                         Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id")])
                     ),
-                    Expr::number(1f64),
+                    Expr::untyped_number(1f64),
                     Expr::literal("baz"),
                 ),
                 ""

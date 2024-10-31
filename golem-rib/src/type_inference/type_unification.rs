@@ -150,6 +150,56 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 }
             }
 
+            Expr::ListComprehension {
+                iterable_expr,
+                yield_expr,
+                inferred_type,
+                ..
+            } => {
+                queue.push(iterable_expr);
+                queue.push(yield_expr);
+
+                let unified_inferred_type = inferred_type.unify();
+
+                match unified_inferred_type {
+                    Ok(unified_type) => *inferred_type = unified_type,
+                    Err(e) => {
+                        errors.push(format!(
+                            "Unable to resolve the type of list comprehension {}",
+                            expr_str
+                        ));
+
+                        errors.push(e)
+                    }
+                }
+            }
+
+            Expr::ListReduce {
+                iterable_expr,
+                init_value_expr,
+                yield_expr,
+                inferred_type,
+                ..
+            } => {
+                queue.push(iterable_expr);
+                queue.push(init_value_expr);
+                queue.push(yield_expr);
+
+                let unified_inferred_type = inferred_type.unify();
+
+                match unified_inferred_type {
+                    Ok(unified_type) => *inferred_type = unified_type,
+                    Err(e) => {
+                        errors.push(format!(
+                            "Unable to resolve the type of list aggregation {}",
+                            expr_str
+                        ));
+
+                        errors.push(e)
+                    }
+                }
+            }
+
             Expr::PatternMatch(expr, arms, inferred_type) => {
                 queue.push(expr);
                 for arm in arms.iter_mut().rev() {
@@ -272,6 +322,7 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                     }
                 }
             }
+
             Expr::Not(expr, inferred_type) => {
                 queue.push(expr);
                 let unified_inferred_type = inferred_type.unify();
@@ -326,6 +377,42 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
                 queue.push(right);
             }
 
+            Expr::Plus(left, right, inferred_type) => internal::handle_math_op(
+                &mut queue,
+                left,
+                right,
+                inferred_type,
+                &mut errors,
+                expr_str,
+            ),
+
+            Expr::Minus(left, right, inferred_type) => internal::handle_math_op(
+                &mut queue,
+                left,
+                right,
+                inferred_type,
+                &mut errors,
+                expr_str,
+            ),
+
+            Expr::Divide(left, right, inferred_type) => internal::handle_math_op(
+                &mut queue,
+                left,
+                right,
+                inferred_type,
+                &mut errors,
+                expr_str,
+            ),
+
+            Expr::Multiply(left, right, inferred_type) => internal::handle_math_op(
+                &mut queue,
+                left,
+                right,
+                inferred_type,
+                &mut errors,
+                expr_str,
+            ),
+
             Expr::And(left, right, _) => {
                 queue.push(left);
                 queue.push(right);
@@ -362,7 +449,28 @@ pub fn unify_types(expr: &mut Expr) -> Result<(), Vec<String>> {
 }
 
 mod internal {
-    use crate::{ArmPattern, Expr};
+    use crate::{ArmPattern, Expr, InferredType};
+
+    pub(crate) fn handle_math_op<'a>(
+        queue: &mut Vec<&'a mut Expr>,
+        left: &'a mut Expr,
+        right: &'a mut Expr,
+        inferred_type: &mut InferredType,
+        errors: &mut Vec<String>,
+        expr_str: &str,
+    ) {
+        queue.push(left);
+        queue.push(right);
+        let unified_inferred_type = inferred_type.unify();
+
+        match unified_inferred_type {
+            Ok(unified_type) => *inferred_type = unified_type,
+            Err(e) => {
+                errors.push(format!("Unable to resolve the type of {}", expr_str));
+                errors.push(e);
+            }
+        }
+    }
 
     // Push any existence of expr in arm patterns to queue
     pub(crate) fn push_arm_pattern_expr<'a>(

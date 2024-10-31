@@ -12,28 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-mod binary_op;
-mod boolean;
-pub(crate) mod call;
-mod cond;
-mod errors;
-mod flag;
-mod identifier;
-mod let_binding;
-mod list_aggregation;
-mod list_comprehension;
-pub(crate) mod literal;
-mod multi_line_code_block;
-mod not;
-mod number;
-mod optional;
-mod partial_block_expr;
-mod pattern_match;
-mod record;
-mod result;
-pub(crate) mod rib_expr;
-mod select_field;
-mod select_index;
-mod sequence;
-mod tuple;
-pub(crate) mod type_name;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use std::collections::HashMap;
+
+// Acts as the structure to hold the global input values
+#[derive(Debug, Default, Clone)]
+pub struct RibInput {
+    pub input: HashMap<String, TypeAnnotatedValue>,
+}
+
+impl RibInput {
+    pub fn new(input: HashMap<String, TypeAnnotatedValue>) -> RibInput {
+        RibInput { input }
+    }
+
+    pub fn merge(&self, other: RibInput) -> RibInput {
+        let mut cloned = self.clone();
+        cloned.input.extend(other.input);
+        cloned
+    }
+}
