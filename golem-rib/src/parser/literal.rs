@@ -30,11 +30,10 @@ parser! {
 }
 
 mod internal {
-    use combine::parser::char::{char as char_, char, letter, space};
-    use combine::parser::char::{digit, spaces};
+    use combine::parser::char::{char as char_, char};
+    use combine::parser::char::{spaces};
     use combine::parser::repeat::many;
-    use combine::{between, choice, many1, sep_by, ParseError, Parser};
-
+    use combine::{between, choice, many1, none_of, sep_by, ParseError, Parser, Stream};
     use crate::expr::Expr;
     use crate::parser::errors::RibParseError;
     use crate::parser::rib_expr::rib_expr;
@@ -81,12 +80,7 @@ mod internal {
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
     {
-        many1(
-            letter().or(space()).or(digit()).or(char_('_').or(char_('-')
-                .or(char_('.'))
-                .or(char_('/'))
-                .or(char_(':').or(char_('@'))))),
-        )
+        parse_until_dollar_brace()
         .map(LiteralTerm::Static)
         .message("Unable to parse static part of literal")
     }
@@ -104,6 +98,14 @@ mod internal {
             block(),
         )
         .map(LiteralTerm::Dynamic)
+    }
+
+    pub fn parse_until_dollar_brace<Input>() -> impl Parser<Input, Output = String>
+    where
+        Input: Stream<Token = char>,
+    {
+        many1(none_of("\"${}".chars()))
+            .message("Failed to parse string until '${'")
     }
 
     pub fn block<Input>() -> impl Parser<Input, Output = Expr>
@@ -142,12 +144,11 @@ mod internal {
 }
 
 #[cfg(test)]
-mod tests {
+mod literal_parse_tests {
     use test_r::test;
 
     use combine::stream::position;
     use combine::EasyParser;
-
     use crate::parser::rib_expr::{rib_expr, rib_program};
 
     use super::*;
@@ -182,13 +183,13 @@ mod tests {
         );
     }
 
+
     #[test]
     fn test_interpolated_strings_in_if_condition() {
         let input = "if foo == \"bar-${worker_id}\" then 1 else \"baz\"";
-        let result = rib_expr().easy_parse(input);
+        let result = Expr::from_text(input).unwrap();
         assert_eq!(
             result,
-            Ok((
                 Expr::cond(
                     Expr::equal_to(
                         Expr::identifier("foo"),
@@ -196,9 +197,22 @@ mod tests {
                     ),
                     Expr::untyped_number(1f64),
                     Expr::literal("baz"),
-                ),
-                ""
-            ))
+                )
+        );
+    }
+
+    #[test]
+    fn test_interpolated_strings_with_special_chars() {
+        let input = "\"<>/!@#%&^&*()_+[];',.${bar}-ba!z-${qux}\"";
+        let result = Expr::from_text(input).unwrap();
+        assert_eq!(
+            result,
+            Expr::concat(vec![
+                Expr::literal("<>/!@#%&^&*()_+[];',."),
+                Expr::identifier("bar"),
+                Expr::literal("-ba!z-"),
+                Expr::identifier("qux"),
+            ])
         );
     }
 }
