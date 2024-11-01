@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::call_type::CallType;
-use crate::parser::rib_expr::rib_program;
+use crate::parser::block::block;
 use crate::parser::type_name::TypeName;
 use crate::type_registry::FunctionTypeRegistry;
 use crate::{
@@ -21,8 +21,10 @@ use crate::{
     ParsedFunctionName, VariableId,
 };
 use bincode::{Decode, Encode};
+use combine::parser::char::spaces;
 use combine::stream::position;
-use combine::EasyParser;
+use combine::Parser;
+use combine::{eof, EasyParser};
 use golem_api_grpc::proto::golem::rib::RecordFieldArmPattern;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -113,7 +115,8 @@ impl Expr {
     /// string interpolation (see error_message above) etc.
     ///
     pub fn from_text(input: &str) -> Result<Expr, String> {
-        rib_program()
+        spaces()
+            .with(block().skip(eof()))
             .easy_parse(position::Stream::new(input))
             .map(|t| t.0)
             .map_err(|err| format!("{}", err))
