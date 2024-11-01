@@ -12,37 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use combine::parser;
 use combine::parser::char;
-use combine::parser::char::{char, spaces};
-use combine::{eof, ParseError, Parser};
-use combine::{parser, sep_by};
+use combine::parser::char::spaces;
+use combine::{ParseError, Parser};
 
 use crate::expr::Expr;
 use crate::parser::errors::RibParseError;
 
 use super::binary_op::BinaryOp;
-
-// Parse a full Rib Program, and we expect the parser to fully consume the stream
-// unlike rib block expression
-pub fn rib_program<Input>() -> impl Parser<Input, Output = Expr>
-where
-    Input: combine::Stream<Token = char>,
-    RibParseError: Into<
-        <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-    >,
-{
-    spaces().with(
-        sep_by(rib_expr().skip(spaces()), char(';').skip(spaces()))
-            .map(|expressions: Vec<Expr>| {
-                if expressions.len() == 1 {
-                    expressions.first().unwrap().clone()
-                } else {
-                    Expr::expr_block(expressions)
-                }
-            })
-            .skip(eof()),
-    )
-}
 
 // A rib expression := (simple_expr, rib_expr_rest*)
 parser! {

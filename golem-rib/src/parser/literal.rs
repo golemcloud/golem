@@ -30,15 +30,14 @@ parser! {
 }
 
 mod internal {
-    use combine::parser::char::{char as char_, char};
-    use combine::parser::char::{spaces};
-    use combine::parser::repeat::many;
-    use combine::{between, choice, many1, none_of, sep_by, ParseError, Parser, Stream};
     use crate::expr::Expr;
+    use crate::parser::block::block;
     use crate::parser::errors::RibParseError;
-    use crate::parser::rib_expr::rib_expr;
+    use combine::parser::char::char as char_;
+    use combine::parser::char::spaces;
+    use combine::parser::repeat::many;
+    use combine::{between, choice, many1, none_of, ParseError, Parser};
 
-    // Literal can handle string interpolation
     pub fn literal_<Input>() -> impl Parser<Input, Output = Expr>
     where
         Input: combine::Stream<Token = char>,
@@ -80,9 +79,9 @@ mod internal {
             <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
         >,
     {
-        parse_until_dollar_brace()
-        .map(LiteralTerm::Static)
-        .message("Unable to parse static part of literal")
+        many1(none_of("\"${}".chars()))
+            .map(LiteralTerm::Static)
+            .message("Unable to parse static part of literal")
     }
 
     fn dynamic_term<Input>() -> impl Parser<Input, Output = LiteralTerm>
@@ -98,34 +97,6 @@ mod internal {
             block(),
         )
         .map(LiteralTerm::Dynamic)
-    }
-
-    pub fn parse_until_dollar_brace<Input>() -> impl Parser<Input, Output = String>
-    where
-        Input: Stream<Token = char>,
-    {
-        many1(none_of("\"${}".chars()))
-            .message("Failed to parse string until '${'")
-    }
-
-    pub fn block<Input>() -> impl Parser<Input, Output = Expr>
-    where
-        Input: combine::Stream<Token = char>,
-        RibParseError: Into<
-            <Input::Error as ParseError<Input::Token, Input::Range, Input::Position>>::StreamError,
-        >,
-    {
-        spaces().with(
-            sep_by(rib_expr().skip(spaces()), char(';').skip(spaces())).map(
-                |expressions: Vec<Expr>| {
-                    if expressions.len() == 1 {
-                        expressions.first().unwrap().clone()
-                    } else {
-                        Expr::expr_block(expressions)
-                    }
-                },
-            ),
-        )
     }
 
     enum LiteralTerm {
@@ -147,9 +118,8 @@ mod internal {
 mod literal_parse_tests {
     use test_r::test;
 
-    use combine::stream::position;
+    use crate::parser::rib_expr::rib_expr;
     use combine::EasyParser;
-    use crate::parser::rib_expr::{rib_expr, rib_program};
 
     use super::*;
 
@@ -170,19 +140,16 @@ mod literal_parse_tests {
     #[test]
     fn test_literal_with_interpolation11() {
         let input = "\"foo-${bar}-baz\"";
-        let result = rib_program()
-            .easy_parse(position::Stream::new(input))
-            .map(|x| x.0);
+        let result = Expr::from_text(input).unwrap();
         assert_eq!(
             result,
-            Ok(Expr::concat(vec![
+            Expr::concat(vec![
                 Expr::literal("foo-"),
                 Expr::identifier("bar"),
                 Expr::literal("-baz"),
-            ]))
+            ])
         );
     }
-
 
     #[test]
     fn test_interpolated_strings_in_if_condition() {
@@ -190,14 +157,14 @@ mod literal_parse_tests {
         let result = Expr::from_text(input).unwrap();
         assert_eq!(
             result,
-                Expr::cond(
-                    Expr::equal_to(
-                        Expr::identifier("foo"),
-                        Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id")])
-                    ),
-                    Expr::untyped_number(1f64),
-                    Expr::literal("baz"),
-                )
+            Expr::cond(
+                Expr::equal_to(
+                    Expr::identifier("foo"),
+                    Expr::concat(vec![Expr::literal("bar-"), Expr::identifier("worker_id")])
+                ),
+                Expr::untyped_number(1f64),
+                Expr::literal("baz"),
+            )
         );
     }
 
