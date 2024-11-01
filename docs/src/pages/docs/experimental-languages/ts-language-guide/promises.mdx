@@ -8,7 +8,7 @@ It is also possible to complete a promise from within a Golem worker using the G
 
 When a promise is completed, an arbitrary byte array can be attached to it as a payload - this data is returned to the awaiting worker when is continues execution.
 
-In TypeScript the promise API has idiomatic TypeScript wrappers in the [Golem TypeScript SDK](/docs/experimental-languages/ts-language-guide/golem-ts-sdk).
+In TypeScript the promise API has idiomatic TypeScript wrappers in the [Golem TypeScript SDK](../../../docs/experimental-languages/ts-language-guide/golem-ts-sdk.mdx).
 
 ### Creating a promise
 
@@ -89,4 +89,4 @@ const success: boolean = completePromise(promiseId, byteArrayPayload)
 
 ### Completing a promise from an external source
 
-To see how to use the **promise ID** to complete a promise through the external REST API, check [the REST API documentation](/docs/rest-api).
+To see how to use the **promise ID** to complete a promise through the external REST API, check [the REST API documentation](../../../docs/rest-api.mdx).

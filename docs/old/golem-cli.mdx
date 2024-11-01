@@ -191,7 +191,7 @@ Golem has a library of **examples** which you can use as a starting point for yo
 The `list-examples` command can list and filter the available commands for you.
 
 - Use `--language X` to filter for your chosen guest language, such as `Rust`, `Go`, etc.
-- Use `--tier N` to show only examples for a given **language tier** - see [Building Components](/docs/building-components) for a definition of tiers.
+- Use `--tier N` to show only examples for a given **language tier**.
 
 ### `golem-cli new`
 
@@ -226,7 +226,7 @@ If needed, you can select an already created project (read below for information
 - `--project-name NAME`
 - `--project urn:project:UUID`
 
-Once the component is successfully uploaded the CLI will print its **metadata**. The metadata contains all the detected **exported functions** with their type signature. See the [Component Interface](/docs/component-interface) page for more information about types and how they are mapped to JSON structures.
+Once the component is successfully uploaded the CLI will print its **metadata**. The metadata contains all the detected **exported functions** with their type signature.
 
 ## Creating and invoking workers
 
@@ -312,8 +312,6 @@ You can specify parameters either as JSON array:
 - `--parameters JSON_ARR` a JSON array with all the parameters to be passed to the exported function. If the function does not expect any parameters it should be an empty array (`[]`)
   Or as separate parameters in WAVE format:
 - `--arg '"str"' --arg '[1, 2, 3]'`
-
-See the [Component Interface](/docs/component-interface) page for more information about what a fully qualified exported function name is, and how to encode the different types in JSON.
 
 There is one more optional parameters to this command:
 

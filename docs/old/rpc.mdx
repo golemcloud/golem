@@ -2,7 +2,7 @@
 
 ## Concept
 
-Golem allows creating and invoking **workers** through its [REST API](/docs/rest-api/worker) or [command-line interface](/docs/golem-cli), using the rules defined on the [component interface](/docs/component-interface) page. These methods are for working with Golem workers from the outside world. However, the public API for calling one worker from another is not very convenient.
+Golem allows creating and invoking **workers** through its REST API or by using `golem-cli`. These methods are for working with Golem workers from the outside world. However, the public API for calling one worker from another is not very convenient.
 
 Golem instead introduces a new way to do worker-to-worker communication, using a method called **WASM RPC**. This consists of the following building blocks:
 
@@ -130,7 +130,7 @@ Options:
 The parameters have the following meaning:
 
 - `--source-wit-root` must point to the directory of the WIT specification of the **worker to be called remotely**. This is usually a `wit` subdirectory in the worker's component's source code.
-- `--dest-crate-root` is a new directory where the generated RPC stub will be put. The tool's current version does not generate a WASM file directly, instead it outputs a complete Rust crate which can be compiled via `cargo component build` (as described on the [Rust page](/docs/building-components/tier-1/rust)) or included in a Rust workspace.
+- `--dest-crate-root` is a new directory where the generated RPC stub will be put. The tool's current version does not generate a WASM file directly, instead it outputs a complete Rust crate which can be compiled via `cargo component build` or included in a Rust workspace.
 - `--world` can be used to select the exported world from the source WIT, if there are more than one. If there is only one world defined, there is no need to use this parameter.
 - `--stub-crate-version` sets the generated Rust crate's version to the given value.
 - `--wasm-rpc-path-override` is useful when working on the `wasm-rpc` crate itself, to point the dependency to a local path instead of using the published version.

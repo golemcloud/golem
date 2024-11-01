@@ -4,7 +4,7 @@ import { Callout } from "nextra/components"
 
 Golem implements and exports a subset of the [WASI](https://wasi.dev) interfaces, as well as its own **runtime interfaces**.
 
-The [Golem Rust SDK](https://crates.io/crates/golem-rust) provides idiomatic wrappers on a subset of these interfaces, and the Rust standard library is implemented on by another subset, but it is also possible to use the generated bindings directly.
+The Golem Rust SDK (See https://crates.io/crates/golem-rust) provides idiomatic wrappers on a subset of these interfaces, and the Rust standard library is implemented on by another subset, but it is also possible to use the generated bindings directly.
 
 ## WIT specifications
 
@@ -144,7 +144,7 @@ use golem_rust::bindings::golem::api::host::{update_worker, UpdateMode};
 update_worker(worker_id, target_version, UpdateMode::Automatic);
 ```
 
-To learn more about updating workers, see [the updating workers page](/docs/rust-language-guide/updating).
+To learn more about updating workers, see [the updating workers page](../../docs/rust-language-guide/updating.mdx).
 
 ### The WASI Key-Value store interface
 

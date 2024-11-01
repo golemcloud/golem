@@ -1,6 +1,6 @@
 # High level transactions in Rust
 
-On top of the [durability controls](/docs/rust-language-guide/durability) and [retry controls](/docs/rust-language-guide/retries), the [golem-rust crate](https://crates.io/crates/golem-rust) also provides a high level library for defining transactions supporting **compensation actions** in case of getting reverted.
+On top of the [durability controls](../../docs/rust-language-guide/durability.mdx) and [retry controls](../../docs/rust-language-guide/retries.mdx), the golem-rust crate (https://crates.io/crates/golem-rust) also provides a high level library for defining transactions supporting **compensation actions** in case of getting reverted.
 
 Although Golem's automatic retry policies and low level atomic regions provide a lot of power automatically, many times a set of external operations such as HTTP requests needs to be executed **transactionally**; if one of the operations fails, the whole transaction need to be rolled back by executing some compensation actions.
 

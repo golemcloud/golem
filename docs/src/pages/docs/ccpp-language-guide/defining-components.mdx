@@ -31,7 +31,7 @@ Golem and the C/C++ toolchain currently requires defining the component's interf
 
 Each new project generated with `golem-cli` contains a `wit` directory with at least one `.wit` file defining a `world`. This world can contain **exports** (exported functions and interfaces) and these exports will be the compiled Golem component's public API.
 
-The first time a component is compiled (see the [Building Components page](/docs/ccpp-language-guide/building-components) for details), a couple of files (`example.c`, `example.h` and `example_component_type.o` if the component name was `example`) get generated in the `src` directory. This module contains the C definitions of all the data types and interfaces defined in the `WIT` file(s).
+The first time a component is compiled (see the [Building Components page](building-components.mdx) for details), a couple of files (`example.c`, `example.h` and `example_component_type.o` if the component name was `example`) get generated in the `src` directory. This module contains the C definitions of all the data types and interfaces defined in the `WIT` file(s).
 
 To **implement** the specification written in WIT, the C code must implement some of these generated exported functions defined in the generated header file.
 
@@ -136,7 +136,7 @@ world example {
 }
 ```
 
-Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](/docs/concepts/invocations).
+Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](../../docs/concepts/invocations.mdx).
 
 To implement the above defined WIT resource in C a few new steps must be taken:
 
@@ -239,7 +239,7 @@ example_list_string_t args;
 wasi_cli_environment_get_arguments(&args);
 ```
 
-Command line arguments can only be specified when a worker is **explicitly created** and they are are empty by default, including in cases when the worker was implicitly created by an [invocation](/docs/concepts/invocation).
+Command line arguments can only be specified when a worker is **explicitly created** and they are are empty by default, including in cases when the worker was implicitly created by an [invocation](../../docs/concepts/invocations.mdx).
 
 ### Environment variables
 
@@ -255,7 +255,7 @@ Environment variables can be specified when a worker is **explicitly created**, 
 - `GOLEM_COMPONENT_ID` - the ID of the worker's component
 - `GOLEM_COMPONENT_VERSION` - the version of the component used for this worker
 
-In addition to these, when using [Worker to Worker communication](/docs/ccpp-language-guide/rpc), workers created by remote calls **inherit the environment variables of the caller**.
+In addition to these, when using [Worker to Worker communication](rpc.mdx), workers created by remote calls **inherit the environment variables of the caller**.
 
 This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of workers.
 
@@ -263,7 +263,7 @@ This feature makes environment variables a good fit for passing configuration su
 
 As explained earlier, Golem workers can export **resources** and these resources can have **constructor parameters**.
 
-Although resources can be used in many ways, one pattern for Golem is only create a single instance of the exported resource in each worker, and use it to pass configuration values to the worker. This is supported by Golem's worker invocation syntax directly, allowing to implicitly create workers and the corresponding resource by a single invocation as described on the [Invocations page](/docs/concepts/invocations).
+Although resources can be used in many ways, one pattern for Golem is only create a single instance of the exported resource in each worker, and use it to pass configuration values to the worker. This is supported by Golem's worker invocation syntax directly, allowing to implicitly create workers and the corresponding resource by a single invocation as described on the [Invocations page](../../docs/concepts/invocations.mdx).
 
 ## Managing state
 

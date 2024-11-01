@@ -75,7 +75,7 @@ For logging from **workers** running on Golem, there are two options:
 - Print log lines to the **stdout** and/or **stderr** channels of the worker
 - Use the [WASI Logging interface](https://github.com/WebAssembly/wasi-logging)
 
-Using the WASI Logging interface depends on the guest language - for example for Rust, there is a crate providing bindings for the standard `log` crate as [described on the Building Components in Rust page](rust-language-guide/building-components).
+Using the WASI Logging interface depends on the guest language - for example for Rust, there is a crate providing bindings for the standard `log` crate as [described on the Building Components in Rust page](../../docs/rust-language-guide/building-components.mdx).
 
 ### Getting worker logs
 
@@ -85,4 +85,4 @@ Worker logs (both stdout/err and WASI logging entries) are persisted for each wo
 - Using the connect WebSocket API
 - Using the [Golem Console](https://console.golem.cloud/) (Golem Cloud only)
 
-To connect to a worker's log with `golem-cli`, use either the `golem-cli worker connect` command or the `--connect` flag when making an invocation. See the [CLI documentation](/docs/cli/workers) for more details.
+To connect to a worker's log with `golem-cli`, use either the `golem-cli worker connect` command or the `--connect` flag when making an invocation. See the [CLI documentation](../../docs/cli/workers.mdx) for more details.

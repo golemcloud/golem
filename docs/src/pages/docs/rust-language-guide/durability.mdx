@@ -1,6 +1,6 @@
 # Control durability guarantees from Rust
 
-Golem provides a set of functions components can call to control details of the durable execution engine. For components implemented in Rust there is a [Rust crate published](https://crates.io/crates/golem-rust) providing a set of idiomatic Rust wrappers for these functions.
+Golem provides a set of functions components can call to control details of the durable execution engine. For components implemented in Rust there is a Rust crate published] at https://crates.io/crates/golem-rust providing a set of idiomatic Rust wrappers for these functions.
 
 ### Adding as a dependency
 
@@ -12,7 +12,7 @@ golem-rust = { version = "1.1.0" }
 
 ### General concepts
 
-The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](/docs/rust-language-guide/retries)).
+The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](../../docs/rust-language-guide/retries.mdx)).
 
 All these features are regional - they can be changed for a section of the code within a single exported function. To make this easy to use in Rust, the library provides a pair of functions for each feature:
 

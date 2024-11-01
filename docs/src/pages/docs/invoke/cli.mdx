@@ -16,21 +16,21 @@ There are multiple options for selecting the worker:
 - `--component urn:component:<component-id> --worker-name <worker-name>`
 - `--component component:///<component-name> --worker-name <worker-name>`
 
-The function to be invoked is selected by the `--function` parameter. Read the [invocation function name syntax page](function-names) for more information about the possible function names.
+The function to be invoked is selected by the `--function` parameter. Read the [invocation function name syntax page](../../docs/function-names.mdx) for more information about the possible function names.
 
 ## Encoding parameters
 
 The CLI provides three ways to define the invocation **parameters**:
 
-- Passing a JSON array of **typed JSON values** to `--parameters`. This is the same format as used [on the HTTP invocation API](/docs/invoke/http).
-- Passing a JSON array of **JSON values** only, without type information, to `--parameters`. The format for encoding WebAssembly values in JSON is [described on the JSON WAVE Mapping page](/json-wave-mapping). In this case `golem-cli` assumes that the invocation targets the latest version of the selected component, queries it's metadata and uses the selected function's type information for interpreting the provided JSON values.
+- Passing a JSON array of **typed JSON values** to `--parameters`. This is the same format as used [on the HTTP invocation API](../../docs/invoke/http.mdx).
+- Passing a JSON array of **JSON values** only, without type information, to `--parameters`. The format for encoding WebAssembly values in JSON is [described on the JSON WAVE Mapping page](../../docs/json-wave-mapping.mdx). In this case `golem-cli` assumes that the invocation targets the latest version of the selected component, queries it's metadata and uses the selected function's type information for interpreting the provided JSON values.
 - Using the [WebAssembly Value Encoding](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) with one or more `--arg` parameter (one for each invocation parameter).
 
 ## Getting results
 
 When using `invoke-and-await`, the CLI awaits the result of the invocation and prints the result value to the standard output. By default it uses the `text` format, in which case it prints the result value using the [WebAssembly Value Encoding](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave).
 
-This can be changed with `--format json` or `--format yaml` to print the invocation result in JSON or YAML, using the [mapping described on the JSON WAVE Mapping page](/json-wave-mapping).
+This can be changed with `--format json` or `--format yaml` to print the invocation result in JSON or YAML, using the [mapping described on the JSON WAVE Mapping page](../../docs/json-wave-mapping.mdx).
 
 ## Logs
 

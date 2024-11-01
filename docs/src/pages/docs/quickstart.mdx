@@ -52,7 +52,7 @@ open source versions) and the cloud-specific `golem-cloud-cli`.
 
 #### Alternative Versions
 
-There are alternative versions of `golem-cli`. Please read the [CLI page](/docs/cli) for more information.
+There are alternative versions of `golem-cli`. Please read the [CLI page](cli.mdx) for more information.
 
 ### Setup
 
@@ -81,7 +81,7 @@ was downloaded as part of the above `curl` command.
 
 <Callout type="info">If you are using the hosted version of Golem, you can skip this step.</Callout>
 
-See also [deployment](/docs/deploy.mdx) page for additional deployment
+See also [deployment](deploy.mdx) page for additional deployment
 options.
 
 ### Creating a Profile
@@ -92,7 +92,7 @@ To specify the Golem service location, run the following command:
 golem-cli init
 ```
 
-This command starts an interactive configuration process. For non-interactive options - see [Golem CLI](/docs/cli) page.
+This command starts an interactive configuration process. For non-interactive options - see [Golem CLI](cli.mdx) page.
 
 On the first step you'll see 3 options:
 
@@ -107,7 +107,7 @@ If you can't see `Golem Cloud` option - you are using an open source specific ve
 Golem runs components that are WebAssembly programs. Components are like
 applications, except they may expose functions that can be called externally.
 
-To deploy to Golem, you must first build a [component](/docs/concepts/components)
+To deploy to Golem, you must first build a [component](concepts/components.mdx)
 using any programming language and toolchain that can build WebAssembly
 components.
 
@@ -123,7 +123,7 @@ the example for your component.
 
 To **build** the newly created component, you need some development tools
 installed. Which tools you need depend on the language you are using. You can
-find more information on the [components](/docs/concepts/components) explainer.
+find more information on the [components](concepts/components.mdx) explainer.
 
 Once you have that, navigate to the `shopping_cart`, and run:
 
@@ -186,7 +186,7 @@ If a worker of the specified name has not been created, then when you attempt to
 
 The parameters are either listed one by one with separate `--arg` options using the [WAVE format](https://github.com/lann/wasm-wave), or as a single JSON array using `--parameters`.
 
-Check the [Invoke section](/docs/invoke) to learn about how to figure out the **function name** and how to encode your parameters in JSON.
+Check the [Invoke section](invoke.mdx) to learn about how to figure out the **function name** and how to encode your parameters in JSON.
 
 ### Next Steps
 
@@ -194,11 +194,11 @@ In this guide, you have learned how to build and deploy invincible serverless wo
 
 Take your next steps with Golem by exploring the following resources:
 
-- Read about the [fundamentals of Golem](/docs/fundamentals)
-- Learn about the [main concepts](/docs/concepts)
-- Read one of the [language-specific guides](/docs/develop-overview) to learn how to develop Golem components
-- Check out how to [deploy](/docs/deploy) Golem to your infrastructure
-- Read the details of how to [invoke workers](/docs/invoke)
-- Learn more about the [Golem CLI](/docs/cli)
-- Explore operational aspects such as [how worker state is persisted](/docs/operate/persistence), what [metrics](/docs/operate/metrics) and [logs](/docs/operate/logs) are available
+- Read about the [fundamentals of Golem](fundamentals.mdx)
+- Learn about the [main concepts](concepts.mdx)
+- Read one of the [language-specific guides](develop-overview.mdx) to learn how to develop Golem components
+- Check out how to [deploy](deploy.mdx) Golem to your infrastructure
+- Read the details of how to [invoke workers](invoke.mdx)
+- Learn more about the [Golem CLI](cli.mdx)
+- Explore operational aspects such as [how worker state is persisted](operate/persistence.mdx), what [metrics](operate/metrics.mdx) and [logs](operate/logs.mdx) are available
 - Check the **References** section for detailed information on APIs and syntaxes

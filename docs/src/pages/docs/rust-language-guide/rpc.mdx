@@ -3,14 +3,14 @@ import { Steps } from "nextra/components"
 
 # Worker to Worker communication for Rust components
 
-See the [Worker to Worker communication page](/docs/concepts/worker-to-worker-communication) for a general overview of how workers can invoke each other in Golem.
+See the [Worker to Worker communication page](../../docs/concepts/worker-to-worker-communication.mdx) for a general overview of how workers can invoke each other in Golem.
 
 ## Setting up
 
-For doing worker to worker communication between Golem components implemented in Rust, in addition to the Rust compiler and the `cargo-component` tool described in the [setup page](/docs/rust-language-guide/setup), we need two additional dependencies:
+For doing worker to worker communication between Golem components implemented in Rust, in addition to the Rust compiler and the `cargo-component` tool described in the [setup page](../../docs/rust-language-guide/setup.mdx), we need two additional dependencies:
 
 - The `golem-cli` tool which automates some steps of setting up the communication between workers.
-- The [cargo-make](https://crates.io/crates/cargo-make) task runner used to further automate the build steps.
+- The `cargo-make` crate task runner used to further automate the build steps.
 
 Install `cargo-make` by running:
 
@@ -25,7 +25,7 @@ A project building two Golem components where one can call the other can be set 
 <Steps>
 ### Create the two components
 
-First create two Rust components using the techniques described in the [defining components](/docs/rust-language-guide/defining-components) page. The two components should be in two separate directories, enclosed by a root directory for the whole project.
+First create two Rust components using the techniques described in the [defining components](../../docs/rust-language-guide/defining-components.mdx) page. The two components should be in two separate directories, enclosed by a root directory for the whole project.
 
 <Callout type="warning">
 It is important to **use a different package name** for each component, otherwise the stub generator will fail.
@@ -205,7 +205,7 @@ Workers can get their own URI by using the `get_self_uri` function from the Gole
 
 If the worker pointed by the URI does not exists, it is going to be created automatically and it inherits the environment variables of the caller.
 
-A common pattern is to use environment variables to configure the deployed component's **component ID** and use that to construct the URI. See the [defining components](/docs/rust-language-guide/defining-components) page for more information about passing configuration values to workers.
+A common pattern is to use environment variables to configure the deployed component's **component ID** and use that to construct the URI. See the [defining components](../../docs/rust-language-guide/defining-components.mdx) page for more information about passing configuration values to workers.
 
 The following code snippet gets the target component's id from an environment variable, and constructs the URI for the target worker with a fixed worker name `target-worker`:
 

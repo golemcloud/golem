@@ -31,7 +31,7 @@ Golem and the Go toolchain currently requires defining the component's interface
 
 Each new project generated with `golem-cli` contains a `wit` directory with at least one `.wit` file defining a `world`. This world can contain **exports** (exported functions and interfaces) and these exports will be the compiled Golem component's public API.
 
-The first time a component is compiled (see the [Building Components page](/docs/go-language-guide/building-components) for details), a couple of files get generated in a subdirectory named as your component. This go package contains the definitions of all the data types and interfaces defined in the `WIT` file(s).
+The first time a component is compiled (see the [Building Components page](../../docs/go-language-guide/building-components.mdx) for details), a couple of files get generated in a subdirectory named as your component. This go package contains the definitions of all the data types and interfaces defined in the `WIT` file(s).
 
 To **implement** the specification written in WIT, the Go code must implement some of these generated interfaces and set them explicitly in the `init` function.
 
@@ -167,7 +167,7 @@ world example {
 }
 ```
 
-Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](/docs/concepts/invocations).
+Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](../../docs/concepts/invocations.mdx).
 
 To implement the above defined WIT resource in Go a few new steps must be taken:
 
@@ -369,7 +369,7 @@ In general Golem supports three different ways of doing this:
 
 ### Command line arguments and environment variables
 
-First, make sure the [Golem Go SDK](/docs/go-language-guide/golem-go-sdk) is set up for the project.
+First, make sure the [Golem Go SDK](../../docs/go-language-guide/golem-go-sdk.mdx) is set up for the project.
 
 Then you can use the `golem_go_bindings` package to initialize the standard library's environment at start of the component's methods:
 
@@ -412,7 +412,7 @@ Environment variables can be specified when a worker is **explicitly created**, 
 - `GOLEM_COMPONENT_ID` - the ID of the worker's component
 - `GOLEM_COMPONENT_VERSION` - the version of the component used for this worker
 
-In addition to these, when using [Worker to Worker communication](/docs/go-language-guide/worker-to-worker-communication), workers created by remote calls **inherit the environment variables of the caller**.
+In addition to these, when using [Worker to Worker communication](rpc.mdx), workers created by remote calls **inherit the environment variables of the caller**.
 
 This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of workers.
 
@@ -420,7 +420,7 @@ This feature makes environment variables a good fit for passing configuration su
 
 As explained earlier, Golem workers can export **resources** and these resources can have **constructor parameters**.
 
-Although resources can be used in many ways, one pattern for Golem is only create a single instance of the exported resource in each worker, and use it to pass configuration values to the worker. This is supported by Golem's worker invocation syntax directly, allowing to implicitly create workers and the corresponding resource by a single invocation as described on the [Invocations page](/docs/concepts/invocations).
+Although resources can be used in many ways, one pattern for Golem is only create a single instance of the exported resource in each worker, and use it to pass configuration values to the worker. This is supported by Golem's worker invocation syntax directly, allowing to implicitly create workers and the corresponding resource by a single invocation as described on the [Invocations page](../../docs/concepts/invocations.mdx).
 
 ## Managing state
 

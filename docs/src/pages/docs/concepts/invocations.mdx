@@ -7,8 +7,8 @@ Golem is a durable computing platform that makes it simple to build and deploy
 highly reliable distributed systems.
 
 The fundamental building block of every Golem application is the
-[component](/docs/concepts/components.mdx), which is instantiated to form
-[workers](/docs/concepts/workers.mdx). The only way to create or interact with workers is
+[component](../../docs/concepts/components.mdx), which is instantiated to form
+[workers](../../docs/concepts/workers.mdx). The only way to create or interact with workers is
 through _invocations_.
 
 An _invocation_ is the act of invoking an exported function on a specific
@@ -41,7 +41,7 @@ Understanding the structure of invocations, then, comes down to understanding
 the structure of component model types, as defined by WIT.
 
 In the next section, you will learn the basics of this structure. For a more
-detailed reference, you can see the page on [Function names](/docs/function-names).
+detailed reference, you can see the page on [Function names](../../docs/function-names.mdx).
 
 ## Basic Invocations
 
@@ -89,7 +89,7 @@ function that is exported by the component.
 
 You will learn how to specify parameters later, when the different supported
 protocols are introduced. For more information on the structure of function
-names, see the page on [Function names](/docs/function-names).
+names, see the page on [Function names](../../docs/function-names.mdx).
 
 ## Resource Invocations
 
@@ -206,16 +206,16 @@ suited to different use cases:
   function on any worker, providing a user-friendly way to input required
   parameters and display return values. The CLI is useful for development, or
   for interacting with your systems through scripts. For more information, see
-  [Invoke Using Golem CLI](#invoke-cli.mdx).
+  [Invoke Using Golem CLI](../../docs/invoke/cli.mdx).
 - **Generic REST API**. The Golem REST API allows you to invoke any function on
   any worker. The REST API is a low-level interface designed mostly for
   building tooling, such as the CLI. For more information, see [Invoking Through
-  the REST API](#invoke-http.mdx).
+  the REST API](../../docs/invoke/http.mdx).
 - **Custom API**. In order to facilitate interacting with Golem applications,
   Golem makes it easy to build a custom API atop workers. This custom API can
   be high-level and support arbitrary business requirements. For more
-  information, see [API Definitions](/docs/concepts/api-definitions.mdx).
+  information, see [API Definitions](../../docs/concepts/api-definitions.mdx).
 - **Workers**. Workers themselves are able to invoke functions on other
   workers, a feature referred to as _worker-to-worker communication_. For more
   information, see
-  [Worker-to-Worker Communication](/docs/concepts/worker-to-worker-communication.mdx).
+  [Worker-to-Worker Communication](../../docs/concepts/worker-to-worker-communication.mdx).

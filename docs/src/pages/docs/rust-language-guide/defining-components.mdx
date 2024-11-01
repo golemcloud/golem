@@ -39,7 +39,7 @@ Golem and the Rust toolchain currently requires defining the component's interfa
 
 Each new project generated with `golem-cli` (or `cargo component new --lib`) contains a `wit` directory with at least one `.wit` file defining a `world`. This world can contain **exports** (exported functions and interfaces) and these exports will be the compiled Golem component's public API.
 
-The first time a component is compiled (see the [Building Components page](/docs/rust-language-guide/building-components) for details), a `bindings.rs` file gets generated in the `src` directory. This module contains the Rust definitions of all the data types and interfaces defined in the `WIT` file(s).
+The first time a component is compiled (see the [Building Components page](../../docs/rust-language-guide/building-components.mdx) for details), a `bindings.rs` file gets generated in the `src` directory. This module contains the Rust definitions of all the data types and interfaces defined in the `WIT` file(s).
 
 To **implement** the specification written in WIT, the Rust code must implement some of these generated traits and export them using a macro defined in the generated bindings module.
 
@@ -157,7 +157,7 @@ world example {
 }
 ```
 
-Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](/docs/concepts/invocations).
+Resources can have multiple instances within a worker. Their constructor returns a _handle_ which is then used to call the methods on the resource. Learn more about how resources can be implicitly created and invoked through Golem's APIs in the [Invocations page](../../docs/concepts/invocations.mdx).
 
 To implement the above defined WIT resource in Rust a few new steps must be taken:
 
@@ -253,7 +253,7 @@ for arg in std::env::args() {
 }
 ```
 
-Command line arguments can only be specified when a worker is **explicitly created** and they are are empty by default, including in cases when the worker was implicitly created by an [invocation](/docs/concepts/invocation).
+Command line arguments can only be specified when a worker is **explicitly created** and they are are empty by default, including in cases when the worker was implicitly created by an [invocation](../../docs/concepts/invocations.mdx).
 
 ### Environment variables
 
@@ -269,7 +269,7 @@ Environment variables can be specified when a worker is **explicitly created**, 
 - `GOLEM_COMPONENT_ID` - the ID of the worker's component
 - `GOLEM_COMPONENT_VERSION` - the version of the component used for this worker
 
-In addition to these, when using [Worker to Worker communication](/docs/rust-language-guide/rpc), workers created by remote calls **inherit the environment variables of the caller**.
+In addition to these, when using [Worker to Worker communication](../../docs/rust-language-guide/rpc.mdx), workers created by remote calls **inherit the environment variables of the caller**.
 
 This feature makes environment variables a good fit for passing configuration such as hostnames, ports, or access tokens to trees of workers.
 
@@ -277,7 +277,7 @@ This feature makes environment variables a good fit for passing configuration su
 
 As explained earlier, Golem workers can export **resources** and these resources can have **constructor parameters**.
 
-Although resources can be used in many ways, one pattern for Golem is only create a single instance of the exported resource in each worker, and use it to pass configuration values to the worker. This is supported by Golem's worker invocation syntax directly, allowing to implicitly create workers and the corresponding resource by a single invocation as described on the [Invocations page](/docs/concepts/invocations).
+Although resources can be used in many ways, one pattern for Golem is only create a single instance of the exported resource in each worker, and use it to pass configuration values to the worker. This is supported by Golem's worker invocation syntax directly, allowing to implicitly create workers and the corresponding resource by a single invocation as described on the [Invocations page](../../docs/concepts/invocations.mdx).
 
 ## Managing state
 
@@ -337,7 +337,7 @@ When exporting a WIT resource, it is possible to have a per-instance `RefCell` h
 
 Anything written to the **standard output** or **standard error** streams by a Golem worker is captured and can be observed using the worker connect API or the `golem-cli worker connect` command.
 
-The [`log` crate](https://crates.io/crates/log) can be used for advanced logging by using the [`wasi-logger` implementation](https://crates.io/crates/wasi-logger).
+The `log` crate https://crates.io/crates/log can be used for advanced logging by using the `wasi-logger` implementation https://crates.io/crates/wasi-logger.
 
 This crate requires a one-time initialization step to set up the logger. The easiest way to do this is to expose a dedicated `init` function from the worker that can be called externally to initialize the worker. If this is not acceptable, the initialization can be done in a `OnceCell` protected static field, and each exported function must access this field to ensure the logger is initialized.
 
