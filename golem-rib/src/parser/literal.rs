@@ -170,12 +170,12 @@ mod literal_parse_tests {
 
     #[test]
     fn test_interpolated_strings_with_special_chars() {
-        let input = "\"<>/!@#%&^&*()_+[];',.${bar}-ba!z-${qux}\"";
+        let input = "\"\n\t<>/!@#%&^&*()_+[]; ',.${bar}-ba!z-${qux}\"";
         let result = Expr::from_text(input).unwrap();
         assert_eq!(
             result,
             Expr::concat(vec![
-                Expr::literal("<>/!@#%&^&*()_+[];',."),
+                Expr::literal("\n\t<>/!@#%&^&*()_+[]; ',."),
                 Expr::identifier("bar"),
                 Expr::literal("-ba!z-"),
                 Expr::identifier("qux"),
