@@ -8,8 +8,7 @@ interface api {
   query: func(statement: string, params: list<string>) -> result<list<db-row>, string>;
 }
 
-world key-value-service {
+world rdbms-service {
   import wasi:rdbms/postgres@0.0.1;
-  import wasi:rdbms/types@0.0.1;
   export api;
 }

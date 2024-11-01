@@ -3305,20 +3305,20 @@ mod _rt {
 #[allow(unused_macros)]
 #[doc(hidden)]
 
-macro_rules! __export_key_value_service_impl {
+macro_rules! __export_rdbms_service_impl {
   ($ty:ident) => (self::export!($ty with_types_in self););
   ($ty:ident with_types_in $($path_to_types_root:tt)*) => (
   $($path_to_types_root)*::exports::golem::it::api::__export_golem_it_api_cabi!($ty with_types_in $($path_to_types_root)*::exports::golem::it::api);
   )
 }
 #[doc(inline)]
-pub(crate) use __export_key_value_service_impl as export;
+pub(crate) use __export_rdbms_service_impl as export;
 
 #[cfg(target_arch = "wasm32")]
-#[link_section = "component-type:wit-bindgen:0.25.0:key-value-service:encoded world"]
+#[link_section = "component-type:wit-bindgen:0.25.0:rdbms-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1593] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xb1\x0b\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1585] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xad\x0b\x01A\x02\x01\
 A\x0a\x01B*\x01y\x04\0\x0anode-index\x03\0\0\x01s\x04\0\x0atable-name\x03\0\x02\x01\
 q\x01\x05error\x01s\0\x04\0\x05error\x03\0\x04\x01k}\x01o\x02}}\x01ky\x01ps\x01q\
 \x0f\x07integer\x01\x06\0\x07decimal\x01\x07\0\x05float\0\0\x07boolean\0\0\x08da\
@@ -3350,10 +3350,10 @@ ams\x0b\0\x0f\x04\0\x1d[method]db-connection.execute\x01\x10\x03\x01\x19wasi:rdb
 ms/postgres@0.0.1\x05\x04\x02\x03\0\0\x06db-row\x01B\x0a\x02\x03\x02\x01\x05\x04\
 \0\x06db-row\x03\0\0\x01ps\x01j\x01w\x01s\x01@\x02\x09statements\x06params\x02\0\
 \x03\x04\0\x07execute\x01\x04\x01p\x01\x01j\x01\x05\x01s\x01@\x02\x09statements\x06\
-params\x02\0\x06\x04\0\x05query\x01\x07\x04\x01\x0cgolem:it/api\x05\x06\x04\x01\x1a\
-golem:it/key-value-service\x04\0\x0b\x17\x01\0\x11key-value-service\x03\0\0\0G\x09\
-producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rus\
-t\x060.25.0";
+params\x02\0\x06\x04\0\x05query\x01\x07\x04\x01\x0cgolem:it/api\x05\x06\x04\x01\x16\
+golem:it/rdbms-service\x04\0\x0b\x13\x01\0\x0drdbms-service\x03\0\0\0G\x09produc\
+ers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060\
+.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

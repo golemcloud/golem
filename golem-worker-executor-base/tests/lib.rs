@@ -64,6 +64,7 @@ pub mod ts_rpc1_stubless;
 pub mod ts_rpc2;
 pub mod ts_rpc2_stubless;
 pub mod wasi;
+pub mod rdbms;
 
 test_r::enable!();
 

@@ -863,7 +863,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             shard_service,
             key_value_service,
             blob_store_service,
-            rdbms,
+            rdbms_service,
             oplog_service,
             rpc,
             scheduler_service,
