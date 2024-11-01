@@ -12,7 +12,7 @@ This mechanism is automatic and applied to all kind of failures. To rely on it, 
 
 The retry policy which controls the maximum number of retries and the exponential backoff is a global configuration of the Golem servers, but it can be customized for each worker.
 
-Once the `golem:api/host@0.2.0` interface is imported in the WIT file (see the [previous page for more information](../../docs/ccpp-language-guide/durability.mdx)), the retry policy can be controlled with the `golem_api_host_get_retry_policy` and `golem_api_host_set_retry_policy` functions.
+Once the `golem:api/host@0.2.0` interface is imported in the WIT file (see the [previous page for more information](/docs/ccpp-language-guide/durability)), the retry policy can be controlled with the `golem_api_host_get_retry_policy` and `golem_api_host_set_retry_policy` functions.
 
 ```c
 golem_api_host_retry_policy_t previous;

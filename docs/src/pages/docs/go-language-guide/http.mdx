@@ -2,7 +2,7 @@
 
 Golem implements the [WASI HTTP](https://github.com/WebAssembly/wasi-http) interfaces so any library built on this specification can be used from Golem components to communicate with external services.
 
-By using the [Golem Go SDK](../../docs/go-language-guide/golem-go-sdk.mdx), Go's built-in `net/http` package can be configured to use the WASI HTTP interfaces.
+By using the [Golem Go SDK](/docs/go-language-guide/golem-go-sdk), Go's built-in `net/http` package can be configured to use the WASI HTTP interfaces.
 
 To do so, Golem's custom `Roundtrip` implementation hast to be used.
 This can be done directly before making http requests:

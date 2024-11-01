@@ -31,8 +31,8 @@ Golem and the Zig (and C/C++) toolchain currently requires defining the componen
 
 Each new project generated with `golem-cli` contains a `wit` directory with at least one `.wit` file defining a `world`. This world can contain **exports** (exported functions and interfaces) and these exports will be the compiled Golem component's public API.
 
-The first time a component is compiled (see the [Building Components page](../../../docs/experimental-languages/zig-language-guide/building-components.mdx) for details), a couple of files (`example.c`, `example.h` and `example_component_type.o` if the component name was `example`) get generated in the `src/bindings` directory. This module contains the C definitions of all the data types and interfaces defined in the `WIT` file(s).
+The first time a component is compiled (see the [Building Components page](/docs/experimental-languages/zig-language-guide/building-components) for details), a couple of files (`example.c`, `example.h` and `example_component_type.o` if the component name was `example`) get generated in the `src/bindings` directory. This module contains the C definitions of all the data types and interfaces defined in the `WIT` file(s).
 
 To **implement** the specification written in WIT, the Zig code must implement some of these generated exported functions defined in the generated header file.
 
-As currently there is no Zig-specific binding generator, for more details, check the [C/C++ guide for defining components](../../../docs/ccpp-language-guide/defining-components.mdx).
+As currently there is no Zig-specific binding generator, for more details, check the [C/C++ guide for defining components](/docs/ccpp-language-guide/defining-components).

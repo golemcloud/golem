@@ -19,7 +19,7 @@ pre-commit:
     typecheck:
       run: bunx tsc
     check-links:
-      run: bun run check-links
+      run: bun run check-links {staged_files}
 
 pre-build:
   parallel: true
@@ -33,7 +33,7 @@ pre-build:
     typecheck:
       run: bunx tsc
     check-links:
-      run: bun run check-links
+      run: bun run check-links {all_files}
 
 fix:
   parallel: false

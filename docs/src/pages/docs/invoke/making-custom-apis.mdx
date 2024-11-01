@@ -1,6 +1,6 @@
 # Making custom APIs
 
-The [Worker Gateway](../../docs/concepts/worker-gateway.mdx) service not only exposes the [low-level REST API for invocations](../../docs/invoke/http.mdx) but also provides a way to define fully customizable HTTP APIs. Future versions will support other protocols as well such as gRPC or GraphQL.
+The [Worker Gateway](/docs/concepts/worker-gateway) service not only exposes the [low-level REST API for invocations](/docs/invoke/http) but also provides a way to define fully customizable HTTP APIs. Future versions will support other protocols as well such as gRPC or GraphQL.
 
 ## Example
 
@@ -75,7 +75,7 @@ Note that workerName and response are actually rib expressions. It gives you the
 as well as dynamically create a worker name.
 
 If your worker name is a constant, the you can simply make it a constant string such as `"foo"`. Please note that it has to be quoted for it a valid Rib string.
-See the [Rib reference](rib.mdx) for the full reference of the binding language.
+See the [Rib reference](/docs/rib) for the full reference of the binding language.
 
 In this example, the following Rib expression defines the request:
 
@@ -89,7 +89,7 @@ The first line is about calling the worker-function and assigning its result to 
 That means, we are not manipulating the result returned by the function, and simply forward it as response body. Status is 200u64. `u64` is the type of the number
 as Rib is typed and it needs to know the full type of the WASM record. `200u64` is equivalent to `let x: u64 = 200; x;` in Rib.
 
-As mentioned above, see the [Rib reference](rib.mdx) to know more about Rib language.
+As mentioned above, see the [Rib reference](/docs/rib) to know more about Rib language.
 
 There are various possibilities here to manipulate the data using Rib
 language, such as selecting only a particular field from the result of the function invocation. Say for example, the result is a WASM `result` which can be `ok` or `err`. In this case you
@@ -119,8 +119,8 @@ Note, the last line of Rib is not ending with a `;`.
 
 The API definitions can be uploaded to Golem using one of the following methods:
 
-- Use the [Golem CLI](../../docs/cli.mdx) tool
-- Use the [Rest APIs](../../docs/rest-api.mdx)
+- Use the [Golem CLI](/docs/cli) tool
+- Use the [Rest APIs](/docs/rest-api)
 - Use [Golem Console](https://console.golem.cloud/) (Only available in Golem Cloud)
 
 The following example uses `golem-cli` to add a new API definition to the system.
@@ -327,7 +327,7 @@ curl -X POST http://localhost:9881/v1/api/deployments/deploy -H "Content-Type: a
 
 ## More details on Response Mapping
 
-Response Mapping is under the `response` field under each binding. This is written using [Rib](../../docs/rib.mdx) to call the worker function and manipulate it's results and return a value that's understandable for each protocol we use.
+Response Mapping is under the `response` field under each binding. This is written using [Rib](/docs/rib) to call the worker function and manipulate it's results and return a value that's understandable for each protocol we use.
 
 Here is a more complex example of an API definition that gives you more idea on
 what can be achieved with Rib expression under response field.
@@ -430,7 +430,7 @@ let body =  match result { success(resp) => resp.order-id, error(msg) => msg };
 
 ```
 
-Here we manipulate the result from worker function using a match expression. More details on match expression is explained under [Rib](../../docs/rib.mdx) documentation.
+Here we manipulate the result from worker function using a match expression. More details on match expression is explained under [Rib](/docs/rib) documentation.
 It matches on `success` and `error` variants because the result type of `golem:it/api.{checkout}` is a variant which can be either success or error.
 
 ## Looking up data from the request body and path

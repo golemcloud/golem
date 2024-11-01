@@ -1,7 +1,7 @@
 # Invoke through the REST API
 
-The Golem REST API exposes two endpoints for invoking workers. See the [OSS](../../docs/rest-api/oss-rest-api/worker.mdx) or [Cloud](../../docs/rest-api/cloud-rest-api/worker.mdx) Worker REST API reference for details.
-These endpoints provide a direct, low level API for calling the exported functions of the workers. They use a special JSON format for encoding WASM values and types. It is possible, and recommended, to create [custom HTTP APIs](../../docs/invoke/making-custom-apis.mdx) for exposing workers to the world.
+The Golem REST API exposes two endpoints for invoking workers. See the [OSS](/docs/rest-api/oss-rest-api/worker) or [Cloud](/docs/rest-api/cloud-rest-api/worker) Worker REST API reference for details.
+These endpoints provide a direct, low level API for calling the exported functions of the workers. They use a special JSON format for encoding WASM values and types. It is possible, and recommended, to create [custom HTTP APIs](/docs/invoke/making-custom-apis) for exposing workers to the world.
 
 ## Endpoints
 
@@ -14,7 +14,7 @@ POST /v1/components/{component_id}/workers/{worker_name}/invoke?function={functi
 ```
 
 This POST request invokes the worker called `worker_name` of the component identified by `component_id` (a UUID), calling the function `function_name`.
-Read the [function name syntax page](../../docs/function-names.mdx) to learn how the function names are mapped.
+Read the [function name syntax page](/docs/function-names) to learn how the function names are mapped.
 
 The **body** of the POST request must be a JSON object containing a single field called `params`, which is an **array** of typed JSON values. The format of typed JSON values is described below.
 
@@ -27,7 +27,7 @@ POST /v1/components/{component_id}/workers/{worker_name}/invoke-and-await?functi
 ```
 
 This POST request invokes the worker called `worker_name` of the component identified by `component_id` (a UUID), calling the function `function_name`.
-Read the [function name syntax page](../../docs/function-names.mdx) to learn how the function names are mapped.
+Read the [function name syntax page](/docs/function-names) to learn how the function names are mapped.
 
 The **body** of the POST request must be a JSON object containing a single field called `params`, which is an **array** of typed JSON values. The format of typed JSON values is described below.
 
@@ -37,7 +37,7 @@ The **response body** is a JSON object with a single field `result`, containing 
 
 If the invoked worker does not exist, it is automatically created by the invocation.
 
-When using the resource constructor syntax (see [the function name syntax page](../../docs/function-names.mdx)), if the resource with the given constructor parameters does not exist yet, it is automatically created by the invocation.
+When using the resource constructor syntax (see [the function name syntax page](/docs/function-names)), if the resource with the given constructor parameters does not exist yet, it is automatically created by the invocation.
 
 ## Typed JSON values
 
@@ -50,7 +50,7 @@ The invocation API **requires** type information beside the values.
 
 ### Value format
 
-Read the [JSON-WAVE Mapping](../../docs/json-wave-mapping.mdx) page to see how every WebAssembly value is encoded in JSON.
+Read the [JSON-WAVE Mapping](/docs/json-wave-mapping) page to see how every WebAssembly value is encoded in JSON.
 
 ### Getting the type
 

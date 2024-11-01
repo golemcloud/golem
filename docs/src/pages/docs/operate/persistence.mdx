@@ -22,7 +22,7 @@ Currently Golem provides the following implementations, configurable through the
 
 ## Compilation cache
 
-The Golem **component service** stores the component WASM files in its own storage layer (configured to be either S3 or a persistent volume) and exposes them through its [download API](oss-rest-api/component) for the worker executor. The WASM files need to be **compiled** to native code before execution, which is a time-consuming task. To reduce the time required for instantiating workers, these compiled binaries are cached in the worker executor's **blob storage**.
+The Golem **component service** stores the component WASM files in its own storage layer (configured to be either S3 or a persistent volume) and exposes them through its [download API](/docs/rest-api/oss-rest-api/component) for the worker executor. The WASM files need to be **compiled** to native code before execution, which is a time-consuming task. To reduce the time required for instantiating workers, these compiled binaries are cached in the worker executor's **blob storage**.
 
 The **component compilation service** is a special, horizontally scalable component of the Golem system which shares this storage with worker executors and is capable of precompiling components before they are being used by any of the executors.
 

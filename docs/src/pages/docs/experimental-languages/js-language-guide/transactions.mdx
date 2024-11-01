@@ -1,6 +1,6 @@
 # High level transactions in JavaScript
 
-On top of the [durability controls](../../../docs/experimental-languages/js-language-guide/durability.mdx) and [retry controls](../../../docs/experimental-languages/js-language-guide/retries.mdx), the [golem-ts](https://github.com/golemcloud/golem-ts) library also provides a high level functions for defining transactions supporting **compensation actions** in case of getting reverted.
+On top of the [durability controls](/docs/experimental-languages/js-language-guide/durability) and [retry controls](/docs/experimental-languages/js-language-guide/retries), the [golem-ts](https://github.com/golemcloud/golem-ts) library also provides a high level functions for defining transactions supporting **compensation actions** in case of getting reverted.
 
 Although Golem's automatic retry policies and low level atomic regions provide a lot of power automatically, many times a set of external operations such as HTTP requests needs to be executed **transactionally**; if one of the operations fails, the whole transaction need to be rolled back by executing some compensation actions.
 

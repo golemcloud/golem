@@ -1,14 +1,14 @@
 # Control durability guarantees from Go
 
-Golem provides a set of functions components can call to control details of the durable execution engine. For components implemented in Go the [Golem Go SDK](../../docs/go-language-guide/golem-go-sdk.mdx) provides a set of Go wrappers for these functions.
+Golem provides a set of functions components can call to control details of the durable execution engine. For components implemented in Go the [Golem Go SDK](/docs/go-language-guide/golem-go-sdk) provides a set of Go wrappers for these functions.
 
 ### Setting up the Golem Go SDK
 
-If the project was created with `golem-cli new`, it already has the Golem Go SDK set up, otherwise follow the step at [Setting up the Golem Go SDK](../../docs/go-language-guide/golem-go-sdk.mdx)
+If the project was created with `golem-cli new`, it already has the Golem Go SDK set up, otherwise follow the step at [Setting up the Golem Go SDK](/docs/go-language-guide/golem-go-sdk)
 
 ### General concepts
 
-The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](../../docs/go-language-guide/retries.mdx)).
+The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](/docs/go-language-guide/retries)).
 
 All these features are regional - they can be changed for a section of the code within a single exported function. To make this easy to use in Go, the library provides lower and higher level functions:
 

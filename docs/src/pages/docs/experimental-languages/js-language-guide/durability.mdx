@@ -1,14 +1,14 @@
 # Control durability guarantees from JavaScript
 
-Golem provides a set of functions components can call to control details of the durable execution engine. For components implemented in JavaScript the [Golem JavaScript SDK](../../../docs/experimental-languages/js-language-guide/golem-js-sdk.mdx) provides a set of JavaScript wrappers for these functions.
+Golem provides a set of functions components can call to control details of the durable execution engine. For components implemented in JavaScript the [Golem JavaScript SDK](/docs/experimental-languages/js-language-guide/golem-js-sdk) provides a set of JavaScript wrappers for these functions.
 
 ### Setting up the Golem JavaScript SDK
 
-If the project was created with `golem-cli new`, it already has the Golem JavaScript SDK set up, otherwise follow the step at [Setting up the Golem JavaScript SDK](../../../docs/experimental-languages/js-language-guide/golem-js-sdk.mdx)
+If the project was created with `golem-cli new`, it already has the Golem JavaScript SDK set up, otherwise follow the step at [Setting up the Golem JavaScript SDK](/docs/experimental-languages/js-language-guide/golem-js-sdk)
 
 ### General concepts
 
-The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](../../../docs/experimental-languages/js-language-guide/retries.mdx)).
+The library allows controlling four main aspects of the durable execution engine: the current persistence level, the idempotence mode, defining atomic regions and changing retry policies (discussed in [the next page](/docs/experimental-languages/js-language-guide/retries)).
 
 All these features are regional - they can be changed for a section of the code within a single exported function. To make this easy to use in JavaScript, the library provides functions starting with `with`, they take a closure parameter which will be executed with the requested mode, and then they restore the previous settings.
 

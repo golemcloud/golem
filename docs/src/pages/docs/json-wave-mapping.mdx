@@ -2,9 +2,9 @@
 
 The **invocation API** uses a special JSON format to describe invocation parameters and results. As the parameter and result types are defined by the Web Assembly components, the natural way to encode parameter and return **values** is the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format.
 
-When using the REST API, the JSON-encoded values must be extended with a JSON-encoded **type information** as well. This is described in details in the [Invoke via HTTP](invoke/http.mdx) page.
+When using the REST API, the JSON-encoded values must be extended with a JSON-encoded **type information** as well. This is described in details in the [Invoke via HTTP](invoke/http) page.
 
-When using the CLI tool, it is possible to either use the WAVE format directly, or use this JSON format as described in details in the [Invoke via CLI](invoke/cli.mdx) page.
+When using the CLI tool, it is possible to either use the WAVE format directly, or use this JSON format as described in details in the [Invoke via CLI](invoke/cli) page.
 
 The following sections define how each WASM type and it's corresponding WAVE value encoding is mapped to Golem's value JSON format.
 
