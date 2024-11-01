@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use golem_service_base::service::initial_component_files::{InitialComponentFilesService};
+use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
@@ -37,6 +39,7 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::TestDependencies;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 
 mod common;
 
@@ -90,6 +93,8 @@ pub struct WorkerExecutorPerTestDependencies {
     worker_executor: Arc<dyn WorkerExecutor + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
+    initial_component_files_service: Arc<InitialComponentFilesService>,
     component_directory: PathBuf,
 }
 
@@ -132,12 +137,22 @@ impl TestDependencies for WorkerExecutorPerTestDependencies {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         panic!("Not supported")
     }
+
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.blob_storage.clone()
+    }
+
+    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
+        self.initial_component_files_service.clone()
+    }
 }
 
 pub struct WorkerExecutorTestDependencies {
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static>,
     component_service: Arc<dyn ComponentService + Send + Sync + 'static>,
+    blob_storage: Arc<dyn BlobStorage + Send + Sync + 'static>,
+    initial_component_files_service: Arc<InitialComponentFilesService>,
     component_directory: PathBuf,
 }
 
@@ -147,14 +162,8 @@ impl Debug for WorkerExecutorTestDependencies {
     }
 }
 
-impl Default for WorkerExecutorTestDependencies {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl WorkerExecutorTestDependencies {
-    pub fn new() -> Self {
+    pub async fn new() -> Self {
         let redis: Arc<dyn Redis + Send + Sync + 'static> = Arc::new(SpawnedRedis::new(
             6379,
             "".to_string(),
@@ -168,11 +177,16 @@ impl WorkerExecutorTestDependencies {
         let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
             FileSystemComponentService::new(Path::new("data/components")),
         );
+        let blob_storage = Arc::new(FileSystemBlobStorage::new(Path::new("data/blobs")).await.unwrap());
+        let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
         Self {
             redis,
             redis_monitor,
             component_directory,
             component_service,
+            blob_storage,
+            initial_component_files_service,
         }
     }
 
@@ -203,6 +217,8 @@ impl WorkerExecutorTestDependencies {
             worker_service,
             component_service: self.component_service().clone(),
             component_directory: self.component_directory.clone(),
+            blob_storage: self.blob_storage.clone(),
+            initial_component_files_service: self.initial_component_files_service.clone(),
         }
     }
 }
@@ -246,6 +262,14 @@ impl TestDependencies for WorkerExecutorTestDependencies {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         panic!("Not supported")
     }
+
+    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
+        self.initial_component_files_service.clone()
+    }
+
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.blob_storage.clone()
+    }
 }
 
 #[derive(Debug)]
@@ -261,8 +285,8 @@ pub fn tracing() -> Tracing {
 }
 
 #[test_dep]
-pub fn test_dependencies(_tracing: &Tracing) -> WorkerExecutorTestDependencies {
-    WorkerExecutorTestDependencies::new()
+pub async fn test_dependencies(_tracing: &Tracing) -> WorkerExecutorTestDependencies {
+    WorkerExecutorTestDependencies::new().await
 }
 
 #[derive(Debug)]

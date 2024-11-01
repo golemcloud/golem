@@ -19,6 +19,7 @@ use std::time::Duration;
 use anyhow::Context;
 use figment::providers::{Format, Toml};
 use figment::Figment;
+use golem_service_base::config::BlobStorageConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -266,36 +267,6 @@ pub enum IndexedStorageConfig {
     InMemory,
 }
 
-#[allow(clippy::large_enum_variant)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum BlobStorageConfig {
-    S3(S3BlobStorageConfig),
-    LocalFileSystem(LocalFileSystemBlobStorageConfig),
-    KVStoreSqlite,
-    Sqlite(DbSqliteConfig),
-    InMemory,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct S3BlobStorageConfig {
-    pub retries: RetryConfig,
-    pub region: String,
-    pub object_prefix: String,
-    pub aws_endpoint_url: Option<String>,
-    pub compilation_cache_bucket: String,
-    pub custom_data_bucket: String,
-    pub oplog_payload_bucket: String,
-    pub compressed_oplog_buckets: Vec<String>,
-    pub use_minio_credentials: bool,
-    pub initial_component_files_bucket: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LocalFileSystemBlobStorageConfig {
-    pub root: PathBuf,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MemoryConfig {
     pub system_memory_override: Option<u64>,
@@ -439,31 +410,6 @@ impl CompiledComponentServiceConfig {
     }
 }
 
-impl Default for S3BlobStorageConfig {
-    fn default() -> Self {
-        Self {
-            retries: RetryConfig::max_attempts_3(),
-            region: "us-east-1".to_string(),
-            compilation_cache_bucket: "golem-compiled-components".to_string(),
-            custom_data_bucket: "custom-data".to_string(),
-            oplog_payload_bucket: "oplog-payload".to_string(),
-            object_prefix: "".to_string(),
-            aws_endpoint_url: None,
-            compressed_oplog_buckets: vec!["oplog-archive-1".to_string()],
-            use_minio_credentials: false,
-            initial_component_files_bucket: "golem-initial-component-files".to_string(),
-        }
-    }
-}
-
-impl Default for LocalFileSystemBlobStorageConfig {
-    fn default() -> Self {
-        Self {
-            root: PathBuf::from("../data/blob_storage"),
-        }
-    }
-}
-
 impl Default for ShardManagerServiceConfig {
     fn default() -> Self {
         Self::Grpc(ShardManagerServiceGrpcConfig::default())
@@ -544,26 +490,6 @@ impl KeyValueStorageConfig {
 impl Default for IndexedStorageConfig {
     fn default() -> Self {
         Self::KVStoreRedis
-    }
-}
-
-impl Default for BlobStorageConfig {
-    fn default() -> Self {
-        Self::default_local_file_system()
-    }
-}
-
-impl BlobStorageConfig {
-    pub fn default_s3() -> Self {
-        Self::S3(S3BlobStorageConfig::default())
-    }
-
-    pub fn default_local_file_system() -> Self {
-        Self::LocalFileSystem(LocalFileSystemBlobStorageConfig::default())
-    }
-
-    pub fn default_in_memory() -> Self {
-        Self::InMemory
     }
 }
 

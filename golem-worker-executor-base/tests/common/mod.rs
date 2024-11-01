@@ -1,6 +1,8 @@
 use anyhow::Error;
 use async_trait::async_trait;
 
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
 use golem_worker_executor_base::services::file_loader::{FileLoader};
@@ -19,11 +21,12 @@ use golem_common::model::{
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
-    BlobStorageConfig, CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     ComponentServiceConfig, ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, LocalFileSystemBlobStorageConfig, MemoryConfig,
+    KeyValueStorageConfig, MemoryConfig,
     ShardManagerServiceConfig, WorkerServiceGrpcConfig,
 };
+use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
@@ -234,6 +237,14 @@ impl TestDependencies for TestWorkerExecutor {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.deps.worker_executor_cluster()
     }
+
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.deps.blob_storage()
+    }
+
+    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
+        self.deps.initial_component_files_service()
+    }
 }
 
 impl Drop for TestWorkerExecutor {
@@ -298,7 +309,7 @@ pub async fn start_limited(
         }),
         indexed_storage: IndexedStorageConfig::KVStoreRedis,
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
-            root: Path::new("data").to_path_buf(),
+            root: Path::new("data/blobs").to_path_buf(),
         }),
         port: context.grpc_port(),
         http_port: context.http_port(),

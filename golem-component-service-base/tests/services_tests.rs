@@ -1,6 +1,6 @@
-use golem_worker_executor_base::services::initial_component_files::{InitialComponentFilesServiceDefault};
-use golem_worker_executor_base::storage::blob::fs::FileSystemBlobStorage;
-use golem_worker_executor_base::storage::blob::BlobStorage;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
 use test_r::test;
 
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
@@ -143,7 +143,7 @@ async fn test_component_constraint_incompatible_updates(
             .expect("Failed to create blob storage"),
     );
 
-    let initial_component_files_service = Arc::new(InitialComponentFilesServiceDefault::new(blob_storage.clone()));
+    let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
     let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
         Arc::new(ComponentCompilationServiceDisabled);
@@ -241,7 +241,7 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             .expect("Failed to create blob storage"),
     );
 
-    let initial_component_files_service = Arc::new(InitialComponentFilesServiceDefault::new(blop_store.clone()));
+    let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blop_store.clone()));
 
     let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
         Arc::new(ComponentServiceDefault::new(

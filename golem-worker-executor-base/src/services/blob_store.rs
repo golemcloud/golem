@@ -21,7 +21,7 @@ use bincode::{Decode, Encode};
 
 use golem_common::model::AccountId;
 
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 
 /// Interface for storing blobs in a persistent storage.
 #[async_trait]
@@ -436,8 +436,8 @@ mod tests {
     use golem_common::model::AccountId;
 
     use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
-    use crate::storage::blob::fs::FileSystemBlobStorage;
-    use crate::storage::blob::memory::InMemoryBlobStorage;
+    use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
         let account1 = AccountId {

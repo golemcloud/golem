@@ -39,6 +39,9 @@ use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
 use crate::config::{DbType, TestDependencies};
 use async_trait::async_trait;
+use golem_service_base::service::initial_component_files::{InitialComponentFilesService};
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -161,6 +164,8 @@ pub struct EnvBasedTestDependencies {
     component_compilation_service: Arc<dyn ComponentCompilationService + Send + Sync + 'static>,
     worker_service: Arc<dyn WorkerService + Send + Sync + 'static>,
     worker_executor_cluster: Arc<dyn WorkerExecutorCluster + Send + Sync + 'static>,
+    blob_storage: Arc<dyn BlobStorage + Send + Sync +'static>,
+    initial_component_files_service: Arc<InitialComponentFilesService>,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -460,6 +465,9 @@ impl EnvBasedTestDependencies {
 
         let redis_monitor = redis_monitor_join.await.expect("Failed to join");
 
+        let blob_storage = Arc::new(FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem")).await.unwrap());
+        let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
         Self {
             config: config.clone(),
             rdb,
@@ -470,6 +478,8 @@ impl EnvBasedTestDependencies {
             component_compilation_service,
             worker_service,
             worker_executor_cluster,
+            blob_storage,
+            initial_component_files_service,
         }
     }
 }
@@ -512,6 +522,14 @@ impl TestDependencies for EnvBasedTestDependencies {
 
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.worker_executor_cluster.clone()
+    }
+
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.blob_storage.clone()
+    }
+
+    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
+        self.initial_component_files_service.clone()
     }
 }
 

@@ -14,8 +14,8 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use async_trait::async_trait;
 use bytes::Bytes;
+use sha2::{Sha256, Digest};
 
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use golem_common::model::InitialComponentFileKey;
@@ -23,32 +23,16 @@ use golem_common::model::InitialComponentFileKey;
 const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
 
 /// Service for storing initial component files.
-#[async_trait]
-pub trait InitialComponentFilesService {
-    async fn get(
-        &self,
-        key: &InitialComponentFileKey,
-    ) -> Result<Option<Bytes>, String>;
-    async fn put_if_not_exists(
-        &self,
-        key: &InitialComponentFileKey,
-        bytes: Bytes,
-    ) -> Result<(), String>;
-}
-
-pub struct InitialComponentFilesServiceDefault {
+pub struct InitialComponentFilesService {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
 }
 
-impl InitialComponentFilesServiceDefault {
+impl InitialComponentFilesService {
     pub fn new(blob_storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
         Self { blob_storage }
     }
-}
 
-#[async_trait]
-impl InitialComponentFilesService for InitialComponentFilesServiceDefault {
-    async fn get(
+    pub async fn get(
         &self,
         key: &InitialComponentFileKey,
     ) -> Result<Option<Bytes>, String> {
@@ -63,12 +47,15 @@ impl InitialComponentFilesService for InitialComponentFilesServiceDefault {
             .await
     }
 
-    async fn put_if_not_exists(
+    pub async fn put_if_not_exists(
         &self,
-        key: &InitialComponentFileKey,
-        bytes: Bytes,
-    ) -> Result<(), String> {
-        let path = PathBuf::from(key.0.clone());
+        bytes: &Bytes,
+    ) -> Result<InitialComponentFileKey, String> {
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let hash = hex::encode(hasher.finalize());
+
+        let key = PathBuf::from(hash.clone());
 
         let exists = self
             .blob_storage
@@ -76,7 +63,7 @@ impl InitialComponentFilesService for InitialComponentFilesServiceDefault {
                 INITIAL_COMPONENT_FILES_LABEL,
                 "put",
                 BlobStorageNamespace::InitialComponentFiles,
-                &path,
+                &key,
             )
             .await
             .map_err(|err| format!("Failed to get metadata: {}", err))?;
@@ -87,12 +74,12 @@ impl InitialComponentFilesService for InitialComponentFilesServiceDefault {
                     INITIAL_COMPONENT_FILES_LABEL,
                     "put",
                     BlobStorageNamespace::InitialComponentFiles,
-                    &path,
-                    &bytes,
+                    &key,
+                    bytes,
                 )
-                .await
-        } else {
-            Ok(())
-        }
+                .await?;
+
+        };
+        Ok(InitialComponentFileKey(hash))
     }
 }

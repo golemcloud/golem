@@ -24,7 +24,7 @@ use golem_common::model::ComponentId;
 
 use crate::error::GolemError;
 use crate::services::golem_config::CompiledComponentServiceConfig;
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use crate::Engine;
 
 /// Service for storing compiled native binaries of WebAssembly components

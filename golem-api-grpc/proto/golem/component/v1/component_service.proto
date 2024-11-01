@@ -9,6 +9,7 @@ import public "golem/component/component_type.proto";
 import public "golem/component/v1/component_error.proto";
 import public "golem/component/component_id.proto";
 import public "golem/component/component_constraints.proto";
+import public "golem/component/initial_component_file.proto";
 
 service ComponentService {
   rpc GetComponents (GetComponentsRequest) returns (GetComponentsResponse);
@@ -64,6 +65,8 @@ message CreateComponentRequestHeader {
   golem.common.ProjectId projectId = 1;
   string componentName = 2;
   optional ComponentType componentType = 3;
+  // All files need to be uploaded to the blob storage before providing them here
+  repeated InitialComponentFile files = 4;
 }
 
 message CreateComponentRequestChunk {

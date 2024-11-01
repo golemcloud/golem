@@ -38,7 +38,7 @@ use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
 use crate::services::golem_config::{
-    BlobStorageConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
+   GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
 };
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::{
@@ -57,9 +57,10 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{component, shard_manager, All};
-use crate::storage::blob::s3::S3BlobStorage;
-use crate::storage::blob::sqlite::SqliteBlobStorage;
-use crate::storage::blob::BlobStorage;
+use golem_service_base::storage::blob::s3::S3BlobStorage;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::config::BlobStorageConfig;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
@@ -77,10 +78,10 @@ use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
-use services::initial_component_files::InitialComponentFilesServiceDefault;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
-use storage::sqlite::SqlitePool;
+use golem_service_base::storage::sqlite::SqlitePool;
 use tokio::runtime::Handle;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
@@ -262,7 +263,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                     config.root
                 );
                 Arc::new(
-                    storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                    golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
                         .await
                         .map_err(|err| anyhow!(err))?,
                 )
@@ -291,11 +292,11 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             }
             BlobStorageConfig::InMemory => {
                 info!("Using in-memory blob storage");
-                Arc::new(storage::blob::memory::InMemoryBlobStorage::new())
+                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
             }
         };
 
-        let initial_files_service = Arc::new(InitialComponentFilesServiceDefault::new(blob_storage.clone()));
+        let initial_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
 

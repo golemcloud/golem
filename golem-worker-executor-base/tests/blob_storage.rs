@@ -16,17 +16,16 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::Client;
-use golem_worker_executor_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use tempfile::{tempdir, TempDir};
 use testcontainers_modules::minio::MinIO;
 use uuid::Uuid;
-
 use golem_common::model::{AccountId, ComponentId};
-use golem_worker_executor_base::services::golem_config::S3BlobStorageConfig;
-use golem_worker_executor_base::storage::blob::{
+use golem_service_base::config::S3BlobStorageConfig;
+use golem_service_base::storage::blob::{
     fs, memory, s3, BlobStorage, BlobStorageNamespace,
 };
-use golem_worker_executor_base::storage::sqlite::SqlitePool;
+use golem_service_base::storage::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
@@ -38,7 +37,7 @@ macro_rules! test_blob_storage {
 
             use assert2::check;
             use bytes::Bytes;
-            use golem_worker_executor_base::storage::blob::*;
+            use golem_service_base::storage::blob::*;
             use std::path::Path;
 
             use crate::blob_storage::GetBlobStorage;

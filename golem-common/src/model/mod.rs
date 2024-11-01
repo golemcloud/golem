@@ -2511,6 +2511,10 @@ impl InitialComponentFilePath {
         &self.0
     }
 
+    pub fn to_rel_string(&self) -> String {
+        self.0.strip_prefix("/").unwrap().to_string()
+    }
+
     pub fn extend(&mut self, path: &str) -> Result<(), String> {
         self.0.push_checked(path).map_err(|e| e.to_string())
     }

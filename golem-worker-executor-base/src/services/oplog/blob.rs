@@ -15,7 +15,7 @@
 use crate::error::GolemError;
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService};
-use crate::storage::blob::{
+use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
 };
 use async_lock::RwLockUpgradableReadGuard;

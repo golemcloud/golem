@@ -21,12 +21,11 @@ use golem_component_service_base::service::component_compilation::{
 use golem_service_base::config::ComponentStoreConfig;
 use golem_service_base::db;
 use golem_service_base::service::component_object_store;
-use golem_worker_executor_base::services::golem_config::BlobStorageConfig;
-use golem_worker_executor_base::services::initial_component_files;
-use golem_worker_executor_base::storage;
-use golem_worker_executor_base::storage::blob::sqlite::SqliteBlobStorage;
-use golem_worker_executor_base::storage::blob::BlobStorage;
-use golem_worker_executor_base::storage::sqlite::SqlitePool;
+use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::service::initial_component_files::{self, InitialComponentFilesService};
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::sqlite::SqlitePool;
 use std::sync::Arc;
 
 use crate::config::ComponentServiceConfig;
@@ -68,16 +67,16 @@ impl Services {
 
         let blob_storage: Arc<dyn BlobStorage + Sync + Send> = match &config.blob_storage {
             BlobStorageConfig::S3(config) => {
-                Arc::new(storage::blob::s3::S3BlobStorage::new(config.clone()).await)
+                Arc::new(golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await)
             }
             BlobStorageConfig::LocalFileSystem(config) => {
                 Arc::new(
-                    storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                    golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
                         .await?
                 )
             }
             BlobStorageConfig::Sqlite(sqlite) => {
-                let pool = SqlitePool::configured(sqlite)
+                let pool = SqlitePool::configured(&sqlite)
                     .await
                     .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
                 Arc::new(
@@ -86,15 +85,15 @@ impl Services {
                 )
             }
             BlobStorageConfig::InMemory => {
-                Arc::new(storage::blob::memory::InMemoryBlobStorage::new())
+                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
             }
             _ => {
                 return Err("Unsupported blob storage configuration".to_string());
             }
         };
 
-        let initial_component_files_service: Arc<dyn initial_component_files::InitialComponentFilesService + Sync + Send> =
-            Arc::new(initial_component_files::InitialComponentFilesServiceDefault::new(blob_storage.clone()));
+        let initial_component_files_service: Arc<InitialComponentFilesService> =
+            Arc::new(initial_component_files::InitialComponentFilesService::new(blob_storage.clone()));
 
         let object_store: Arc<dyn ComponentObjectStore + Sync + Send> =
             match &config.component_store {

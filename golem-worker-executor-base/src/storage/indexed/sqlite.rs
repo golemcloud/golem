@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::storage::sqlite::SqlitePool;
+use golem_service_base::storage::sqlite::SqlitePool;
 use async_trait::async_trait;
 use bytes::Bytes;
 use std::time::Duration;

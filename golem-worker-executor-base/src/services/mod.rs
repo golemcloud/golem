@@ -26,7 +26,6 @@ pub mod compiled_component;
 pub mod component;
 pub mod events;
 pub mod golem_config;
-pub mod initial_component_files;
 pub mod file_loader;
 pub mod key_value;
 pub mod oplog;

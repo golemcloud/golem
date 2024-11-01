@@ -309,7 +309,7 @@ mod tests {
     use crate::services::shard::{ShardService, ShardServiceDefault};
     use crate::services::worker::{DefaultWorkerService, WorkerService};
     use crate::services::worker_activator::{WorkerActivator, WorkerActivatorMock};
-    use crate::storage::blob::memory::InMemoryBlobStorage;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::oplog::OplogIndex;

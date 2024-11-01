@@ -19,6 +19,7 @@ pub mod model;
 pub mod repo;
 pub mod service;
 pub mod stream;
+pub mod storage;
 
 #[cfg(test)]
 test_r::enable!();

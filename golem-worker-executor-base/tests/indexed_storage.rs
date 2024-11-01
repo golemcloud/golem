@@ -20,9 +20,8 @@ use golem_test_framework::config::TestDependencies;
 use golem_worker_executor_base::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor_base::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor_base::storage::indexed::sqlite::SqliteIndexedStorage;
-use golem_worker_executor_base::storage::sqlite::SqlitePool;
+use golem_service_base::storage::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
-
 use crate::WorkerExecutorTestDependencies;
 use golem_worker_executor_base::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use std::sync::Arc;

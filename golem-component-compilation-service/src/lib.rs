@@ -20,11 +20,11 @@ use std::{
 use config::ServerConfig;
 use golem_api_grpc::proto::golem::componentcompilation::v1::component_compilation_service_server::ComponentCompilationServiceServer;
 use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_worker_executor_base::services::golem_config::BlobStorageConfig;
-use golem_worker_executor_base::storage::blob::s3::S3BlobStorage;
-use golem_worker_executor_base::storage::blob::BlobStorage;
+use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::storage::blob::s3::S3BlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor_base::{
-    http_server::HttpServerImpl, services::compiled_component, storage,
+    http_server::HttpServerImpl, services::compiled_component,
 };
 use grpc::CompileGrpcService;
 use prometheus::Registry;
@@ -35,8 +35,8 @@ use wasmtime::component::__internal::anyhow::anyhow;
 
 use crate::config::make_config_loader;
 use crate::service::compile_service::ComponentCompilationServiceImpl;
-use golem_worker_executor_base::storage::blob::sqlite::SqliteBlobStorage;
-use golem_worker_executor_base::storage::sqlite::SqlitePool;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::sqlite::SqlitePool;
 use wasmtime::WasmBacktraceDetails;
 
 mod config;
@@ -76,21 +76,21 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
                 config.root
             );
             Arc::new(
-                storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
                     .await
                     .expect("Failed to create file system blob storage"),
             )
         }
         BlobStorageConfig::InMemory => {
             info!("Using in-memory blob storage");
-            Arc::new(storage::blob::memory::InMemoryBlobStorage::new())
+            Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
         }
         BlobStorageConfig::KVStoreSqlite => {
             Err(anyhow!("KVStoreSqlite configuration option is not supported - use an explicit Sqlite configuration instead"))?
         }
         BlobStorageConfig::Sqlite(sqlite) => {
             info!("Using Sqlite for blob storage at {}", sqlite.database);
-            let pool = SqlitePool::configured(sqlite)
+            let pool = SqlitePool::configured(&sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
             Arc::new(

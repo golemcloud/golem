@@ -23,7 +23,7 @@ use golem_worker_executor_base::storage::keyvalue::memory::InMemoryKeyValueStora
 use golem_worker_executor_base::storage::keyvalue::redis::RedisKeyValueStorage;
 use golem_worker_executor_base::storage::keyvalue::sqlite::SqliteKeyValueStorage;
 use golem_worker_executor_base::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
-use golem_worker_executor_base::storage::sqlite::SqlitePool;
+use golem_service_base::storage::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 use test_r::inherit_test_dep;

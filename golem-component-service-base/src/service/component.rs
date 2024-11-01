@@ -17,7 +17,6 @@ use std::collections::{HashMap, HashSet};
 use std::vec;
 use async_zip::ZipEntry;
 use bytes::Bytes;
-use sha2::{Sha256, Digest};
 use std::num::TryFromIntError;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -33,7 +32,7 @@ use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::{ComponentId, ComponentType};
-use golem_common::model::{InitialComponentFile, InitialComponentFileKey, InitialComponentFilePath, InitialComponentFilePermissions};
+use golem_common::model::{InitialComponentFile, InitialComponentFilePath, InitialComponentFilePermissions};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
@@ -43,7 +42,7 @@ use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use tap::TapFallible;
 use tokio_stream::Stream;
 use tracing::{error, info};
-use golem_worker_executor_base::services::initial_component_files::{InitialComponentFilesService};
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use async_zip::tokio::read::seek::ZipFileReader;
 use tokio::io::BufReader;
 
@@ -301,7 +300,7 @@ pub struct ComponentServiceDefault {
     component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
     component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
-    initial_component_files_service: Arc<dyn InitialComponentFilesService + Sync + Send>,
+    initial_component_files_service: Arc<InitialComponentFilesService>,
 }
 
 impl ComponentServiceDefault {
@@ -309,7 +308,7 @@ impl ComponentServiceDefault {
         component_repo: Arc<dyn ComponentRepo + Sync + Send>,
         object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
         component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
-        initial_component_files_service: Arc<dyn InitialComponentFilesService + Sync + Send>,
+        initial_component_files_service: Arc<InitialComponentFilesService>,
     ) -> Self {
         ComponentServiceDefault {
             component_repo,
@@ -931,10 +930,9 @@ impl ComponentServiceDefault {
         })?;
 
         let mut uploaded: Vec<InitialComponentFile> = vec![];
-        let mut hasher = Sha256::new();
 
         for i in 0..zip_archive.file().entries().len() {
-            let (initial_component_file, content) = {
+            let (path, permissions, content) = {
                 let mut entry_reader = zip_archive.reader_with_entry(i).await.map_err(|e| {
                     ComponentError::malformed_component_archive_from_error("Failed to read entry from archive", e.into())
                 })?;
@@ -949,44 +947,33 @@ impl ComponentServiceDefault {
                     continue;
                 }
 
-                let file_path = initial_component_file_path_from_zip_entry(&entry)?;
+                let path = initial_component_file_path_from_zip_entry(&entry)?;
 
                 let mut buffer = Vec::new();
                 entry_reader.read_to_end_checked(&mut buffer).await.map_err(|e| {
                     ComponentError::malformed_component_archive_from_error("Failed to read entry content", e.into())
                 })?;
 
-                hasher.update(&buffer);
-                let hash = hex::encode(hasher.finalize_reset());
-
                 // if permissions are not provided, default to read-only
-                let initial_component_file = if let Some(permissions) = path_permissions.get(&file_path) {
-                    InitialComponentFile {
-                        key: InitialComponentFileKey(hash),
-                        path: file_path,
-                        permissions: permissions.clone(),
-                    }
-                } else {
-                    InitialComponentFile {
-                        key: InitialComponentFileKey(hash),
-                        path: file_path,
-                        permissions: InitialComponentFilePermissions::ReadOnly,
-                    }
-                };
+                let permissions = path_permissions.get(&path).cloned().unwrap_or(InitialComponentFilePermissions::ReadOnly);
 
-                (initial_component_file, Bytes::from(buffer))
+                (path, permissions, Bytes::from(buffer))
             };
 
-            info!("Uploading file: {}", initial_component_file.path.to_string());
+            info!("Uploading file: {}", path.to_string());
 
-            self.initial_component_files_service
-                .put_if_not_exists(&initial_component_file.key, content)
+            let key = self.initial_component_files_service
+                .put_if_not_exists(&content)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error("Failed to upload component files", e)
                 })?;
 
-            uploaded.push(initial_component_file);
+            uploaded.push(InitialComponentFile {
+                key,
+                path,
+                permissions
+            });
         }
 
         let uploaded_paths = uploaded.iter().map(|f| f.path.clone()).collect::<HashSet<_>>();

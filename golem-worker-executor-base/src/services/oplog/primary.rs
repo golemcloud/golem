@@ -15,7 +15,7 @@
 use crate::error::GolemError;
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use async_mutex::Mutex;
 use async_trait::async_trait;
