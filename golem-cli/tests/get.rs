@@ -15,7 +15,7 @@
 use test_r::{inherit_test_dep, test, test_dep};
 
 use crate::api_definition::{
-    golem_def, make_golem_file, make_shopping_cart_component, to_definition,
+    golem_json_def, make_golem_file, make_shopping_cart_component, to_definition,
 };
 use crate::api_deployment::make_definition;
 use crate::cli::{Cli, CliLive};
@@ -52,7 +52,7 @@ fn top_level_get_api_definition(
     let component_name = "top_level_get_api_definition";
     let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_def(component_name, &component_id);
+    let def = golem_json_def(component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinitionWithTypeInfo =

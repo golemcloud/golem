@@ -1168,8 +1168,16 @@ paths:
       operationId: import_open_api
       requestBody:
         content:
-          application/json; charset=utf-8:
-            schema: {}
+          application/json:
+            schema:
+              title: API definition in OpenAPI format
+              description: API definition in OpenAPI format with required custom extensions
+              type: OpenAPI+WorkerBridgeCustomExtension
+          application/x-yaml:
+            schema:
+              title: API definition in OpenAPI format
+              description: API definition in OpenAPI format with required custom extensions
+              type: OpenAPI+WorkerBridgeCustomExtension
         required: true
       responses:
         '200':
@@ -1286,7 +1294,10 @@ paths:
       operationId: create_definition
       requestBody:
         content:
-          application/json; charset=utf-8:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HttpApiDefinitionRequest'
+          application/x-yaml:
             schema:
               $ref: '#/components/schemas/HttpApiDefinitionRequest'
         required: true
@@ -1425,7 +1436,10 @@ paths:
         style: simple
       requestBody:
         content:
-          application/json; charset=utf-8:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HttpApiDefinitionRequest'
+          application/x-yaml:
             schema:
               $ref: '#/components/schemas/HttpApiDefinitionRequest'
         required: true

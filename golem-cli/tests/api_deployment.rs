@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api_definition::{golem_def, make_golem_file, make_shopping_cart_component};
+use crate::api_definition::{golem_json_def, make_golem_file, make_shopping_cart_component};
 use crate::cli::{Cli, CliLive};
 use crate::Tracing;
 use assert2::assert;
@@ -79,7 +79,7 @@ pub fn make_definition(
 ) -> Result<HttpApiDefinitionWithTypeInfo, anyhow::Error> {
     let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_def(component_name, &component_id);
+    let def = golem_json_def(component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     cli.run(&["api-definition", "add", path.to_str().unwrap()])

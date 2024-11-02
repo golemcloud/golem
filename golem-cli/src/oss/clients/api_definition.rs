@@ -17,7 +17,6 @@ use std::fmt::Display;
 use std::io::Read;
 
 use async_trait::async_trait;
-
 use golem_client::model::HttpApiDefinitionRequest;
 use golem_client::model::HttpApiDefinitionWithTypeInfo;
 
@@ -77,10 +76,10 @@ async fn create_or_update_api_definition<
 
     match action {
         Action::Import => {
-            let value: serde_json::value::Value = serde_json::from_str(definition_str.as_str())
-                .map_err(|e| GolemError(format!("Failed to parse json: {e:?}")))?;
+            let value = serde_json::from_str(definition_str.as_str())
+                .map_err(|e| GolemError(format!("Failed to parse: {e:?}")))?;
 
-            Ok(client.import_open_api(&value).await?)
+            Ok(client.import_open_api_json(&value).await?)
         }
         Action::Create => {
             let value: HttpApiDefinitionRequest = serde_json::from_str(definition_str.as_str())

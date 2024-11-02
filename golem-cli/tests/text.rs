@@ -15,7 +15,7 @@
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
 use crate::api_definition::{
-    golem_def, make_golem_file, make_open_api_file, make_shopping_cart_component,
+    golem_json_def, make_golem_file, make_open_api_json_file, make_shopping_cart_component,
 };
 use crate::cli::{Cli, CliLive};
 use crate::worker::add_environment_service_component;
@@ -542,7 +542,7 @@ fn text_api_definition_import(
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
     let component_version = component.component_version;
-    let path = make_open_api_file(&component_name, &component_id, component_version)?;
+    let path = make_open_api_json_file(&component_name, &component_id, component_version)?;
 
     let res = cli.with_format(Format::Text).run_string(&[
         "api-definition",
@@ -568,7 +568,7 @@ fn text_api_definition_add(
     let component_name = format!("text_api_definition_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_def(&component_name, &component_id);
+    let def = golem_json_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let res = cli.with_format(Format::Text).run_string(&[
@@ -595,7 +595,7 @@ fn text_api_definition_update(
     let component_name = format!("text_api_definition_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_def(&component_name, &component_id);
+    let def = golem_json_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinitionWithTypeInfo =
@@ -624,7 +624,7 @@ fn text_api_definition_list(
     let component_name = format!("text_api_definition_list{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_def(&component_name, &component_id);
+    let def = golem_json_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
     let cfg = &cli.config;
 
@@ -656,7 +656,7 @@ fn text_api_definition_get(
     let component_name = format!("text_api_definition_get{name:_>9}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_def(&component_name, &component_id);
+    let def = golem_json_def(&component_name, &component_id);
     let path = make_golem_file(&def)?;
 
     let _: HttpApiDefinitionWithTypeInfo =
