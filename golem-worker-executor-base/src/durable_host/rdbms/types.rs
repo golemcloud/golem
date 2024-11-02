@@ -17,7 +17,7 @@ use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::types::{
     DbColumnType, DbColumnTypeFlags, DbColumnTypeMeta, DbColumnTypePrimitive, DbRow, DbValue,
-    DbValuePrimitive, Error, HostDbResultSet,
+    DbValuePrimitive, Error, Host, HostDbResultSet,
 };
 use crate::services::rdbms::types as rdbms_types;
 use crate::workerctx::WorkerCtx;
@@ -26,6 +26,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
+
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct DbResultSetEntry {
     pub rdbms_type: RdbmsType,
@@ -45,7 +49,7 @@ impl DbResultSetEntry {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
     async fn get_column_metadata(
         &mut self,
         self_: Resource<DbResultSetEntry>,
@@ -85,6 +89,27 @@ impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
             .table()
             .delete::<DbResultSetEntry>(rep)?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
+    async fn get_column_metadata(
+        &mut self,
+        self_: Resource<DbResultSetEntry>,
+    ) -> anyhow::Result<Vec<DbColumnTypeMeta>> {
+        (*self).get_column_metadata(self_).await
+    }
+
+    async fn get_next(
+        &mut self,
+        self_: Resource<DbResultSetEntry>,
+    ) -> anyhow::Result<Option<Vec<DbRow>>> {
+        (*self).get_next(self_).await
+    }
+
+    fn drop(&mut self, rep: Resource<DbResultSetEntry>) -> anyhow::Result<()> {
+        (*self).drop(rep)
     }
 }
 

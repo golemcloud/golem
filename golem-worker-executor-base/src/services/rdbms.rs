@@ -181,7 +181,7 @@ pub mod postgres {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<Arc<dyn DbResultSet  + Send + Sync>, String> {
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
             let key = RdbmsPoolKey::new(address.to_string());
             let pool = self.pool_cache.get(&key).await;
             if let Some(pool) = pool {

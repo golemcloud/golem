@@ -39,26 +39,25 @@ async fn rdbms_postgres_select1(
     let worker_name = "rdbms-service-1";
 
     let mut env = HashMap::new();
-    env.insert("DB_URL".to_string(), "postgresql://postgres:postgres@localhost:5432/postgres".to_string());
+    env.insert(
+        "DB_URL".to_string(),
+        "postgresql://postgres:postgres@localhost:5432/postgres".to_string(),
+    );
 
-    let worker_id = executor.start_worker_with(&component_id, worker_name, vec![], env).await;
+    let worker_id = executor
+        .start_worker_with(&component_id, worker_name, vec![], env)
+        .await;
 
     let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{execute}",
-            vec![
-                Value::String(format!("SELECT 1")),
-                Value::List(vec![]),
-            ],
+            vec![Value::String(format!("SELECT 1")), Value::List(vec![])],
         )
         .await
         .unwrap();
 
     drop(executor);
 
-    check!(
-        result
-            == vec![Value::Result(Ok(Some(Box::new(Value::U64(1)))))]
-    );
+    check!(result == vec![Value::Result(Ok(Some(Box::new(Value::U64(1)))))]);
 }

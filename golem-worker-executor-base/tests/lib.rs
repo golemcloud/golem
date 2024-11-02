@@ -55,6 +55,7 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod measure_test_component_mem;
 pub mod observability;
+pub mod rdbms;
 pub mod rust_rpc;
 pub mod rust_rpc_stubless;
 pub mod scalability;
@@ -64,7 +65,6 @@ pub mod ts_rpc1_stubless;
 pub mod ts_rpc2;
 pub mod ts_rpc2_stubless;
 pub mod wasi;
-pub mod rdbms;
 
 test_r::enable!();
 

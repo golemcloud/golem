@@ -16,12 +16,19 @@ use crate::durable_host::rdbms::types::DbResultSetEntry;
 use crate::durable_host::rdbms::RdbmsType;
 use crate::durable_host::{Durability, DurableWorkerCtx};
 use crate::metrics::wasm::record_host_function_call;
+use crate::preview2::wasi::rdbms::postgres::Host;
 use crate::preview2::wasi::rdbms::postgres::HostDbConnection;
-use crate::preview2::wasi::rdbms::types::{DbResultSet, DbValue, Error};
+use crate::preview2::wasi::rdbms::types::{DbValue, Error};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct PostgresDbConnection {
     pub address: String,
@@ -34,7 +41,7 @@ impl PostgresDbConnection {
 }
 
 #[async_trait]
-impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     async fn open(
         &mut self,
         address: String,
@@ -164,5 +171,37 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
             .table()
             .delete::<PostgresDbConnection>(rep)?;
         Ok(())
+    }
+}
+
+#[async_trait]
+impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
+    async fn open(
+        &mut self,
+        address: String,
+    ) -> anyhow::Result<Result<Resource<PostgresDbConnection>, Error>> {
+        (*self).open(address).await
+    }
+
+    async fn query(
+        &mut self,
+        self_: Resource<PostgresDbConnection>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
+        (*self).query(self_, statement, params).await
+    }
+
+    async fn execute(
+        &mut self,
+        self_: Resource<PostgresDbConnection>,
+        statement: String,
+        params: Vec<DbValue>,
+    ) -> anyhow::Result<Result<u64, Error>> {
+        (*self).execute(self_, statement, params).await
+    }
+
+    fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
+        (*self).drop(rep)
     }
 }
