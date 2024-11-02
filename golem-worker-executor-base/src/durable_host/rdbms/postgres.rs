@@ -49,7 +49,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "open");
 
-        let worker_id = self.state.owned_worker_id.clone();
+
         // let result = Durability::<Ctx, String, String, SerializableError>::wrap(
         //     self,
         //     WrappedFunctionType::ReadRemote,
@@ -69,6 +69,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         //     Err(e) => Ok(Err(Error::Error(format!("{:?}", e)))),
         // }
 
+        let worker_id = self.state.owned_worker_id.clone();
         let result = self
             .state
             .rdbms_service
@@ -84,6 +85,9 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             }
             Err(e) => Ok(Err(Error::Error(e))),
         }
+        // let entry = PostgresDbConnection::new(address);
+        // let resource = self.as_wasi_view().table().push(entry)?;
+        // Ok(Ok(resource))
     }
 
     async fn query(

@@ -12,16 +12,16 @@ fn get_db_url() -> String {
 struct Component;
 
 impl Guest for Component {
-
-    fn check() -> String{
+    fn check() -> String {
+        let address = get_db_url();
+        println!("check - address: {}", address);
         "Ok".to_string()
     }
 
     fn execute(statement: String, params: Vec<String>) -> Result<u64, String> {
-
         let address = get_db_url();
 
-        let connection  = DbConnection::open(&address).map_err(|e| e.to_string())?;
+        let connection = DbConnection::open(&address).map_err(|e| e.to_string())?;
 
         println!("execute - address: {}, statement: {}, params: {:?}", address, statement, params);
 
@@ -35,10 +35,9 @@ impl Guest for Component {
     }
 
     fn query(statement: String, params: Vec<String>) -> Result<Vec<DbRow>, String> {
-
         let address = get_db_url();
 
-        let connection  = DbConnection::open(&address).map_err(|e| e.to_string())?;
+        let connection = DbConnection::open(&address).map_err(|e| e.to_string())?;
 
         println!("query - address: {}, statement: {}, params: {:?}", address, statement, params);
 
@@ -60,8 +59,6 @@ impl Guest for Component {
 
         Ok(rows)
     }
-
-
 }
 
 bindings::export!(Component with_types_in bindings);

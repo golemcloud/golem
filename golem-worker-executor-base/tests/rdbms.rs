@@ -41,7 +41,7 @@ async fn rdbms_postgres_select1(
     let mut env = HashMap::new();
     env.insert(
         "DB_URL".to_string(),
-        "postgresql://postgres:postgres@localhost:5432/postgres".to_string(),
+        "postgresql://postgres:postgres@localhost:5444/postgres".to_string(),
     );
 
     let worker_id = executor
@@ -61,7 +61,7 @@ async fn rdbms_postgres_select1(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{execute}",
-            vec![Value::String(format!("SELECT 1")), Value::List(vec![])],
+            vec![Value::String(format!("SELECT 1;")), Value::List(vec![])],
         )
         .await
         .unwrap();
