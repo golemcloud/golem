@@ -13,6 +13,10 @@ struct Component;
 
 impl Guest for Component {
 
+    fn check() -> String{
+        "Ok".to_string()
+    }
+
     fn execute(statement: String, params: Vec<String>) -> Result<u64, String> {
 
         let address = get_db_url();

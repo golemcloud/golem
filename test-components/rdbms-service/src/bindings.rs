@@ -2206,6 +2206,28 @@ pub mod exports {
                 pub type DbRow = super::super::super::super::wasi::rdbms::types::DbRow;
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
+                pub unsafe fn _export_check_cabi<T: Guest>() -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let result0 = T::check();
+                    let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    let vec2 = (result0.into_bytes()).into_boxed_slice();
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    ::core::mem::forget(vec2);
+                    *ptr1.add(4).cast::<usize>() = len2;
+                    *ptr1.add(0).cast::<*mut u8>() = ptr2.cast_mut();
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_check<T: Guest>(arg0: *mut u8) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0.add(4).cast::<usize>();
+                    _rt::cabi_dealloc(l0, l1, 1);
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
                 pub unsafe fn _export_execute_cabi<T: Guest>(
                     arg0: *mut u8,
                     arg1: usize,
@@ -3057,6 +3079,7 @@ pub mod exports {
                     }
                 }
                 pub trait Guest {
+                    fn check() -> _rt::String;
                     fn execute(
                         statement: _rt::String,
                         params: _rt::Vec<_rt::String>,
@@ -3069,26 +3092,34 @@ pub mod exports {
                 #[doc(hidden)]
 
                 macro_rules! __export_golem_it_api_cabi{
-      ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
+    ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-        #[export_name = "golem:it/api#execute"]
-        unsafe extern "C" fn export_execute(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
-          $($path_to_types)*::_export_execute_cabi::<$ty>(arg0, arg1, arg2, arg3)
-        }
-        #[export_name = "cabi_post_golem:it/api#execute"]
-        unsafe extern "C" fn _post_return_execute(arg0: *mut u8,) {
-          $($path_to_types)*::__post_return_execute::<$ty>(arg0)
-        }
-        #[export_name = "golem:it/api#query"]
-        unsafe extern "C" fn export_query(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
-          $($path_to_types)*::_export_query_cabi::<$ty>(arg0, arg1, arg2, arg3)
-        }
-        #[export_name = "cabi_post_golem:it/api#query"]
-        unsafe extern "C" fn _post_return_query(arg0: *mut u8,) {
-          $($path_to_types)*::__post_return_query::<$ty>(arg0)
-        }
-      };);
-    }
+      #[export_name = "golem:it/api#check"]
+      unsafe extern "C" fn export_check() -> *mut u8 {
+        $($path_to_types)*::_export_check_cabi::<$ty>()
+      }
+      #[export_name = "cabi_post_golem:it/api#check"]
+      unsafe extern "C" fn _post_return_check(arg0: *mut u8,) {
+        $($path_to_types)*::__post_return_check::<$ty>(arg0)
+      }
+      #[export_name = "golem:it/api#execute"]
+      unsafe extern "C" fn export_execute(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+        $($path_to_types)*::_export_execute_cabi::<$ty>(arg0, arg1, arg2, arg3)
+      }
+      #[export_name = "cabi_post_golem:it/api#execute"]
+      unsafe extern "C" fn _post_return_execute(arg0: *mut u8,) {
+        $($path_to_types)*::__post_return_execute::<$ty>(arg0)
+      }
+      #[export_name = "golem:it/api#query"]
+      unsafe extern "C" fn export_query(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+        $($path_to_types)*::_export_query_cabi::<$ty>(arg0, arg1, arg2, arg3)
+      }
+      #[export_name = "cabi_post_golem:it/api#query"]
+      unsafe extern "C" fn _post_return_query(arg0: *mut u8,) {
+        $($path_to_types)*::__post_return_query::<$ty>(arg0)
+      }
+    };);
+  }
                 #[doc(hidden)]
                 pub(crate) use __export_golem_it_api_cabi;
                 #[repr(align(8))]
@@ -3317,8 +3348,8 @@ pub(crate) use __export_rdbms_service_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:rdbms-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1585] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xad\x0b\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1600] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xbc\x0b\x01A\x02\x01\
 A\x0a\x01B*\x01y\x04\0\x0anode-index\x03\0\0\x01s\x04\0\x0atable-name\x03\0\x02\x01\
 q\x01\x05error\x01s\0\x04\0\x05error\x03\0\x04\x01k}\x01o\x02}}\x01ky\x01ps\x01q\
 \x0f\x07integer\x01\x06\0\x07decimal\x01\x07\0\x05float\0\0\x07boolean\0\0\x08da\
@@ -3347,13 +3378,13 @@ ection\x03\x01\x01i\x06\x01j\x01\x07\x01\x05\x01@\x01\x07addresss\0\x08\x04\0\x1
 \x01@\x03\x04self\x0a\x09statements\x06params\x0b\0\x0d\x04\0\x1b[method]db-conn\
 ection.query\x01\x0e\x01j\x01w\x01\x05\x01@\x03\x04self\x0a\x09statements\x06par\
 ams\x0b\0\x0f\x04\0\x1d[method]db-connection.execute\x01\x10\x03\x01\x19wasi:rdb\
-ms/postgres@0.0.1\x05\x04\x02\x03\0\0\x06db-row\x01B\x0a\x02\x03\x02\x01\x05\x04\
-\0\x06db-row\x03\0\0\x01ps\x01j\x01w\x01s\x01@\x02\x09statements\x06params\x02\0\
-\x03\x04\0\x07execute\x01\x04\x01p\x01\x01j\x01\x05\x01s\x01@\x02\x09statements\x06\
-params\x02\0\x06\x04\0\x05query\x01\x07\x04\x01\x0cgolem:it/api\x05\x06\x04\x01\x16\
-golem:it/rdbms-service\x04\0\x0b\x13\x01\0\x0drdbms-service\x03\0\0\0G\x09produc\
-ers\x01\x0cprocessed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060\
-.25.0";
+ms/postgres@0.0.1\x05\x04\x02\x03\0\0\x06db-row\x01B\x0c\x02\x03\x02\x01\x05\x04\
+\0\x06db-row\x03\0\0\x01@\0\0s\x04\0\x05check\x01\x02\x01ps\x01j\x01w\x01s\x01@\x02\
+\x09statements\x06params\x03\0\x04\x04\0\x07execute\x01\x05\x01p\x01\x01j\x01\x06\
+\x01s\x01@\x02\x09statements\x06params\x03\0\x07\x04\0\x05query\x01\x08\x04\x01\x0c\
+golem:it/api\x05\x06\x04\x01\x16golem:it/rdbms-service\x04\0\x0b\x13\x01\0\x0drd\
+bms-service\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x07\
+0.208.1\x10wit-bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

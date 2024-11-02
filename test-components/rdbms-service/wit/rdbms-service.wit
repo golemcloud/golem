@@ -3,6 +3,8 @@ package golem:it;
 interface api {
   use wasi:rdbms/types@0.0.1.{db-row};
 
+  check: func() -> string;
+
   execute: func(statement: string, params: list<string>) -> result<u64, string>;
 
   query: func(statement: string, params: list<string>) -> result<list<db-row>, string>;

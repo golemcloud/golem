@@ -69,18 +69,21 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         //     Err(e) => Ok(Err(Error::Error(format!("{:?}", e)))),
         // }
 
-        let _ = self
+        let result = self
             .state
             .rdbms_service
             .postgres()
             .create(&worker_id, &address)
-            .await
-            .map_err(Error::Error)?;
+            .await;
 
-        let entry = PostgresDbConnection::new(address);
-        let resource = self.as_wasi_view().table().push(entry)?;
-
-        Ok(Ok(resource))
+        match result {
+            Ok(_) => {
+                let entry = PostgresDbConnection::new(address);
+                let resource = self.as_wasi_view().table().push(entry)?;
+                Ok(Ok(resource))
+            }
+            Err(e) => Ok(Err(Error::Error(e))),
+        }
     }
 
     async fn query(
@@ -109,14 +112,16 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 &statement,
                 params.into_iter().map(|v| v.into()).collect(),
             )
-            .await
-            .map_err(Error::Error)?;
+            .await;
 
-        let db_result_set = self
-            .as_wasi_view()
-            .table()
-            .push(DbResultSetEntry::new(RdbmsType::Postgres, result))?;
-        Ok(Ok(db_result_set))
+        match result {
+            Ok(result) => {
+                let entry = DbResultSetEntry::new(RdbmsType::Postgres, result);
+                let db_result_set = self.as_wasi_view().table().push(entry)?;
+                Ok(Ok(db_result_set))
+            }
+            Err(e) => Ok(Err(Error::Error(e))),
+        }
     }
 
     async fn execute(

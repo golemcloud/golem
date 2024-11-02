@@ -48,6 +48,15 @@ async fn rdbms_postgres_select1(
         .start_worker_with(&component_id, worker_name, vec![], env)
         .await;
 
+    let _result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{check}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
     let result = executor
         .invoke_and_await(
             &worker_id,
