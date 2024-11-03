@@ -1,4 +1,4 @@
-use crate::services::rdbms::postgres::{Postgres, PostgresDefault};
+use crate::services::rdbms::postgres::{Postgres, PostgresDefault, PostgresNoOp};
 use std::error::Error;
 use std::sync::Arc;
 
@@ -69,7 +69,7 @@ pub mod postgres {
     use std::collections::HashSet;
     use std::ops::Deref;
     use std::sync::Arc;
-    use tracing::info;
+    use tracing::{error, info};
     use uuid::Uuid;
 
     #[async_trait]
@@ -94,10 +94,51 @@ pub mod postgres {
         ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
     }
 
+    #[derive(Clone, Default)]
+    pub struct PostgresNoOp {}
+
+    #[async_trait]
+    impl Postgres for PostgresNoOp {
+        async fn create(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
+            info!("create connection - address: {}", address);
+            Ok(())
+        }
+
+        async fn exists(&self, _worker_id: &OwnedWorkerId, _address: &str) -> bool {
+            false
+        }
+
+        async fn remove(&self, _worker_id: &OwnedWorkerId, _address: &str) -> Result<(), String> {
+            Ok(())
+        }
+
+        async fn execute(
+            &self,
+            _worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            _params: Vec<DbValue>,
+        ) -> Result<u64, String> {
+            info!("execute - address: {}, statement: {}", address, statement);
+            Ok(0)
+        }
+
+        async fn query(
+            &self,
+            _worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            _params: Vec<DbValue>,
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+            info!("query - address: {}, statement: {}", address, statement);
+            Ok(Arc::new(SimpleDbResultSet::empty()))
+        }
+    }
+
     #[derive(Clone)]
     pub struct PostgresDefault {
         pool_config: RdbmsPoolConfig,
-        pool_cache: Cache<RdbmsPoolKey, (), Pool<sqlx::Postgres>, String>,
+        pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<sqlx::Postgres>>, String>,
     }
 
     impl PostgresDefault {
@@ -113,6 +154,20 @@ pub mod postgres {
                 pool_cache,
             }
         }
+
+        async fn get_or_create(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<Arc<Pool<sqlx::Postgres>>, String> {
+            let key = RdbmsPoolKey::new(address.to_string());
+            let pool_config = self.pool_config.clone();
+
+            self
+                .pool_cache
+                .get_or_insert_simple(&key.clone(), || {
+                    Box::pin(async move {
+                        Ok(Arc::new(create_pool(&key, &pool_config).await?))
+                    })
+                })
+                .await
+        }
     }
 
     impl Default for PostgresDefault {
@@ -123,16 +178,10 @@ pub mod postgres {
 
     #[async_trait]
     impl Postgres for PostgresDefault {
-        async fn create(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
-            let key = RdbmsPoolKey::new(address.to_string());
-            let pool_config = self.pool_config.clone();
-            let _pool = self
-                .pool_cache
-                .get_or_insert_simple(&key.clone(), || {
-                    Box::pin(async move { create_pool(&key, &pool_config).await })
-                })
-                .await?;
-
+        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
+            info!("create connection - address: {}", address);
+            let _pool = self.get_or_create(worker_id, address).await?;
+            info!("create connection - address: {} - done", address);
             Ok(())
         }
 
@@ -154,58 +203,64 @@ pub mod postgres {
 
         async fn execute(
             &self,
-            _worker_id: &OwnedWorkerId,
+            worker_id: &OwnedWorkerId,
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
         ) -> Result<u64, String> {
-            let key = RdbmsPoolKey::new(address.to_string());
-            let pool = self.pool_cache.get(&key).await;
-            if let Some(pool) = pool {
-                let mut query: Query<sqlx::Postgres, PgArguments> = sqlx::query(statement);
-
-                for param in params {
-                    query = bind_value(query, param)?;
-                }
-
-                let result = query.execute(&pool).await.map_err(|e| e.to_string())?;
-                Ok(result.rows_affected())
-            } else {
-                Err("DB Connection not found".to_string())
-            }
+            info!("execute - address: {}, statement: {} - 0", address, statement);
+            let pool = self.get_or_create(worker_id, address).await?;
+            info!("execute - address: {}, statement: {} - 1", address, statement);
+            let result = execute(statement, params, pool.deref()).await;
+            info!("execute - address: {}, statement: {} - 2", address, statement);
+            result
         }
 
         async fn query(
             &self,
-            _worker_id: &OwnedWorkerId,
+            worker_id: &OwnedWorkerId,
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
         ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-            let key = RdbmsPoolKey::new(address.to_string());
-            let pool = self.pool_cache.get(&key).await;
-            if let Some(pool) = pool {
-                let mut query: Query<sqlx::Postgres, PgArguments> = sqlx::query(statement);
-
-                for param in params {
-                    query = bind_value(query, param)?;
-                }
-
-                let result = query.fetch_all(&pool).await.map_err(|e| e.to_string())?;
-
-                if result.is_empty() {
-                    Ok(Arc::new(SimpleDbResultSet::empty()))
-                } else {
-                    let first = &result[0];
-                    let _columns = first.columns();
-                    let columns = vec![];
-                    let values = vec![];
-                    Ok(Arc::new(SimpleDbResultSet::new(columns, Some(values))))
-                }
-            } else {
-                Err("DB Connection not found".to_string())
-            }
+            info!("query - address: {}, statement: {} - 0", address, statement);
+            let pool = self.get_or_create(worker_id, address).await?;
+            info!("query - address: {}, statement: {} - 1", address, statement);
+            let result = query(statement, params, pool.deref()).await;
+            info!("query - address: {}, statement: {} - 2", address, statement);
+            result
         }
+    }
+
+    async fn query(statement: &str, params: Vec<DbValue>, pool: &Pool<sqlx::Postgres>) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+        let mut query: Query<sqlx::Postgres, PgArguments> = sqlx::query(statement);
+
+        for param in params {
+            query = bind_value(query, param)?;
+        }
+
+        let result = query.fetch_all(pool).await.map_err(|e| e.to_string())?;
+
+        if result.is_empty() {
+            Ok(Arc::new(SimpleDbResultSet::empty()))
+        } else {
+            let first = &result[0];
+            let _columns = first.columns();
+            let columns = vec![];
+            let values = vec![];
+            Ok(Arc::new(SimpleDbResultSet::new(columns, Some(values))))
+        }
+    }
+
+    async fn execute(statement: &str, params: Vec<DbValue>, pool: &Pool<sqlx::Postgres>) -> Result<u64, String> {
+        let mut query: Query<sqlx::Postgres, PgArguments> = sqlx::query(statement);
+
+        for param in params {
+            query = bind_value(query, param)?;
+        }
+
+        let result = query.execute(pool).await.map_err(|e| e.to_string())?;
+        Ok(result.rows_affected())
     }
 
     // fn get_column_types(columns: &[PgColumn]) -> Result<Vec<DbColumnTypeMeta>, String> {
@@ -280,11 +335,19 @@ pub mod postgres {
             key.address, pool_config.max_connections
         );
 
-        PgPoolOptions::new()
+        let pool = PgPoolOptions::new()
             .max_connections(pool_config.max_connections)
             .connect(&key.address)
             .await
-            .map_err(|e| e.to_string())
+            .map_err(|e| {
+                error!("DB Pool: {}, connections: {} -  error {}", key.address, pool_config.max_connections, e);
+                e.to_string()
+            })?;
+        info!(
+            "DB Pool: {}, connections: {} - created",
+            key.address, pool_config.max_connections
+        );
+        Ok(pool)
     }
 }
 
@@ -407,5 +470,48 @@ pub mod types {
         AutoIncrement,
         DefaultValue,
         Indexed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::hash::Hash;
+    use test_r::{test, timeout};
+    use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
+    use crate::services::rdbms::{RdbmsPoolKey, RdbmsServiceDefault};
+    use crate::services::rdbms::RdbmsService;
+
+    #[test]
+    #[timeout(30000)]
+    async fn test() {
+        let rdbms_service = RdbmsServiceDefault::default();
+
+        let address = "postgresql://postgres:postgres@localhost:5444/postgres";
+
+        let worker_id = OwnedWorkerId::new(&AccountId::generate(), &WorkerId {
+            component_id: ComponentId::new_v4(),
+            worker_name: "test".to_string(),
+        });
+
+        let key1 = RdbmsPoolKey::new(address.to_string());
+        let key2 = RdbmsPoolKey::new(address.to_string());
+
+        assert!(key1 == key2);
+
+        let connection = rdbms_service.postgres().create(&worker_id, &address).await;
+
+        assert!(connection.is_ok());
+
+        let result = rdbms_service.postgres().execute(&worker_id, &address, "SELECT 1",vec![]).await;
+
+        assert!(result.is_ok());
+
+        let connection = rdbms_service.postgres().create(&worker_id, &address).await;
+
+        assert!(connection.is_ok());
+
+        let result = rdbms_service.postgres().query(&worker_id, &address, "SELECT 1",vec![]).await;
+
+        assert!(result.is_ok());
     }
 }
