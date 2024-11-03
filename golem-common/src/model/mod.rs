@@ -18,8 +18,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::str::FromStr;
-use std::time::Duration;
-
+use std::time::{Duration, SystemTime};
 use crate::config::RetryConfig;
 use crate::model::oplog::{
     IndexedResourceKey, OplogEntry, OplogIndex, TimestampedUpdateDescription, WorkerResourceId,
@@ -47,6 +46,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
+use anyhow;
+use crate::uri::oss::urn::WorkerUrn;
+use golem_api_grpc::proto::golem::shardmanager::{
+    Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
+};
 
 pub mod component_constraint;
 pub mod component_metadata;
@@ -57,10 +61,6 @@ pub mod public_oplog;
 pub mod regions;
 pub mod trim_date;
 
-use crate::uri::oss::urn::WorkerUrn;
-use golem_api_grpc::proto::golem::shardmanager::{
-    Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
-};
 
 newtype_uuid!(
     ComponentId,
@@ -2507,6 +2507,10 @@ impl InitialComponentFilePath {
         Ok(InitialComponentFilePath(buf.normalize()))
     }
 
+    pub fn from_rel_str(s: &str) -> Result<Self, String> {
+        Self::from_str(&format!("/{}", s))
+    }
+
     pub fn as_path(&self) -> &Utf8UnixPathBuf {
         &self.0
     }
@@ -2520,9 +2524,9 @@ impl InitialComponentFilePath {
     }
 }
 
-impl ToString for InitialComponentFilePath {
-    fn to_string(&self) -> String {
-        self.0.to_string()
+impl Display for InitialComponentFilePath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 
@@ -2667,7 +2671,6 @@ impl Display for InitialComponentFilePathAndPermissions {
     }
 }
 
-// /// Format of the properties.json file inside of the archive file that can be uploaded when creating a component
 #[derive(Clone, Debug, Serialize, Deserialize, Object)]
 pub struct InitialComponentFilePathAndPermissionsList {
     pub values: Vec<InitialComponentFilePathAndPermissions>,
@@ -2688,6 +2691,92 @@ impl poem_openapi::types::ParseFromMultipartField for InitialComponentFilePathAn
                 .await
                 .map_err(|err| err.propagate::<InitialComponentFilePathAndPermissionsList>())
                 .and_then(|s| serde_json::from_str(&s).map_err(|err| poem_openapi::types::ParseError::custom(err)))
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ComponentFileSystemNodeDetails {
+    File {
+        permissions: InitialComponentFilePermissions,
+        size: u64,
+    },
+    Directory,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ComponentFileSystemNode {
+   pub name: String,
+   pub last_modified: SystemTime,
+   pub details: ComponentFileSystemNodeDetails,
+}
+
+impl From<ComponentFileSystemNode> for golem_api_grpc::proto::golem::worker::FileSystemNode {
+    fn from(value: ComponentFileSystemNode) -> Self {
+        let last_modified = value.last_modified.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+
+        match value.details {
+            ComponentFileSystemNodeDetails::File { permissions, size } =>
+                golem_api_grpc::proto::golem::worker::FileSystemNode {
+                    value: Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::File(
+                        golem_api_grpc::proto::golem::worker::FileFileSystemNode {
+                            name: value.name,
+                            last_modified,
+                            size,
+                            permissions:
+                                golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::from(permissions).into(),
+                        }
+                    ))
+                },
+            ComponentFileSystemNodeDetails::Directory =>
+                golem_api_grpc::proto::golem::worker::FileSystemNode {
+                    value: Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::Directory(
+                        golem_api_grpc::proto::golem::worker::DirectoryFileSystemNode {
+                            name: value.name,
+                            last_modified,
+                        }
+                    ))
+                }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for ComponentFileSystemNode {
+    type Error = anyhow::Error;
+
+    fn try_from(value: golem_api_grpc::proto::golem::worker::FileSystemNode) -> Result<Self, Self::Error> {
+        match value.value {
+            Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::Directory(
+                golem_api_grpc::proto::golem::worker::DirectoryFileSystemNode {
+                    name,
+                    last_modified,
+                }
+            )) => {
+                Ok(ComponentFileSystemNode {
+                    name,
+                    last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
+                    details: ComponentFileSystemNodeDetails::Directory,
+                })
+            },
+            Some(golem_api_grpc::proto::golem::worker::file_system_node::Value::File(
+                golem_api_grpc::proto::golem::worker::FileFileSystemNode {
+                    name,
+                    last_modified,
+                    size,
+                    permissions,
+                }
+            )) => {
+                Ok(ComponentFileSystemNode {
+                    name,
+                    last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
+                    details: ComponentFileSystemNodeDetails::File {
+                        permissions:
+                            golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::try_from(permissions)?.into(),
+                        size,
+                    },
+                })
+            },
+            None => Err(anyhow::anyhow!("Missing value")),
         }
     }
 }

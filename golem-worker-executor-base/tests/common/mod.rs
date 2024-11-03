@@ -16,8 +16,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentId, ComponentVersion, IdempotencyKey, InitialComponentFilePath, OwnedWorkerId, ScanCursor, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
@@ -32,7 +31,7 @@ use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult, ReadFileResult, TrapType, WorkerConfig
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -49,8 +48,7 @@ use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::{All, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
-    ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
-    InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx
 };
 use golem_worker_executor_base::Bootstrap;
 
@@ -745,6 +743,17 @@ impl ResourceLimiterAsync for TestWorkerCtx {
             desired
         );
         Ok(true)
+    }
+}
+
+#[async_trait]
+impl FileSystemReading for TestWorkerCtx {
+    async fn list_directory(&self, path: &InitialComponentFilePath) -> Result<ListDirectoryResult, GolemError> {
+        self.durable_ctx.list_directory(path).await
+    }
+
+    async fn read_file(&self, path: &InitialComponentFilePath) -> Result<ReadFileResult, GolemError> {
+        self.durable_ctx.read_file(path).await
     }
 }
 

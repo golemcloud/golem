@@ -40,6 +40,7 @@ cap-std = { workspace = true }
 cap-time-ext = "3.0.0"                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
+drop-stream = { workspace = true }
 evicting_cache_map = "0.4.0"
 figment = { workspace = true }
 flume = "0.11.0"
@@ -77,6 +78,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }

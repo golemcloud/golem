@@ -1827,6 +1827,13 @@ impl IntoValue for GolemError {
                         reason.into_value(),
                     ]))),
                 },
+                GolemError::FileSystemError { path, reason } => Value::Variant {
+                    case_idx: 24,
+                    case_value: Some(Box::new(Value::Record(vec![
+                        path.into_value(),
+                        reason.into_value(),
+                    ]))),
+                },
             }
         }
         into_value(self, true)

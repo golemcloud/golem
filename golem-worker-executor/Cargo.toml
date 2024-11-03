@@ -24,8 +24,10 @@ golem-worker-executor-base = { path = "../golem-worker-executor-base", version =
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 cap-std = { workspace = true }
 console-subscriber = { workspace = true }
+futures = { workspace = true }
 figment = { workspace = true }
 humantime-serde = { workspace = true }
 prometheus = { workspace = true }

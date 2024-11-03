@@ -88,6 +88,7 @@ console-subscriber = "0.3.0"
 ctor = "0.2.6"
 dashmap = "5.5.3"
 derive_more = "0.99.17"
+drop-stream = "0.3.2"
 figment = { version = "0.10.14", features = ["toml", "env"] }
 fred = { version = "9.0.3", features = [
     "metrics",

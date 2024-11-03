@@ -5,7 +5,7 @@
 pub unsafe fn _export_run_cabi<T: Guest>() -> *mut u8 {
     let result0 = T::run();
     let ptr1 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
-    let (t2_0, t2_1, t2_2, t2_3) = result0;
+    let (t2_0, t2_1, t2_2, t2_3, t2_4) = result0;
     match t2_0 {
         Some(e) => {
             *ptr1.add(0).cast::<u8>() = (1i32) as u8;
@@ -62,6 +62,20 @@ pub unsafe fn _export_run_cabi<T: Guest>() -> *mut u8 {
             *ptr1.add(36).cast::<u8>() = (0i32) as u8;
         }
     };
+    match t2_4 {
+        Some(e) => {
+            *ptr1.add(48).cast::<u8>() = (1i32) as u8;
+            let vec7 = (e.into_bytes()).into_boxed_slice();
+            let ptr7 = vec7.as_ptr().cast::<u8>();
+            let len7 = vec7.len();
+            ::core::mem::forget(vec7);
+            *ptr1.add(56).cast::<usize>() = len7;
+            *ptr1.add(52).cast::<*mut u8>() = ptr7.cast_mut();
+        }
+        None => {
+            *ptr1.add(48).cast::<u8>() = (0i32) as u8;
+        }
+    };
     ptr1
 }
 #[doc(hidden)]
@@ -103,9 +117,19 @@ pub unsafe fn __post_return_run<T: Guest>(arg0: *mut u8) {
             _rt::cabi_dealloc(l10, l11, 1);
         }
     }
+    let l12 = i32::from(*arg0.add(48).cast::<u8>());
+    match l12 {
+        0 => (),
+        _ => {
+            let l13 = *arg0.add(52).cast::<*mut u8>();
+            let l14 = *arg0.add(56).cast::<usize>();
+            _rt::cabi_dealloc(l13, l14, 1);
+        }
+    }
 }
 pub trait Guest {
     fn run() -> (
+        Option<_rt::String>,
         Option<_rt::String>,
         Option<_rt::String>,
         Option<_rt::String>,
@@ -130,8 +154,8 @@ macro_rules! __export_world_file_write_read_delete_cabi{
 #[doc(hidden)]
 pub(crate) use __export_world_file_write_read_delete_cabi;
 #[repr(align(4))]
-struct _RetArea([::core::mem::MaybeUninit<u8>; 48]);
-static mut _RET_AREA: _RetArea = _RetArea([::core::mem::MaybeUninit::uninit(); 48]);
+struct _RetArea([::core::mem::MaybeUninit<u8>; 60]);
+static mut _RET_AREA: _RetArea = _RetArea([::core::mem::MaybeUninit::uninit(); 60]);
 mod _rt {
     pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
         if size == 0 {
@@ -176,12 +200,12 @@ pub(crate) use __export_file_write_read_delete_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.21.0:file-write-read-delete:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 205] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07A\x01A\x02\x01A\x04\x01\
-ks\x01o\x04\0\0\0\0\x01@\0\0\x01\x04\0\x03run\x01\x02\x04\x01\x1fgolem:it/file-w\
-rite-read-delete\x04\0\x0b\x1c\x01\0\x16file-write-read-delete\x03\0\0\0G\x09pro\
-ducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.201.0\x10wit-bindgen-rust\x06\
-0.21.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 206] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07B\x01A\x02\x01A\x04\x01\
+ks\x01o\x05\0\0\0\0\0\x01@\0\0\x01\x04\0\x03run\x01\x02\x04\x01\x1fgolem:it/file\
+-write-read-delete\x04\0\x0b\x1c\x01\0\x16file-write-read-delete\x03\0\0\0G\x09p\
+roducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.201.0\x10wit-bindgen-rust\
+\x060.21.0";
 
 #[inline(never)]
 #[doc(hidden)]

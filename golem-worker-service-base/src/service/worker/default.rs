@@ -12,16 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
-
 use async_trait::async_trait;
+use bytes::Bytes;
+use futures::{Stream, StreamExt};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use tonic::transport::Channel;
 use tonic::Code;
 use tracing::{error, info};
-
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
@@ -35,21 +36,20 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
-    ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
+    AccountId, ComponentFileSystemNode, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, InitialComponentFilePath, PromiseId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus
 };
 use golem_service_base::model::{Component, GolemError};
 use golem_service_base::model::{
     GetOplogResponse, GolemErrorUnknown, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
 };
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
-
+use golem_api_grpc::proto::golem::worker::LogEvent;
 use crate::service::component::ComponentService;
-
 use super::{
-    AllExecutors, CallWorkerExecutorError, ConnectWorkerStream, HasWorkerExecutorClients,
+    AllExecutors, CallWorkerExecutorError, WorkerStream, HasWorkerExecutorClients,
     RandomExecutor, ResponseMapResult, RoutingLogic, WorkerServiceError,
 };
+use futures::stream::TryStreamExt;
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
@@ -70,7 +70,7 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<ConnectWorkerStream>;
+    ) -> WorkerResult<WorkerStream<LogEvent>>;
 
     async fn delete(
         &self,
@@ -243,6 +243,22 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
+
+    async fn list_directory(
+        &self,
+        worker_id: &WorkerId,
+        path: InitialComponentFilePath,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
+
+    async fn get_file_contents(
+        &self,
+        worker_id: &WorkerId,
+        path: InitialComponentFilePath,
+        metadata: WorkerRequestMetadata,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
 }
 
 pub struct TypedResult {
@@ -350,7 +366,7 @@ where
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<ConnectWorkerStream> {
+    ) -> WorkerResult<WorkerStream<LogEvent>> {
         let worker_id = worker_id.clone();
         let worker_id_err: WorkerId = worker_id.clone();
         let stream = self
@@ -366,7 +382,7 @@ where
                         account_limits: metadata.limits.clone().map(|id| id.into()),
                     }))
                 },
-                |response| Ok(ConnectWorkerStream::new(response.into_inner())),
+                |response| Ok(WorkerStream::new(response.into_inner())),
                 |error| match error {
                     CallWorkerExecutorError::FailedToConnectToPod(status)
                         if status.code() == Code::NotFound =>
@@ -425,9 +441,9 @@ where
     ) -> WorkerResult<Vec<ProtoVal>> {
         let mut result = Vec::new();
         for param in params {
-            result.push(golem_wasm_rpc::protobuf::Val::from(
-                golem_wasm_rpc::Value::try_from(param).map_err(WorkerServiceError::TypeChecker)?,
-            ));
+            let val = golem_wasm_rpc::Value::try_from(param)
+                .map_err(WorkerServiceError::TypeChecker)?;
+            result.push(golem_wasm_rpc::protobuf::Val::from(val));
         }
         Ok(result)
     }
@@ -988,6 +1004,148 @@ where
             WorkerServiceError::InternalCallError,
         )
             .await
+    }
+
+    async fn list_directory(
+        &self,
+        worker_id: &WorkerId,
+        path: InitialComponentFilePath,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
+        let worker_id = worker_id.clone();
+        let path_clone = path.clone();
+        self.call_worker_executor(
+            worker_id.clone(),
+            "list_directory",
+            move |worker_executor_client| {
+                info!("Search oplog");
+                let worker_id = worker_id.clone();
+                Box::pin(
+                    worker_executor_client.list_directory(workerexecutor::v1::ListDirectoryRequest {
+                        worker_id: Some(worker_id.into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        path: path_clone.to_string()
+                    }),
+                )
+            },
+            |response| match response.into_inner() {
+                workerexecutor::v1::ListDirectoryResponse {
+                    result: Some(golem_api_grpc::proto::golem::workerexecutor::v1::list_directory_response::Result::Success(success)),
+                } => {
+                    success.nodes
+                        .into_iter()
+                        .map(|v|
+                            v
+                            .try_into()
+                            .map_err(|_| "Failed to convert node".into())
+                        )
+                        .collect::<Result<Vec<_>, _>>()
+                }
+                workerexecutor::v1::ListDirectoryResponse {
+                    result: Some(workerexecutor::v1::list_directory_response::Result::Failure(err)),
+                } => Err(err.into()),
+                workerexecutor::v1::ListDirectoryResponse {
+                    result: Some(workerexecutor::v1::list_directory_response::Result::NotFound(_)),
+                } => Err(WorkerServiceError::FileNotFound(path.clone()).into()),
+                workerexecutor::v1::ListDirectoryResponse {
+                    result: Some(workerexecutor::v1::list_directory_response::Result::NotADirectory(_)),
+                } => Err(WorkerServiceError::BadFileType(path.clone()).into()),
+                workerexecutor::v1::ListDirectoryResponse {
+                    result: None
+                } => Err("Empty response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+            .await
+    }
+
+    async fn get_file_contents(
+        &self,
+        worker_id: &WorkerId,
+        path: InitialComponentFilePath,
+        metadata: WorkerRequestMetadata,
+        _auth_ctx: &AuthCtx,
+    ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
+        let worker_id = worker_id.clone();
+        let worker_id_err: WorkerId = worker_id.clone();
+        let path_clone = path.clone();
+        let stream = self
+            .call_worker_executor(
+                worker_id.clone(),
+                "read_file",
+                move |worker_executor_client| {
+                    info!("Connect worker");
+                    Box::pin(worker_executor_client.get_file_contents(workerexecutor::v1::GetFileContentsRequest {
+                        worker_id: Some(worker_id.clone().into()),
+                        account_id: metadata.account_id.clone().map(|id| id.into()),
+                        file_path: path_clone.to_string()
+                    }))
+                },
+                |response| Ok(WorkerStream::new(response.into_inner())),
+                |error| match error {
+                    CallWorkerExecutorError::FailedToConnectToPod(status)
+                        if status.code() == Code::NotFound =>
+                    {
+                        WorkerServiceError::WorkerNotFound(worker_id_err.clone())
+                    }
+                    _ => WorkerServiceError::InternalCallError(error),
+                },
+            )
+            .await?;
+
+        let (header, stream) = stream.into_future().await;
+
+        let header = header.ok_or(WorkerServiceError::Internal("Empty stream".to_string()))?;
+
+        match header.map_err(|_| WorkerServiceError::Internal("Stream error".to_string()))?.result {
+            Some(workerexecutor::v1::get_file_contents_response::Result::Success(_)) =>
+                Err(WorkerServiceError::Internal("Protocal violation".to_string())),
+            Some(workerexecutor::v1::get_file_contents_response::Result::Failure(err)) => {
+                let converted =
+                    GolemError::try_from(err)
+                    .map_err(|err| WorkerServiceError::Internal(format!("Failed converting errors {err}")))?;
+                Err(converted.into())
+            }
+            Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
+                match header.result {
+                    Some(workerexecutor::v1::get_file_contents_response_header::Result::Success(_)) => {
+                        Ok(())
+                    },
+                    Some(workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(_)) => {
+                        Err(WorkerServiceError::BadFileType(path).into())
+                    },
+                    Some(workerexecutor::v1::get_file_contents_response_header::Result::NotFound(_)) => {
+                        Err(WorkerServiceError::FileNotFound(path).into())
+                    },
+                    None =>
+                        Err(WorkerServiceError::Internal("Empty response".to_string())),
+                }
+            }
+            None => Err(WorkerServiceError::Internal("Empty response".to_string())),
+        }?;
+
+        let stream = stream
+            .map_err(|_| WorkerServiceError::Internal("Stream error".to_string()))
+            .map(|item| item.and_then(|response| response.result.ok_or(WorkerServiceError::Internal("Malformed chunk".to_string()))))
+            .map_ok(|chunk|
+                match chunk {
+                    workerexecutor::v1::get_file_contents_response::Result::Success(bytes) => Ok(Bytes::from(bytes)),
+                    workerexecutor::v1::get_file_contents_response::Result::Failure(err) => {
+                        let converted =
+                            GolemError::try_from(err)
+                            .map_err(|err| WorkerServiceError::Internal(format!("Failed converting errors {err}")))?
+                            .into();
+                        Err(converted)
+                    },
+                    workerexecutor::v1::get_file_contents_response::Result::Header(_) => {
+                        Err(WorkerServiceError::Internal("Unexpected header".to_string()))
+                    },
+                }
+            )
+            .map(|item| item.and_then(|inner| inner));
+
+        Ok(Box::pin(stream))
     }
 }
 

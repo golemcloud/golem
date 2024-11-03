@@ -12,44 +12,32 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::pin::Pin;
+use futures::Stream;
+use golem_api_grpc::proto::golem::worker::v1::{list_directory_response, GetFileContentsResponse};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use tap::TapFallible;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
-
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response, delete_worker_response, get_oplog_response,
-    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, search_oplog_response,
-    update_worker_response, worker_error, worker_execution_error, CompletePromiseRequest,
-    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
-    InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, SearchOplogSuccessResponse, UnknownError, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
+    complete_promise_response, delete_worker_response, get_oplog_response, get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response, invoke_response, launch_new_worker_response, resume_worker_response, search_oplog_response, update_worker_response, worker_error, worker_execution_error, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse, UnknownError, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError
 };
-use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
+use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, LogEvent, WorkerMetadata};
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
     proto_invocation_context_parent_worker_id_string, proto_target_worker_id_string,
     proto_worker_id_string,
 };
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{ComponentVersion, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId};
+use golem_common::model::{ComponentVersion, InitialComponentFilePath, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::validate_worker_name;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
-use golem_worker_service_base::service::worker::ConnectWorkerStream;
-
+use golem_worker_service_base::service::worker::WorkerStream;
+use futures::StreamExt;
 use crate::empty_worker_metadata;
 use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
@@ -390,7 +378,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
-    type ConnectWorkerStream = golem_worker_service_base::service::worker::ConnectWorkerStream;
+    type ConnectWorkerStream = golem_worker_service_base::service::worker::WorkerStream<LogEvent>;
 
     async fn connect_worker(
         &self,
@@ -523,6 +511,65 @@ impl GrpcWorkerService for WorkerGrpcApi {
         Ok(Response::new(SearchOplogResponse {
             result: Some(response),
         }))
+    }
+
+    async fn list_directory(
+        &self,
+        request: Request<golem_api_grpc::proto::golem::worker::v1::ListDirectoryRequest>,
+    ) -> Result<Response<golem_api_grpc::proto::golem::worker::v1::ListDirectoryResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_file_contents",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .list_directory(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(response) => record.succeed(list_directory_response::Result::Success(response)),
+            Err(error) => record.fail(
+                list_directory_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(golem_api_grpc::proto::golem::worker::v1::ListDirectoryResponse {
+            result: Some(response),
+        }))
+    }
+
+    type GetFileContentsStream = Pin<Box<dyn Stream<Item = Result<GetFileContentsResponse, Status>> + Send + 'static>>;
+
+    async fn get_file_contents(
+        &self,
+        request: Request<golem_api_grpc::proto::golem::worker::v1::GetFileContentsRequest>,
+    ) -> Result<Response<Self::GetFileContentsStream>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_file_contents",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let stream = self
+            .get_file_contents(request)
+            .instrument(record.span.clone())
+            .await;
+
+        let stream = match stream {
+            Ok(stream) => record.succeed(stream),
+            Err(error) => {
+                let res = golem_api_grpc::proto::golem::worker::v1::GetFileContentsResponse {
+                    result: Some(
+                        golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Error(error.clone())
+                    )
+                };
+                let err_stream: Self::GetFileContentsStream = Box::pin(tokio_stream::iter(vec![Ok(res)]));
+                record.fail(err_stream, &WorkerTraceErrorKind(&error))
+            }
+        };
+        Ok(Response::new(stream))
     }
 }
 
@@ -831,7 +878,7 @@ impl WorkerGrpcApi {
     async fn connect_worker(
         &self,
         request: ConnectWorkerRequest,
-    ) -> Result<ConnectWorkerStream, GrpcWorkerError> {
+    ) -> Result<WorkerStream<LogEvent>, GrpcWorkerError> {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let stream = self
             .worker_service
@@ -945,6 +992,64 @@ impl WorkerGrpcApi {
             last_index: result.last_index,
         })
     }
+
+    async fn list_directory(
+        &self,
+        request: golem_api_grpc::proto::golem::worker::v1::ListDirectoryRequest,
+    ) -> Result<golem_api_grpc::proto::golem::worker::v1::ListDirectorySuccessResponse, GrpcWorkerError> {
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let file_path = validate_component_file_path(request.path)?;
+
+        let result = self
+            .worker_service
+            .list_directory(
+                &worker_id,
+                file_path,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        Ok(golem_api_grpc::proto::golem::worker::v1::ListDirectorySuccessResponse {
+            nodes: result
+                .into_iter()
+                .map(|e| e.into())
+                .collect(),
+        })
+    }
+
+    async fn get_file_contents(
+        &self,
+        request: golem_api_grpc::proto::golem::worker::v1::GetFileContentsRequest,
+    ) -> Result<<Self as GrpcWorkerService>::GetFileContentsStream, GrpcWorkerError> {
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let file_path = validate_component_file_path(request.file_path)?;
+        let stream = self
+            .worker_service
+            .get_file_contents(
+                &worker_id,
+                file_path,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?
+            .map(|item|
+                match item {
+                    Ok(data) =>
+                        Ok(golem_api_grpc::proto::golem::worker::v1::GetFileContentsResponse {
+                            result: Some(golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Success(data.into())),
+                        }),
+                    Err(error) =>
+                        Ok(golem_api_grpc::proto::golem::worker::v1::GetFileContentsResponse {
+                            result: Some(golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Error(error.into())),
+                        })
+                }
+
+            )
+            ;
+
+        Ok(Box::pin(stream))
+    }
 }
 
 fn validated_worker_id(
@@ -991,6 +1096,13 @@ fn validate_protobuf_target_worker_id(
         .try_into()
         .map_err(|e| bad_request_error(format!("Invalid target worker id: {e}")))?;
     validated_target_worker_id(worker_id.component_id, worker_id.worker_name)
+}
+
+fn validate_component_file_path(
+    file_path: String,
+) -> Result<InitialComponentFilePath, GrpcWorkerError> {
+    InitialComponentFilePath::from_str(&file_path)
+        .map_err(|_| bad_request_error("Invalid file path"))
 }
 
 fn bad_request_error<T>(error: T) -> GrpcWorkerError
@@ -1104,6 +1216,9 @@ fn error_to_status(error: GrpcWorkerError) -> Status {
                 }
                 worker_execution_error::Error::InitialComponentFileDownloadFailed(_) => {
                     "Initial File Download Failed".to_string()
+                }
+                worker_execution_error::Error::FileSystemError(_) => {
+                    "Failed accessing worker filesystem".to_string()
                 }
             };
             Status::internal(message)

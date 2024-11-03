@@ -81,6 +81,10 @@ impl FileLoader {
         debug!("Hardlinking {} to {}", path.display(), target.display());
         hard_link(path, target).await?;
 
+        let mut perms = tokio::fs::metadata(target).await?.permissions();
+        perms.set_readonly(true);
+        tokio::fs::set_permissions(target, perms).await?;
+
         Ok(())
     }
 

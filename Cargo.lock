@@ -2579,6 +2579,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
+name = "drop-stream"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf3ad5e2193e855cdd101d6d4ad09f0b3fa9aa5bd5169f483b4accd6eef96cfe"
+dependencies = [
+ "futures-core",
+ "pin-project 1.1.7",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4021,9 +4031,11 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytes 1.8.0",
  "cap-std",
  "console-subscriber",
  "figment",
+ "futures",
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-rpc",
@@ -4069,6 +4081,7 @@ dependencies = [
  "chrono",
  "console-subscriber",
  "dashmap",
+ "drop-stream",
  "evicting_cache_map",
  "figment",
  "flume",
@@ -4121,6 +4134,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.0",
  "tokio-stream",
+ "tokio-util",
  "tonic",
  "tonic-health",
  "tonic-reflection",

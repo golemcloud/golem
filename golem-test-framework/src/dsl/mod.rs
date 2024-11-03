@@ -21,15 +21,7 @@ use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
-    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
-    interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, search_oplog_response,
-    update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest,
-    GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest,
-    ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError, WorkerExecutionError,
+    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response, invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response, search_oplog_response, update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError
 };
 use golem_api_grpc::proto::golem::worker::{
     log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
@@ -40,7 +32,7 @@ use golem_common::model::oplog::{
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor, SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatusRecord
+    ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor, SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatusRecord
 };
 use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_wasm_rpc::Value;
@@ -179,6 +171,10 @@ pub trait TestDsl {
         worker_id: &WorkerId,
         query: &str,
     ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
+
+    async fn list_directory(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Vec<ComponentFileSystemNode>>;
+
+    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Bytes>;
 }
 
 #[async_trait]
@@ -897,6 +893,39 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         Ok(result)
     }
+
+    async fn list_directory(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Vec<ComponentFileSystemNode>> {
+        let response = self
+            .worker_service()
+            .list_directory(ListDirectoryRequest {
+                worker_id: Some(worker_id.clone().into()),
+                path: path.to_string(),
+            })
+            .await?;
+
+        match response.result {
+            Some(list_directory_response::Result::Success(response)) => {
+                let converted = response
+                    .nodes
+                    .into_iter()
+                    .map(|node| node.try_into())
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|err| anyhow!("Failed to convert node: {err}"))?;
+                Ok(converted)
+            }
+            _ => Err(anyhow!("Failed to list directory")),
+        }
+    }
+
+    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Bytes> {
+        self
+            .worker_service()
+            .get_file_contents(GetFileContentsRequest {
+                worker_id: Some(worker_id.clone().into()),
+                file_path: path.to_string(),
+            })
+            .await
+    }
 }
 
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
@@ -1079,6 +1108,9 @@ pub fn worker_error_message(error: &Error) -> String {
                 }
                 worker_execution_error::Error::InitialComponentFileDownloadFailed(error) => {
                     format!("Initial File download failed: {}", error.reason)
+                }
+                worker_execution_error::Error::FileSystemError(error) => {
+                    format!("File system error: {}", error.reason)
                 }
             },
         },
@@ -1305,6 +1337,9 @@ pub trait TestDslUnsafe {
         worker_id: &WorkerId,
         query: &str,
     ) -> Vec<PublicOplogEntryWithIndex>;
+
+    async fn list_directory(&self, worker_id: &WorkerId, path: &str) -> Vec<ComponentFileSystemNode>;
+    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> Bytes;
 }
 
 #[async_trait]
@@ -1538,5 +1573,16 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::search_oplog(self, worker_id, query)
             .await
             .expect("Failed to search oplog")
+    }
+
+    async fn list_directory(&self, worker_id: &WorkerId, path: &str) -> Vec<ComponentFileSystemNode> {
+        <T as TestDsl>::list_directory(self, worker_id, path)
+            .await
+            .expect("Failed to list directory")
+    }
+    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> Bytes {
+        <T as TestDsl>::get_file_contents(self, worker_id, path)
+        .await
+        .expect("Failed to get file contents")
     }
 }

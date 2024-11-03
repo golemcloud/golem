@@ -15,7 +15,7 @@
 use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
 };
-use golem_common::model::{AccountId, ComponentId, WorkerId};
+use golem_common::model::{AccountId, ComponentId, InitialComponentFilePath, WorkerId};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{GolemError, VersionedComponentId};
 
@@ -42,6 +42,10 @@ pub enum WorkerServiceError {
     Golem(GolemError),
     #[error(transparent)]
     InternalCallError(CallWorkerExecutorError),
+    #[error("File not found: {0}")]
+    FileNotFound(InitialComponentFilePath),
+    #[error("Bad file type: {0}")]
+    BadFileType(InitialComponentFilePath),
 }
 
 impl SafeDisplay for WorkerServiceError {
@@ -56,6 +60,8 @@ impl SafeDisplay for WorkerServiceError {
             WorkerServiceError::Internal(_) => self.to_string(),
             WorkerServiceError::Golem(inner) => inner.to_safe_string(),
             WorkerServiceError::InternalCallError(inner) => inner.to_safe_string(),
+            WorkerServiceError::FileNotFound(_) => self.to_string(),
+            WorkerServiceError::BadFileType(_) => self.to_string(),
         }
     }
 }
@@ -101,6 +107,12 @@ impl From<WorkerServiceError> for worker_error::Error {
             WorkerServiceError::Golem(worker_execution_error) => {
                 worker_error::Error::InternalError(worker_execution_error.into())
             }
+            WorkerServiceError::FileNotFound(_) => worker_error::Error::NotFound(ErrorBody {
+                error: error.to_safe_string(),
+            }),
+            WorkerServiceError::BadFileType(_) => worker_error::Error::BadRequest(ErrorsBody {
+                errors: vec![error.to_safe_string()],
+            }),
         }
     }
 }

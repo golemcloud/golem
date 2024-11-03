@@ -16,19 +16,19 @@ pub mod public_oplog;
 
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
+use std::pin::Pin;
 use std::sync::Arc;
-
 use bincode::{Decode, Encode};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use serde::{Deserialize, Serialize};
 use wasmtime::Trap;
-
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord,
+    ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord
 };
-
+use futures::Stream;
+use bytes::Bytes;
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::workerctx::WorkerCtx;
 
@@ -340,6 +340,19 @@ pub enum LookupResult {
     Pending,
     Interrupted,
     Complete(Result<TypeAnnotatedValue, GolemError>),
+}
+
+#[derive(Clone, Debug)]
+pub enum ListDirectoryResult {
+    Ok(Vec<ComponentFileSystemNode>),
+    NotFound,
+    NotADirectory,
+}
+
+pub enum ReadFileResult {
+    Ok(Pin<Box<dyn Stream<Item = Result<Bytes, GolemError>> + Send + 'static>>),
+    NotFound,
+    NotAFile,
 }
 
 #[cfg(test)]
