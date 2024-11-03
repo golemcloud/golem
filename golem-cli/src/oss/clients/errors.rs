@@ -17,7 +17,7 @@ use golem_client::api::{
     ApiDefinitionError, ApiDeploymentError, ComponentError, HealthCheckError, WorkerError,
 };
 use golem_client::model::{
-    GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed, GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfComponentFailed, GolemErrorInitialComponentFileDownloadFailed, GolemErrorInterrupted, GolemErrorInvalidRequest, GolemErrorInvalidShardId, GolemErrorPromiseAlreadyCompleted, GolemErrorPromiseDropped, GolemErrorPromiseNotFound, GolemErrorRuntimeError, GolemErrorUnexpectedOplogEntry, GolemErrorUnknown, GolemErrorValueMismatch, GolemErrorWorkerAlreadyExists, GolemErrorWorkerCreationFailed, GolemErrorWorkerNotFound, PromiseId, WorkerId, WorkerServiceErrorsBody
+    GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed, GolemErrorFailedToResumeWorker, GolemErrorFileSystemError, GolemErrorGetLatestVersionOfComponentFailed, GolemErrorInitialComponentFileDownloadFailed, GolemErrorInterrupted, GolemErrorInvalidRequest, GolemErrorInvalidShardId, GolemErrorPromiseAlreadyCompleted, GolemErrorPromiseDropped, GolemErrorPromiseNotFound, GolemErrorRuntimeError, GolemErrorUnexpectedOplogEntry, GolemErrorUnknown, GolemErrorValueMismatch, GolemErrorWorkerAlreadyExists, GolemErrorWorkerCreationFailed, GolemErrorWorkerNotFound, PromiseId, WorkerId, WorkerServiceErrorsBody
 };
 use itertools::Itertools;
 
@@ -189,10 +189,21 @@ fn display_golem_error(error: GolemError) -> String {
         GolemError::ShardingNotReady(_) => "Sharding not ready".to_string(),
         GolemError::InitialComponentFileDownloadFailed(GolemErrorInitialComponentFileDownloadFailed{
             path,
-            reason
+            reason,
+            ..
         }) => {
             format!(
                 "Failed to download initial file {}: {}",
+                path, reason
+            )
+        }
+        GolemError::FileSystemError(GolemErrorFileSystemError{
+            path,
+            reason,
+            ..
+        }) => {
+            format!(
+                "Error working with file {}: {}",
                 path, reason
             )
         }
