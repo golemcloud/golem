@@ -26,6 +26,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
+use std::ops::Deref;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
@@ -59,9 +60,8 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<DbResultSetEntry>(&self_)
-            .map(|e| e.internal.clone())?;
-        let columns = internal.get_column_metadata().await.map_err(Error::Error)?;
+            .get::<DbResultSetEntry>(&self_)?.internal.clone();
+        let columns = internal.deref().get_column_metadata().await.map_err(Error::Error)?;
         let columns = columns.into_iter().map(|c| c.into()).collect();
         Ok(columns)
     }
@@ -75,10 +75,9 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<DbResultSetEntry>(&self_)
-            .map(|e| e.internal.clone())?;
+            .get::<DbResultSetEntry>(&self_)?.internal.clone();
 
-        let rows = internal.get_next().await.map_err(Error::Error)?;
+        let rows = internal.deref().get_next().await.map_err(Error::Error)?;
         let rows = rows.map(|r| r.into_iter().map(|r| r.into()).collect());
         Ok(rows)
     }

@@ -354,7 +354,10 @@ pub mod postgres {
 pub mod types {
     use async_trait::async_trait;
     use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+    use golem_common::tracing::directive::default::info;
+    use tracing::{error, info};
 
     #[async_trait]
     pub trait DbResultSet {
@@ -366,32 +369,36 @@ pub mod types {
     #[derive(Clone, Debug)]
     pub struct SimpleDbResultSet {
         column_metadata: Vec<DbColumnTypeMeta>,
-        rows: Option<Vec<DbRow>>,
+        rows: Arc<Mutex<Option<Vec<DbRow>>>>,
     }
 
     impl SimpleDbResultSet {
         pub fn new(column_metadata: Vec<DbColumnTypeMeta>, rows: Option<Vec<DbRow>>) -> Self {
             Self {
                 column_metadata,
-                rows,
+                rows: Arc::new(Mutex::new(rows)),
             }
         }
+
         pub fn empty() -> Self {
-            Self {
-                column_metadata: vec![],
-                rows: None,
-            }
+            Self::new(vec![], None)
         }
     }
 
     #[async_trait]
     impl DbResultSet for SimpleDbResultSet {
         async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String> {
+            info!("get_column_metadata");
             Ok(self.column_metadata.clone())
         }
 
         async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
-            Ok(self.rows.clone())
+            let rows = self.rows.lock().unwrap().clone();
+            info!("get_next {}", rows.is_some());
+            if rows.is_some() {
+              *self.rows.lock().unwrap() = None;
+            }
+            Ok(rows)
         }
     }
 

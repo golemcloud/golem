@@ -120,7 +120,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(result) => {
-                let entry = DbResultSetEntry::new(RdbmsType::Postgres, result);
+                let entry = DbResultSetEntry::new(RdbmsType::Postgres, result.clone());
                 let db_result_set = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(db_result_set))
             }
