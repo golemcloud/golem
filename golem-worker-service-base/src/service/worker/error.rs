@@ -15,7 +15,7 @@
 use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, UnknownError, WorkerError as GrpcWorkerError,
 };
-use golem_common::model::{AccountId, ComponentId, InitialComponentFilePath, WorkerId};
+use golem_common::model::{AccountId, ComponentId, ComponentFilePath, WorkerId};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{GolemError, VersionedComponentId};
 
@@ -43,9 +43,9 @@ pub enum WorkerServiceError {
     #[error(transparent)]
     InternalCallError(CallWorkerExecutorError),
     #[error("File not found: {0}")]
-    FileNotFound(InitialComponentFilePath),
+    FileNotFound(ComponentFilePath),
     #[error("Bad file type: {0}")]
-    BadFileType(InitialComponentFilePath),
+    BadFileType(ComponentFilePath),
 }
 
 impl SafeDisplay for WorkerServiceError {

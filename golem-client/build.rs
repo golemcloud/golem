@@ -50,7 +50,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "ComponentMetadata",
                 "golem_common::model::component_metadata::ComponentMetadata",
             ),
-            ("InitialComponentFilePathAndPermissionsList", "golem_common::model::InitialComponentFilePathAndPermissionsList"),
+            ("ComponentFilePathAndPermissionsList", "golem_common::model::ComponentFilePathAndPermissionsList"),
             ("ComponentType", "golem_common::model::ComponentType"),
             (
                 "OplogCursor",
@@ -64,6 +64,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("WorkerFilter", "golem_common::model::WorkerFilter"),
             ("WorkerId", "golem_common::model::WorkerId"),
+            ("WorkerBindingType", "golem_common::model::WorkerBindingType"),
             ("WorkerStatus", "golem_common::model::WorkerStatus"),
             (
                 "PublicOplogEntry",

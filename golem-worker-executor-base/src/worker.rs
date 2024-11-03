@@ -44,7 +44,7 @@ use golem_common::model::oplog::{
     WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::{exports, ComponentType, InitialComponentFilePath};
+use golem_common::model::{exports, ComponentType, ComponentFilePath};
 use golem_common::model::{
     ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
     Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
@@ -769,7 +769,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn list_directory(
         &self,
-        path: InitialComponentFilePath,
+        path: ComponentFilePath,
     ) -> Result<ListDirectoryResult, GolemError> {
         let (sender, receiver) = oneshot::channel();
 
@@ -798,7 +798,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn read_file(
         &self,
-        path: InitialComponentFilePath,
+        path: ComponentFilePath,
     ) -> Result<ReadFileResult, GolemError> {
         let (sender, receiver) = oneshot::channel();
 
@@ -2388,12 +2388,12 @@ pub enum QueuedWorkerInvocation {
     /// All other cases here are used for concurrency control and should not be exposed to the user.
     External(TimestampedWorkerInvocation),
     ListDirectory {
-        path: InitialComponentFilePath,
+        path: ComponentFilePath,
         sender: oneshot::Sender<Result<ListDirectoryResult, GolemError>>,
     },
     // The worker will suspend execution until the stream is dropped, so consume in a timely manner.
     ReadFile {
-        path: InitialComponentFilePath,
+        path: ComponentFilePath,
         sender: oneshot::Sender<Result<ReadFileResult, GolemError>>,
     },
 }

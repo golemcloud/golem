@@ -307,9 +307,10 @@ message SearchOplogSuccessResponse {
 }
 
 message ListDirectoryRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.TargetWorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
-  string path = 3;
+  golem.common.ResourceLimits account_limits = 3;
+  string path = 4;
 }
 
 message ListDirectoryResponse {
@@ -326,9 +327,10 @@ message ListDirectorySuccessResponse {
 }
 
 message GetFileContentsRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.TargetWorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
-  string file_path = 3;
+  golem.common.ResourceLimits account_limits = 3;
+  string file_path = 4;
 }
 
 message GetFileContentsResponse {

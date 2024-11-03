@@ -153,6 +153,7 @@ fn golem_def_with_response(
                 worker_name: Some("\"foo\"".to_string()),
                 idempotency_key: None,
                 response,
+                binding_type: None,
             },
         }],
     }
@@ -280,6 +281,7 @@ pub fn to_definition(
                             types: HashMap::new(),
                         }),
                         idempotency_key_input: None,
+                        binding_type: None,
                     },
                 }
             })

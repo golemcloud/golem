@@ -18,7 +18,7 @@ use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use futures::future::try_join_all;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::{ComponentId, ComponentType, InitialComponentFile, InitialComponentFileKey, InitialComponentFilePath, InitialComponentFilePermissions};
+use golem_common::model::{ComponentId, ComponentType, InitialComponentFile, InitialComponentFileKey, ComponentFilePath, ComponentFilePermissions};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, Row};
@@ -177,9 +177,9 @@ impl TryFrom<FileRecord> for InitialComponentFile {
 
     fn try_from(value: FileRecord) -> Result<Self, Self::Error> {
         Ok(InitialComponentFile {
-            path: InitialComponentFilePath::from_str(value.file_path.as_str())?,
+            path: ComponentFilePath::from_str(value.file_path.as_str())?,
             key: InitialComponentFileKey(value.file_key),
-            permissions: InitialComponentFilePermissions::from_compact_str(&value.file_permissions)?,
+            permissions: ComponentFilePermissions::from_compact_str(&value.file_permissions)?,
         })
     }
 }

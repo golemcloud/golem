@@ -9,7 +9,8 @@ use crate::api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
-use crate::worker_binding::CompiledGolemWorkerBinding;
+use crate::worker_binding::{CompiledGolemWorkerBinding};
+use golem_common::model::WorkerBindingType;
 use rib::{Expr, RibInputTypeInfo};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -128,6 +129,8 @@ pub struct GolemWorkerBinding {
     pub worker_name: Option<String>,
     pub idempotency_key: Option<String>,
     pub response: String,
+    #[oai(rename = "bindingType")]
+    pub worker_binding_type: Option<WorkerBindingType>,
 }
 
 // GolemWorkerBindingWithTypeInfo is a subset of CompiledGolemWorkerBinding
@@ -141,6 +144,8 @@ pub struct GolemWorkerBindingWithTypeInfo {
     pub worker_name: Option<String>,
     pub idempotency_key: Option<String>,
     pub response: String,
+    #[oai(rename = "bindingType")]
+    pub worker_binding_type: Option<WorkerBindingType>,
     pub response_mapping_input: Option<RibInputTypeInfo>,
     pub worker_name_input: Option<RibInputTypeInfo>,
     pub idempotency_key_input: Option<RibInputTypeInfo>,
@@ -163,6 +168,7 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
                 .response_compiled
                 .response_rib_expr
                 .to_string(),
+            worker_binding_type: Some(worker_binding.worker_binding_type),
             response_mapping_input: Some(worker_binding.response_compiled.rib_input),
             worker_name_input: worker_binding
                 .worker_name_compiled
@@ -289,6 +295,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             worker_name: worker_id,
             idempotency_key,
             response,
+            worker_binding_type: Some(value.worker_binding_type)
         })
     }
 }
@@ -318,6 +325,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             worker_name,
             idempotency_key,
             response,
+            worker_binding_type: self.worker_binding_type.unwrap_or_default(),
         })
     }
 }
@@ -506,11 +514,14 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
 
         let idempotency_key = value.idempotency_key.map(|key| key.into());
 
+        let r#type: grpc_apidefinition::WorkerBindingType = value.worker_binding_type.into();
+
         let result = grpc_apidefinition::WorkerBinding {
             component: Some(value.component_id.into()),
             worker_name,
             idempotency_key,
             response,
+            r#type: r#type.into(),
         };
 
         Ok(result)
@@ -536,11 +547,16 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             None
         };
 
+        let r#type =
+            grpc_apidefinition::WorkerBindingType::try_from(value.r#type)
+                .map_err(|e| format!("Failed to convert WorkerBindingType: {}", e))?;
+
         let result = crate::worker_binding::GolemWorkerBinding {
             component_id,
             worker_name,
             idempotency_key,
             response,
+            worker_binding_type: r#type.into(),
         };
 
         Ok(result)

@@ -3,7 +3,7 @@ syntax = "proto3";
 package golem.component;
 
 import "golem/common/project_id.proto";
-import "golem/component/initial_component_file.proto";
+import "golem/component/component_files.proto";
 import "golem/component/component_metadata.proto";
 import "golem/component/component_type.proto";
 import "golem/component/versioned_component_id.proto";

@@ -18,7 +18,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, InitialComponentFileKey, InitialComponentFilePath, InitialComponentFilePermissions, PromiseId, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerId, WorkerStatus
+    ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ComponentFilePermissions, PromiseId, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerId, WorkerStatus
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -1103,7 +1103,7 @@ pub struct FlatComponentFileSystemNode {
     pub name: String,
     pub last_modified: u64,
     pub kind: FlatComponentFileSystemNodeKind,
-    pub permissions: Option<InitialComponentFilePermissions>, // only for files
+    pub permissions: Option<ComponentFilePermissions>, // only for files
     pub size: Option<u64>, // only for files
 }
 
@@ -1799,25 +1799,15 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             None => None,
         };
 
+        let component_type = if value.component_type.is_some() {
+            Some(value.component_type().into())
+        } else {
+            None
+        };
+
         let files = value.files
-            .iter()
-            .map(|f| {
-                let permissions = match f.permissions.try_into() {
-                    Ok(golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadOnly) =>
-                        InitialComponentFilePermissions::ReadOnly,
-                    Ok(golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadWrite) =>
-                        InitialComponentFilePermissions::ReadWrite,
-                    Err(_) => Err("Invalid file permissions".to_string())?
-                };
-
-                let path = InitialComponentFilePath::from_str(f.path.as_str())?;
-
-                Ok::<InitialComponentFile, String>(InitialComponentFile {
-                    key: InitialComponentFileKey(f.key.clone()),
-                    path,
-                    permissions,
-                })
-            })
+            .into_iter()
+            .map(|f| f.try_into())
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
@@ -1834,11 +1824,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
                 .ok_or("Missing metadata")?
                 .try_into()?,
             created_at,
-            component_type: if value.component_type.is_some() {
-                Some(value.component_type().into())
-            } else {
-                None
-            },
+            component_type,
             files
         })
     }

@@ -172,9 +172,9 @@ pub trait TestDsl {
         query: &str,
     ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
 
-    async fn list_directory(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Vec<ComponentFileSystemNode>>;
+    async fn list_directory(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> crate::Result<Vec<ComponentFileSystemNode>>;
 
-    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Bytes>;
+    async fn get_file_contents(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> crate::Result<Bytes>;
 }
 
 #[async_trait]
@@ -894,11 +894,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         Ok(result)
     }
 
-    async fn list_directory(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Vec<ComponentFileSystemNode>> {
+    async fn list_directory(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> crate::Result<Vec<ComponentFileSystemNode>> {
+        let target_worker_id: TargetWorkerId = worker_id.into();
+
         let response = self
             .worker_service()
             .list_directory(ListDirectoryRequest {
-                worker_id: Some(worker_id.clone().into()),
+                worker_id: Some(target_worker_id.into()),
                 path: path.to_string(),
             })
             .await?;
@@ -917,11 +919,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         }
     }
 
-    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> crate::Result<Bytes> {
+    async fn get_file_contents(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> crate::Result<Bytes> {
+        let target_worker_id: TargetWorkerId = worker_id.into();
         self
             .worker_service()
             .get_file_contents(GetFileContentsRequest {
-                worker_id: Some(worker_id.clone().into()),
+                worker_id: Some(target_worker_id.into()),
                 file_path: path.to_string(),
             })
             .await
@@ -1338,8 +1341,8 @@ pub trait TestDslUnsafe {
         query: &str,
     ) -> Vec<PublicOplogEntryWithIndex>;
 
-    async fn list_directory(&self, worker_id: &WorkerId, path: &str) -> Vec<ComponentFileSystemNode>;
-    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> Bytes;
+    async fn list_directory(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> Vec<ComponentFileSystemNode>;
+    async fn get_file_contents(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> Bytes;
 }
 
 #[async_trait]
@@ -1575,12 +1578,12 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to search oplog")
     }
 
-    async fn list_directory(&self, worker_id: &WorkerId, path: &str) -> Vec<ComponentFileSystemNode> {
+    async fn list_directory(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> Vec<ComponentFileSystemNode> {
         <T as TestDsl>::list_directory(self, worker_id, path)
             .await
             .expect("Failed to list directory")
     }
-    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> Bytes {
+    async fn get_file_contents(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> Bytes {
         <T as TestDsl>::get_file_contents(self, worker_id, path)
         .await
         .expect("Failed to get file contents")

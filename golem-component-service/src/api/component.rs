@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use futures_util::TryStreamExt;
-use golem_common::model::{ComponentId, ComponentType, InitialComponentFilePathAndPermissionsList};
+use golem_common::model::{ComponentId, ComponentType, ComponentFilePathAndPermissionsList};
 use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
 use golem_component_service_base::service::component::{
     ComponentError as ComponentServiceError, ComponentService,
@@ -69,7 +69,7 @@ pub struct UploadPayload {
     name: ComponentName,
     component_type: Option<ComponentType>,
     component: Upload,
-    files_permissions: Option<InitialComponentFilePathAndPermissionsList>,
+    files_permissions: Option<ComponentFilePathAndPermissionsList>,
     files: Option<Upload>,
 }
 
@@ -78,7 +78,7 @@ pub struct UploadPayload {
 pub struct UpdatePayload {
     component_type: Option<ComponentType>,
     component: Upload,
-    files_permissions: Option<InitialComponentFilePathAndPermissionsList>,
+    files_permissions: Option<ComponentFilePathAndPermissionsList>,
     files: Option<Upload>,
 }
 

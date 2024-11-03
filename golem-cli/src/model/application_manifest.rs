@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::{ComponentType, InitialComponentFilePath, InitialComponentFilePathAndPermissions, InitialComponentFilePermissions};
+use golem_common::model::{ComponentType, ComponentFilePath, ComponentFilePathAndPermissions, ComponentFilePermissions};
 use golem_wasm_rpc_stubgen::model::oam;
 use golem_wasm_rpc_stubgen::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
 use golem_wasm_rpc_stubgen::model::validation::{ValidatedResult, ValidationBuilder};
@@ -505,9 +505,9 @@ impl ApplicationManifest {
 
         Some(InitialComponentFile {
             source_path,
-            target: InitialComponentFilePathAndPermissions {
+            target: ComponentFilePathAndPermissions {
                 path: file.target_path,
-                permissions: file.permissions.unwrap_or(InitialComponentFilePermissions::ReadOnly),
+                permissions: file.permissions.unwrap_or(ComponentFilePermissions::ReadOnly),
             }
         })
     }
@@ -790,7 +790,7 @@ pub struct BuildStep {
 #[derive(Clone, Debug)]
 pub struct InitialComponentFile {
     pub source_path: DownloadableFile,
-    pub target: InitialComponentFilePathAndPermissions,
+    pub target: ComponentFilePathAndPermissions,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -816,8 +816,8 @@ struct RawComponentFile {
     pub source_path: String,
 
     #[serde(rename = "targetPath")]
-    pub target_path: InitialComponentFilePath,
-    pub permissions: Option<InitialComponentFilePermissions>,
+    pub target_path: ComponentFilePath,
+    pub permissions: Option<ComponentFilePermissions>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

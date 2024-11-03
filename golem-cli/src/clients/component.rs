@@ -16,7 +16,7 @@
 use crate::model::component::Component;
 use crate::model::{ComponentName, GolemError, PathBufOrStdin};
 use async_trait::async_trait;
-use golem_client::model::{ComponentType, InitialComponentFilePathAndPermissionsList};
+use golem_client::model::{ComponentType, ComponentFilePathAndPermissionsList};
 use golem_common::uri::oss::urn::ComponentUrn;
 use std::path::Path;
 
@@ -45,7 +45,7 @@ pub trait ComponentClient {
         project: &Option<Self::ProjectContext>,
         component_type: ComponentType,
         files_archive: Option<&Path>,
-        files_permissions: Option<&InitialComponentFilePathAndPermissionsList>
+        files_permissions: Option<&ComponentFilePathAndPermissionsList>
     ) -> Result<Component, GolemError>;
     async fn update(
         &self,
@@ -53,6 +53,6 @@ pub trait ComponentClient {
         file: PathBufOrStdin,
         component_type: Option<ComponentType>,
         files_archive: Option<&Path>,
-        files_permissions: Option<&InitialComponentFilePathAndPermissionsList>
+        files_permissions: Option<&ComponentFilePathAndPermissionsList>
     ) -> Result<Component, GolemError>;
 }

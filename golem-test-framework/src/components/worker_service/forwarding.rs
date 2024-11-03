@@ -716,6 +716,10 @@ impl WorkerService for ForwardingWorkerService {
                     }
                     .into(),
                 ),
+                account_limits: Some(ResourceLimits {
+                    available_fuel: i64::MAX,
+                    max_memory_per_worker: i64::MAX,
+                }),
                 path: request.path,
             })
             .await?
@@ -764,6 +768,10 @@ impl WorkerService for ForwardingWorkerService {
                         }
                         .into(),
                     ),
+                    account_limits: Some(ResourceLimits {
+                        available_fuel: i64::MAX,
+                        max_memory_per_worker: i64::MAX,
+                    }),
                     file_path: request.file_path,
                 }
             )

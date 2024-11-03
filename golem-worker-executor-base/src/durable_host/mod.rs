@@ -50,7 +50,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey, InitialComponentFile, InitialComponentFilePath, InitialComponentFilePermissions, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord, ComponentFileSystemNodeDetails
+    AccountId, ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey, InitialComponentFile, ComponentFilePath, ComponentFilePermissions, OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord, ComponentFileSystemNodeDetails
 };
 use futures_util::TryStreamExt;
 use futures_util::TryFutureExt;
@@ -1420,7 +1420,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
 #[async_trait]
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWorkerCtx<Ctx> {
-    async fn list_directory(&self, path: &InitialComponentFilePath) -> Result<ListDirectoryResult, GolemError> {
+    async fn list_directory(&self, path: &ComponentFilePath) -> Result<ListDirectoryResult, GolemError> {
         let root = self._temp_dir.path();
         let target = root.join(&PathBuf::from(path.to_rel_string()));
 
@@ -1472,9 +1472,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
                     .contains(&entry.path());
 
                 let permissions = if is_readonly_by_host || is_readonly_by_us {
-                    InitialComponentFilePermissions::ReadOnly
+                    ComponentFilePermissions::ReadOnly
                 } else {
-                    InitialComponentFilePermissions::ReadWrite
+                    ComponentFilePermissions::ReadWrite
                 };
 
                 result.push(ComponentFileSystemNode {
@@ -1496,7 +1496,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
         Ok(ListDirectoryResult::Ok(result))
     }
 
-    async fn read_file(&self, path: &InitialComponentFilePath) -> Result<ReadFileResult, GolemError> {
+    async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
         let root = self._temp_dir.path();
         let target = root.join(&PathBuf::from(path.to_rel_string()));
 
@@ -2139,12 +2139,12 @@ async fn prepare_filesystem(
         let path = root.join(&PathBuf::from(file.path.to_rel_string()));
 
         match file.permissions {
-            InitialComponentFilePermissions::ReadOnly => {
+            ComponentFilePermissions::ReadOnly => {
                 debug!("Loading read-only file {}", path.display());
                 file_loader.get_read_only_to(&file.key, &path).await?;
                 read_only_files.insert(path);
             }
-            InitialComponentFilePermissions::ReadWrite => {
+            ComponentFilePermissions::ReadWrite => {
                 debug!("Loading read-write file {}", path.display());
                 file_loader.get_read_write_to(&file.key, &path).await?;
             }

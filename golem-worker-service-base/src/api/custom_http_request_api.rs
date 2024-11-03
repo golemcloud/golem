@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::api_definition::http::CompiledHttpApiDefinition;
+use crate::worker_binding::fileserver_binding_handler::FileServerBindingHandler;
 use crate::worker_service_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
 use futures_util::FutureExt;
 use hyper::header::HOST;
@@ -22,6 +23,7 @@ pub struct CustomHttpRequestApi {
     pub worker_service_rib_interpreter: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
     pub api_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
+    pub fileserver_binding_handler: Arc<dyn FileServerBindingHandler + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
@@ -30,6 +32,7 @@ impl CustomHttpRequestApi {
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send,
         >,
+        fileserver_binding_handler: Arc<dyn FileServerBindingHandler + Sync + Send>,
     ) -> Self {
         let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             worker_request_executor_service.clone(),
@@ -38,6 +41,7 @@ impl CustomHttpRequestApi {
         Self {
             worker_service_rib_interpreter: evaluator,
             api_definition_lookup_service,
+            fileserver_binding_handler,
         }
     }
 
@@ -104,7 +108,7 @@ impl CustomHttpRequestApi {
         {
             Ok(resolved_worker_binding) => {
                 resolved_worker_binding
-                    .interpret_response_mapping(&self.worker_service_rib_interpreter)
+                    .interpret_response_mapping(&self.worker_service_rib_interpreter, &self.fileserver_binding_handler)
                     .await
             }
 

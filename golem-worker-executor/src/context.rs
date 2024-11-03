@@ -52,7 +52,7 @@ use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
     ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx
 };
-use golem_common::model::InitialComponentFilePath;
+use golem_common::model::ComponentFilePath;
 
 use crate::services::AdditionalDeps;
 
@@ -410,11 +410,11 @@ impl ResourceStore for Context {
 
 #[async_trait]
 impl FileSystemReading for Context {
-    async fn list_directory(&self, path: &InitialComponentFilePath) -> Result<ListDirectoryResult, GolemError> {
+    async fn list_directory(&self, path: &ComponentFilePath) -> Result<ListDirectoryResult, GolemError> {
         self.durable_ctx.list_directory(path).await
     }
 
-    async fn read_file(&self, path: &InitialComponentFilePath) -> Result<ReadFileResult, GolemError> {
+    async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
         self.durable_ctx.read_file(path).await
     }
 }

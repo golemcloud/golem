@@ -112,7 +112,7 @@ mod tests {
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::path::Path;
     use crate::worker_binding::{
-        RequestDetails, RequestToWorkerBindingResolver, RibInputTypeMismatch,
+        RequestDetails, RequestToWorkerBindingResolver, RibInputTypeMismatch
     };
     use crate::worker_bridge_execution::to_response::ToResponse;
     use crate::worker_bridge_execution::{
@@ -137,6 +137,8 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use crate::worker_binding::fileserver_binding_handler::{FileServerBindingHandler, FileServerBindingResult};
+    use crate::worker_binding::WorkerDetail;
 
     struct TestWorkerRequestExecutor {}
 
@@ -151,6 +153,19 @@ mod tests {
             let response_dummy = create_tuple(vec![response]);
 
             Ok(WorkerResponse::new(response_dummy))
+        }
+    }
+
+    struct TestFileServerBindingHandler {}
+
+    #[async_trait]
+    impl FileServerBindingHandler for TestFileServerBindingHandler {
+        async fn handle_file_server_binding(
+            &self,
+            worker_detail: &WorkerDetail,
+            original_result: RibResult,
+        ) -> FileServerBindingResult {
+            unimplemented!()
         }
     }
 
@@ -237,6 +252,10 @@ mod tests {
         ))
     }
 
+    fn get_test_fileserver_binding_handler() -> Arc<dyn FileServerBindingHandler + Sync + Send> {
+        Arc::new(TestFileServerBindingHandler {})
+    }
+
     #[derive(Debug)]
     struct TestResponse {
         worker_name: String,
@@ -244,20 +263,26 @@ mod tests {
         function_params: Value,
     }
 
+    impl ToResponse<TestResponse> for FileServerBindingResult {
+        fn to_response(self, _request_details: &RequestDetails) -> TestResponse {
+            panic!("FileServerBindingResult")
+        }
+    }
+
     impl ToResponse<TestResponse> for EvaluationError {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+        fn to_response(self, _request_details: &RequestDetails) -> TestResponse {
             panic!("{}", self.to_string())
         }
     }
 
     impl ToResponse<TestResponse> for RibInputTypeMismatch {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+        fn to_response(self, _request_details: &RequestDetails) -> TestResponse {
             panic!("{}", self.to_string())
         }
     }
 
     impl ToResponse<TestResponse> for RibResult {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+        fn to_response(self, _request_details: &RequestDetails) -> TestResponse {
             let function_name = self
                 .get_val()
                 .map(|x| x.get(&Path::from_key("function_name")).unwrap())
@@ -338,6 +363,7 @@ mod tests {
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
+        let fileserver_binding_handler = get_test_fileserver_binding_handler();
         let compiled =
             CompiledHttpApiDefinition::from_http_api_definition(api_specification, &get_metadata())
                 .unwrap();
@@ -347,7 +373,7 @@ mod tests {
             .await
             .unwrap();
 
-        resolved_route.interpret_response_mapping(&evaluator).await
+        resolved_route.interpret_response_mapping(&evaluator, &fileserver_binding_handler).await
     }
 
     #[test]

@@ -1,7 +1,7 @@
-use crate::empty_worker_metadata;
+use golem_worker_service_base::empty_worker_metadata;
 use crate::service::{component::ComponentService, worker::WorkerService};
 use golem_common::model::{
-    ComponentId, IdempotencyKey, InitialComponentFilePath, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId
+    ComponentId, IdempotencyKey, ComponentFilePath, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -706,7 +706,7 @@ impl WorkerApi {
         worker_name: Path<String>,
         file_name: Path<String>,
     ) -> Result<Json<GetFilesResponse>> {
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = make_target_worker_id(component_id.0, Some(worker_name.0))?;
         let path = make_component_file_path(file_name.0)?;
         let record = recorded_http_api_request!("get_file", worker_id = worker_id.to_string());
 
@@ -737,7 +737,7 @@ impl WorkerApi {
         worker_name: Path<String>,
         file_name: Path<String>,
     ) -> Result<Binary<Body>> {
-        let worker_id = make_worker_id(component_id.0, worker_name.0)?;
+        let worker_id = make_target_worker_id(component_id.0, Some(worker_name.0))?;
         let path = make_component_file_path(file_name.0)?;
         let record = recorded_http_api_request!("get_files", worker_id = worker_id.to_string());
 
@@ -796,8 +796,8 @@ fn make_target_worker_id(
 
 fn make_component_file_path(
     name: String
-) -> std::result::Result<InitialComponentFilePath, WorkerApiBaseError> {
-    InitialComponentFilePath::from_rel_str(&name).map_err(|error| {
+) -> std::result::Result<ComponentFilePath, WorkerApiBaseError> {
+    ComponentFilePath::from_rel_str(&name).map_err(|error| {
         WorkerApiBaseError::BadRequest(Json(ErrorsBody {
             errors: vec![format!("Invalid file name: {error}")],
         }))

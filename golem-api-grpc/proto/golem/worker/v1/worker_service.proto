@@ -265,7 +265,7 @@ message SearchOplogSuccessResponse {
 }
 
 message ListDirectoryRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.TargetWorkerId worker_id = 1;
   string path = 2;
 }
 
@@ -281,7 +281,7 @@ message ListDirectorySuccessResponse {
 }
 
 message GetFileContentsRequest {
-  golem.worker.WorkerId worker_id = 1;
+  golem.worker.TargetWorkerId worker_id = 1;
   string file_path = 2;
 }
 

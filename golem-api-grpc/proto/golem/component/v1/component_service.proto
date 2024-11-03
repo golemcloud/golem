@@ -9,7 +9,7 @@ import public "golem/component/component_type.proto";
 import public "golem/component/v1/component_error.proto";
 import public "golem/component/component_id.proto";
 import public "golem/component/component_constraints.proto";
-import public "golem/component/initial_component_file.proto";
+import public "golem/component/component_files.proto";
 
 service ComponentService {
   rpc GetComponents (GetComponentsRequest) returns (GetComponentsResponse);

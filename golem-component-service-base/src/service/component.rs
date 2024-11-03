@@ -32,7 +32,7 @@ use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::{ComponentId, ComponentType};
-use golem_common::model::{InitialComponentFile, InitialComponentFilePath, InitialComponentFilePermissions};
+use golem_common::model::{InitialComponentFile, ComponentFilePath, ComponentFilePermissions};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
@@ -919,7 +919,7 @@ impl ComponentServiceDefault {
         files_properties: InitialComponentFilesArchiveAndPermissions,
     ) -> Result<Vec<InitialComponentFile>, ComponentError> {
         let files_file = files_properties.archive;
-        let path_permissions: HashMap<InitialComponentFilePath, InitialComponentFilePermissions> = HashMap::from_iter(
+        let path_permissions: HashMap<ComponentFilePath, ComponentFilePermissions> = HashMap::from_iter(
             files_properties.permissions.values.iter().map(|f| (f.path.clone(), f.permissions)),
         );
 
@@ -955,7 +955,7 @@ impl ComponentServiceDefault {
                 })?;
 
                 // if permissions are not provided, default to read-only
-                let permissions = path_permissions.get(&path).cloned().unwrap_or(InitialComponentFilePermissions::ReadOnly);
+                let permissions = path_permissions.get(&path).cloned().unwrap_or(ComponentFilePermissions::ReadOnly);
 
                 (path, permissions, Bytes::from(buffer))
             };
@@ -1016,7 +1016,7 @@ impl ComponentServiceDefault {
     }
 }
 
-fn initial_component_file_path_from_zip_entry(entry: &ZipEntry) -> Result<InitialComponentFilePath, ComponentError> {
+fn initial_component_file_path_from_zip_entry(entry: &ZipEntry) -> Result<ComponentFilePath, ComponentError> {
     let file_path = entry.filename().as_str().map_err(|e| {
         ComponentError::malformed_component_archive_from_message(format!("Failed to convert filename to string: {}", e))
     })?;
@@ -1029,7 +1029,7 @@ fn initial_component_file_path_from_zip_entry(entry: &ZipEntry) -> Result<Initia
         .collect::<Vec<_>>()
         .join("/");
 
-    InitialComponentFilePath::from_str(&format!("/{file_path}")).map_err(|e| {
+    ComponentFilePath::from_str(&format!("/{file_path}")).map_err(|e| {
         ComponentError::malformed_component_archive_from_message(format!("Failed to convert path to InitialComponentFilePath: {}", e))
     })
 }

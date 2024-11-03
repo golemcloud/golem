@@ -2,6 +2,12 @@ pub mod component;
 pub mod worker;
 pub mod worker_request_executor;
 
+use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::sqlite::SqlitePool;
+use golem_worker_service_base::worker_binding::fileserver_binding_handler::DefaultFileServerBindingHandler;
+use golem_worker_service_base::worker_binding::fileserver_binding_handler::FileServerBindingHandler;
 use worker_request_executor::UnauthorisedWorkerRequestExecutor;
 
 use golem_worker_service_base::api_definition::http::{
@@ -58,6 +64,7 @@ pub struct Services {
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
+    pub fileserver_binding_handler: Arc<dyn FileServerBindingHandler + Sync + Send>,
 }
 
 impl Services {
@@ -139,6 +146,44 @@ impl Services {
             }
         };
 
+
+        let blob_storage: Arc<dyn BlobStorage + Sync + Send> = match &config.blob_storage {
+            BlobStorageConfig::S3(config) => {
+                Arc::new(golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await)
+            }
+            BlobStorageConfig::LocalFileSystem(config) => {
+                Arc::new(
+                    golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                        .await?
+                )
+            }
+            BlobStorageConfig::Sqlite(sqlite) => {
+                let pool = SqlitePool::configured(&sqlite)
+                    .await
+                    .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
+                Arc::new(
+                    golem_service_base::storage::blob::sqlite::SqliteBlobStorage::new(pool.clone())
+                        .await?,
+                )
+            }
+            BlobStorageConfig::InMemory => {
+                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
+            }
+            _ => {
+                return Err("Unsupported blob storage configuration".to_string());
+            }
+        };
+
+        let initial_component_files_service: Arc<InitialComponentFilesService> =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let fileserver_binding_handler: Arc<dyn FileServerBindingHandler + Sync + Send> =
+            Arc::new(DefaultFileServerBindingHandler::new(
+                component_service.clone(),
+                initial_component_files_service.clone(),
+                worker_service.clone(),
+            ));
+
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
@@ -171,6 +216,7 @@ impl Services {
             worker_to_http_service,
             component_service,
             api_definition_validator_service,
+            fileserver_binding_handler
         })
     }
 }

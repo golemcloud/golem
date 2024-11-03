@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package golem.component;
+
+enum ComponentFilePermissions {
+  READ_ONLY = 0;
+  READ_WRITE = 1;
+}
+
+message InitialComponentFile {
+  string key = 1;
+  string path = 2;
+  ComponentFilePermissions permissions = 3;
+}

@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use crate::empty_worker_metadata;
+use golem_worker_service_base::empty_worker_metadata;
 use crate::service::worker::WorkerService;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;

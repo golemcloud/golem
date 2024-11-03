@@ -2031,7 +2031,7 @@ paths:
                   type: string
                   format: binary
                 filesPermissions:
-                  $ref: '#/components/schemas/InitialComponentFilePathAndPermissionsList'
+                  $ref: '#/components/schemas/ComponentFilePathAndPermissionsList'
                 files:
                   type: string
                   format: binary
@@ -2186,7 +2186,7 @@ paths:
                   type: string
                   format: binary
                 filesPermissions:
-                  $ref: '#/components/schemas/InitialComponentFilePathAndPermissionsList'
+                  $ref: '#/components/schemas/ComponentFilePathAndPermissionsList'
                 files:
                   type: string
                   format: binary
@@ -2896,6 +2896,11 @@ components:
       required:
       - oplogIdx
       - data
+    ComponentFilePermissions:
+      type: string
+      enum:
+      - ReadOnly
+      - ReadWrite
     CreateParameters:
       type: object
       properties:
@@ -3093,7 +3098,7 @@ components:
         kind:
           $ref: '#/components/schemas/FlatComponentFileSystemNodeKind'
         permissions:
-          $ref: '#/components/schemas/InitialComponentFilePermissions'
+          $ref: '#/components/schemas/ComponentFilePermissions'
         size:
           type: integer
           format: uint64
@@ -3693,6 +3698,8 @@ components:
           type: string
         response:
           type: string
+        bindingType:
+          $ref: '#/components/schemas/WorkerBindingType'
       required:
       - componentId
       - response
@@ -3707,6 +3714,8 @@ components:
           type: string
         response:
           type: string
+        bindingType:
+          $ref: '#/components/schemas/WorkerBindingType'
         responseMappingInput:
           $ref: '#/components/schemas/RibInputTypeInfo'
         workerNameInput:
@@ -3801,11 +3810,6 @@ components:
       required:
       - resourceName
       - resourceParams
-    InitialComponentFilePermissions:
-      type: string
-      enum:
-      - ReadOnly
-      - ReadWrite
     InterruptResponse:
       type: object
     InvokeParameters:
@@ -4765,6 +4769,11 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
       required:
       - filters
+    WorkerBindingType:
+      type: string
+      enum:
+      - default
+      - file-server
     WorkerCreatedAtFilter:
       type: object
       properties:
@@ -5241,6 +5250,26 @@ components:
       - componentSize
       - metadata
       - files
+    ComponentFilePathAndPermissions:
+      type: object
+      properties:
+        path:
+          description: Path inside a component filesystem. Must be absolute.
+          type: string
+        permissions:
+          $ref: '#/components/schemas/ComponentFilePermissions'
+      required:
+      - path
+      - permissions
+    ComponentFilePathAndPermissionsList:
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentFilePathAndPermissions'
+      required:
+      - values
     ComponentMetadata:
       type: object
       properties:
@@ -5277,31 +5306,11 @@ components:
           description: Path inside a component filesystem. Must be absolute.
           type: string
         permissions:
-          $ref: '#/components/schemas/InitialComponentFilePermissions'
+          $ref: '#/components/schemas/ComponentFilePermissions'
       required:
       - key
       - path
       - permissions
-    InitialComponentFilePathAndPermissions:
-      type: object
-      properties:
-        path:
-          description: Path inside a component filesystem. Must be absolute.
-          type: string
-        permissions:
-          $ref: '#/components/schemas/InitialComponentFilePermissions'
-      required:
-      - path
-      - permissions
-    InitialComponentFilePathAndPermissionsList:
-      type: object
-      properties:
-        values:
-          type: array
-          items:
-            $ref: '#/components/schemas/InitialComponentFilePathAndPermissions'
-      required:
-      - values
     LinearMemory:
       type: object
       properties:

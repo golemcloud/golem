@@ -20,8 +20,8 @@ use crate::model::text::component::{ComponentAddView, ComponentGetView, Componen
 use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
-use golem_client::model::{ComponentType, InitialComponentFilePathAndPermissionsList};
-use golem_common::model::{ComponentId, InitialComponentFilePathAndPermissions};
+use golem_client::model::{ComponentType, ComponentFilePathAndPermissionsList};
+use golem_common::model::{ComponentId, ComponentFilePathAndPermissions};
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_common::uri::oss::urn::ComponentUrn;
@@ -112,7 +112,7 @@ impl <ProjectContext> ComponentServiceLive<ProjectContext> {
         let source_path = PathBuf::from(component_file.source_path.as_url().path());
 
         let mut results: Vec<LoadedFile> = vec![];
-        let mut queue: VecDeque<(PathBuf, InitialComponentFilePathAndPermissions)> = vec![(source_path, component_file.target)].into();
+        let mut queue: VecDeque<(PathBuf, ComponentFilePathAndPermissions)> = vec![(source_path, component_file.target)].into();
 
         while let Some((path, target)) = queue.pop_front() {
             if path.is_dir() {
@@ -159,7 +159,7 @@ impl <ProjectContext> ComponentServiceLive<ProjectContext> {
 
         let mut zip_writer = ZipFileWriter::with_tokio(zip_file,);
 
-        let mut properties_files: Vec<InitialComponentFilePathAndPermissions> = vec![];
+        let mut properties_files: Vec<ComponentFilePathAndPermissions> = vec![];
 
         for component_file in component_files {
             for LoadedFile { content, target } in self.load_file(component_file).await? {
@@ -178,7 +178,7 @@ impl <ProjectContext> ComponentServiceLive<ProjectContext> {
             return Err(GolemError("Conflicting paths in component files".to_string()));
         };
 
-        let properties = InitialComponentFilePathAndPermissionsList {
+        let properties = ComponentFilePathAndPermissionsList {
             values: properties_files,
         };
 
@@ -450,12 +450,12 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
 #[derive(Debug, Clone)]
 struct LoadedFile {
     content: Vec<u8>,
-    target: InitialComponentFilePathAndPermissions
+    target: ComponentFilePathAndPermissions
 }
 
 #[derive(Debug)]
 struct ComponentFilesArchiveAndProperties {
     pub archive_path: PathBuf,
-    pub properties: InitialComponentFilePathAndPermissionsList,
+    pub properties: ComponentFilePathAndPermissionsList,
     _temp_dir: TempDir // archive_path is only valid as long as this is alive
 }

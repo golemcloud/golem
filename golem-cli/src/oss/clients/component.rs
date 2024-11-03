@@ -15,7 +15,7 @@
 use std::io::Read;
 
 use async_trait::async_trait;
-use golem_client::model::InitialComponentFilePathAndPermissionsList;
+use golem_client::model::ComponentFilePathAndPermissionsList;
 
 use crate::clients::component::ComponentClient;
 use golem_common::uri::oss::urn::ComponentUrn;
@@ -85,7 +85,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         _project: &Option<Self::ProjectContext>,
         component_type: golem_client::model::ComponentType,
         files_archive: Option<&Path>,
-        files_permissions: Option<&InitialComponentFilePathAndPermissionsList>
+        files_permissions: Option<&ComponentFilePathAndPermissionsList>
     ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {path:?}");
 
@@ -131,7 +131,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         path: PathBufOrStdin,
         component_type: Option<golem_client::model::ComponentType>,
         files_archive: Option<&Path>,
-        files_permissions: Option<&InitialComponentFilePathAndPermissionsList>,
+        files_permissions: Option<&ComponentFilePathAndPermissionsList>,
     ) -> Result<Component, GolemError> {
         info!("Updating component {urn} from {path:?}");
 

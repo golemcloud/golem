@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime};
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
-use golem_common::model::{ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile, InitialComponentFilePath, InitialComponentFilePermissions, WorkerStatus};
+use golem_common::model::{ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile, ComponentFilePath, ComponentFilePermissions, WorkerStatus};
 use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe
 };
@@ -212,13 +212,13 @@ async fn initial_file_read_write(
     let component_files: Vec<InitialComponentFile> = vec![
         InitialComponentFile {
             key: file1_key,
-            path: InitialComponentFilePath::from_str("/foo.txt").unwrap(),
-            permissions: InitialComponentFilePermissions::ReadOnly,
+            path: ComponentFilePath::from_str("/foo.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadOnly,
         },
         InitialComponentFile {
             key: file2_key,
-            path: InitialComponentFilePath::from_str("/bar/baz.txt").unwrap(),
-            permissions: InitialComponentFilePermissions::ReadWrite,
+            path: ComponentFilePath::from_str("/bar/baz.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
         }
     ];
 
@@ -264,18 +264,18 @@ async fn initial_file_listing_through_api(
     let component_files: Vec<InitialComponentFile> = vec![
         InitialComponentFile {
             key: file1_key,
-            path: InitialComponentFilePath::from_str("/foo.txt").unwrap(),
-            permissions: InitialComponentFilePermissions::ReadOnly,
+            path: ComponentFilePath::from_str("/foo.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadOnly,
         },
         InitialComponentFile {
             key: file2_key.clone(),
-            path: InitialComponentFilePath::from_str("/bar/baz.txt").unwrap(),
-            permissions: InitialComponentFilePermissions::ReadWrite,
+            path: ComponentFilePath::from_str("/bar/baz.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
         },
         InitialComponentFile {
             key: file2_key,
-            path: InitialComponentFilePath::from_str("/baz.txt").unwrap(),
-            permissions: InitialComponentFilePermissions::ReadWrite,
+            path: ComponentFilePath::from_str("/baz.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
         }
     ];
 
@@ -309,7 +309,7 @@ async fn initial_file_listing_through_api(
             name: "baz.txt".to_string(),
             last_modified: SystemTime::UNIX_EPOCH,
             details: ComponentFileSystemNodeDetails::File {
-                permissions: InitialComponentFilePermissions::ReadWrite,
+                permissions: ComponentFilePermissions::ReadWrite,
                 size: 4,
             }
         },
@@ -317,7 +317,7 @@ async fn initial_file_listing_through_api(
             name: "foo.txt".to_string(),
             last_modified: SystemTime::UNIX_EPOCH,
             details: ComponentFileSystemNodeDetails::File {
-                permissions: InitialComponentFilePermissions::ReadOnly,
+                permissions: ComponentFilePermissions::ReadOnly,
                 size: 4,
             }
         },
@@ -341,13 +341,13 @@ async fn initial_file_reading_through_api(
     let component_files: Vec<InitialComponentFile> = vec![
         InitialComponentFile {
             key: file1_key,
-            path: InitialComponentFilePath::from_str("/foo.txt").unwrap(),
-            permissions: InitialComponentFilePermissions::ReadOnly,
+            path: ComponentFilePath::from_str("/foo.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadOnly,
         },
         InitialComponentFile {
             key: file2_key.clone(),
-            path: InitialComponentFilePath::from_str("/bar/baz.txt").unwrap(),
-            permissions: InitialComponentFilePermissions::ReadWrite,
+            path: ComponentFilePath::from_str("/bar/baz.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
         }
     ];
 

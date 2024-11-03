@@ -2488,6 +2488,12 @@ impl FromStr for ComponentType {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, NewType)]
 pub struct InitialComponentFileKey(pub String);
 
+impl Display for InitialComponentFileKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 
 /// Path inside a component filesystem. Must be
 /// - absolute (start with '/')
@@ -2495,20 +2501,28 @@ pub struct InitialComponentFileKey(pub String);
 /// - not contain "." components
 /// - use '/' as a separator
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct InitialComponentFilePath(Utf8UnixPathBuf);
+pub struct ComponentFilePath(Utf8UnixPathBuf);
 
-impl InitialComponentFilePath {
+impl ComponentFilePath {
     pub fn from_str(s: &str) -> Result<Self, String> {
         let buf: Utf8UnixPathBuf = s.into();
         if !buf.is_absolute() {
             return Err("Path must be absolute".to_string());
         }
 
-        Ok(InitialComponentFilePath(buf.normalize()))
+        Ok(ComponentFilePath(buf.normalize()))
     }
 
     pub fn from_rel_str(s: &str) -> Result<Self, String> {
         Self::from_str(&format!("/{}", s))
+    }
+
+    pub fn from_either_str(s: &str) -> Result<Self, String> {
+        if s.starts_with('/') {
+            Self::from_str(s)
+        } else {
+            Self::from_rel_str(s)
+        }
     }
 
     pub fn as_path(&self) -> &Utf8UnixPathBuf {
@@ -2524,13 +2538,13 @@ impl InitialComponentFilePath {
     }
 }
 
-impl Display for InitialComponentFilePath {
+impl Display for ComponentFilePath {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl poem_openapi::types::Type for InitialComponentFilePath {
+impl poem_openapi::types::Type for ComponentFilePath {
     const IS_REQUIRED: bool = true;
 
     type RawValueType = Self;
@@ -2559,13 +2573,13 @@ impl poem_openapi::types::Type for InitialComponentFilePath {
     }
 }
 
-impl poem_openapi::types::ToJSON for InitialComponentFilePath {
+impl poem_openapi::types::ToJSON for ComponentFilePath {
     fn to_json(&self) -> Option<serde_json::Value> {
         Some(serde_json::Value::String(self.to_string()))
     }
 }
 
-impl poem_openapi::types::ParseFromJSON for InitialComponentFilePath {
+impl poem_openapi::types::ParseFromJSON for ComponentFilePath {
     fn parse_from_json(value: Option<serde_json::Value>) -> Result<Self, poem_openapi::types::ParseError<Self>> {
         match value {
             None => Err(poem_openapi::types::ParseError::custom("Missing value for ComponentFilePath")),
@@ -2574,7 +2588,7 @@ impl poem_openapi::types::ParseFromJSON for InitialComponentFilePath {
     }
 }
 
-impl Serialize for InitialComponentFilePath {
+impl Serialize for ComponentFilePath {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -2583,8 +2597,8 @@ impl Serialize for InitialComponentFilePath {
     }
 }
 
-impl<'de> Deserialize<'de> for InitialComponentFilePath {
-    fn deserialize<D>(deserializer: D) -> Result<InitialComponentFilePath, D::Error>
+impl<'de> Deserialize<'de> for ComponentFilePath {
+    fn deserialize<D>(deserializer: D) -> Result<ComponentFilePath, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -2595,42 +2609,42 @@ impl<'de> Deserialize<'de> for InitialComponentFilePath {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Enum)]
 #[serde(rename_all = "kebab-case")]
-pub enum InitialComponentFilePermissions {
+pub enum ComponentFilePermissions {
     ReadOnly,
     ReadWrite,
 }
 
-impl InitialComponentFilePermissions {
+impl ComponentFilePermissions {
     pub fn as_compact_str(&self) -> &'static str {
         match self {
-            InitialComponentFilePermissions::ReadOnly => "ro",
-            InitialComponentFilePermissions::ReadWrite => "rw",
+            ComponentFilePermissions::ReadOnly => "ro",
+            ComponentFilePermissions::ReadWrite => "rw",
         }
     }
     pub fn from_compact_str(s: &str) -> Result<Self, String> {
         match s {
-            "ro" => Ok(InitialComponentFilePermissions::ReadOnly),
-            "rw" => Ok(InitialComponentFilePermissions::ReadWrite),
+            "ro" => Ok(ComponentFilePermissions::ReadOnly),
+            "rw" => Ok(ComponentFilePermissions::ReadWrite),
             _ => Err(format!("Unknown permissions: {}", s)),
         }
     }
 }
 
-impl From<golem_api_grpc::proto::golem::component::InitialComponentFilePermissions> for InitialComponentFilePermissions {
+impl From<golem_api_grpc::proto::golem::component::ComponentFilePermissions> for ComponentFilePermissions {
 
-    fn from(value: golem_api_grpc::proto::golem::component::InitialComponentFilePermissions) -> Self {
+    fn from(value: golem_api_grpc::proto::golem::component::ComponentFilePermissions) -> Self {
         match value {
-            golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadOnly => InitialComponentFilePermissions::ReadOnly,
-            golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadWrite => InitialComponentFilePermissions::ReadWrite,
+            golem_api_grpc::proto::golem::component::ComponentFilePermissions::ReadOnly => ComponentFilePermissions::ReadOnly,
+            golem_api_grpc::proto::golem::component::ComponentFilePermissions::ReadWrite => ComponentFilePermissions::ReadWrite,
         }
     }
 }
 
-impl From<InitialComponentFilePermissions> for golem_api_grpc::proto::golem::component::InitialComponentFilePermissions {
-    fn from(value: InitialComponentFilePermissions) -> Self {
+impl From<ComponentFilePermissions> for golem_api_grpc::proto::golem::component::ComponentFilePermissions {
+    fn from(value: ComponentFilePermissions) -> Self {
         match value {
-            InitialComponentFilePermissions::ReadOnly => golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadOnly,
-            InitialComponentFilePermissions::ReadWrite => golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::ReadWrite,
+            ComponentFilePermissions::ReadOnly => golem_api_grpc::proto::golem::component::ComponentFilePermissions::ReadOnly,
+            ComponentFilePermissions::ReadWrite => golem_api_grpc::proto::golem::component::ComponentFilePermissions::ReadWrite,
         }
     }
 }
@@ -2638,13 +2652,19 @@ impl From<InitialComponentFilePermissions> for golem_api_grpc::proto::golem::com
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Object)]
 pub struct InitialComponentFile {
     pub key: InitialComponentFileKey,
-    pub path: InitialComponentFilePath,
-    pub permissions: InitialComponentFilePermissions,
+    pub path: ComponentFilePath,
+    pub permissions: ComponentFilePermissions,
+}
+
+impl InitialComponentFile {
+    pub fn is_read_only(&self) -> bool {
+        self.permissions == ComponentFilePermissions::ReadOnly
+    }
 }
 
 impl From<InitialComponentFile> for golem_api_grpc::proto::golem::component::InitialComponentFile {
     fn from(value: InitialComponentFile) -> Self {
-        let permissions: golem_api_grpc::proto::golem::component::InitialComponentFilePermissions = value.permissions.into();
+        let permissions: golem_api_grpc::proto::golem::component::ComponentFilePermissions = value.permissions.into();
         Self {
             key: value.key.0,
             path: value.path.to_string(),
@@ -2653,43 +2673,55 @@ impl From<InitialComponentFile> for golem_api_grpc::proto::golem::component::Ini
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Object)]
-pub struct InitialComponentFilePathAndPermissions {
-    pub path: InitialComponentFilePath,
-    pub permissions: InitialComponentFilePermissions,
+impl TryFrom<golem_api_grpc::proto::golem::component::InitialComponentFile> for InitialComponentFile {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::component::InitialComponentFile) -> Result<Self, Self::Error> {
+        let permissions: golem_api_grpc::proto::golem::component::ComponentFilePermissions = value.permissions.try_into().map_err(|e| format!("Failed converting permissions {e}"))?;
+        let permissions: ComponentFilePermissions = permissions.into();
+        let path = ComponentFilePath::from_str(&value.path).map_err(|e| e.to_string())?;
+        let key = InitialComponentFileKey(value.key);
+        Ok(Self { key, path, permissions })
+    }
 }
 
-impl InitialComponentFilePathAndPermissions {
+#[derive(Clone, Debug, Serialize, Deserialize, Object)]
+pub struct ComponentFilePathAndPermissions {
+    pub path: ComponentFilePath,
+    pub permissions: ComponentFilePermissions,
+}
+
+impl ComponentFilePathAndPermissions {
     pub fn extend_path(&mut self, path: &str) -> Result<(), String> {
         self.path.extend(path)
     }
 }
 
-impl Display for InitialComponentFilePathAndPermissions {
+impl Display for ComponentFilePathAndPermissions {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", serde_json::to_string(self).unwrap())
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Object)]
-pub struct InitialComponentFilePathAndPermissionsList {
-    pub values: Vec<InitialComponentFilePathAndPermissions>,
+pub struct ComponentFilePathAndPermissionsList {
+    pub values: Vec<ComponentFilePathAndPermissions>,
 }
 
-impl Display for InitialComponentFilePathAndPermissionsList {
+impl Display for ComponentFilePathAndPermissionsList {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", serde_json::to_string(self).unwrap())
     }
 }
 
-impl poem_openapi::types::ParseFromMultipartField for InitialComponentFilePathAndPermissionsList {
+impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathAndPermissionsList {
     fn parse_from_multipart(
             field: Option<poem::web::Field>,
         ) -> impl std::future::Future<Output = ParseResult<Self>> + Send {
         async {
             String::parse_from_multipart(field)
                 .await
-                .map_err(|err| err.propagate::<InitialComponentFilePathAndPermissionsList>())
+                .map_err(|err| err.propagate::<ComponentFilePathAndPermissionsList>())
                 .and_then(|s| serde_json::from_str(&s).map_err(|err| poem_openapi::types::ParseError::custom(err)))
         }
     }
@@ -2698,7 +2730,7 @@ impl poem_openapi::types::ParseFromMultipartField for InitialComponentFilePathAn
 #[derive(Clone, Debug, PartialEq)]
 pub enum ComponentFileSystemNodeDetails {
     File {
-        permissions: InitialComponentFilePermissions,
+        permissions: ComponentFilePermissions,
         size: u64,
     },
     Directory,
@@ -2724,7 +2756,7 @@ impl From<ComponentFileSystemNode> for golem_api_grpc::proto::golem::worker::Fil
                             last_modified,
                             size,
                             permissions:
-                                golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::from(permissions).into(),
+                                golem_api_grpc::proto::golem::component::ComponentFilePermissions::from(permissions).into(),
                         }
                     ))
                 },
@@ -2771,12 +2803,56 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
                     last_modified: SystemTime::UNIX_EPOCH + Duration::from_secs(last_modified),
                     details: ComponentFileSystemNodeDetails::File {
                         permissions:
-                            golem_api_grpc::proto::golem::component::InitialComponentFilePermissions::try_from(permissions)?.into(),
+                            golem_api_grpc::proto::golem::component::ComponentFilePermissions::try_from(permissions)?.into(),
                         size,
                     },
                 })
             },
             None => Err(anyhow::anyhow!("Missing value")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Enum)]
+#[serde(rename_all = "kebab-case")]
+#[oai(rename_all = "kebab-case")]
+pub enum WorkerBindingType {
+    Default,
+    FileServer
+}
+
+impl Default for WorkerBindingType {
+    fn default() -> Self {
+        WorkerBindingType::Default
+    }
+}
+
+impl TryFrom<String> for WorkerBindingType {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "default" => Ok(WorkerBindingType::Default),
+            "file-server" => Ok(WorkerBindingType::FileServer),
+            _ => Err(format!("Invalid WorkerBindingType: {}", value))
+        }
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::apidefinition::WorkerBindingType> for WorkerBindingType {
+    fn from(value: golem_api_grpc::proto::golem::apidefinition::WorkerBindingType) -> Self {
+        match value {
+            golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::Default => WorkerBindingType::Default,
+            golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::FileServer => WorkerBindingType::FileServer
+        }
+    }
+}
+
+impl From<WorkerBindingType> for golem_api_grpc::proto::golem::apidefinition::WorkerBindingType {
+    fn from(value: WorkerBindingType) -> Self {
+        match value {
+            WorkerBindingType::Default => golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::Default,
+            WorkerBindingType::FileServer => golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::FileServer
         }
     }
 }
@@ -2794,7 +2870,7 @@ mod tests {
     use crate::model::{
         AccountId, ComponentId, FilterComparator, IdempotencyKey, ShardId, StringFilterComparator,
         TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-        WorkerStatusRecord, InitialComponentFilePath
+        WorkerStatusRecord, ComponentFilePath
     };
     use bincode::{Decode, Encode};
     use poem_openapi::types::ToJSON;
@@ -3135,13 +3211,13 @@ mod tests {
 
     #[test]
     fn initial_component_file_path_from_absolute() {
-        let path = InitialComponentFilePath::from_str("/a/b/c").unwrap();
+        let path = ComponentFilePath::from_str("/a/b/c").unwrap();
         assert_eq!(path.to_string(), "/a/b/c");
     }
 
     #[test]
     fn initial_component_file_path_from_relative() {
-        let path = InitialComponentFilePath::from_str("a/b/c");
+        let path = ComponentFilePath::from_str("a/b/c");
         assert!(path.is_err());
     }
 }

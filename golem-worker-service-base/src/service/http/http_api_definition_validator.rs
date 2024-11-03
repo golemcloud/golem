@@ -109,6 +109,7 @@ mod tests {
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
+    use golem_common::model::WorkerBindingType;
 
     #[test]
     fn test_unique_routes() {
@@ -121,6 +122,7 @@ mod tests {
                         component_id: ComponentId::new_v4(),
                         version: 1,
                     },
+                    worker_binding_type: WorkerBindingType::Default,
                     worker_name: Some(Expr::identifier("request")),
                     idempotency_key: None,
                     response: ResponseMapping(Expr::literal("sample")),

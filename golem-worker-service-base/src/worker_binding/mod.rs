@@ -9,3 +9,4 @@ mod golem_worker_binding;
 mod request_details;
 mod rib_input_value_resolver;
 mod worker_binding_resolver;
+pub mod fileserver_binding_handler;

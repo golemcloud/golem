@@ -1,6 +1,11 @@
+
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedList, TypedRecord, TypedTuple};
+use http::StatusCode;
+use rib::LiteralValue;
+use rib::GetLiteralValue;
+use crate::headers::ResolvedResponseHeaders;
 
 use crate::path::{Path, PathComponent};
 
@@ -104,4 +109,57 @@ impl<T: Getter<T>> GetterExt<T> for T {
             Err(_) => None,
         }
     }
+}
+
+pub fn get_response_headers(typed_value: &TypeAnnotatedValue) -> Result<Option<ResolvedResponseHeaders>, String> {
+    match typed_value.get_optional(&Path::from_key("headers")) {
+        None => Ok(None),
+        Some(header) => Ok(Some(ResolvedResponseHeaders::from_typed_value(&header)?)),
+    }
+}
+
+pub fn get_response_headers_or_default(typed_value: &TypeAnnotatedValue) -> Result<ResolvedResponseHeaders, String> {
+    get_response_headers(typed_value).map(|headers| headers.unwrap_or_default())
+}
+
+
+pub fn get_status_code(typed_value: &TypeAnnotatedValue) -> Result<Option<StatusCode>, String> {
+    match typed_value.get_optional(&Path::from_key("status")) {
+        None => Ok(None),
+        Some(typed_value) => Ok(Some(get_status_code_inner(&typed_value)?)),
+    }
+}
+
+pub fn get_status_code_or_ok(typed_value: &TypeAnnotatedValue) -> Result<StatusCode, String> {
+    get_status_code(typed_value).map(|status| status.unwrap_or(StatusCode::OK))
+}
+
+fn get_status_code_inner(status_code: &TypeAnnotatedValue) -> Result<StatusCode, String> {
+    let status_res: Result<u16, String> =
+        match status_code.get_literal() {
+            Some(LiteralValue::String(status_str)) => status_str.parse().map_err(|e| {
+                format!(
+                    "Invalid Status Code Expression. It is resolved to a string but not a number {}. Error: {}",
+                    status_str, e
+                )
+            }),
+            Some(LiteralValue::Num(number)) => number.to_string().parse().map_err(|e| {
+                format!(
+                    "Invalid Status Code Expression. It is resolved to a number but not a u16 {}. Error: {}",
+                    number, e
+                )
+            }),
+            _ => Err(format!(
+                "Status Code Expression is evaluated to a complex value. It is resolved to {:?}",
+                status_code.to_json_value()
+            ))
+        };
+
+    let status_u16 = status_res?;
+
+    StatusCode::from_u16(status_u16).map_err(|e|
+        format!(
+        "Invalid Status Code. A valid status code cannot be formed from the evaluated status code expression {}. Error: {}",
+        status_u16, e
+    ))
 }

@@ -36,7 +36,7 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    AccountId, ComponentFileSystemNode, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, InitialComponentFilePath, PromiseId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus
+    AccountId, ComponentFileSystemNode, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, ComponentFilePath, PromiseId, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus
 };
 use golem_service_base::model::{Component, GolemError};
 use golem_service_base::model::{
@@ -246,16 +246,16 @@ pub trait WorkerService<AuthCtx> {
 
     async fn list_directory(
         &self,
-        worker_id: &WorkerId,
-        path: InitialComponentFilePath,
+        worker_id: &TargetWorkerId,
+        path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
 
     async fn get_file_contents(
         &self,
-        worker_id: &WorkerId,
-        path: InitialComponentFilePath,
+        worker_id: &TargetWorkerId,
+        path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
@@ -1008,8 +1008,8 @@ where
 
     async fn list_directory(
         &self,
-        worker_id: &WorkerId,
-        path: InitialComponentFilePath,
+        worker_id: &TargetWorkerId,
+        path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
@@ -1025,6 +1025,7 @@ where
                     worker_executor_client.list_directory(workerexecutor::v1::ListDirectoryRequest {
                         worker_id: Some(worker_id.into()),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
                         path: path_clone.to_string()
                     }),
                 )
@@ -1062,13 +1063,12 @@ where
 
     async fn get_file_contents(
         &self,
-        worker_id: &WorkerId,
-        path: InitialComponentFilePath,
+        worker_id: &TargetWorkerId,
+        path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let worker_id = worker_id.clone();
-        let worker_id_err: WorkerId = worker_id.clone();
         let path_clone = path.clone();
         let stream = self
             .call_worker_executor(
@@ -1079,18 +1079,12 @@ where
                     Box::pin(worker_executor_client.get_file_contents(workerexecutor::v1::GetFileContentsRequest {
                         worker_id: Some(worker_id.clone().into()),
                         account_id: metadata.account_id.clone().map(|id| id.into()),
+                        account_limits: metadata.limits.clone().map(|id| id.into()),
                         file_path: path_clone.to_string()
                     }))
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
-                |error| match error {
-                    CallWorkerExecutorError::FailedToConnectToPod(status)
-                        if status.code() == Code::NotFound =>
-                    {
-                        WorkerServiceError::WorkerNotFound(worker_id_err.clone())
-                    }
-                    _ => WorkerServiceError::InternalCallError(error),
-                },
+                WorkerServiceError::InternalCallError,
             )
             .await?;
 

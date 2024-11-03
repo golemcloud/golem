@@ -2,7 +2,7 @@ use chrono::Utc;
 use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::{ComponentId, ComponentType};
-use golem_common::model::{InitialComponentFile, InitialComponentFilePathAndPermissionsList};
+use golem_common::model::{InitialComponentFile, ComponentFilePathAndPermissionsList};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use rib::WorkerFunctionsInRib;
 use serde::{Deserialize, Serialize};
@@ -145,5 +145,5 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
 #[derive(Debug)]
 pub struct InitialComponentFilesArchiveAndPermissions {
     pub archive: File,
-    pub permissions: InitialComponentFilePathAndPermissionsList,
+    pub permissions: ComponentFilePathAndPermissionsList,
 }

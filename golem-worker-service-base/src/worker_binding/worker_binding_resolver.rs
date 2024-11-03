@@ -16,6 +16,9 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
 
+use super::fileserver_binding_handler::{FileServerBindingHandler, FileServerBindingResult};
+use golem_common::model::WorkerBindingType;
+
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // to resolve a single worker-binding is then executed with the help of worker_service_rib_interpreter, which internally
 // calls the worker function.
@@ -47,6 +50,7 @@ pub struct ResolvedWorkerBindingFromRequest {
     pub worker_detail: WorkerDetail,
     pub request_details: RequestDetails,
     pub compiled_response_mapping: ResponseMappingCompiled,
+    pub worker_binding_type: WorkerBindingType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -86,11 +90,13 @@ impl ResolvedWorkerBindingFromRequest {
     pub async fn interpret_response_mapping<R>(
         &self,
         evaluator: &Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
+        file_server_binding_handler: &Arc<dyn FileServerBindingHandler + Sync + Send>,
     ) -> R
     where
         RibResult: ToResponse<R>,
         EvaluationError: ToResponse<R>,
         RibInputTypeMismatch: ToResponse<R>,
+        FileServerBindingResult: ToResponse<R>,
     {
         let request_rib_input = self
             .request_details
@@ -114,7 +120,18 @@ impl ResolvedWorkerBindingFromRequest {
                     .await;
 
                 match result {
-                    Ok(worker_response) => worker_response.to_response(&self.request_details),
+                    Ok(worker_response) =>
+                        match self.worker_binding_type {
+                            WorkerBindingType::Default => {
+                                worker_response.to_response(&self.request_details)
+                            }
+                            WorkerBindingType::FileServer => {
+                                file_server_binding_handler
+                                    .handle_file_server_binding(&self.worker_detail, worker_response)
+                                    .await
+                                    .to_response(&self.request_details)
+                            }
+                        }
                     Err(err) => err.to_response(&self.request_details),
                 }
             }
@@ -122,6 +139,7 @@ impl ResolvedWorkerBindingFromRequest {
             (_, Err(err)) => err.to_response(&self.request_details),
         }
     }
+
 }
 
 #[async_trait]
@@ -235,6 +253,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
             worker_detail,
             request_details: http_request_details,
             compiled_response_mapping: binding.response_compiled.clone(),
+            worker_binding_type: binding.worker_binding_type.clone(),
         };
 
         Ok(resolved_binding)
