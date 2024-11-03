@@ -16,6 +16,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use bytes::Bytes;
 use sha2::{Sha256, Digest};
+use tracing::debug;
 
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use golem_common::model::InitialComponentFileKey;
@@ -30,6 +31,26 @@ pub struct InitialComponentFilesService {
 impl InitialComponentFilesService {
     pub fn new(blob_storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
         Self { blob_storage }
+    }
+
+    pub async fn exists(
+        &self,
+        key: &InitialComponentFileKey,
+    ) -> Result<bool, String> {
+        let path = PathBuf::from(key.0.clone());
+
+        let metadata = self
+            .blob_storage
+            .get_metadata(
+                INITIAL_COMPONENT_FILES_LABEL,
+                "exists",
+                BlobStorageNamespace::InitialComponentFiles,
+                &path,
+            )
+            .await
+            .map_err(|err| format!("Failed to get metadata: {}", err))?;
+
+        Ok(metadata.is_some())
     }
 
     pub async fn get(
@@ -57,7 +78,7 @@ impl InitialComponentFilesService {
 
         let key = PathBuf::from(hash.clone());
 
-        let exists = self
+        let metadata = self
             .blob_storage
             .get_metadata(
                 INITIAL_COMPONENT_FILES_LABEL,
@@ -68,7 +89,9 @@ impl InitialComponentFilesService {
             .await
             .map_err(|err| format!("Failed to get metadata: {}", err))?;
 
-        if !exists.is_some() {
+        if metadata.is_none() {
+            debug!("Storing initial component file with hash: {}", hash);
+
             self.blob_storage
                 .put_raw(
                     INITIAL_COMPONENT_FILES_LABEL,

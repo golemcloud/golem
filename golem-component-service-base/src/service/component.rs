@@ -21,9 +21,8 @@ use std::num::TryFromIntError;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::model::{Component, ComponentConstraints};
+use crate::model::{Component, ComponentConstraints, InitialComponentFilesArchiveAndPermissions};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
-use crate::model::{InitialComponentFilesArchiveAndPermissions};
 use crate::service::component_compilation::ComponentCompilationService;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -31,8 +30,7 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
-use golem_common::model::{ComponentId, ComponentType};
-use golem_common::model::{InitialComponentFile, ComponentFilePath, ComponentFilePermissions};
+use golem_common::model::{ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile, InitialComponentFileKey};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
@@ -70,6 +68,8 @@ pub enum ComponentError {
     MalformedComponentArchiveError { message: String, error: Option<String> },
     #[error("Failed uploading initial component files: {message}: {error}")]
     InitialComponentFileUploadError { message: String, error: String },
+    #[error("Provided component file not found: {path} (key: {key})")]
+    InitialComponentFileNotFound { path: String, key: String },
 }
 
 impl ComponentError {
@@ -107,6 +107,13 @@ impl ComponentError {
             error: error.as_ref().to_string(),
         }
     }
+
+    pub fn initial_component_file_not_found(path: &ComponentFilePath, key: &InitialComponentFileKey) -> Self {
+        Self::InitialComponentFileNotFound {
+            path: path.to_string(),
+            key: key.to_string(),
+        }
+    }
 }
 
 impl SafeDisplay for ComponentError {
@@ -123,6 +130,7 @@ impl SafeDisplay for ComponentError {
             ComponentError::ComponentConstraintCreateError(_) => self.to_string(),
             ComponentError::MalformedComponentArchiveError { .. } => self.to_string(),
             ComponentError::InitialComponentFileUploadError { .. } => self.to_string(),
+            ComponentError::InitialComponentFileNotFound { .. } => self.to_string(),
         }
     }
 }
@@ -185,6 +193,11 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
                     errors: vec![value.to_safe_string()],
                 })
             }
+            ComponentError::InitialComponentFileNotFound { .. } => {
+                component_error::Error::NotFound(ErrorBody {
+                    error: value.to_safe_string(),
+                })
+            }
         };
         Self { error: Some(error) }
     }
@@ -211,12 +224,35 @@ pub trait ComponentService<Namespace> {
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError>;
 
+    // Files must have been uploaded to the blob store before calling this method
+    async fn create_internal(
+        &self,
+        component_id: &ComponentId,
+        component_name: &ComponentName,
+        component_type: ComponentType,
+        data: Vec<u8>,
+        // None signals that files should be reused from the previous version
+        files: Vec<InitialComponentFile>,
+        namespace: &Namespace,
+    ) -> Result<Component<Namespace>, ComponentError>;
+
     async fn update(
         &self,
         component_id: &ComponentId,
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
+        namespace: &Namespace,
+    ) -> Result<Component<Namespace>, ComponentError>;
+
+    // Files must have been uploaded to the blob store before calling this method
+    async fn update_internal(
+        &self,
+        component_id: &ComponentId,
+        data: Vec<u8>,
+        component_type: Option<ComponentType>,
+        // None signals that files should be reused from the previous version
+        files: Option<Vec<InitialComponentFile>>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError>;
 
@@ -364,6 +400,143 @@ impl ComponentServiceDefault {
             conflicting_functions,
         }
     }
+
+    // All files must be confirmed to be in the blob store before calling this method
+    async fn create_unchecked<Namespace>(
+        &self,
+        component_id: &ComponentId,
+        component_name: &ComponentName,
+        component_type: ComponentType,
+        data: Vec<u8>,
+        uploaded_files: Vec<InitialComponentFile>,
+        namespace: &Namespace,
+    ) -> Result<Component<Namespace>, ComponentError>
+    where
+        Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static
+     {
+        let versioned_component_id = create_new_versioned_component_id(component_id);
+
+        // analyze component before uploading anything so we fail early
+        let component_metadata = ComponentMetadata::analyse_component(&data)
+            .map_err(ComponentError::ComponentProcessingError)?;
+
+        let component_size = data.len() as u64;
+
+        info!(namespace = %namespace,"Uploaded component - exports {:?}", component_metadata.exports);
+
+        let (_, _) = tokio::try_join!(
+            self.upload_user_component(&versioned_component_id, data.clone()),
+            self.upload_protected_component(&versioned_component_id, data)
+        )?;
+
+        let component = Component {
+            component_size,
+            metadata: component_metadata,
+            created_at: Utc::now(),
+            component_type,
+            component_name: component_name.clone(),
+            versioned_component_id: versioned_component_id.clone(),
+            namespace: namespace.clone(),
+            files: uploaded_files.clone(),
+        };
+
+        let record = component
+            .clone()
+            .try_into()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        let result = self.component_repo.create(&record).await;
+
+        if let Err(RepoError::UniqueViolation(_)) = result {
+            Err(ComponentError::AlreadyExists(component_id.clone()))?;
+        }
+
+        self.component_compilation
+            .enqueue_compilation(component_id, component.versioned_component_id.version)
+            .await;
+
+        Ok(component)
+    }
+
+    async fn update_unchecked<Namespace>(
+        &self,
+        component_id: &ComponentId,
+        data: Vec<u8>,
+        component_type: Option<ComponentType>,
+        files: Option<Vec<InitialComponentFile>>,
+        namespace: &Namespace,
+    ) -> Result<Component<Namespace>, ComponentError>
+    where
+        Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static
+    {
+        let created_at = Utc::now();
+
+        let metadata = ComponentMetadata::analyse_component(&data)
+            .map_err(ComponentError::ComponentProcessingError)?;
+
+        info!(namespace = %namespace, "Uploaded component - exports {:?}", metadata.exports);
+
+        let constraints = self.component_repo.get_constraint(component_id).await?;
+
+        let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
+
+        if let Some(constraints) = constraints {
+            let conflicts =
+                Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
+            if !conflicts.is_empty() {
+                return Err(ComponentError::ComponentConstraintConflictError(conflicts));
+            }
+        }
+
+        let next_component = self
+            .component_repo
+            .get_latest_version(&component_id.0)
+            .await?
+            .filter(|c| c.namespace == namespace.to_string())
+            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))
+            .and_then(|c| {
+                c.try_into()
+                    .map_err(|e| ComponentError::conversion_error("record", e))
+            })
+            .map(Component::next_version)?;
+
+        // Fallback to the files from the previous version if no files are provided.
+        let files_to_use = files.unwrap_or_else(|| next_component.files.clone());
+
+        let component_size: u64 = data.len().try_into().map_err(|e: TryFromIntError| {
+            ComponentError::conversion_error("data length", e.to_string())
+        })?;
+
+        let (_, _) = tokio::try_join!(
+            self.upload_user_component(&next_component.versioned_component_id, data.clone()),
+            self.upload_protected_component(&next_component.versioned_component_id, data),
+        )?;
+
+        let component = Component {
+            component_size,
+            metadata,
+            created_at,
+            component_type: component_type.unwrap_or(next_component.component_type),
+            files: files_to_use,
+            ..next_component
+        };
+
+        let record = component
+            .clone()
+            .try_into()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        self.component_repo.create(&record).await?;
+
+        self.component_compilation
+            .enqueue_compilation(component_id, component.versioned_component_id.version)
+            .await;
+
+        Ok(component)
+    }
+
 }
 
 #[derive(Debug)]
@@ -465,56 +638,41 @@ where
             .await?
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
-        let versioned_component_id = create_new_versioned_component_id(component_id);
+        let uploaded_files = match files {
+            Some(files) => self.upload_component_files(files).await?,
+            None => vec![],
+        };
 
-        // analyze component before uploading anything so we fail early
-        let component_metadata = ComponentMetadata::analyse_component(&data)
-            .map_err(ComponentError::ComponentProcessingError)?;
+        self.create_unchecked(component_id, component_name, component_type, data, uploaded_files, namespace).await
+    }
 
-        let component_size = data.len() as u64;
+    async fn create_internal(
+        &self,
+        component_id: &ComponentId,
+        component_name: &ComponentName,
+        component_type: ComponentType,
+        data: Vec<u8>,
+        files: Vec<InitialComponentFile>,
+        namespace: &Namespace,
+    ) -> Result<Component<Namespace>, ComponentError> {
+        info!(namespace = %namespace, "Create component");
 
-        info!(namespace = %namespace,"Uploaded component - exports {:?}", component_metadata.exports);
+        self.find_id_by_name(component_name, namespace)
+            .await?
+            .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
-        let upload_files = async {
-            match files {
-                Some(files) => self.upload_component_files(files).await,
-                None => Ok(vec![]),
+        for file in &files {
+            let exists = self.initial_component_files_service
+                .exists(&file.key)
+                .await
+                .map_err(|e| ComponentError::initial_component_file_upload_error("Error checking if file exists", e))?;
+
+            if !exists {
+                return Err(ComponentError::initial_component_file_not_found(&file.path, &file.key));
             }
-        };
-
-        let (_, _, uploaded_files) = tokio::try_join!(
-            self.upload_user_component(&versioned_component_id, data.clone()),
-            self.upload_protected_component(&versioned_component_id, data),
-            upload_files
-        )?;
-
-        let component = Component {
-            component_size,
-            metadata: component_metadata,
-            created_at: Utc::now(),
-            component_type,
-            component_name: component_name.clone(),
-            versioned_component_id: versioned_component_id.clone(),
-            namespace: namespace.clone(),
-            files: uploaded_files.clone(),
-        };
-
-        let record = component
-            .clone()
-            .try_into()
-            .map_err(|e| ComponentError::conversion_error("record", e))?;
-
-        let result = self.component_repo.create(&record).await;
-
-        if let Err(RepoError::UniqueViolation(_)) = result {
-            Err(ComponentError::AlreadyExists(component_id.clone()))?;
         }
 
-        self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version)
-            .await;
-
-        Ok(component)
+        self.create_unchecked(component_id, component_name, component_type, data, files, namespace).await
     }
 
     async fn update(
@@ -527,76 +685,36 @@ where
     ) -> Result<Component<Namespace>, ComponentError> {
         info!(namespace = %namespace, "Update component");
 
-        let created_at = Utc::now();
+        let uploaded_files = match files {
+            Some(files) => Some(self.upload_component_files(files).await?),
+            None => None,
+        };
 
-        let metadata = ComponentMetadata::analyse_component(&data)
-            .map_err(ComponentError::ComponentProcessingError)?;
+        self.update_unchecked(component_id, data, component_type, uploaded_files, namespace).await
+    }
 
-        let constraints = self.component_repo.get_constraint(component_id).await?;
+    async fn update_internal(
+        &self,
+        component_id: &ComponentId,
+        data: Vec<u8>,
+        component_type: Option<ComponentType>,
+        files: Option<Vec<InitialComponentFile>>,
+        namespace: &Namespace,
+    ) -> Result<Component<Namespace>, ComponentError> {
+        info!(namespace = %namespace, "Update component");
 
-        let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
+        for file in files.iter().flatten() {
+            let exists = self.initial_component_files_service
+                .exists(&file.key)
+                .await
+                .map_err(|e| ComponentError::initial_component_file_upload_error("Error checking if file exists", e))?;
 
-        if let Some(constraints) = constraints {
-            let conflicts =
-                Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
-            if !conflicts.is_empty() {
-                return Err(ComponentError::ComponentConstraintConflictError(conflicts));
+            if !exists {
+                return Err(ComponentError::initial_component_file_not_found(&file.path, &file.key));
             }
         }
 
-        let next_component = self
-            .component_repo
-            .get_latest_version(&component_id.0)
-            .await?
-            .filter(|c| c.namespace == namespace.to_string())
-            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))
-            .and_then(|c| {
-                c.try_into()
-                    .map_err(|e| ComponentError::conversion_error("record", e))
-            })
-            .map(Component::next_version)?;
-
-        info!(namespace = %namespace, "Uploaded component - exports {:?}", metadata.exports);
-
-        let component_size: u64 = data.len().try_into().map_err(|e: TryFromIntError| {
-            ComponentError::conversion_error("data length", e.to_string())
-        })?;
-
-        let upload_files = async {
-            match files {
-                Some(files) => self.upload_component_files(files).await,
-                None =>
-                    // reuse files from the previous version
-                    Ok(next_component.files.clone()),
-            }
-        };
-
-        let (_, _, uploaded_files) = tokio::try_join!(
-            self.upload_user_component(&next_component.versioned_component_id, data.clone()),
-            self.upload_protected_component(&next_component.versioned_component_id, data),
-            upload_files
-        )?;
-
-        let component = Component {
-            component_size,
-            metadata,
-            created_at,
-            component_type: component_type.unwrap_or(next_component.component_type),
-            files: uploaded_files,
-            ..next_component
-        };
-        let record = component
-            .clone()
-            .try_into()
-            .map_err(|e| ComponentError::conversion_error("record", e))?;
-
-        self.component_repo.create(&record).await?;
-
-        self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version)
-            .await;
-
-        Ok(component)
+        self.update_unchecked(component_id, data, component_type, files, namespace).await
     }
 
     async fn download(
@@ -916,11 +1034,11 @@ impl ComponentServiceDefault {
 
     async fn upload_component_files(
         &self,
-        files_properties: InitialComponentFilesArchiveAndPermissions,
+        payload: InitialComponentFilesArchiveAndPermissions,
     ) -> Result<Vec<InitialComponentFile>, ComponentError> {
-        let files_file = files_properties.archive;
+        let files_file = payload.archive;
         let path_permissions: HashMap<ComponentFilePath, ComponentFilePermissions> = HashMap::from_iter(
-            files_properties.permissions.values.iter().map(|f| (f.path.clone(), f.permissions)),
+            payload.files.iter().map(|f| (f.path.clone(), f.permissions)),
         );
 
         let mut buf_reader = BufReader::new(files_file);

@@ -14,7 +14,7 @@ use crate::service::component::{ComponentService, ComponentServiceError};
 use crate::service::worker::{WorkerService, WorkerServiceError};
 use super::WorkerDetail;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use crate::getter::{get_response_headers_or_default, get_status_code, Getter, GetterExt};
+use crate::getter::{get_response_headers_or_default, get_status_code, GetterExt};
 use crate::path::Path;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use crate::empty_worker_metadata;

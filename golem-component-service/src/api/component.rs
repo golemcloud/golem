@@ -139,6 +139,11 @@ impl From<ComponentServiceError> for ComponentError {
                     error: error.to_safe_string(),
                 }))
             }
+            ComponentServiceError::InitialComponentFileNotFound { .. } => {
+                ComponentError::NotFound(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
         }
     }
 }
@@ -183,7 +188,7 @@ impl ComponentApi {
 
             let files = files_file
                 .zip(payload.files_permissions)
-                .map(|(archive, permissions)| InitialComponentFilesArchiveAndPermissions { archive, permissions });
+                .map(|(archive, permissions)| InitialComponentFilesArchiveAndPermissions { archive, files: permissions.values });
 
             let component_name = payload.name;
             self.component_service
@@ -262,7 +267,7 @@ impl ComponentApi {
 
             let files = files_file
                 .zip(payload.files_permissions)
-                .map(|(archive, permissions)| InitialComponentFilesArchiveAndPermissions { archive, permissions });
+                .map(|(archive, permissions)| InitialComponentFilesArchiveAndPermissions { archive, files: permissions.values });
 
             self.component_service
                 .update(

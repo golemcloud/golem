@@ -51,8 +51,10 @@ pub trait TestDsl {
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
+    async fn store_unique_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId;
     async fn store_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
+    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, files: &Option<Vec<InitialComponentFile>>) -> ComponentVersion;
     async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
@@ -187,8 +189,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .get_or_add_component(&source_path, ComponentType::Durable)
             .await;
 
-        // let _ = log_and_save_component_metadata(&source_path).await;
-
         component_id
     }
 
@@ -199,8 +199,6 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .component_service()
             .get_or_add_component(&source_path, ComponentType::Ephemeral)
             .await;
-
-        // let _ = log_and_save_component_metadata(&source_path).await;
 
         component_id
     }
@@ -227,8 +225,19 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         self.component_service()
             .add_component_with_id(&source_path, component_id, ComponentType::Durable)
             .await
-            .expect("Failed to store component with id {component_id}");
+            .expect("Failed to store component");
     }
+
+    async fn store_unique_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        let uuid = Uuid::new_v4();
+        let unique_name = format!("{name}-{uuid}");
+        self.component_service()
+            .add_component_with_files(&source_path, &unique_name, component_type, files)
+            .await
+            .expect("Failed to store component")
+    }
+
 
     async fn store_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
@@ -252,6 +261,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
             .update_component(component_id, &source_path, ComponentType::Durable)
+            .await
+    }
+
+    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, files: &Option<Vec<InitialComponentFile>>) -> ComponentVersion {
+        let source_path = self.component_directory().join(format!("{name}.wasm"));
+        self.component_service()
+            .update_component_with_files(component_id, &source_path, ComponentType::Durable, files)
             .await
     }
 
@@ -1245,9 +1261,10 @@ pub trait TestDslUnsafe {
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
+    async fn store_unique_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId;
     async fn store_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
-
+    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, files: &Option<Vec<InitialComponentFile>>) -> ComponentVersion;
     async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
@@ -1367,12 +1384,20 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::store_component_with_id(self, name, component_id).await
     }
 
+    async fn store_unique_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId {
+        <T as TestDsl>::store_unique_component_with_files(self, name, component_type, files).await
+    }
+
     async fn store_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId {
         <T as TestDsl>::store_component_with_files(self, name, component_type, files).await
     }
 
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion {
         <T as TestDsl>::update_component(self, component_id, name).await
+    }
+
+    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, files: &Option<Vec<InitialComponentFile>>) -> ComponentVersion {
+        <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
     }
 
     async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {

@@ -13,6 +13,7 @@ pub struct GolemWorkerBinding {
     pub worker_name: Option<Expr>,
     pub idempotency_key: Option<Expr>,
     pub response: ResponseMapping,
+    #[serde(default)]
     pub worker_binding_type: WorkerBindingType,
 }
 

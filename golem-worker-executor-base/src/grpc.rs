@@ -30,7 +30,6 @@ use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
 use futures_util::StreamExt;
-use futures_util::TryStreamExt;
 use crate::error::*;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;

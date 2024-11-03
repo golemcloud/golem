@@ -267,6 +267,8 @@ pub trait ComponentService {
                 UpdateComponentRequestHeader {
                     component_id: Some(component_id.clone().into()),
                     component_type: Some(component_type as i32),
+                    update_files: false,
+                    files: vec![],
                 },
             )),
         }];
@@ -309,6 +311,77 @@ pub trait ComponentService {
             }
         }
     }
+
+    async fn update_component_with_files(
+        &self,
+        component_id: &ComponentId,
+        local_path: &Path,
+        component_type: ComponentType,
+        files: &Option<Vec<InitialComponentFile>>,
+    ) -> u64 {
+        let mut client = self.client().await;
+        let mut file = File::open(local_path)
+            .await
+            .unwrap_or_else(|_| panic!("Failed to read component from {local_path:?}"));
+
+        let component_type: golem_api_grpc::proto::golem::component::ComponentType =
+            component_type.into();
+
+        let update_files = files.is_some();
+
+        let files: Vec<golem_api_grpc::proto::golem::component::InitialComponentFile> =
+            files.iter().flatten().map(|f| f.clone().into()).collect::<Vec<_>>();
+
+        let mut chunks: Vec<UpdateComponentRequest> = vec![UpdateComponentRequest {
+            data: Some(update_component_request::Data::Header(
+                UpdateComponentRequestHeader {
+                    component_id: Some(component_id.clone().into()),
+                    component_type: Some(component_type as i32),
+                    update_files,
+                    files,
+                },
+            )),
+        }];
+
+        loop {
+            let mut buffer = [0; 4096];
+
+            let n = file
+                .read(&mut buffer)
+                .await
+                .unwrap_or_else(|_| panic!("Failed to read template from {local_path:?}"));
+
+            if n == 0 {
+                break;
+            } else {
+                chunks.push(UpdateComponentRequest {
+                    data: Some(update_component_request::Data::Chunk(
+                        UpdateComponentRequestChunk {
+                            component_chunk: buffer[0..n].to_vec(),
+                        },
+                    )),
+                });
+            }
+        }
+        let response = client
+            .update_component(tokio_stream::iter(chunks))
+            .await
+            .expect("Failed to update component")
+            .into_inner();
+        match response.result {
+            None => {
+                panic!("Missing response from golem-component-service for create-component")
+            }
+            Some(update_component_response::Result::Success(component)) => {
+                info!("Created component {component:?}");
+                component.versioned_component_id.unwrap().version
+            }
+            Some(update_component_response::Result::Error(error)) => {
+                panic!("Failed to update component in golem-component-service: {error:?}");
+            }
+        }
+    }
+
 
     async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {
         let response = self

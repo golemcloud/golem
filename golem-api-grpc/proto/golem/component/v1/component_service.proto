@@ -137,6 +137,10 @@ message UpdateComponentRequest {
 message UpdateComponentRequestHeader {
   golem.component.ComponentId componentId = 1;
   optional ComponentType componentType = 2;
+  // Whether to update the files or not. If false, the files field will be ignored and file from the previous version will be used.
+  bool updateFiles = 3;
+  // All files need to be uploaded to the blob storage before providing them here
+  repeated InitialComponentFile files = 4;
 }
 
 message UpdateComponentRequestChunk {

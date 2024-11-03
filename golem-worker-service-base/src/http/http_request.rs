@@ -162,8 +162,8 @@ mod tests {
     impl FileServerBindingHandler for TestFileServerBindingHandler {
         async fn handle_file_server_binding(
             &self,
-            worker_detail: &WorkerDetail,
-            original_result: RibResult,
+            _worker_detail: &WorkerDetail,
+            _original_result: RibResult,
         ) -> FileServerBindingResult {
             unimplemented!()
         }

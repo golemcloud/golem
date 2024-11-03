@@ -222,7 +222,7 @@ async fn initial_file_read_write(
         }
     ];
 
-    let component_id = executor.store_component_with_files("initial-file-read-write", ComponentType::Ephemeral, &component_files).await;
+    let component_id = executor.store_unique_component_with_files("initial-file-read-write", ComponentType::Durable, &component_files).await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
@@ -279,7 +279,7 @@ async fn initial_file_listing_through_api(
         }
     ];
 
-    let component_id = executor.store_component_with_files("initial-file-read-write", ComponentType::Ephemeral, &component_files).await;
+    let component_id = executor.store_unique_component_with_files("initial-file-read-write", ComponentType::Durable, &component_files).await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
@@ -351,7 +351,7 @@ async fn initial_file_reading_through_api(
         }
     ];
 
-    let component_id = executor.store_component_with_files("initial-file-read-write", ComponentType::Ephemeral, &component_files).await;
+    let component_id = executor.store_unique_component_with_files("initial-file-read-write", ComponentType::Durable, &component_files).await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
@@ -377,7 +377,7 @@ async fn initial_file_reading_through_api(
     drop(executor);
 
     check!(result1 == "foo\n");
-    check!(result2 == "baz\n");
+    check!(result2 == "hello world");
 }
 
 #[test]
