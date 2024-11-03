@@ -103,7 +103,6 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 mod tests {
     use test_r::test;
 
-    use crate::api::WorkerBindingType;
     use crate::api_definition::http::{MethodPattern, Route};
     use crate::service::http::http_api_definition_validator::unique_routes;
     use crate::worker_binding::ResponseMapping;
@@ -125,7 +124,7 @@ mod tests {
                     worker_name: Expr::identifier("request"),
                     idempotency_key: None,
                     response: ResponseMapping(Expr::literal("sample")),
-                    binding_type: WorkerBindingType::Default,
+                    binding_type: None,
                 },
             }
         }

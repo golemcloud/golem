@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::ComponentRefSplit;
-use crate::file_system::{lookup_initial_files, package_initial_files};
+use crate::file_system::lookup_initial_files;
 use crate::model::oam::Application;
 use crate::model::{
     ComponentName, Format, GolemError, GolemResult, PathBufOrStdin, WorkerUpdateMode,
@@ -25,7 +25,7 @@ use clap::Subcommand;
 use golem_client::model::ComponentType;
 use golem_common::file_system::PackagedFileSet;
 use golem_common::uri::oss::uri::ComponentUri;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[derive(Subcommand, Debug)]
@@ -205,10 +205,12 @@ impl<
                 manifest,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
+                let manifest_directory = manifest.as_ref().map(PathBuf::as_path).and_then(Path::parent);
                 let manifest = manifest.as_ref().map(Application::from_yaml_file).transpose()?;
                 let files = lookup_initial_files(manifest.as_ref(), &component_name)?;
-                let files = package_initial_files(files)
-                    .await?;
+                let initial_files = files.package(manifest_directory)
+                    .await
+                    .map_err(GolemError)?;
                 service
                     .add(
                         component_name,
@@ -217,7 +219,7 @@ impl<
                         Some(project_id),
                         non_interactive,
                         format,
-                        files,
+                        initial_files,
                     )
                     .await
             }
@@ -232,13 +234,15 @@ impl<
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                let manifest_directory = manifest.as_ref().map(PathBuf::as_path).and_then(Path::parent);
                 let manifest = manifest.as_ref().map(Application::from_yaml_file).transpose()?;
                 
                 let initial_files = if let ComponentUri::URL(component_url) = &component_name_or_uri {
                     let component_name = ComponentName(component_url.name.clone());
                     let files = lookup_initial_files(manifest.as_ref(), &component_name)?;
-                    package_initial_files(files)
-                        .await?
+                    files.package(manifest_directory)
+                        .await
+                        .map_err(GolemError)?
                 } else {
                     PackagedFileSet::empty()
                 };

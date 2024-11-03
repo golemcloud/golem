@@ -1,3 +1,4 @@
+use golem_worker_service_base::api::WorkerBindingType;
 use test_r::test;
 
 use async_trait::async_trait;
@@ -31,6 +32,8 @@ use golem_worker_service_base::service::http::http_api_definition_validator::{
 use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_wasm_ast::analysis::analysed_type::str;
+use tracing::debug;
+use std::path::Path;
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -233,6 +236,7 @@ async fn test_services(
     test_delete_non_existing(definition_service.clone()).await;
     test_deployment(definition_service.clone(), deployment_service.clone()).await;
     test_deployment_conflict(definition_service.clone(), deployment_service.clone()).await;
+    test_file_server(definition_service.clone(), deployment_service.clone()).await;
 }
 
 async fn test_deployment(
@@ -250,6 +254,7 @@ async fn test_deployment(
             "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
+            &WorkerBindingType::Default,
         );
     let def2draft = get_api_definition(
             &Uuid::new_v4().to_string(),
@@ -258,6 +263,7 @@ async fn test_deployment(
             "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             true,
+            &WorkerBindingType::Default,
         );
     let def2 = HttpApiDefinitionRequest {
         draft: false,
@@ -270,6 +276,7 @@ async fn test_deployment(
             "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
+            &WorkerBindingType::Default,
         );
     let def4 = get_api_definition(
             &Uuid::new_v4().to_string(),
@@ -278,6 +285,7 @@ async fn test_deployment(
             "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             false,
+            &WorkerBindingType::Default,
         );
 
     definition_service
@@ -486,6 +494,7 @@ async fn test_deployment_conflict(
             "\"worker1\"",
             "${ let status: u64 = 200; { headers: { ContentType: \"json\", userid: \"foo\"}, body: golem:it/api.{get-cart-contents}(\"foo\"), status: status }  }",
             false,
+            &WorkerBindingType::Default,
         );
     let def2 = get_api_definition(
         &Uuid::new_v4().to_string(),
@@ -494,6 +503,7 @@ async fn test_deployment_conflict(
         "\"worker2\"",
         "${ {body: golem:it/api.{get-cart-contents}(\"foo\")} }",
         true,
+        &WorkerBindingType::Default,
     );
 
     let def3 = get_api_definition(
@@ -503,6 +513,7 @@ async fn test_deployment_conflict(
         "\"worker2\"",
         "${ {body: golem:it/api.{get-cart-contents}(\"foo\")} }",
         false,
+        &WorkerBindingType::Default,
     );
 
     definition_service
@@ -579,6 +590,7 @@ async fn test_definition_crud(
             "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             false,
+            &WorkerBindingType::Default,
         );
     let def1v1_upd = get_api_definition(
             &def1v1.id.0,
@@ -587,6 +599,7 @@ async fn test_definition_crud(
             "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             false,
+            &WorkerBindingType::Default,
         );
     let def1v2 = get_api_definition(
             &def1v1.id.0,
@@ -595,6 +608,7 @@ async fn test_definition_crud(
             "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             true,
+            &WorkerBindingType::Default,
         );
 
     let def1v2_upd = get_api_definition(
@@ -604,6 +618,7 @@ async fn test_definition_crud(
             "${let userid: u64 = request.path.user; let res = if userid>100u64 then 0u64 else 1u64; \"shopping-cart-${res}\"}",
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; status }",
             true,
+            &WorkerBindingType::Default,
         );
 
     definition_service
@@ -736,6 +751,73 @@ async fn test_delete_non_existing(
     assert!(delete_result.is_err(), "definition should not exist");
 }
 
+
+async fn test_file_server(
+    definition_service: Arc<
+        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+            + Sync
+            + Send,
+    >,
+    deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
+) {
+    // let defs = vec![];
+    // defs.push(get_api_definition(
+    //         &Uuid::new_v4().to_string(),
+    //         "0.0.1",
+    //         "/api/1/foo/{file}",
+    //         "\"my-file-server\"",
+    //         "\"/static/ro/${request.path.file}\"",
+    //         false,
+    //         &WorkerBindingType::FileServer,
+    //     ));
+
+    // for def in &defs {
+    //     definition_service
+    //         .create(
+    //             def,
+    //             &DefaultNamespace::default(),
+    //             &EmptyAuthCtx::default(),
+    //         )
+    //         .await
+    //         .unwrap();
+    // }
+
+    // let service_defs: Vec<HttpApiDefinition> = definition_service
+    //     .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
+    //     .await
+    //     .unwrap()
+    //     .into_iter()
+    //     .map(|x| x.into())
+    //     .collect::<Vec<_>>();
+    // assert_eq!(defs.len(), service_defs.len());
+    // assert!(contains_definitions(
+    //     service_defs,
+    //     defs
+    // ));
+
+    // let deps = vec![&defs[0].id.0];
+    // let deployment = get_api_deployment("test.com", None, deps);
+    // deployment_service
+    //     .deploy(&deployment, &EmptyAuthCtx::default())
+    //     .await
+    //     .unwrap();
+
+    // let definitions: Vec<HttpApiDefinition> = definition_service
+    //     .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
+    //     .await
+    //     .unwrap()
+    //     .into_iter()
+    //     .map(|x| x.into())
+    //     .collect::<Vec<_>>();
+    // assert_eq!(definitions.len(), 1);
+    // assert!(contains_definitions(
+    //     definitions,
+    //     defs
+    // ));
+    todo!()
+
+}
+
 fn get_api_deployment(
     host: &str,
     subdomain: Option<&str>,
@@ -766,6 +848,7 @@ fn get_api_definition(
     worker_id: &str,
     response_mapping: &str,
     draft: bool,
+    binding_type: &WorkerBindingType,
 ) -> HttpApiDefinitionRequest {
     let yaml_string = format!(
         r#"
@@ -781,8 +864,9 @@ fn get_api_definition(
                 version: 0
               workerName: '{}'
               response: '{}'
+              bindingType: '{}'
         "#,
-        id, version, draft, path_pattern, worker_id, response_mapping
+        id, version, draft, path_pattern, worker_id, response_mapping, binding_type,
     );
 
     serde_yaml::from_str(yaml_string.as_str()).unwrap()

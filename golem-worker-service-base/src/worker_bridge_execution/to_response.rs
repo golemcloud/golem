@@ -69,6 +69,7 @@ mod internal {
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
     use crate::worker_service_rib_interpreter::EvaluationError;
+    use futures::stream;
     use http::{HeaderMap, StatusCode};
     use std::str::FromStr;
 
@@ -259,7 +260,7 @@ mod internal {
     }
 
     
-    impl FileServerResult<Vec<u8>> {
+    impl FileServerResult {
         const EMPTY_RESPONSE_DETAILS: TypeAnnotatedValue = TypeAnnotatedValue::Bool(false);
 
         fn response_details(&self) -> &TypeAnnotatedValue {
@@ -309,10 +310,11 @@ mod internal {
         }
 
         fn inferred_content_type(&self) -> Option<String> {
-            if let Self::Ok { content, .. } = self {
-                infer::get(content)
+            if let Self::Ok { mime_hint, .. } = self {
+                mime_hint.first()
                     .as_ref()
-                    .map(infer::Type::to_string)
+                    .map(mime_guess::Mime::essence_str)
+                    .map(ToString::to_string)
             } else {
                 None
             }
@@ -320,7 +322,13 @@ mod internal {
 
         pub fn body(&self) -> poem::Body {
             match self {
-                Self::Ok { content, .. } => poem::Body::from_bytes(bytes::Bytes::from(content.clone())),
+                Self::Ok { content, .. } => {
+                    // We hand control of the file stream to poem, so we can only generate the body once
+                    let stream = content.replace(Box::pin(stream::once(async move {
+                        Err(std::io::ErrorKind::Interrupted.into())
+                    })));
+                    poem::Body::from_bytes_stream(stream)
+                },
                 Self::SimpleErr(err) => poem::Body::from_string(err.clone()),
                 Self::Err(err) => {
                     match IntermediateHttpResponse::from(&RibResult::Val(err.clone())) {

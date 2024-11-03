@@ -5,16 +5,20 @@ use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
 use crate::path::Path;
+use crate::service::worker::{WorkerRequestMetadata, WorkerService};
 use crate::worker_service_rib_interpreter::EvaluationError;
 use crate::worker_service_rib_interpreter::WorkerServiceRibInterpreter;
 use async_trait::async_trait;
-use golem_common::model::IdempotencyKey;
-use golem_service_base::model::VersionedComponentId;
+use futures::stream;
+use golem_common::model::{IdempotencyKey, WorkerId};
+use golem_service_base::auth::EmptyAuthCtx;
+use golem_service_base::model::{GetFileResponse, VersionedComponentId};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions as _;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::typed_result::ResultValue;
 use rib::RibResult;
 use serde_json::Value;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -89,6 +93,7 @@ impl ResolvedWorkerBindingFromRequest {
     pub async fn interpret_response_mapping<R>(
         &self,
         evaluator: &Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
+        worker_service: Option<&Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>>,
     ) -> R
     where
         RibResult: ToResponse<R>,
@@ -120,10 +125,17 @@ impl ResolvedWorkerBindingFromRequest {
                 match result {
                     Ok(worker_response) => {
                         if self.binding_type == WorkerBindingType::FileServer {
-                            Self::get_file_server_result(worker_response)
-                                .get_file()
-                                .await
-                                .to_response(&self.request_details)
+                            let worker_id = WorkerId {
+                                component_id: self.worker_detail.component_id.component_id.clone(),
+                                worker_name: self.worker_detail.worker_name.clone(),
+                            };
+                            let worker_service = worker_service.expect("fileServer requires a WorkerService");
+                            let file_server_result = Self::get_file_server_result(worker_response)
+                                .get_file(&worker_id, worker_service)
+                                .await;
+
+                            file_server_result.to_response(&self.request_details)
+
                         } else {
                             worker_response.to_response(&self.request_details)
                         }
@@ -175,30 +187,40 @@ impl ResolvedWorkerBindingFromRequest {
             return Err(format!("'file-server' must provide a string path, but evaluated to '{}'", path_value.to_json_value()));
         };
 
-        Ok(FileServerResult::Ok { content, response_details })
+        let mime_hint = mime_guess::from_path(&content);
+
+        Ok(FileServerResult::Ok { content, response_details, mime_hint })
     }
 }
 
+pub(crate) type FileStream = Cell<futures::stream::BoxStream<'static, std::io::Result<Vec<u8>>>>;
+
 #[derive(Debug, PartialEq)]
-pub(crate) enum FileServerResult<Content = Vec<u8>> {
-    Ok { content: Content, response_details: Option<TypeAnnotatedValue> },
+pub(crate) enum FileServerResult<Content = FileStream> {
+    Ok { content: Content, response_details: Option<TypeAnnotatedValue>, mime_hint: mime_guess::MimeGuess },
     SimpleErr(String),
     // TypedRecord of status, etc.
     Err(TypeAnnotatedValue),
 }
 
 impl FileServerResult<String> {
-    pub async fn get_file(self) -> FileServerResult<Vec<u8>> {
+    pub async fn get_file(self, worker_id: &WorkerId, worker_service: &Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>) -> FileServerResult {
         match self {
-            Self::Ok { content: _path, response_details } => {
+            Self::Ok { content: path, response_details, mime_hint } => {
+                let metadata = WorkerRequestMetadata {
+                    account_id: None,
+                    limits: None,
+                };
                 
-                todo!();
-
-                let content = std::io::Result::Ok(vec![0u8; 0]);
-
-                match content {
-                    Ok(content) => FileServerResult::Ok { content, response_details },
-                    Err(_) => FileServerResult::SimpleErr(format!("File could not be read")),
+                match worker_service.get_file(worker_id, &path, metadata, &EmptyAuthCtx::default())
+                    .await 
+                {
+                    Ok(GetFileResponse::Directory(_)) => 
+                        // Directory currently returns empty content, but could serve a directory listing
+                        FileServerResult::Ok { content: Cell::new(Box::pin(stream::empty())), response_details, mime_hint },
+                    Ok(GetFileResponse::File(file)) =>
+                        FileServerResult::Ok { content: Cell::new(file), response_details, mime_hint },
+                    Err(err) => FileServerResult::SimpleErr(format!("File could not be read: {err}")),
                 }
             },
             Self::SimpleErr(err) => FileServerResult::SimpleErr(err),
@@ -313,6 +335,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
 #[cfg(test)]
 mod file_server_result_test {
     use super::*;
+    use test_r::test;
 
     async fn into_result(s: &str) -> FileServerResult<String> {
         let value = rib::interpret_pure(
@@ -327,17 +350,17 @@ mod file_server_result_test {
         ResolvedWorkerBindingFromRequest::get_file_server_result(value)
     }
 
-    #[tokio::test]
+    #[test]
     async fn file_server_result() {
         let res0 = into_result(r#"
             "./my_file.txt"
         "#).await;
-        assert_eq!(res0, FileServerResult::Ok { content: format!("./my_file.txt"), response_details: None });
+        assert_eq!(res0, FileServerResult::Ok { content: format!("./my_file.txt"), response_details: None, mime_hint: mime_guess::from_ext("txt") });
 
         let res1 = into_result(r#"
             ok("./my_file.txt")
         "#).await;
-        assert_eq!(res1, FileServerResult::Ok { content: format!("./my_file.txt"), response_details: None });
+        assert_eq!(res1, FileServerResult::Ok { content: format!("./my_file.txt"), response_details: None, mime_hint: mime_guess::from_ext("txt") });
 
         let res2 = into_result(r#"
             err("no file for you")
@@ -351,10 +374,11 @@ mod file_server_result_test {
             }
         "#).await;
 
-        let FileServerResult::Ok { content, response_details } = res3 else {
+        let FileServerResult::Ok { content, response_details, mime_hint } = res3 else {
             unreachable!("Expected Ok")
         };
-        assert_eq!(&content, "./my_file.txt");
+        assert_eq!(content, "./my_file.txt");
+        assert_eq!(mime_hint, mime_guess::from_ext("txt"));
         assert!(response_details.is_some());
         
         let res4 = into_result(r#"

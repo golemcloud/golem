@@ -8,10 +8,10 @@ spec:
     type: wasm
     properties:
       files:
-      - sourcePath: "test-components/file-initial/resources/readonly"
+      - sourcePath: "./readonly"
         targetPath: "/ro/"
         permission: readOnly
-      - sourcePath: "test-components/file-initial/resources/readwrite"
+      - sourcePath: "./readwrite"
         targetPath: "/"
         permission: readWrite
       - sourcePath: "https://raw.githubusercontent.com/golemcloud/golem/refs/heads/main/golem-logo-black.jpg"

@@ -130,7 +130,7 @@ pub struct GolemWorkerBinding {
     pub idempotency_key: Option<String>,
     pub response: String,
     #[serde(default)]
-    pub binding_type: WorkerBindingType,
+    pub binding_type: Option<WorkerBindingType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -141,6 +141,8 @@ pub struct GolemWorkerBindingWithTypeInfo {
     pub worker_name: String,
     pub idempotency_key: Option<String>,
     pub response: String,
+    #[serde(default)]
+    pub binding_type: Option<WorkerBindingType>,
     pub response_mapping_input: Option<RibInputTypeInfo>,
     pub worker_name_input: Option<RibInputTypeInfo>,
     pub idempotency_key_input: Option<RibInputTypeInfo>,
@@ -160,6 +162,7 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
                 .response_compiled
                 .response_rib_expr
                 .to_string(),
+            binding_type: Some(value.binding_type),
             response_mapping_input: Some(worker_binding.response_compiled.rib_input),
             worker_name_input: Some(worker_binding.worker_name_compiled.rib_input_type_info),
             idempotency_key_input: value
@@ -306,7 +309,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             None
         };
 
-        let binding_type = self.binding_type.into();
+        let binding_type = self.binding_type.map(WorkerBindingType::from);
 
         Ok(crate::worker_binding::GolemWorkerBinding {
             component_id: self.component_id,
@@ -502,8 +505,9 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
 
         let idempotency_key = value.idempotency_key.map(|key| key.into());
 
-        let binding_type: golem_api_grpc::proto::golem::apidefinition::WorkerBindingType = value.binding_type.into();
-        let binding_type = Some(binding_type as i32);
+        let binding_type = value.binding_type
+            .map(golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::from)
+            .map(|binding_type| binding_type as i32);
 
         let result = grpc_apidefinition::WorkerBinding {
             component: Some(value.component_id.into()),
@@ -550,7 +554,7 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             worker_name,
             idempotency_key,
             response,
-            binding_type,
+            binding_type: Some(binding_type),
         };
 
         Ok(result)
@@ -562,6 +566,15 @@ pub enum WorkerBindingType {
     #[default]
     Default,
     FileServer,
+}
+
+impl std::fmt::Display for WorkerBindingType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerBindingType::Default => write!(f, "Default"),
+            WorkerBindingType::FileServer => write!(f, "FileServer"),
+        }
+    }
 }
 
 impl From<golem_api_grpc::proto::golem::apidefinition::WorkerBindingType> for WorkerBindingType {

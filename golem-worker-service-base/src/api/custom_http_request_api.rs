@@ -2,8 +2,10 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::api_definition::http::CompiledHttpApiDefinition;
+use crate::service::worker::WorkerService;
 use crate::worker_service_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
 use futures_util::FutureExt;
+use golem_service_base::auth::EmptyAuthCtx;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
@@ -22,6 +24,7 @@ pub struct CustomHttpRequestApi {
     pub worker_service_rib_interpreter: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
     pub api_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
+    pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
 }
 
 impl CustomHttpRequestApi {
@@ -30,6 +33,7 @@ impl CustomHttpRequestApi {
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send,
         >,
+        worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
     ) -> Self {
         let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             worker_request_executor_service.clone(),
@@ -38,6 +42,7 @@ impl CustomHttpRequestApi {
         Self {
             worker_service_rib_interpreter: evaluator,
             api_definition_lookup_service,
+            worker_service,
         }
     }
 
@@ -104,7 +109,7 @@ impl CustomHttpRequestApi {
         {
             Ok(resolved_worker_binding) => {
                 resolved_worker_binding
-                    .interpret_response_mapping(&self.worker_service_rib_interpreter)
+                    .interpret_response_mapping(&self.worker_service_rib_interpreter, Some(&self.worker_service))
                     .await
             }
 

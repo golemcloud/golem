@@ -160,7 +160,7 @@ mod internal {
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
-            binding_type: get_binding_type(worker_bridge_info)?,
+            binding_type: Some(get_binding_type(worker_bridge_info)?),
         };
 
         Ok(Route {
@@ -259,7 +259,6 @@ mod tests {
     use test_r::test;
 
     use super::*;
-    use crate::api::WorkerBindingType;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
@@ -326,7 +325,7 @@ mod tests {
                         .into_iter()
                         .collect()
                     )),
-                    binding_type: WorkerBindingType::default(),
+                    binding_type: None,
                 }
             })
         );

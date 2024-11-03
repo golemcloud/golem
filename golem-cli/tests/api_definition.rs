@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::ComponentId;
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
+use tracing::debug;
 
 use crate::cli::{Cli, CliLive};
-use crate::worker::add_component_from_file;
+use crate::worker::{add_component_from_file, add_component_from_file_with_manifest};
 use crate::Tracing;
 use assert2::assert;
 use chrono::{DateTime, Utc};
@@ -29,7 +31,8 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use test_r::core::{DynamicTestRegistration, TestType};
 use uuid::Uuid;
@@ -111,6 +114,14 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
         TestType::IntegrationTest,
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
             api_definition_delete((deps, name.to_string(), cli.with_args(short)))
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_add_file_server{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_add_file_server((deps, name.to_string(), cli.with_args(short)))
         }
     );
 }
@@ -274,6 +285,7 @@ pub fn to_definition(
                         worker_name: v.binding.worker_name.clone(),
                         idempotency_key: v.binding.idempotency_key.clone(),
                         response: v.binding.response,
+                        binding_type: v.binding.binding_type.clone(),
                         response_mapping_input: Some(RibInputTypeInfo {
                             types: HashMap::new(),
                         }),
@@ -539,4 +551,101 @@ fn api_definition_delete(
     assert!(res_list.is_empty());
 
     Ok(())
+}
+
+fn api_definition_add_file_server(
+    (deps, name, cli): (
+        &(impl TestDependencies + Send + Sync + 'static),
+        String,
+        CliLive,
+    ),
+) -> anyhow::Result<()> {
+    
+
+    let component_name = format!("api_definition_add_file_server{name}");
+
+    let component_dir = prepare_component_directory(deps, &component_name)?;
+    let manifest_path = component_dir.path().join(format!("{component_name}.yaml"));
+
+    let component = add_component_from_file_with_manifest(deps, &component_name, &cli, "file-initial.wasm", manifest_path.to_string_lossy().as_ref())?;
+    let component_id = component.component_urn.id;
+
+    let api_name = format!("{component_name}-file-server");
+    let api_definition = make_file_server_api_definition(&component_id, &api_name)?;
+    let api_path = component_dir.path().join("api-file-server.json");
+
+    {
+        let mut api_file = std::fs::File::create_new(&api_path)?;
+        serde_json::to_writer(&mut api_file, &api_definition)?;
+        api_file.flush()?;
+    }
+
+    let mut res: HttpApiDefinitionWithTypeInfo =
+        cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
+
+    let expected = to_definition(api_definition, res.created_at);
+    res.routes[0].binding.response_mapping_input.as_mut().unwrap().types.clear();
+    assert_eq!(res, expected);
+
+    Ok(())
+}
+
+fn copy_dir(source: &Path, destination: &Path) -> anyhow::Result<()> {
+    let walk = walkdir::WalkDir::new(source);
+
+    for entry in walk {
+        let entry = entry?;
+        if entry.metadata()?.is_file() {
+            let source_path = entry.path();
+            let destination_path = destination.join(source_path.strip_prefix(source)?);
+            debug!("Copying '{}' to '{}'", source_path.display(), destination_path.display());
+
+            if let Some(dirs) = destination_path.parent() {
+                std::fs::create_dir_all(dirs)?;
+            }
+            std::fs::copy(source_path, destination_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn prepare_component_directory(deps: &(impl TestDependencies + Send + Sync + 'static), component_name: &str) -> anyhow::Result<tempfile::TempDir> {
+    let tempdir = tempfile::TempDir::new().unwrap();
+    let temp_path = tempdir.path();
+    copy_dir(&deps.component_directory().join(Path::new("file-initial/resources/")), temp_path)?;
+
+    let mut application = golem_cli::model::oam::Application::from_yaml_file(temp_path.join("file-initial.yaml"))?;
+    let component = application
+        .spec
+        .components
+        .iter_mut()
+        .filter(|c| &c.name == "file-initial-1")
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Component 'file-initial-1' not found"))?;
+
+    component.name = component_name.to_string();
+
+    let manifest_path = temp_path.join(format!("{component_name}.yaml"));
+    application.to_yaml_file(&manifest_path)?;
+
+    Ok(tempdir)
+}
+
+fn make_file_server_api_definition(component_id: &ComponentId, api_id: &str) -> anyhow::Result<HttpApiDefinitionRequest> {
+    Ok(serde_yaml::from_str(&format!(r#"
+        id: '{api_id}'
+        version: "0.1.0"
+        draft: true
+        routes:
+        - method: Get
+          path: '/static/{{file}}'
+          binding:
+            componentId: 
+              version: 0
+              componentId: '{component_id}'
+            workerName: '"my_file_server"'
+            response: 'let file: str = request.path.file; "/static/ro/${{file}}"'
+            bindingType: FileServer
+    "#,))?)
 }

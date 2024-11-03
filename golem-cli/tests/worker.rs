@@ -254,6 +254,28 @@ pub fn add_ephemeral_component_from_file(
     ])
 }
 
+pub fn add_component_from_file_with_manifest(
+    deps: &(impl TestDependencies + Send + Sync + 'static),
+    component_name: &str,
+    cli: &CliLive,
+    file: &str,
+    manifest_path: &str,
+) -> anyhow::Result<ComponentView> {
+    let env_service = deps.component_directory().join(file);
+    let cfg = &cli.config;
+    let manifest_path = deps.component_directory().join(manifest_path);
+
+    cli.run(&[
+        "component",
+        "add",
+        &cfg.arg('c', "component-name"),
+        component_name,
+        env_service.to_str().unwrap(),
+        &cfg.arg('m', "manifest"),
+        manifest_path.to_str().unwrap(),
+    ])
+}
+
 pub fn add_environment_service_component(
     deps: &(impl TestDependencies + Send + Sync + 'static),
     component_name: &str,

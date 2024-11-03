@@ -3025,7 +3025,6 @@ components:
       - nodeType
       - name
       - permissions
-      - lastModified
     FileSystemNodeType:
       type: string
       enum:
@@ -3611,7 +3610,6 @@ components:
       - componentId
       - workerName
       - response
-      - bindingType
     GolemWorkerBindingWithTypeInfo:
       type: object
       properties:
@@ -3623,6 +3621,8 @@ components:
           type: string
         response:
           type: string
+        bindingType:
+          $ref: '#/components/schemas/WorkerBindingType'
         responseMappingInput:
           $ref: '#/components/schemas/RibInputTypeInfo'
         workerNameInput:

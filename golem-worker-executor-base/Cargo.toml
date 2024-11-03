@@ -109,7 +109,7 @@ testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
 tracing-subscriber = { workspace = true }
-walkdir = "2.5.0"
+walkdir = { workspace = true }
 warp = { workspace = true }
 
 [build-dependencies]

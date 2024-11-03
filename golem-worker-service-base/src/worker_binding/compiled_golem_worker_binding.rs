@@ -41,7 +41,7 @@ impl CompiledGolemWorkerBinding {
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
-            binding_type: golem_worker_binding.binding_type.clone(),
+            binding_type: golem_worker_binding.binding_type.clone().unwrap_or_default(),
         })
     }
 }

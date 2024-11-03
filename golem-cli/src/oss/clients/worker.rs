@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
 use std::time::Duration;
 
-use crate::clients::worker::{worker_name_required, WorkerClient};
+use crate::clients::worker::{worker_name_required, GetFileResponse, WorkerClient};
 use crate::command::worker::WorkerConnectOptions;
 use crate::connect_output::ConnectOutput;
 use crate::model::{
@@ -25,8 +26,7 @@ use async_trait::async_trait;
 use futures_util::{future, pin_mut, SinkExt, StreamExt};
 use golem_client::api::WorkerError;
 use golem_client::model::{
-    InvokeParameters, InvokeResult, ScanCursor, UpdateWorkerRequest, WorkerCreationRequest,
-    WorkerFilter, WorkerId, WorkersMetadataRequest,
+    GetFilesResponse, InvokeParameters, InvokeResult, ScanCursor, UpdateWorkerRequest, WorkerCreationRequest, WorkerFilter, WorkerId, WorkersMetadataRequest
 };
 use golem_client::{Context, Error};
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
@@ -555,6 +555,34 @@ impl<C: golem_client::api::WorkerClient + Sync + Send> WorkerClient for WorkerCl
         }
 
         Ok(entries)
+    }
+
+    async fn get_files(
+        &self,
+        worker_urn: WorkerUrn,
+    ) -> Result<GetFilesResponse, GolemError> {
+        let files = self.client.get_files(&worker_urn.id.component_id.0, &worker_name_required(&worker_urn)?)
+            .await?;
+
+        Ok(files)
+    }
+
+    async fn get_file(
+        &self,
+        worker_urn: WorkerUrn,
+        path: &Path,
+    ) -> Result<GetFileResponse, GolemError> {
+        let path = path.to_string_lossy();
+        let path = path.as_ref();
+        let response = self.client.get_file(&worker_urn.id.component_id.0, &worker_name_required(&worker_urn)?, path)
+            .await?;
+
+        // This should be determined by content-type, but the client generator doesn't currently support it
+        if let Ok(get_files_response) = serde_json::from_slice::<GetFilesResponse>(response.as_ref()) {
+            Ok(GetFileResponse::Directory(get_files_response))
+        } else {
+            Ok(GetFileResponse::File(response.into()))
+        }
     }
 }
 

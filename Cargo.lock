@@ -1564,17 +1564,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cfb"
-version = "0.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38f2da7a0a2c4ccf0065be06397cc26a81f4e528be095826eee9d4adbb8c60f"
-dependencies = [
- "byteorder",
- "fnv",
- "uuid",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3541,6 +3530,7 @@ dependencies = [
  "strip-ansi-escapes",
  "strum",
  "strum_macros",
+ "tempfile",
  "test-r",
  "testcontainers",
  "testcontainers-modules",
@@ -3600,6 +3590,7 @@ dependencies = [
  "figment",
  "fred",
  "futures-core",
+ "futures-util",
  "git-version",
  "golem-api-grpc",
  "golem-rib",
@@ -3618,6 +3609,7 @@ dependencies = [
  "rand",
  "range-set-blaze",
  "regex",
+ "reqwest",
  "serde 1.0.213",
  "serde_json",
  "test-r",
@@ -3631,6 +3623,7 @@ dependencies = [
  "tracing-test",
  "url",
  "uuid",
+ "walkdir",
  "wasm-wave",
 ]
 
@@ -4215,8 +4208,8 @@ dependencies = [
  "http 1.1.0",
  "humantime-serde",
  "hyper 1.5.0",
- "infer",
  "lazy_static 1.5.0",
+ "mime_guess",
  "nom 7.1.3",
  "openapiv3",
  "opentelemetry",
@@ -4236,6 +4229,7 @@ dependencies = [
  "strum",
  "strum_macros",
  "tap",
+ "tempfile",
  "test-r",
  "testcontainers",
  "testcontainers-modules",
@@ -4250,6 +4244,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "walkdir",
  "wasm-wave",
 ]
 
@@ -4899,15 +4894,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b248f5224d1d606005e02c97f5aa4e88eeb230488bcc03bc9ca4d7991399f2b5"
 
 [[package]]
-name = "infer"
-version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc150e5ce2330295b8616ce0e3f53250e53af31759a9dbedad1621ba29151847"
-dependencies = [
- "cfb",
-]
-
-[[package]]
 name = "inlinable_string"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4968,10 +4954,12 @@ dependencies = [
  "reqwest",
  "serde 1.0.213",
  "serde_json",
+ "tempfile",
  "test-r",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
  "warp",
 ]
 

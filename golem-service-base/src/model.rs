@@ -1140,7 +1140,26 @@ impl From<golem_api_grpc::proto::golem::common::FileSystemNode> for FileSystemNo
     }
 }
 
+impl From<FileSystemNode> for golem_api_grpc::proto::golem::common::FileSystemNode {
+    fn from(value: FileSystemNode) -> Self {
+        let node_type = Some(value.node_type as i32);
+        let permissions = Some(value.permissions as i32);
+        let name = value.name;
+        let last_modified = value.last_modified;
+        let size = value.size;
+
+        Self {
+            node_type,
+            name,
+            permissions,
+            last_modified,
+            size,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Enum)]
+#[repr(i32)]
 pub enum FileSystemNodeType {
     Directory,
     File,

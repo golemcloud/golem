@@ -24,14 +24,7 @@ use tracing::Level;
 
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest,
-    GetOplogResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse,
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetFileRequest, GetFileResponse, GetFilesRequest, GetFilesResponse, GetOplogRequest, GetOplogResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse
 };
 use golem_api_grpc::proto::golem::worker::LogEvent;
 
@@ -200,6 +193,14 @@ pub trait WorkerService {
             .search_oplog(request)
             .await?
             .into_inner())
+    }
+
+    async fn get_files(&self, request: GetFilesRequest) -> crate::Result<GetFilesResponse> {
+        Ok(self.client().await?.get_files(request).await?.into_inner())
+    }
+
+    async fn get_file(&self, request: GetFileRequest) -> crate::Result<Streaming<GetFileResponse>> {
+        Ok(self.client().await?.get_file(request).await?.into_inner())
     }
 
     fn private_host(&self) -> String;

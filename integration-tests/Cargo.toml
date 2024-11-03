@@ -26,10 +26,12 @@ rand = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 warp = { workspace = true }
+walkdir = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }

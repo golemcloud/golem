@@ -20,15 +20,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
-    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
-    interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, search_oplog_response,
-    update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest,
-    GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest,
-    ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse,
-    WorkerError, WorkerExecutionError,
+    get_files_response, get_oplog_response, get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response, invoke_response, launch_new_worker_response, resume_worker_response, search_oplog_response, update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, GetFileRequest, GetFileResponse, GetFilesRequest, GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest, ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError
 };
 use golem_api_grpc::proto::golem::worker::{
     log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
@@ -44,8 +36,9 @@ use golem_common::model::{
     SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatusRecord,
 };
-use golem_service_base::model::PublicOplogEntryWithIndex;
+use golem_service_base::model::{FileSystemNode, PublicOplogEntryWithIndex};
 use golem_wasm_rpc::Value;
+use tonic::Streaming;
 use std::collections::HashMap;
 use std::path::Path;
 use tokio::select;
@@ -185,6 +178,17 @@ pub trait TestDsl {
         worker_id: &WorkerId,
         query: &str,
     ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
+
+    async fn get_files(
+        &self,
+        worker_id: &WorkerId,
+    ) -> crate::Result<Vec<FileSystemNode>>;
+
+    async fn get_file(
+        &self,
+        worker_id: &WorkerId,
+        path: &Path,
+    ) -> crate::Result<Streaming<GetFileResponse>>;
 }
 
 #[async_trait]
@@ -888,6 +892,43 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         Ok(result)
     }
+
+    async fn get_files(
+        &self,
+        worker_id: &WorkerId,
+    ) -> crate::Result<Vec<FileSystemNode>> {
+        let response = self
+            .worker_service()
+            .get_files(GetFilesRequest {
+                worker_id: Some(worker_id.clone().into()),
+            })
+            .await?;
+
+            
+        match response.result {
+            Some(get_files_response::Result::Success(success)) => 
+                Ok(success.nodes.into_iter().map(FileSystemNode::from).collect()),
+            Some(get_files_response::Result::Error(WorkerError { error: Some(err) })) => 
+                Err(anyhow!("Failed to get files: {err:?}")),
+            _ => Err(anyhow!("Empty response")),
+        }
+    }
+
+    async fn get_file(
+        &self,
+        worker_id: &WorkerId,
+        path: &Path,
+    ) -> crate::Result<Streaming<GetFileResponse>> {
+        let response = self
+            .worker_service()
+            .get_file(GetFileRequest {
+                worker_id: Some(worker_id.clone().into()),
+                path: path.to_string_lossy().into_owned(),
+            })
+            .await?;
+
+        Ok(response)
+    }
 }
 
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
@@ -1334,6 +1375,15 @@ pub trait TestDslUnsafe {
         worker_id: &WorkerId,
         query: &str,
     ) -> Vec<PublicOplogEntryWithIndex>;
+    async fn get_files(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Vec<FileSystemNode>;
+    async fn get_file(
+        &self,
+        worker_id: &WorkerId,
+        path: &Path,
+    ) -> Streaming<GetFileResponse>;
 }
 
 #[async_trait]
@@ -1559,5 +1609,24 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::search_oplog(self, worker_id, query)
             .await
             .expect("Failed to search oplog")
+    }
+
+    async fn get_files(
+        &self,
+        worker_id: &WorkerId,
+    ) -> Vec<FileSystemNode> {
+        <T as TestDsl>::get_files(self, worker_id)
+            .await
+            .expect("Failed to get files")
+    }
+
+    async fn get_file(
+        &self,
+        worker_id: &WorkerId,
+        path: &Path,
+    ) -> Streaming<GetFileResponse> {
+        <T as TestDsl>::get_file(self, worker_id, path)
+            .await
+            .expect("Failed to get file")
     }
 }

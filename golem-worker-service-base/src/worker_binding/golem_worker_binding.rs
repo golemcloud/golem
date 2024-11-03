@@ -13,7 +13,7 @@ pub struct GolemWorkerBinding {
     pub idempotency_key: Option<Expr>,
     pub response: ResponseMapping,
     #[serde(default)]
-    pub binding_type: WorkerBindingType,
+    pub binding_type: Option<WorkerBindingType>,
 }
 
 // ResponseMapping will consist of actual logic such as invoking worker functions
@@ -31,7 +31,7 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBinding {
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.idempotency_key),
             response: ResponseMapping(worker_binding.response_compiled.response_rib_expr),
-            binding_type: worker_binding.binding_type,
+            binding_type: Some(worker_binding.binding_type),
         }
     }
 }

@@ -311,7 +311,7 @@ mod tests {
 
     impl ToResponse<TestResponse> for FileServerResult {
         fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
-            panic!("{self:?}")
+            unimplemented!("")
         }
     }
 
@@ -372,7 +372,7 @@ mod tests {
             .await
             .unwrap();
 
-        resolved_route.interpret_response_mapping(&evaluator).await
+        resolved_route.interpret_response_mapping(&evaluator, None).await
     }
 
     #[test]

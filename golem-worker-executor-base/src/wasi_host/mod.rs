@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
 use std::time::Duration;
 
 use crate::durable_host::{DurableWorkerCtx, FileSystemDirectories};
 use crate::workerctx::WorkerCtx;
-use golem_common::file_system::{READ_ONLY_FILES_PATH_ABSOLUTE, READ_ONLY_FILES_PATH_RELATIVE};
+use golem_common::file_system::READ_ONLY_FILES_PATH;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
 use wasmtime_wasi::{
@@ -114,8 +115,8 @@ pub fn create_context(
         .allow_ip_name_lookup(true);
 
     if let Some(dir_ro) = dir_ro {
-        wasi_builder.preopened_dir(dir_ro.path(), READ_ONLY_FILES_PATH_ABSOLUTE, DirPerms::READ, FilePerms::READ)?;
-        wasi_builder.preopened_dir(dir_ro.path(), READ_ONLY_FILES_PATH_RELATIVE, DirPerms::READ, FilePerms::READ)?;
+        wasi_builder.preopened_dir(dir_ro.path(), READ_ONLY_FILES_PATH, DirPerms::READ, FilePerms::READ)?;
+        wasi_builder.preopened_dir(dir_ro.path(), Path::new("/").join(READ_ONLY_FILES_PATH).to_string_lossy(), DirPerms::READ, FilePerms::READ)?;
     }
 
     let wasi = wasi_builder.build();

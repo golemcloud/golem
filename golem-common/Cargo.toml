@@ -29,6 +29,7 @@ derive_more = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
 futures-core = { workspace = true }
+futures-util = { workspace = true }
 git-version = { workspace = true }
 humantime-serde = { workspace = true }
 http_02 = { workspace = true }
@@ -43,6 +44,7 @@ prost-types = { workspace = true }
 rand = { workspace = true }
 range-set-blaze = "0.1.16"
 regex = { workspace = true }
+reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -54,6 +56,7 @@ tracing-subscriber = { workspace = true }
 tracing-serde = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+walkdir = { workspace = true }
 wasm-wave = { workspace = true }
 
 [dev-dependencies]

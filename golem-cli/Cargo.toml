@@ -77,7 +77,7 @@ tungstenite = "0.20.1"
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = "=0.0.11"
-walkdir = "2.5.0"
+walkdir = { workspace = true }
 wasm-wave = { workspace = true }
 
 [dev-dependencies]
@@ -90,6 +90,7 @@ postgres = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
 serde_json_path = "0.6.5"
+tempfile = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }

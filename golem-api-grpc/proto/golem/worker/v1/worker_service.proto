@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.worker.v1;
 
 import public "golem/common/empty.proto";
+import public "golem/common/file_system.proto";
 import public "golem/worker/complete_parameters.proto";
 import public "golem/worker/cursor.proto";
 import public "golem/worker/idempotency_key.proto";
@@ -41,6 +42,9 @@ service WorkerService {
 
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
+
+  rpc GetFiles(GetFilesRequest) returns (GetFilesResponse);
+  rpc GetFile(GetFileRequest) returns (stream GetFileResponse);
 }
 
 message LaunchNewWorkerRequest {
@@ -258,4 +262,43 @@ message SearchOplogSuccessResponse {
   repeated golem.worker.OplogEntryWithIndex entries = 1;
   optional golem.worker.OplogCursor next = 2;
   uint64 last_index = 5;
+}
+
+message GetFilesRequest {
+  golem.worker.WorkerId worker_id = 1;
+}
+
+message GetFilesResponse {
+  oneof result {
+    GetFilesSuccessResponse success = 1;
+    WorkerError error = 2;
+  }
+}
+
+message GetFilesSuccessResponse {
+  repeated golem.common.FileSystemNode nodes = 1;
+}
+
+message GetFileRequest {
+  golem.worker.WorkerId worker_id = 1;
+  string path = 3;
+}
+
+
+message GetFileResponse {
+  oneof result {
+    GetFileSuccessResponse success = 1;
+    WorkerError error = 2;
+  }
+}
+
+message GetFileSuccessResponse {
+  oneof nodeType {
+    GetFilesSuccessResponse directory = 1;
+    FileChunk file = 2;
+  }
+}
+
+message FileChunk {
+  bytes content = 1;
 }

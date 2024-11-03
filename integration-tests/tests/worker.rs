@@ -12,25 +12,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_api_grpc::proto::golem::worker::v1::GetFileResponse;
+use golem_common::file_system::{InitialFile, InitialFileSet};
 use test_r::{inherit_test_dep, test, timeout};
 
 use assert2::check;
 
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
+use tracing::debug;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::Tracing;
 use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
-    ComponentId, FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator,
-    TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription,
-    WorkerStatus,
+    ComponentId, FileSystemPermission, FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus
 };
-use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use rand::seq::IteratorRandom;
 use serde_json::json;
 use std::time::{Duration, SystemTime};
@@ -1392,4 +1394,55 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
     check!(result1 == Ok(vec![Value::U64(1200)]));
     check!(result2 == Ok(vec![Value::U64(1)]));
     check!(result3 == Ok(vec![Value::U64(0)]));
+}
+
+
+#[test]
+#[tracing::instrument]
+#[timeout(120000)]
+async fn worker_get_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let resources_path = deps.component_directory().join("file-initial/resources/");
+
+    let initial_files = InitialFileSet {
+        files: vec![
+            InitialFile { 
+                source_path: PathBuf::from("readonly/multichunk.txt"), 
+                target_path: PathBuf::from("ro/multichunk.txt"), 
+                permission: FileSystemPermission::ReadOnly,
+            },
+            InitialFile { 
+                source_path: PathBuf::from("readonly/lorem.txt"), 
+                target_path: PathBuf::from("ro/lorem.txt"), 
+                permission: FileSystemPermission::ReadOnly,
+            },
+            InitialFile { 
+                source_path: PathBuf::from("readwrite/quick_fox.txt"), 
+                target_path: PathBuf::from("quick_fox.txt"), 
+                permission: FileSystemPermission::ReadWrite, 
+            },
+        ],
+    }.package(Some(&resources_path))
+        .await
+        .unwrap();
+    let component_id = deps.store_component_with_files("file-initial", initial_files).await;
+
+    let worker_id = WorkerId {
+        component_id,
+        worker_name: "file_server1".to_string(),
+    };
+
+    let response = deps.get_files(&worker_id).await;
+    info!("{response:?}");
+
+    let mut stream = deps.get_file(&worker_id, Path::new("/static/ro")).await;
+    let first = stream.message().await.unwrap().unwrap();
+    info!("{first:?}");
+
+    let mut stream = deps.get_file(&worker_id, Path::new("/static/ro/lorem.txt")).await;
+    let first = stream.message().await.unwrap().unwrap();
+    info!("{first:?}");
+
+    let mut stream = deps.get_file(&worker_id, Path::new("/static/ro/multichunk.txt")).await;
+    let first = stream.message().await.unwrap().unwrap();
+    info!("{first:?}");
 }

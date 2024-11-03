@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Add;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant};
 
@@ -43,7 +43,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::config::RetryConfig;
-use golem_common::file_system::{READ_ONLY_FILES_PATH_ABSOLUTE, READ_ONLY_FILES_PATH_RELATIVE};
+use golem_common::file_system::READ_ONLY_FILES_PATH;
 use golem_common::model::oplog::{
     IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError,
     WorkerResourceId, WrappedFunctionType,
@@ -2040,26 +2040,47 @@ pub struct FileSystemDirectories {
 
 impl FileSystemDirectories {
     pub async fn get_node(&self, path: &Path) -> std::io::Result<FileSystemNode> {
-        let is_ro = path.strip_prefix(READ_ONLY_FILES_PATH_ABSOLUTE).is_ok() 
-            || path.strip_prefix(READ_ONLY_FILES_PATH_RELATIVE).is_ok();
+        // Make any absolute paths relateive
+        let path = match path.strip_prefix("/") {
+            Ok(p) => p,
+            Err(_) => path,
+        };
+
+        debug!("get_node: path = {}", path.display());
+
+        let (is_ro, path) = match path.strip_prefix(READ_ONLY_FILES_PATH) {
+            Ok(p) => (true, p),
+            Err(_) => (false, path),
+        };
+
+        debug!("get_node: is_ro = {is_ro}");
 
         let dir_path = if let (Some(dir_ro), true) = (self.dir_ro.as_ref(), is_ro) {
             dir_ro
         } else {
             &self.dir_rw
         }.path();
+
+        debug!("get_node: dir_path = {}", dir_path.display());
+
         let dir = tokio::fs::File::open(dir_path)
             .await?;
         let dir = cap_std::fs::Dir::from_std_file(dir.into_std().await);
         
-        let path = path.to_path_buf();
+        let mut path = path.to_path_buf();
+        if path == PathBuf::new() {
+            path = PathBuf::from(".");
+        }
+        debug!("get_node: path = {}", path.display());
         let node = tokio::task::spawn_blocking::<_, std::io::Result<_>>(move || {
             let metadata = dir.metadata(&path)?;
 
             let node = if metadata.is_dir() {
+                debug!("get_node: is_dir");
                 let dir = dir.open_dir(&path)?;
                 FileSystemNode::Directory(dir.entries()?)
             } else {
+                debug!("get_node: is_file");
                 let file = dir.open(&path)?;
                 FileSystemNode::File(file)
             };

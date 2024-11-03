@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
+
 use crate::command::worker::WorkerConnectOptions;
 use crate::model::{
     Format, GolemError, IdempotencyKey, WorkerMetadata, WorkerName, WorkerUpdateMode,
     WorkersMetadataResponse,
 };
 use async_trait::async_trait;
-use golem_client::model::{InvokeParameters, InvokeResult, ScanCursor, WorkerFilter, WorkerId};
+use golem_client::model::{GetFilesResponse, InvokeParameters, InvokeResult, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::uri::oss::urn::{ComponentUrn, WorkerUrn};
 
@@ -106,6 +108,22 @@ pub trait WorkerClient {
         worker_urn: WorkerUrn,
         query: String,
     ) -> Result<Vec<(u64, PublicOplogEntry)>, GolemError>;
+
+    async fn get_files(
+        &self,
+        worker_urn: WorkerUrn,
+    ) -> Result<GetFilesResponse, GolemError>;
+
+    async fn get_file(
+        &self,
+        worker_uri: WorkerUrn,
+        path: &Path,
+    ) -> Result<GetFileResponse, GolemError>;
+}
+
+pub enum GetFileResponse {
+    File(Vec<u8>),
+    Directory(GetFilesResponse),
 }
 
 pub fn worker_name_required(urn: &WorkerUrn) -> Result<String, GolemError> {

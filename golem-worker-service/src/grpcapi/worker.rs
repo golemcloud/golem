@@ -13,28 +13,16 @@
 // limitations under the License.
 
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use futures::stream::BoxStream;
 use tap::TapFallible;
+use tokio_stream::StreamExt as _;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody, FileSystemNode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response, delete_worker_response, get_oplog_response,
-    get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
-    invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, search_oplog_response,
-    update_worker_response, worker_error, worker_execution_error, CompletePromiseRequest,
-    CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
-    GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest,
-    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
-    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
-    InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest,
-    SearchOplogResponse, SearchOplogSuccessResponse, UnknownError, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
+    complete_promise_response, delete_worker_response, get_file_response, get_file_success_response, get_files_response, get_oplog_response, get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response, invoke_response, launch_new_worker_response, resume_worker_response, search_oplog_response, update_worker_response, worker_error, worker_execution_error, CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, FileChunk, GetFileRequest, GetFileResponse, GetFileSuccessResponse, GetFilesRequest, GetFilesResponse, GetFilesSuccessResponse, GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse, UnknownError, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
 use golem_common::grpc::{
@@ -524,6 +512,55 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
+
+    async fn get_files(
+        &self,
+        request: Request<GetFilesRequest>,
+    ) -> Result<Response<GetFilesResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_files",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .get_files(request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(response) => record.succeed(get_files_response::Result::Success(response)),
+            Err(error) => record.fail(
+                get_files_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetFilesResponse {
+            result: Some(response),
+        }))
+    }
+
+    type GetFileStream = BoxStream<'static, Result<GetFileResponse, Status>>;
+
+    async fn get_file(
+        &self,
+        request: Request<GetFileRequest>,
+    ) -> Result<Response<Self::GetFileStream>, Status>  {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_file",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let stream = self
+            .get_file(request)
+            .instrument(record.span.clone())
+            .await;
+        match stream {
+            Ok(stream) => Ok(Response::new(stream)),
+            Err(error) => Err(error_to_status(error)),
+        }
+    }
 }
 
 impl WorkerGrpcApi {
@@ -944,6 +981,84 @@ impl WorkerGrpcApi {
             next: result.next.map(|c| c.into()),
             last_index: result.last_index,
         })
+    }
+
+    async fn get_files(
+        &self,
+        request: GetFilesRequest,
+    ) -> Result<GetFilesSuccessResponse, GrpcWorkerError> {
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+
+        let result = self
+            .worker_service
+            .get_files(
+                &worker_id,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        Ok(GetFilesSuccessResponse {
+            nodes: result.contents.into_iter().map(FileSystemNode::from).collect(),
+        })
+    }
+
+    async fn get_file(
+        &self,
+        request: GetFileRequest,
+    ) -> Result<<Self as GrpcWorkerService>::GetFileStream, GrpcWorkerError> {
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+
+        let result = self
+            .worker_service
+            .get_file(
+                &worker_id,
+                &request.path,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .await?;
+
+        fn file_message_to_grpc(file_message: std::io::Result<Vec<u8>>) -> Result<GetFileResponse, Status> {
+            let result = match file_message {
+                Ok(ok) => get_file_response::Result::Success(GetFileSuccessResponse {
+                    node_type: Some(get_file_success_response::NodeType::File(FileChunk {
+                        content: ok,
+                    })),
+                }),
+                Err(err) => get_file_response::Result::Error(GrpcWorkerError {
+                    error: Some(worker_error::Error::InternalError(WorkerExecutionError {
+                        error: Some(worker_execution_error::Error::FileSystem(golem_api_grpc::proto::golem::worker::v1::FileSystem {
+                            details: err.to_string(),
+                        })),
+                    })),
+                }),
+            };
+            
+            Ok(GetFileResponse {
+                result: Some(result),
+            })
+        }
+
+        let response = match result {
+            golem_service_base::model::GetFileResponse::Directory(get_files_response) => {
+                let stream: <Self as GrpcWorkerService>::GetFileStream =
+                Box::pin(futures::stream::once(async move { Ok(GetFileResponse {
+                    result: Some(get_file_response::Result::Success(GetFileSuccessResponse {
+                        node_type: Some(get_file_success_response::NodeType::Directory(
+                            GetFilesSuccessResponse {
+                                nodes: get_files_response.contents.into_iter().map(FileSystemNode::from).collect(),
+                            }
+                        )),
+                    }))
+                }) }));
+                stream
+            }
+            golem_service_base::model::GetFileResponse::File(stream) =>
+                Box::pin(stream.map(file_message_to_grpc)),
+        };
+
+        Ok(response)
     }
 }
 

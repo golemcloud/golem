@@ -37,6 +37,7 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use itertools::Itertools;
 use serde_json::Value;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tracing::{error, info};
@@ -202,6 +203,19 @@ pub trait WorkerService {
         &self,
         worker_uri: WorkerUri,
         query: String,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
+
+    async fn get_files(
+        &self,
+        worker_uri: WorkerUri,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError>;
+
+    async fn get_file(
+        &self,
+        worker_uri: WorkerUri,
+        path: &Path,
         project: Option<Self::ProjectContext>,
     ) -> Result<GolemResult, GolemError>;
 }
@@ -858,5 +872,28 @@ impl<ProjectContext: Send + Sync + 'static> WorkerService for WorkerServiceLive<
 
         let entries = self.client.search_oplog(worker_urn, query).await?;
         Ok(GolemResult::Ok(Box::new(entries)))
+    }
+
+    async fn get_files(
+        &self,
+        worker_uri: WorkerUri,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+
+        let _response = self.client.get_files(worker_urn).await?;
+        todo!()
+    }
+
+    async fn get_file(
+        &self,
+        worker_uri: WorkerUri,
+        path: &Path,
+        project: Option<Self::ProjectContext>,
+    ) -> Result<GolemResult, GolemError> {
+        let worker_urn = self.resolve_uri(worker_uri, project).await?;
+
+        let _response = self.client.get_file(worker_urn, path).await?;
+        todo!()
     }
 }
