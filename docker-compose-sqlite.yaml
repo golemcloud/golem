@@ -82,6 +82,8 @@ services:
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
+      - GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem"
+      - GOLEM__BLOB_STORAGE__CONFIG__ROOT="/worker_executor_store"
       - GOLEM__DB__TYPE=Sqlite
       - GOLEM__DB__CONFIG__DATABASE=/app/golem_db/golem_worker.sqlite
       - GOLEM__DB__CONFIG__MAX_CONNECTIONS=10
@@ -100,6 +102,7 @@ services:
       - "${WORKER_SERVICE_GRPC_PORT}:${WORKER_SERVICE_GRPC_PORT}"
     volumes:
       - golem_db:/app/golem_db
+      - worker_executor_store:/worker_executor_store
 
   golem-component-compilation-service:
     build:

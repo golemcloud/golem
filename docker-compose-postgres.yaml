@@ -106,6 +106,8 @@ services:
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=info,h2=warn,hyper=warn,tower=warn
+      - GOLEM__BLOB_STORAGE__TYPE="LocalFileSystem"
+      - GOLEM__BLOB_STORAGE__CONFIG__ROOT="/worker_executor_store"
       - GOLEM__DB__TYPE=Postgres
       - GOLEM__DB__CONFIG__DATABASE=golem_db
       - GOLEM__DB__CONFIG__SCHEMA=golem_worker
@@ -123,6 +125,8 @@ services:
       - GOLEM__CUSTOM_REQUEST_PORT=${WORKER_SERVICE_CUSTOM_REQUEST_PORT}
       - GOLEM__PORT=${WORKER_SERVICE_HTTP_PORT}
       - GOLEM__WORKER_GRPC_PORT=${WORKER_SERVICE_GRPC_PORT}
+    volumes:
+      - worker_executor_store:/worker_executor_store
     ports:
       - "${WORKER_SERVICE_HTTP_PORT}:${WORKER_SERVICE_HTTP_PORT}"
       - "${WORKER_SERVICE_CUSTOM_REQUEST_PORT}:${WORKER_SERVICE_CUSTOM_REQUEST_PORT}"
