@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::config::{DbSqliteConfig, RetryConfig};
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
-use golem_common::config::{RetryConfig, DbSqliteConfig};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]

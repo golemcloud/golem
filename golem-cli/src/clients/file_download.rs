@@ -32,5 +32,4 @@ impl FileDownloadClient for FileDownloadClientLive {
         let bytes = response.bytes().await?;
         Ok(bytes.to_vec())
     }
-
 }

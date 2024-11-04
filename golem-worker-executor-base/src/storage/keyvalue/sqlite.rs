@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::storage::sqlite::{DBValue, SqlitePool};
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_service_base::storage::sqlite::{DBValue, SqlitePool};
 use std::collections::HashMap;
 
 #[derive(Debug)]

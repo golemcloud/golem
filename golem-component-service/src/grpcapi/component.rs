@@ -167,7 +167,8 @@ impl ComponentGrpcApi {
         data: Vec<u8>,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
-        let files = request.files
+        let files = request
+            .files
             .iter()
             .map(|f| f.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
@@ -205,7 +206,8 @@ impl ComponentGrpcApi {
         };
 
         let files = if request.update_files {
-            let value = request.files
+            let value = request
+                .files
                 .iter()
                 .map(|f| f.clone().try_into())
                 .collect::<Result<Vec<_>, _>>()
@@ -217,7 +219,13 @@ impl ComponentGrpcApi {
 
         let result = self
             .component_service
-            .update_internal(&id, data, component_type, files, &DefaultNamespace::default())
+            .update_internal(
+                &id,
+                data,
+                component_type,
+                files,
+                &DefaultNamespace::default(),
+            )
             .await?;
         Ok(result.into())
     }

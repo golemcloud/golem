@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod application_manifest;
 pub mod component;
 pub mod deploy;
 pub mod invoke_result_view;
 pub mod text;
 pub mod wave;
-pub mod application_manifest;
 
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;

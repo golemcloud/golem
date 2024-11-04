@@ -85,7 +85,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         _project: &Option<Self::ProjectContext>,
         component_type: golem_client::model::ComponentType,
         files_archive: Option<&Path>,
-        files_permissions: Option<&ComponentFilePathAndPermissionsList>
+        files_permissions: Option<&ComponentFilePathAndPermissionsList>,
     ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {path:?}");
 
@@ -106,7 +106,13 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client
-                    .create_component(&name.0, Some(&component_type), file, files_permissions, files_archive_file)
+                    .create_component(
+                        &name.0,
+                        Some(&component_type),
+                        file,
+                        files_permissions,
+                        files_archive_file,
+                    )
                     .await?
             }
             PathBufOrStdin::Stdin => {
@@ -117,7 +123,13 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .create_component(&name.0, Some(&component_type), bytes, files_permissions, files_archive_file)
+                    .create_component(
+                        &name.0,
+                        Some(&component_type),
+                        bytes,
+                        files_permissions,
+                        files_archive_file,
+                    )
                     .await?
             }
         };
@@ -145,7 +157,6 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
             None => None,
         };
 
-
         let component = match path {
             PathBufOrStdin::Path(path) => {
                 let file = File::open(path)
@@ -153,7 +164,13 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client
-                    .update_component(&urn.id.0, component_type.as_ref(), file, files_permissions, files_archive_file)
+                    .update_component(
+                        &urn.id.0,
+                        component_type.as_ref(),
+                        file,
+                        files_permissions,
+                        files_archive_file,
+                    )
                     .await?
             }
             PathBufOrStdin::Stdin => {
@@ -164,7 +181,13 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .update_component(&urn.id.0, component_type.as_ref(), bytes, files_permissions, files_archive_file)
+                    .update_component(
+                        &urn.id.0,
+                        component_type.as_ref(),
+                        bytes,
+                        files_permissions,
+                        files_archive_file,
+                    )
                     .await?
             }
         };

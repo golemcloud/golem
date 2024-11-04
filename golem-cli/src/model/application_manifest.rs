@@ -12,26 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::{ComponentType, ComponentFilePath, ComponentFilePathAndPermissions, ComponentFilePermissions};
+use glob::glob;
+use golem_common::model::{
+    ComponentFilePath, ComponentFilePathAndPermissions, ComponentFilePermissions, ComponentType,
+};
+use golem_wasm_rpc_stubgen::commands::declarative::ApplicationResolveMode;
 use golem_wasm_rpc_stubgen::model::oam;
+use golem_wasm_rpc_stubgen::model::oam::TypedTraitProperties;
 use golem_wasm_rpc_stubgen::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
 use golem_wasm_rpc_stubgen::model::validation::{ValidatedResult, ValidationBuilder};
 use golem_wasm_rpc_stubgen::model::wasm_rpc::{
-    include_glob_patter_from_yaml_file, DEFAULT_CONFIG_FILE_NAME, OAM_COMPONENT_TYPE_WASM, OAM_COMPONENT_TYPE_WASM_BUILD, OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD, OAM_TRAIT_TYPE_WASM_RPC,
+    include_glob_patter_from_yaml_file, DEFAULT_CONFIG_FILE_NAME, OAM_COMPONENT_TYPE_WASM,
+    OAM_COMPONENT_TYPE_WASM_BUILD, OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD, OAM_TRAIT_TYPE_WASM_RPC,
 };
-use glob::glob;
-use golem_wasm_rpc_stubgen::commands::declarative::ApplicationResolveMode;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use url::Url;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use golem_wasm_rpc_stubgen::model::oam::TypedTraitProperties;
 use tracing::warn;
+use url::Url;
 
 use super::GolemError;
 
-pub fn load_app(app_resolve_mode: &ApplicationResolveMode) -> Result<ApplicationManifest, GolemError> {
+pub fn load_app(
+    app_resolve_mode: &ApplicationResolveMode,
+) -> Result<ApplicationManifest, GolemError> {
     match load_app_validated(app_resolve_mode) {
         ValidatedResult::Ok(app) => Ok(app),
         ValidatedResult::OkWithWarns(app, warns) => {
@@ -42,13 +47,17 @@ pub fn load_app(app_resolve_mode: &ApplicationResolveMode) -> Result<Application
         ValidatedResult::WarnsAndErrors(warns, errors) => {
             let warns = warns.join(",");
             let errors = errors.join(",");
-            Err(GolemError(format!("Failed loading app manifest. warns: {warns}, errors: {errors}")))
+            Err(GolemError(format!(
+                "Failed loading app manifest. warns: {warns}, errors: {errors}"
+            )))
         }
     }
 }
 
-fn load_app_validated(app_resolve_mode: &ApplicationResolveMode) -> ValidatedResult<ApplicationManifest> {
-    let sources = collect_sources(&app_resolve_mode);
+fn load_app_validated(
+    app_resolve_mode: &ApplicationResolveMode,
+) -> ValidatedResult<ApplicationManifest> {
+    let sources = collect_sources(app_resolve_mode);
     let oam_apps = sources.and_then(|sources| {
         sources
             .into_iter()
@@ -276,7 +285,9 @@ impl ApplicationManifest {
     ) -> Option<WasmComponent> {
         let properties = component
             .typed_properties::<WasmComponentProperties>()
-            .map_err(|err| validation.add_error(format!("Failed to get component properties: {}", err)))
+            .map_err(|err| {
+                validation.add_error(format!("Failed to get component properties: {}", err))
+            })
             .ok();
 
         let wasm_rpc_traits = component
@@ -350,8 +361,7 @@ impl ApplicationManifest {
             if (has_inputs && !has_outputs) || (!has_inputs && has_outputs) {
                 validation.push_context("command", build_step.command.clone());
                 validation.add_warn(
-                    "Using inputs and outputs only has effect when both defined"
-                        .to_string(),
+                    "Using inputs and outputs only has effect when both defined".to_string(),
                 );
                 validation.pop_context();
             }
@@ -374,8 +384,10 @@ impl ApplicationManifest {
                 input_wasm: properties.input_wasm.into(),
                 output_wasm: properties.output_wasm.into(),
                 wasm_rpc_dependencies,
-                component_type: properties.component_type.map_or_else(|| ComponentType::Durable, ComponentType::from),
-                files: converted_files
+                component_type: properties
+                    .component_type
+                    .map_or_else(|| ComponentType::Durable, ComponentType::from),
+                files: converted_files,
             })
         }
     }
@@ -495,20 +507,24 @@ impl ApplicationManifest {
     fn convert_component_file(
         validation: &mut ValidationBuilder,
         file: RawComponentFile,
-        source: &Path
+        source: &Path,
     ) -> Option<InitialComponentFile> {
-        let source_path = DownloadableFile::make(&file.source_path, source).map_err(|err| {
-            validation.push_context("source path", file.source_path.to_string());
-            validation.add_error(err);
-            validation.pop_context();
-        }).ok()?;
+        let source_path = DownloadableFile::make(&file.source_path, source)
+            .map_err(|err| {
+                validation.push_context("source path", file.source_path.to_string());
+                validation.add_error(err);
+                validation.pop_context();
+            })
+            .ok()?;
 
         Some(InitialComponentFile {
             source_path,
             target: ComponentFilePathAndPermissions {
                 path: file.target_path,
-                permissions: file.permissions.unwrap_or(ComponentFilePermissions::ReadOnly),
-            }
+                permissions: file
+                    .permissions
+                    .unwrap_or(ComponentFilePermissions::ReadOnly),
+            },
         })
     }
 
@@ -691,7 +707,7 @@ pub struct WasmComponent {
     pub output_wasm: PathBuf,
     pub wasm_rpc_dependencies: Vec<String>,
     pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>
+    pub files: Vec<InitialComponentFile>,
 }
 
 impl WasmComponent {
@@ -753,16 +769,24 @@ impl DownloadableFile {
                 .parent()
                 .expect("Failed to get parent")
                 .canonicalize()
-                .map_err(|_| format!("Failed to canonicalize relative path: {}", relative_to.display().to_string()))?;
+                .map_err(|_| {
+                    format!(
+                        "Failed to canonicalize relative path: {}",
+                        relative_to.display()
+                    )
+                })?;
 
             let source_path = canonical_relative_to.join(PathBuf::from(url_string));
-            Url::from_file_path(source_path).map_err(|_| "Failed to convert path to URL".to_string())
+            Url::from_file_path(source_path)
+                .map_err(|_| "Failed to convert path to URL".to_string())
         })?;
 
         let source_path_scheme = url.scheme();
         let supported_schemes = ["http", "https", "file", ""];
         if !supported_schemes.contains(&source_path_scheme) {
-            return Err(format!("Unsupported source path scheme: {}", source_path_scheme));
+            return Err(format!(
+                "Unsupported source path scheme: {source_path_scheme}"
+            ));
         }
         Ok(DownloadableFile(url))
     }
@@ -797,14 +821,14 @@ pub struct InitialComponentFile {
 #[serde(rename_all = "kebab-case")]
 enum RawComponentType {
     Ephemeral,
-    Durable
+    Durable,
 }
 
 impl From<RawComponentType> for ComponentType {
     fn from(raw: RawComponentType) -> Self {
         match raw {
             RawComponentType::Ephemeral => Self::Ephemeral,
-            RawComponentType::Durable => Self::Durable
+            RawComponentType::Durable => Self::Durable,
         }
     }
 }

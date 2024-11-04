@@ -1,11 +1,10 @@
-
+use crate::headers::ResolvedResponseHeaders;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedList, TypedRecord, TypedTuple};
 use http::StatusCode;
-use rib::LiteralValue;
 use rib::GetLiteralValue;
-use crate::headers::ResolvedResponseHeaders;
+use rib::LiteralValue;
 
 use crate::path::{Path, PathComponent};
 
@@ -111,17 +110,20 @@ impl<T: Getter<T>> GetterExt<T> for T {
     }
 }
 
-pub fn get_response_headers(typed_value: &TypeAnnotatedValue) -> Result<Option<ResolvedResponseHeaders>, String> {
+pub fn get_response_headers(
+    typed_value: &TypeAnnotatedValue,
+) -> Result<Option<ResolvedResponseHeaders>, String> {
     match typed_value.get_optional(&Path::from_key("headers")) {
         None => Ok(None),
         Some(header) => Ok(Some(ResolvedResponseHeaders::from_typed_value(&header)?)),
     }
 }
 
-pub fn get_response_headers_or_default(typed_value: &TypeAnnotatedValue) -> Result<ResolvedResponseHeaders, String> {
+pub fn get_response_headers_or_default(
+    typed_value: &TypeAnnotatedValue,
+) -> Result<ResolvedResponseHeaders, String> {
     get_response_headers(typed_value).map(|headers| headers.unwrap_or_default())
 }
-
 
 pub fn get_status_code(typed_value: &TypeAnnotatedValue) -> Result<Option<StatusCode>, String> {
     match typed_value.get_optional(&Path::from_key("status")) {

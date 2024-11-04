@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::WorkerExecutorTestDependencies;
 use golem_common::config::RedisConfig;
 use golem_common::redis::RedisPool;
+use golem_service_base::storage::sqlite::SqlitePool;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 use golem_test_framework::config::TestDependencies;
 use golem_worker_executor_base::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor_base::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor_base::storage::indexed::sqlite::SqliteIndexedStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
-use sqlx::sqlite::SqlitePoolOptions;
-use crate::WorkerExecutorTestDependencies;
 use golem_worker_executor_base::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
+use sqlx::sqlite::SqlitePoolOptions;
 use std::sync::Arc;
 use test_r::inherit_test_dep;
 use uuid::Uuid;

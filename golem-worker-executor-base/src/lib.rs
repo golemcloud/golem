@@ -37,9 +37,7 @@ use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
-use crate::services::golem_config::{
-   GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
-};
+use crate::services::golem_config::{GolemConfig, IndexedStorageConfig, KeyValueStorageConfig};
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
@@ -57,10 +55,6 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{component, shard_manager, All};
-use golem_service_base::storage::blob::s3::S3BlobStorage;
-use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
-use golem_service_base::storage::blob::BlobStorage;
-use golem_service_base::config::BlobStorageConfig;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
@@ -74,14 +68,18 @@ use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::golem_version;
 use golem_common::redis::RedisPool;
+use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::s3::S3BlobStorage;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::sqlite::SqlitePool;
 use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
 use prometheus::Registry;
 use services::file_loader::FileLoader;
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
-use golem_service_base::storage::sqlite::SqlitePool;
 use tokio::runtime::Handle;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
@@ -103,6 +101,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `All` service.
     /// This is the place to initialize additional services and store them in `All`'s `extra_deps`
     /// field.
+    #[allow(clippy::too_many_arguments)]
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<Ctx>>,
@@ -296,7 +295,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             }
         };
 
-        let initial_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let initial_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
 

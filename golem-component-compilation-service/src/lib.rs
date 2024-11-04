@@ -23,9 +23,7 @@ use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::storage::blob::s3::S3BlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_worker_executor_base::{
-    http_server::HttpServerImpl, services::compiled_component,
-};
+use golem_worker_executor_base::{http_server::HttpServerImpl, services::compiled_component};
 use grpc::CompileGrpcService;
 use prometheus::Registry;
 use service::CompilationService;
@@ -90,7 +88,7 @@ async fn run(config: ServerConfig, prometheus: Registry) -> Result<(), Box<dyn s
         }
         BlobStorageConfig::Sqlite(sqlite) => {
             info!("Using Sqlite for blob storage at {}", sqlite.database);
-            let pool = SqlitePool::configured(&sqlite)
+            let pool = SqlitePool::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
             Arc::new(

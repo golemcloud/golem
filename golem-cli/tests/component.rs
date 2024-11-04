@@ -174,7 +174,9 @@ fn component_add_from_project_file(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
     let component_name = format!("component_add_from_project_file_{name}");
-    let golem_yaml = deps.component_directory().join("cli-project-yaml/golem.yaml");
+    let golem_yaml = deps
+        .component_directory()
+        .join("cli-project-yaml/golem.yaml");
     let cfg = &cli.config;
     let component: ComponentView = cli.run_trimmed(&[
         "component",
@@ -199,7 +201,9 @@ fn component_update_from_project_file(
     (deps, name, cli): (&EnvBasedTestDependencies, String, CliLive),
 ) -> Result<(), anyhow::Error> {
     let component_name = format!("component_update_from_project_file_{name}");
-    let golem_yaml = deps.component_directory().join("cli-project-yaml/golem.yaml");
+    let golem_yaml = deps
+        .component_directory()
+        .join("cli-project-yaml/golem.yaml");
     let cfg = &cli.config;
     let component: ComponentView = cli.run_trimmed(&[
         "component",
@@ -224,7 +228,10 @@ fn component_update_from_project_file(
         &component_name,
     ])?;
     assert!(res.contains(&component), "{res:?}.contains({component:?})");
-    assert!(res.iter().map(|x| x.component_version).contains(&1), "{res:?}.contains({component:?})");
+    assert!(
+        res.iter().map(|x| x.component_version).contains(&1),
+        "{res:?}.contains({component:?})"
+    );
     assert_eq!(res.len(), 2, "{res:?}.len() == 2");
     Ok(())
 }

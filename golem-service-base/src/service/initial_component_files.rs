@@ -15,7 +15,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use bytes::Bytes;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use tracing::debug;
 
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
@@ -33,10 +33,7 @@ impl InitialComponentFilesService {
         Self { blob_storage }
     }
 
-    pub async fn exists(
-        &self,
-        key: &InitialComponentFileKey,
-    ) -> Result<bool, String> {
+    pub async fn exists(&self, key: &InitialComponentFileKey) -> Result<bool, String> {
         let path = PathBuf::from(key.0.clone());
 
         let metadata = self
@@ -53,12 +50,8 @@ impl InitialComponentFilesService {
         Ok(metadata.is_some())
     }
 
-    pub async fn get(
-        &self,
-        key: &InitialComponentFileKey,
-    ) -> Result<Option<Bytes>, String> {
-        self
-            .blob_storage
+    pub async fn get(&self, key: &InitialComponentFileKey) -> Result<Option<Bytes>, String> {
+        self.blob_storage
             .get_raw(
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get",
@@ -101,7 +94,6 @@ impl InitialComponentFilesService {
                     bytes,
                 )
                 .await?;
-
         };
         Ok(InitialComponentFileKey(hash))
     }

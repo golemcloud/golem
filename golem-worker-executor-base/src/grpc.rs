@@ -12,8 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::error::*;
 use futures_util::Stream;
+use futures_util::StreamExt;
 use gethostname::gethostname;
+use golem_api_grpc::proto::golem;
+use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
+use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
+use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    ConnectWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest, GetFileContentsResponse,
+    GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest,
+    GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess,
+    ListDirectoryRequest, ListDirectoryResponse, SearchOplogRequest, SearchOplogResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse,
+};
+use golem_common::grpc::{
+    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
+    proto_promise_id_string, proto_target_worker_id_string, proto_worker_id_string,
+};
+use golem_common::metrics::api::record_new_grpc_api_active_stream;
+use golem_common::model::oplog::{OplogIndex, UpdateDescription};
+use golem_common::model::{
+    AccountId, ComponentFilePath, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, ShardId, TargetWorkerId, TimestampedWorkerInvocation, WorkerEvent, WorkerFilter,
+    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+};
+use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val;
 use std::cmp::min;
@@ -29,25 +55,6 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
-use futures_util::StreamExt;
-use crate::error::*;
-use golem_api_grpc::proto::golem;
-use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
-use golem_api_grpc::proto::golem::worker::{Cursor, ResourceMetadata, UpdateMode};
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutor;
-use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest, GetFileContentsResponse, GetOplogRequest, GetOplogResponse, GetRunningWorkersMetadataRequest, GetRunningWorkersMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InvokeAndAwaitWorkerRequest, InvokeAndAwaitWorkerResponseTyped, InvokeAndAwaitWorkerSuccess, ListDirectoryRequest, ListDirectoryResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse
-};
-use golem_common::grpc::{
-    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
-    proto_promise_id_string, proto_target_worker_id_string, proto_worker_id_string,
-};
-use golem_common::metrics::api::record_new_grpc_api_active_stream;
-use golem_common::model::oplog::{OplogIndex, UpdateDescription};
-use golem_common::model::{
-    AccountId, ComponentId, ComponentType, IdempotencyKey, ComponentFilePath, OwnedWorkerId, ScanCursor, ShardId, TargetWorkerId, TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord
-};
-use golem_common::{model as common_model, recorded_grpc_api_request};
 
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
@@ -61,7 +68,7 @@ use crate::services::{
     HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
-use crate::worker::{Worker};
+use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use tokio;
 
@@ -1208,7 +1215,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: ListDirectoryRequest,
     ) -> Result<ListDirectoryResponse, GolemError> {
-        let path = ComponentFilePath::from_str(&request.path)
+        let path = ComponentFilePath::from_abs_str(&request.path)
             .map_err(|e| GolemError::invalid_request(format!("Invalid path: {}", e)))?;
 
         let worker = self.get_or_create(&request).await?;
@@ -1216,28 +1223,29 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let result = worker.list_directory(path).await?;
 
         let response = match result {
-            ListDirectoryResult::Ok(entries) => {
-                ListDirectoryResponse {
-                    result: Some(golem::workerexecutor::v1::list_directory_response::Result::Success(
+            ListDirectoryResult::Ok(entries) => ListDirectoryResponse {
+                result: Some(
+                    golem::workerexecutor::v1::list_directory_response::Result::Success(
                         golem::workerexecutor::v1::ListDirectorySuccessResponse {
-                            nodes: entries
-                                .into_iter()
-                                .map(|entry| entry.into())
-                                .collect(),
+                            nodes: entries.into_iter().map(|entry| entry.into()).collect(),
                         },
-                    ))
-                }
+                    ),
+                ),
             },
-            ListDirectoryResult::NotFound => {
-                ListDirectoryResponse {
-                    result: Some(golem::workerexecutor::v1::list_directory_response::Result::NotFound(golem::common::Empty {}).into())
-                }
+            ListDirectoryResult::NotFound => ListDirectoryResponse {
+                result: Some(
+                    golem::workerexecutor::v1::list_directory_response::Result::NotFound(
+                        golem::common::Empty {},
+                    ),
+                ),
             },
-            ListDirectoryResult::NotADirectory => {
-                ListDirectoryResponse {
-                    result: Some(golem::workerexecutor::v1::list_directory_response::Result::NotADirectory(golem::common::Empty {}).into())
-                }
-            }
+            ListDirectoryResult::NotADirectory => ListDirectoryResponse {
+                result: Some(
+                    golem::workerexecutor::v1::list_directory_response::Result::NotADirectory(
+                        golem::common::Empty {},
+                    ),
+                ),
+            },
         };
 
         Ok(response)
@@ -1247,7 +1255,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: GetFileContentsRequest,
     ) -> Result<<Self as WorkerExecutor>::GetFileContentsStream, GolemError> {
-        let path = ComponentFilePath::from_str(&request.file_path)
+        let path = ComponentFilePath::from_abs_str(&request.file_path)
             .map_err(|e| GolemError::invalid_request(format!("Invalid path: {}", e)))?;
 
         let worker = self.get_or_create(&request).await?;
@@ -1257,28 +1265,40 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let response: <Self as WorkerExecutor>::GetFileContentsStream = match result {
             ReadFileResult::NotFound => {
                 let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotFound(golem::common::Empty {}).into()),
+                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotFound(golem::common::Empty {})),
                 };
                 let header_chunk = GetFileContentsResponse {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response::Result::Header(header))
+                    result: Some(
+                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
+                            header,
+                        ),
+                    ),
                 };
                 Box::pin(tokio_stream::iter(vec![Ok(header_chunk)]))
-            },
+            }
             ReadFileResult::NotAFile => {
                 let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(golem::common::Empty {}).into()),
+                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::NotAFile(golem::common::Empty {})),
                 };
                 let header_chunk = GetFileContentsResponse {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response::Result::Header(header))
+                    result: Some(
+                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
+                            header,
+                        ),
+                    ),
                 };
                 Box::pin(tokio_stream::iter(vec![Ok(header_chunk)]))
-            },
+            }
             ReadFileResult::Ok(stream) => {
                 let header = golem::workerexecutor::v1::GetFileContentsResponseHeader {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::Success(golem::common::Empty {}).into()),
+                    result: Some(golem::workerexecutor::v1::get_file_contents_response_header::Result::Success(golem::common::Empty {})),
                 };
                 let header_chunk = GetFileContentsResponse {
-                    result: Some(golem::workerexecutor::v1::get_file_contents_response::Result::Header(header))
+                    result: Some(
+                        golem::workerexecutor::v1::get_file_contents_response::Result::Header(
+                            header,
+                        ),
+                    ),
                 };
                 let header_stream = tokio_stream::iter(vec![Ok(header_chunk)]);
 
@@ -2077,7 +2097,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
-    type GetFileContentsStream = Pin<Box<dyn Stream<Item = Result<GetFileContentsResponse, Status>> + Send + 'static>>;
+    type GetFileContentsStream =
+        Pin<Box<dyn Stream<Item = Result<GetFileContentsResponse, Status>> + Send + 'static>>;
 
     async fn get_file_contents(
         &self,
@@ -2090,7 +2111,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             path = request.file_path,
         );
 
-       let result = self
+        let result = self
             .get_file_contents_internal(request)
             .instrument(record.span.clone())
             .await;
@@ -2106,14 +2127,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 };
 
-                let err_stream: Self::GetFileContentsStream = Box::pin(tokio_stream::iter(vec![Ok(res)]));
+                let err_stream: Self::GetFileContentsStream =
+                    Box::pin(tokio_stream::iter(vec![Ok(res)]));
 
                 record.fail(err_stream, &err)
             }
         };
         Ok(Response::new(stream))
     }
-
 }
 
 trait CanStartWorker {
@@ -2294,7 +2315,6 @@ impl CanStartWorker for golem::workerexecutor::v1::InvokeAndAwaitWorkerRequest {
 }
 
 impl GrpcInvokeRequest for golem::workerexecutor::v1::InvokeAndAwaitWorkerRequest {
-
     fn input(&self) -> Vec<Val> {
         self.input.clone()
     }

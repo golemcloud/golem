@@ -135,7 +135,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             worker_proxy.clone(),
             events.clone(),
             file_loader.clone(),
-            additional_deps
+            additional_deps,
         ))
     }
 

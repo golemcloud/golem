@@ -1,11 +1,11 @@
-use std::str::FromStr;
-use golem_wasm_rpc::protobuf::TypedRecord;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::TypedRecord;
 use http::HeaderMap;
 use poem::web::headers::ContentType;
 use rib::GetLiteralValue;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 #[derive(Default, Debug, PartialEq)]
 pub struct ResolvedResponseHeaders {
@@ -38,7 +38,6 @@ impl ResolvedResponseHeaders {
                     .map_err(|e: http::Error| e.to_string())
                     .map_err(|e| format!("Unable to resolve valid headers. Error: {e}"))?;
 
-
                 Ok(ResolvedResponseHeaders { headers })
             }
 
@@ -63,8 +62,11 @@ impl ResolvedResponseHeaders {
 
 #[cfg(test)]
 mod test {
-    use golem_wasm_rpc::protobuf::{type_annotated_value::TypeAnnotatedValue, NameTypePair, NameValuePair, Type, TypedRecord};
+    use golem_wasm_rpc::protobuf::{
+        type_annotated_value::TypeAnnotatedValue, NameTypePair, NameValuePair, Type, TypedRecord,
+    };
 
+    #[allow(dead_code)]
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];
         let mut name_value_pairs = vec![];
@@ -109,7 +111,9 @@ mod test {
 
         let header_map: HeaderMap = map.try_into().unwrap();
 
-        let expected = ResolvedResponseHeaders { headers: header_map };
+        let expected = ResolvedResponseHeaders {
+            headers: header_map,
+        };
 
         assert_eq!(resolved_headers, expected)
     }

@@ -18,7 +18,9 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ComponentFilePermissions, PromiseId, ScanCursor, ShardId, Timestamp, WorkerFilter, WorkerId, WorkerStatus
+    ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
+    ComponentType, ComponentVersion, InitialComponentFile, PromiseId, ScanCursor, ShardId,
+    Timestamp, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -967,8 +969,9 @@ impl SafeDisplay for GolemErrorInitialComponentFileDownloadFailed {
 impl From<golem_api_grpc::proto::golem::worker::v1::InitialComponentFileDownloadFailed>
     for GolemErrorInitialComponentFileDownloadFailed
 {
-
-    fn from(value: golem_api_grpc::proto::golem::worker::v1::InitialComponentFileDownloadFailed) -> Self {
+    fn from(
+        value: golem_api_grpc::proto::golem::worker::v1::InitialComponentFileDownloadFailed,
+    ) -> Self {
         Self {
             path: value.path,
             reason: value.reason,
@@ -983,7 +986,7 @@ impl From<GolemErrorInitialComponentFileDownloadFailed>
         Self {
             path: value.path,
             reason: value.reason,
-         }
+        }
     }
 }
 
@@ -1000,10 +1003,7 @@ impl SafeDisplay for GolemErrorFileSystemError {
     }
 }
 
-impl From<golem_api_grpc::proto::golem::worker::v1::FileSystemError>
-    for GolemErrorFileSystemError
-{
-
+impl From<golem_api_grpc::proto::golem::worker::v1::FileSystemError> for GolemErrorFileSystemError {
     fn from(value: golem_api_grpc::proto::golem::worker::v1::FileSystemError) -> Self {
         Self {
             path: value.path,
@@ -1012,17 +1012,14 @@ impl From<golem_api_grpc::proto::golem::worker::v1::FileSystemError>
     }
 }
 
-impl From<GolemErrorFileSystemError>
-    for golem_api_grpc::proto::golem::worker::v1::FileSystemError
-{
+impl From<GolemErrorFileSystemError> for golem_api_grpc::proto::golem::worker::v1::FileSystemError {
     fn from(value: GolemErrorFileSystemError) -> Self {
         Self {
             path: value.path,
             reason: value.reason,
-         }
+        }
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
 #[error("Invalid account")]
@@ -1104,12 +1101,16 @@ pub struct FlatComponentFileSystemNode {
     pub last_modified: u64,
     pub kind: FlatComponentFileSystemNodeKind,
     pub permissions: Option<ComponentFilePermissions>, // only for files
-    pub size: Option<u64>, // only for files
+    pub size: Option<u64>,                             // only for files
 }
 
 impl From<ComponentFileSystemNode> for FlatComponentFileSystemNode {
     fn from(value: ComponentFileSystemNode) -> Self {
-        let last_modified = value.last_modified.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+        let last_modified = value
+            .last_modified
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         match value.details {
             ComponentFileSystemNodeDetails::Directory => Self {
                 name: value.name,
@@ -1781,7 +1782,7 @@ pub struct Component {
     pub metadata: ComponentMetadata,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub component_type: Option<ComponentType>,
-    pub files: Vec<InitialComponentFile>
+    pub files: Vec<InitialComponentFile>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
@@ -1805,7 +1806,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             None
         };
 
-        let files = value.files
+        let files = value
+            .files
             .into_iter()
             .map(|f| f.try_into())
             .collect::<Result<Vec<_>, _>>()?;
@@ -1825,7 +1827,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
                 .try_into()?,
             created_at,
             component_type,
-            files
+            files,
         })
     }
 }
@@ -1845,7 +1847,7 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 let c: golem_api_grpc::proto::golem::component::ComponentType = c.into();
                 c.into()
             }),
-            files: value.files.into_iter().map(|f| f.into()).collect()
+            files: value.files.into_iter().map(|f| f.into()).collect(),
         }
     }
 }

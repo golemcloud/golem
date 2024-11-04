@@ -14,7 +14,6 @@
 
 use std::time::Duration;
 
-use golem_worker_service_base::empty_worker_metadata;
 use crate::service::worker::WorkerService;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;
@@ -23,6 +22,7 @@ use golem_common::recorded_http_api_request;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::{validate_worker_name, ErrorsBody};
 use golem_worker_service_base::api::WorkerApiBaseError;
+use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::service::worker::{proxy_worker_connection, WorkerStream};
 use poem::web::websocket::WebSocket;
 use poem::web::{Data, Path};

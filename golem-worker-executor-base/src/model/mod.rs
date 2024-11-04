@@ -14,23 +14,24 @@
 
 pub mod public_oplog;
 
+use crate::error::{GolemError, WorkerOutOfMemory};
+use crate::workerctx::WorkerCtx;
+use bincode::{Decode, Encode};
+use bytes::Bytes;
+use futures::Stream;
+use golem_common::model::oplog::WorkerError;
+use golem_common::model::regions::DeletedRegions;
+use golem_common::model::{
+    ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId,
+    WorkerStatusRecord,
+};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
-use bincode::{Decode, Encode};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use serde::{Deserialize, Serialize};
 use wasmtime::Trap;
-use golem_common::model::oplog::WorkerError;
-use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{
-    ComponentFileSystemNode, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord
-};
-use futures::Stream;
-use bytes::Bytes;
-use crate::error::{GolemError, WorkerOutOfMemory};
-use crate::workerctx::WorkerCtx;
 
 pub trait ShardAssignmentCheck {
     fn check_worker(&self, worker_id: &WorkerId) -> Result<(), GolemError>;

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use futures_util::TryStreamExt;
-use golem_common::model::{ComponentId, ComponentType, ComponentFilePathAndPermissionsList};
+use golem_common::model::{ComponentFilePathAndPermissionsList, ComponentId, ComponentType};
 use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
 use golem_component_service_base::service::component::{
     ComponentError as ComponentServiceError, ComponentService,
@@ -81,7 +81,6 @@ pub struct UpdatePayload {
     files_permissions: Option<ComponentFilePathAndPermissionsList>,
     files: Option<Upload>,
 }
-
 
 type Result<T> = std::result::Result<T, ComponentError>;
 
@@ -188,7 +187,12 @@ impl ComponentApi {
 
             let files = files_file
                 .zip(payload.files_permissions)
-                .map(|(archive, permissions)| InitialComponentFilesArchiveAndPermissions { archive, files: permissions.values });
+                .map(
+                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                        archive,
+                        files: permissions.values,
+                    },
+                );
 
             let component_name = payload.name;
             self.component_service
@@ -255,7 +259,7 @@ impl ComponentApi {
     async fn update_component(
         &self,
         component_id: Path<ComponentId>,
-        payload: UpdatePayload
+        payload: UpdatePayload,
     ) -> Result<Json<Component>> {
         let record = recorded_http_api_request!(
             "update_component",
@@ -267,7 +271,12 @@ impl ComponentApi {
 
             let files = files_file
                 .zip(payload.files_permissions)
-                .map(|(archive, permissions)| InitialComponentFilesArchiveAndPermissions { archive, files: permissions.values });
+                .map(
+                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                        archive,
+                        files: permissions.values,
+                    },
+                );
 
             self.component_service
                 .update(

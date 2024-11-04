@@ -61,7 +61,11 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
         format!("api_deployment_fileserver_stateful_worker{suffix}"),
         TestType::IntegrationTest,
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
-            api_deployment_fileserver_stateful_worker((deps, name.to_string(), cli.with_args(short)))
+            api_deployment_fileserver_stateful_worker((
+                deps,
+                name.to_string(),
+                cli.with_args(short),
+            ))
         }
     );
 }
@@ -112,7 +116,7 @@ fn api_deployment_fileserver_simple(
         &cfg.arg('d', "definition"),
         &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
-        &host,
+        host,
     ])?;
 
     let res1 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/foo.txt"))?;
@@ -174,12 +178,15 @@ fn api_deployment_fileserver_complex(
         &cfg.arg('d', "definition"),
         &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
-        &host,
+        host,
     ])?;
 
     let res = reqwest::blocking::get(format!("http://{host}/files/{component_id}/file"))?;
     assert_eq!(res.status().as_u16(), 201);
-    assert_eq!(res.headers().get("content-type").unwrap(), "application/json");
+    assert_eq!(
+        res.headers().get("content-type").unwrap(),
+        "application/json"
+    );
     assert_eq!(res.text()?, "foo\n");
 
     Ok(())
@@ -233,7 +240,8 @@ fn api_deployment_fileserver_stateful_worker(
 
     let temp_dir = tempfile::tempdir()?;
 
-    let api_definition = make_file_server_api_definition_with_worker_name(&component_id, &worker_name)?;
+    let api_definition =
+        make_file_server_api_definition_with_worker_name(&component_id, &worker_name)?;
     let api_path = temp_dir.path().join("api-file-server.json");
 
     {
@@ -254,7 +262,7 @@ fn api_deployment_fileserver_stateful_worker(
         &cfg.arg('d', "definition"),
         &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
-        &host,
+        host,
     ])?;
 
     let res1 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/foo.txt"))?;
@@ -270,9 +278,11 @@ fn api_deployment_fileserver_stateful_worker(
     Ok(())
 }
 
-
-fn make_file_server_api_definition_simple(component_id: &ComponentId) -> anyhow::Result<HttpApiDefinitionRequest> {
-    Ok(serde_yaml::from_str(&format!(r#"
+fn make_file_server_api_definition_simple(
+    component_id: &ComponentId,
+) -> anyhow::Result<HttpApiDefinitionRequest> {
+    Ok(serde_yaml::from_str(&format!(
+        r#"
         id: "{component_id}"
         version: "0.1.0"
         draft: true
@@ -285,11 +295,15 @@ fn make_file_server_api_definition_simple(component_id: &ComponentId) -> anyhow:
               componentId: '{component_id}'
               version: 0
             response: 'let file: str = request.path.file; "/files/${{file}}"'
-    "#,))?)
+    "#,
+    ))?)
 }
 
-fn make_file_server_api_definition_complex(component_id: &ComponentId) -> anyhow::Result<HttpApiDefinitionRequest> {
-    Ok(serde_yaml::from_str(&format!(r#"
+fn make_file_server_api_definition_complex(
+    component_id: &ComponentId,
+) -> anyhow::Result<HttpApiDefinitionRequest> {
+    Ok(serde_yaml::from_str(&format!(
+        r#"
         id: "{component_id}"
         version: "0.1.0"
         draft: true
@@ -302,11 +316,16 @@ fn make_file_server_api_definition_complex(component_id: &ComponentId) -> anyhow
               componentId: '{component_id}'
               version: 0
             response: '{{ headers: {{Content-Type: "application/json"}}, status: 201u64, file-path: "/files/foo.txt" }}'
-    "#,))?)
+    "#,
+    ))?)
 }
 
-fn make_file_server_api_definition_with_worker_name(component_id: &ComponentId, worker_name: &str) -> anyhow::Result<HttpApiDefinitionRequest> {
-    Ok(serde_yaml::from_str(&format!(r#"
+fn make_file_server_api_definition_with_worker_name(
+    component_id: &ComponentId,
+    worker_name: &str,
+) -> anyhow::Result<HttpApiDefinitionRequest> {
+    Ok(serde_yaml::from_str(&format!(
+        r#"
         id: "{component_id}"
         version: "0.1.0"
         draft: true
@@ -320,5 +339,6 @@ fn make_file_server_api_definition_with_worker_name(component_id: &ComponentId, 
               version: 0
             workerName: 'let name: str = "{worker_name}"; name'
             response: 'let file: str = request.path.file; "/files/${{file}}"'
-    "#,))?)
+    "#,
+    ))?)
 }

@@ -119,11 +119,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
         HostDescriptor::get_type(&mut self.as_wasi_view(), self_).await
     }
 
-    async fn set_size(
-        &mut self,
-        fd: Resource<Descriptor>,
-        size: Filesize,
-    ) -> Result<(), FsError> {
+    async fn set_size(&mut self, fd: Resource<Descriptor>, size: Filesize) -> Result<(), FsError> {
         self.fail_if_read_only(&fd)?;
 
         let _permit = self
@@ -484,8 +480,7 @@ impl<Ctx: WorkerCtx> HostDescriptor for DurableWorkerCtx<Ctx> {
             .await
             .map_err(FsError::trap)?;
         record_host_function_call("filesystem::types::descriptor", "symlink_at");
-        HostDescriptor::symlink_at(&mut self.as_wasi_view(), fd, old_path, new_path.clone())
-            .await
+        HostDescriptor::symlink_at(&mut self.as_wasi_view(), fd, old_path, new_path.clone()).await
     }
 
     async fn unlink_file_at(

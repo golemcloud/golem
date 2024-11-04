@@ -1,11 +1,13 @@
 use crate::api::WorkerApiBaseError;
-use crate::worker_binding::fileserver_binding_handler::{FileServerBindingError, FileServerBindingResult};
+use crate::worker_binding::fileserver_binding_handler::{
+    FileServerBindingError, FileServerBindingResult,
+};
 use crate::worker_binding::{RequestDetails, RibInputTypeMismatch};
 use crate::worker_service_rib_interpreter::EvaluationError;
 use http::StatusCode;
 use poem::Body;
-use rib::RibResult;
 use poem::IntoResponse;
+use rib::RibResult;
 
 pub trait ToResponse<A> {
     fn to_response(self, request_details: &RequestDetails) -> A;
@@ -52,18 +54,19 @@ impl ToResponse<poem::Response> for String {
 impl ToResponse<poem::Response> for FileServerBindingResult {
     fn to_response(self, _request_details: &RequestDetails) -> poem::Response {
         match self {
-            Ok(data) =>
-                Body::from_bytes_stream(data.data)
-                    .with_content_type(&data.binding_details.content_type.to_string())
-                    .with_status(data.binding_details.status_code)
-                    .into_response(),
+            Ok(data) => Body::from_bytes_stream(data.data)
+                .with_content_type(data.binding_details.content_type.to_string())
+                .with_status(data.binding_details.status_code)
+                .into_response(),
             Err(FileServerBindingError::InternalError(e)) => poem::Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from_string(format!("Error {}", e).to_string())),
-            Err(FileServerBindingError::ComponentServiceError(inner)) =>
-                WorkerApiBaseError::from(inner).into_response(),
-            Err(FileServerBindingError::WorkerServiceError(inner)) =>
-                WorkerApiBaseError::from(inner).into_response(),
+            Err(FileServerBindingError::ComponentServiceError(inner)) => {
+                WorkerApiBaseError::from(inner).into_response()
+            }
+            Err(FileServerBindingError::WorkerServiceError(inner)) => {
+                WorkerApiBaseError::from(inner).into_response()
+            }
         }
     }
 }
@@ -75,19 +78,16 @@ mod internal {
     };
     use crate::worker_service_rib_interpreter::EvaluationError;
     use http::StatusCode;
-    
 
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
     use crate::path::Path;
-    
+
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    
-    
+
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
-    
+
     use crate::headers::ResolvedResponseHeaders;
-    
 
     pub(crate) struct IntermediateHttpResponse {
         body: Option<TypeAnnotatedValue>,
@@ -101,11 +101,10 @@ mod internal {
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
             match evaluation_result {
                 RibResult::Val(typed_value) => {
-                    let status = get_status_code_or_ok(typed_value)
-                        .map_err(|e| EvaluationError(e))?;
+                    let status = get_status_code_or_ok(typed_value).map_err(EvaluationError)?;
 
-                    let headers = get_response_headers_or_default(typed_value)
-                        .map_err(|e| EvaluationError(e))?;
+                    let headers =
+                        get_response_headers_or_default(typed_value).map_err(EvaluationError)?;
 
                     let body = typed_value
                         .get_optional(&Path::from_key("body"))
@@ -141,8 +140,7 @@ mod internal {
 
             match evaluation_result {
                 Some(type_annotated_value) => {
-                    match type_annotated_value.to_http_resp_with_content_type(content_type)
-                    {
+                    match type_annotated_value.to_http_resp_with_content_type(content_type) {
                         Ok(body_with_header) => {
                             let mut response = body_with_header.into_response();
                             response.set_status(*status);
@@ -171,17 +169,16 @@ mod internal {
 
 #[cfg(test)]
 mod test {
-    use test_r::test;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
+    use test_r::test;
 
     use crate::worker_binding::{HttpRequestDetails, RequestDetails};
     use crate::worker_bridge_execution::to_response::ToResponse;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;
-    
 
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];

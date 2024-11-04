@@ -362,7 +362,6 @@ impl From<WorkerServiceError> for ResponseMapResult {
     }
 }
 
-
 #[async_trait]
 impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> RoutingLogic for T {
     async fn call_worker_executor<Target, F, G, H, Out, R>(

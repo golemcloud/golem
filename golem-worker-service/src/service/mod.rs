@@ -146,19 +146,16 @@ impl Services {
             }
         };
 
-
         let blob_storage: Arc<dyn BlobStorage + Sync + Send> = match &config.blob_storage {
-            BlobStorageConfig::S3(config) => {
-                Arc::new(golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await)
-            }
-            BlobStorageConfig::LocalFileSystem(config) => {
-                Arc::new(
-                    golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
-                        .await?
-                )
-            }
+            BlobStorageConfig::S3(config) => Arc::new(
+                golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await,
+            ),
+            BlobStorageConfig::LocalFileSystem(config) => Arc::new(
+                golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                    .await?,
+            ),
             BlobStorageConfig::Sqlite(sqlite) => {
-                let pool = SqlitePool::configured(&sqlite)
+                let pool = SqlitePool::configured(sqlite)
                     .await
                     .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
                 Arc::new(
@@ -216,7 +213,7 @@ impl Services {
             worker_to_http_service,
             component_service,
             api_definition_validator_service,
-            fileserver_binding_handler
+            fileserver_binding_handler,
         })
     }
 }

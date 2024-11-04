@@ -77,8 +77,8 @@ impl ParseFromJSON for JsonOpenApiDefinition {
 mod internal {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
-    use golem_common::model::WorkerBindingType;
     use golem_common::model::ComponentId;
+    use golem_common::model::WorkerBindingType;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use rib::Expr;
     use serde_json::Value;
@@ -242,7 +242,9 @@ mod internal {
         AllPathPatterns::parse(path).map_err(|err| err.to_string())
     }
 
-    pub(crate) fn get_binding_type(worker_bridge_info: &Value) -> Result<WorkerBindingType, String> {
+    pub(crate) fn get_binding_type(
+        worker_bridge_info: &Value,
+    ) -> Result<WorkerBindingType, String> {
         let binding_type = worker_bridge_info
             .get("type")
             .map(|v| serde_json::from_value(v.clone()))
@@ -261,8 +263,8 @@ mod tests {
     use super::*;
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
-    use golem_common::model::WorkerBindingType;
     use golem_common::model::ComponentId;
+    use golem_common::model::WorkerBindingType;
     use openapiv3::PathItem;
     use rib::Expr;
     use serde_json::json;

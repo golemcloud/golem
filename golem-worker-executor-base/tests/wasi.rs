@@ -24,9 +24,13 @@ use std::time::{Duration, SystemTime};
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
-use golem_common::model::{ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile, ComponentFilePath, ComponentFilePermissions, WorkerStatus};
+use golem_common::model::{
+    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
+    ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile,
+    WorkerStatus,
+};
 use golem_test_framework::dsl::{
-    drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe
+    drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe,
 };
 use golem_wasm_rpc::Value;
 use http_02::{Response, StatusCode};
@@ -206,23 +210,37 @@ async fn initial_file_read_write(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let file1_key = executor.add_initial_component_file(PathBuf::from("initial-file-read-write/files/foo.txt").as_path()).await;
-    let file2_key = executor.add_initial_component_file(PathBuf::from("initial-file-read-write/files/baz.txt").as_path()).await;
+    let file1_key = executor
+        .add_initial_component_file(
+            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+        )
+        .await;
+    let file2_key = executor
+        .add_initial_component_file(
+            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+        )
+        .await;
 
     let component_files: Vec<InitialComponentFile> = vec![
         InitialComponentFile {
             key: file1_key,
-            path: ComponentFilePath::from_str("/foo.txt").unwrap(),
+            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadOnly,
         },
         InitialComponentFile {
             key: file2_key,
-            path: ComponentFilePath::from_str("/bar/baz.txt").unwrap(),
+            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadWrite,
-        }
+        },
     ];
 
-    let component_id = executor.store_unique_component_with_files("initial-file-read-write", ComponentType::Durable, &component_files).await;
+    let component_id = executor
+        .store_unique_component_with_files(
+            "initial-file-read-write",
+            ComponentType::Durable,
+            &component_files,
+        )
+        .await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
@@ -258,72 +276,89 @@ async fn initial_file_listing_through_api(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let file1_key = executor.add_initial_component_file(PathBuf::from("initial-file-read-write/files/foo.txt").as_path()).await;
-    let file2_key = executor.add_initial_component_file(PathBuf::from("initial-file-read-write/files/baz.txt").as_path()).await;
+    let file1_key = executor
+        .add_initial_component_file(
+            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+        )
+        .await;
+    let file2_key = executor
+        .add_initial_component_file(
+            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+        )
+        .await;
 
     let component_files: Vec<InitialComponentFile> = vec![
         InitialComponentFile {
             key: file1_key,
-            path: ComponentFilePath::from_str("/foo.txt").unwrap(),
+            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadOnly,
         },
         InitialComponentFile {
             key: file2_key.clone(),
-            path: ComponentFilePath::from_str("/bar/baz.txt").unwrap(),
+            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadWrite,
         },
         InitialComponentFile {
             key: file2_key,
-            path: ComponentFilePath::from_str("/baz.txt").unwrap(),
+            path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadWrite,
-        }
+        },
     ];
 
-    let component_id = executor.store_unique_component_with_files("initial-file-read-write", ComponentType::Durable, &component_files).await;
+    let component_id = executor
+        .store_unique_component_with_files(
+            "initial-file-read-write",
+            ComponentType::Durable,
+            &component_files,
+        )
+        .await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
         .start_worker_with(&component_id, "initial-file-read-write-2", vec![], env)
         .await;
 
-    let result = executor
-        .list_directory(&worker_id, "/")
-        .await;
+    let result = executor.list_directory(&worker_id, "/").await;
 
     let mut result = result
         .into_iter()
-        .map(|e| ComponentFileSystemNode { last_modified: SystemTime::UNIX_EPOCH, ..e } )
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
         .collect::<Vec<_>>();
 
     result.sort_by_key(|e| e.name.clone());
 
     drop(executor);
 
-    check!(result == vec![
-        ComponentFileSystemNode {
-            name: "bar".to_string(),
-            last_modified: SystemTime::UNIX_EPOCH,
-            details: ComponentFileSystemNodeDetails::Directory
-        },
-        ComponentFileSystemNode {
-            name: "baz.txt".to_string(),
-            last_modified: SystemTime::UNIX_EPOCH,
-            details: ComponentFileSystemNodeDetails::File {
-                permissions: ComponentFilePermissions::ReadWrite,
-                size: 4,
-            }
-        },
-        ComponentFileSystemNode {
-            name: "foo.txt".to_string(),
-            last_modified: SystemTime::UNIX_EPOCH,
-            details: ComponentFileSystemNodeDetails::File {
-                permissions: ComponentFilePermissions::ReadOnly,
-                size: 4,
-            }
-        },
-    ]);
+    check!(
+        result
+            == vec![
+                ComponentFileSystemNode {
+                    name: "bar".to_string(),
+                    last_modified: SystemTime::UNIX_EPOCH,
+                    details: ComponentFileSystemNodeDetails::Directory
+                },
+                ComponentFileSystemNode {
+                    name: "baz.txt".to_string(),
+                    last_modified: SystemTime::UNIX_EPOCH,
+                    details: ComponentFileSystemNodeDetails::File {
+                        permissions: ComponentFilePermissions::ReadWrite,
+                        size: 4,
+                    }
+                },
+                ComponentFileSystemNode {
+                    name: "foo.txt".to_string(),
+                    last_modified: SystemTime::UNIX_EPOCH,
+                    details: ComponentFileSystemNodeDetails::File {
+                        permissions: ComponentFilePermissions::ReadOnly,
+                        size: 4,
+                    }
+                },
+            ]
+    );
 }
-
 
 #[test]
 #[tracing::instrument]
@@ -335,23 +370,37 @@ async fn initial_file_reading_through_api(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
-    let file1_key = executor.add_initial_component_file(PathBuf::from("initial-file-read-write/files/foo.txt").as_path()).await;
-    let file2_key = executor.add_initial_component_file(PathBuf::from("initial-file-read-write/files/baz.txt").as_path()).await;
+    let file1_key = executor
+        .add_initial_component_file(
+            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+        )
+        .await;
+    let file2_key = executor
+        .add_initial_component_file(
+            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+        )
+        .await;
 
     let component_files: Vec<InitialComponentFile> = vec![
         InitialComponentFile {
             key: file1_key,
-            path: ComponentFilePath::from_str("/foo.txt").unwrap(),
+            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadOnly,
         },
         InitialComponentFile {
             key: file2_key.clone(),
-            path: ComponentFilePath::from_str("/bar/baz.txt").unwrap(),
+            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
             permissions: ComponentFilePermissions::ReadWrite,
-        }
+        },
     ];
 
-    let component_id = executor.store_unique_component_with_files("initial-file-read-write", ComponentType::Durable, &component_files).await;
+    let component_id = executor
+        .store_unique_component_with_files(
+            "initial-file-read-write",
+            ComponentType::Durable,
+            &component_files,
+        )
+        .await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
@@ -364,14 +413,10 @@ async fn initial_file_reading_through_api(
         .await
         .unwrap();
 
-    let result1 = executor
-        .get_file_contents(&worker_id, "/foo.txt")
-        .await;
+    let result1 = executor.get_file_contents(&worker_id, "/foo.txt").await;
     let result1 = std::str::from_utf8(&result1).unwrap();
 
-    let result2 = executor
-        .get_file_contents(&worker_id, "/bar/baz.txt")
-        .await;
+    let result2 = executor.get_file_contents(&worker_id, "/bar/baz.txt").await;
     let result2 = std::str::from_utf8(&result2).unwrap();
 
     drop(executor);

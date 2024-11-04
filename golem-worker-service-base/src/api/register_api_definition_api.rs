@@ -9,7 +9,7 @@ use crate::api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
-use crate::worker_binding::{CompiledGolemWorkerBinding};
+use crate::worker_binding::CompiledGolemWorkerBinding;
 use golem_common::model::WorkerBindingType;
 use rib::{Expr, RibInputTypeInfo};
 
@@ -295,7 +295,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             worker_name: worker_id,
             idempotency_key,
             response,
-            worker_binding_type: Some(value.worker_binding_type)
+            worker_binding_type: Some(value.worker_binding_type),
         })
     }
 }
@@ -547,9 +547,8 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             None
         };
 
-        let r#type =
-            grpc_apidefinition::WorkerBindingType::try_from(value.r#type)
-                .map_err(|e| format!("Failed to convert WorkerBindingType: {}", e))?;
+        let r#type = grpc_apidefinition::WorkerBindingType::try_from(value.r#type)
+            .map_err(|e| format!("Failed to convert WorkerBindingType: {}", e))?;
 
         let result = crate::worker_binding::GolemWorkerBinding {
             component_id,

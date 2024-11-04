@@ -125,7 +125,6 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         app: Vec<PathBuf>,
     },
 
-
     /// Lists the existing components
     #[command()]
     List {
@@ -236,7 +235,7 @@ impl<
                 component_name,
                 component_file,
                 component_type,
-                non_interactive
+                non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
 
@@ -256,7 +255,7 @@ impl<
                 project_ref,
                 component_name,
                 non_interactive,
-                app
+                app,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
 
@@ -268,13 +267,18 @@ impl<
 
                 let app = load_app(&app_resolve_mode)?;
 
-                let component = if let Some(component) = app.wasm_components_by_name.get(&component_name.0) {
-                    component
-                } else {
-                    return Err(GolemError(format!("Component {} not found in the app manifest", component_name)));
-                };
+                let component =
+                    if let Some(component) = app.wasm_components_by_name.get(&component_name.0) {
+                        component
+                    } else {
+                        return Err(GolemError(format!(
+                            "Component {} not found in the app manifest",
+                            component_name
+                        )));
+                    };
 
-                let component_file = PathBufOrStdin::Path(app.component_output_wasm(&component_name.0));
+                let component_file =
+                    PathBufOrStdin::Path(app.component_output_wasm(&component_name.0));
 
                 service
                     .add(
@@ -284,7 +288,7 @@ impl<
                         Some(project_id),
                         non_interactive,
                         format,
-                        component.files.clone()
+                        component.files.clone(),
                     )
                     .await
             }
@@ -306,7 +310,7 @@ impl<
                         project_id.clone(),
                         non_interactive,
                         format,
-                        vec![]
+                        vec![],
                     )
                     .await?;
 
@@ -327,7 +331,9 @@ impl<
             } => {
                 let (component_name_or_uri, project_ref) = component_name_or_uri.split();
 
-                let component_name = service.resolve_component_name(&component_name_or_uri).await?;
+                let component_name = service
+                    .resolve_component_name(&component_name_or_uri)
+                    .await?;
 
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
 
@@ -339,13 +345,18 @@ impl<
 
                 let app = load_app(&app_resolve_mode)?;
 
-                let component = if let Some(component) = app.wasm_components_by_name.get(&component_name) {
-                    component
-                } else {
-                    return Err(GolemError(format!("Component {} not found in the app manifest", component_name)));
-                };
+                let component =
+                    if let Some(component) = app.wasm_components_by_name.get(&component_name) {
+                        component
+                    } else {
+                        return Err(GolemError(format!(
+                            "Component {} not found in the app manifest",
+                            component_name
+                        )));
+                    };
 
-                let component_file = PathBufOrStdin::Path(app.component_output_wasm(&component_name));
+                let component_file =
+                    PathBufOrStdin::Path(app.component_output_wasm(&component_name));
 
                 let mut result = service
                     .update(
@@ -355,7 +366,7 @@ impl<
                         project_id.clone(),
                         non_interactive,
                         format,
-                        component.files.clone()
+                        component.files.clone(),
                     )
                     .await?;
 

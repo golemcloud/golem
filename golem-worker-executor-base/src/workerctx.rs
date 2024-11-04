@@ -22,12 +22,14 @@ use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    AccountId, ComponentVersion, IdempotencyKey, ComponentFilePath, OwnedWorkerId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord
+    AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 
 use crate::error::GolemError;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult, ReadFileResult, TrapType, WorkerConfig
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
@@ -380,6 +382,9 @@ pub trait PublicWorkerIo {
 #[async_trait]
 pub trait FileSystemReading {
     // List the contents of a directory. Will return an error if the path is not a directory.
-    async fn list_directory(&self, path: &ComponentFilePath) -> Result<ListDirectoryResult, GolemError>;
+    async fn list_directory(
+        &self,
+        path: &ComponentFilePath,
+    ) -> Result<ListDirectoryResult, GolemError>;
     async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError>;
 }

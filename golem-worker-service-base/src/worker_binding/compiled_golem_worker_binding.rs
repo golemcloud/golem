@@ -1,10 +1,10 @@
 use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
 use crate::worker_service_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
 use bincode::{Decode, Encode};
+use golem_common::model::WorkerBindingType;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo, WorkerFunctionsInRib};
-use golem_common::model::WorkerBindingType;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledGolemWorkerBinding {
@@ -203,7 +203,10 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
         };
 
         let worker_binding_type: golem_api_grpc::proto::golem::apidefinition::WorkerBindingType =
-            value.r#type.try_into().map_err(|_| "Invalid worker binding type".to_string())?;
+            value
+                .r#type
+                .try_into()
+                .map_err(|_| "Invalid worker binding type".to_string())?;
 
         Ok(CompiledGolemWorkerBinding {
             component_id,

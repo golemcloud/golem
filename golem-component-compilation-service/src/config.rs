@@ -22,9 +22,7 @@ use uuid::Uuid;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_service_base::config::BlobStorageConfig;
-use golem_worker_executor_base::services::golem_config::{
-    CompiledComponentServiceConfig,
-};
+use golem_worker_executor_base::services::golem_config::CompiledComponentServiceConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {

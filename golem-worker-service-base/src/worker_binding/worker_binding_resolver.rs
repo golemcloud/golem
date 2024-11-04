@@ -120,18 +120,15 @@ impl ResolvedWorkerBindingFromRequest {
                     .await;
 
                 match result {
-                    Ok(worker_response) =>
-                        match self.worker_binding_type {
-                            WorkerBindingType::Default => {
-                                worker_response.to_response(&self.request_details)
-                            }
-                            WorkerBindingType::FileServer => {
-                                file_server_binding_handler
-                                    .handle_file_server_binding(&self.worker_detail, worker_response)
-                                    .await
-                                    .to_response(&self.request_details)
-                            }
+                    Ok(worker_response) => match self.worker_binding_type {
+                        WorkerBindingType::Default => {
+                            worker_response.to_response(&self.request_details)
                         }
+                        WorkerBindingType::FileServer => file_server_binding_handler
+                            .handle_file_server_binding(&self.worker_detail, worker_response)
+                            .await
+                            .to_response(&self.request_details),
+                    },
                     Err(err) => err.to_response(&self.request_details),
                 }
             }
@@ -139,7 +136,6 @@ impl ResolvedWorkerBindingFromRequest {
             (_, Err(err)) => err.to_response(&self.request_details),
         }
     }
-
 }
 
 #[async_trait]

@@ -32,11 +32,11 @@ use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
     active_workers, blob_store, component, golem_config, key_value, oplog, promise, scheduler,
     shard, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
-    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
+    HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader,
     HasKeyValueService, HasOplogService, HasPromiseService, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService, HasFileLoader
+    HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -439,8 +439,8 @@ impl<Ctx: WorkerCtx> HasFileLoader for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         remote_rpc: Arc<RemoteInvocationRpc>,
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,

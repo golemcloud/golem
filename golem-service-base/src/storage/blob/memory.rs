@@ -232,7 +232,9 @@ impl BlobStorage for InMemoryBlobStorage {
         if self
             .data
             .get(&namespace)
-            .map(|namespace_data| namespace_data.contains_key::<str>(path.to_string_lossy().as_ref()))
+            .map(|namespace_data| {
+                namespace_data.contains_key::<str>(path.to_string_lossy().as_ref())
+            })
             .unwrap_or_default()
         {
             Ok(ExistsResult::Directory)

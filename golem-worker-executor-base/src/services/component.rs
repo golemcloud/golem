@@ -24,7 +24,6 @@ use crate::services::compiled_component::CompiledComponentService;
 use crate::services::golem_config::{
     CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
 };
-use golem_service_base::storage::blob::BlobStorage;
 use async_trait::async_trait;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -39,6 +38,7 @@ use golem_common::metrics::external_calls::record_external_call_response_size_by
 use golem_common::model::component_metadata::LinearMemory;
 use golem_common::model::{ComponentId, ComponentType, ComponentVersion, InitialComponentFile};
 use golem_common::retries::with_retries;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_ast::analysis::AnalysedExport;
 use http::Uri;
 use prost::Message;
@@ -449,7 +449,9 @@ async fn get_metadata_via_grpc(
                     memories: component
                         .metadata
                         .as_ref()
-                        .map(|metadata| metadata.memories.iter().map(|m| m.clone().into()).collect())
+                        .map(|metadata| {
+                            metadata.memories.iter().map(|m| m.clone().into()).collect()
+                        })
                         .unwrap_or_default(),
                     exports: component
                         .metadata
@@ -596,7 +598,7 @@ impl ComponentServiceLocalFileSystem {
                     };
                 };
             };
-        };
+        }
 
         match forced_version {
             Some(forced_version) => matching_files
@@ -616,7 +618,6 @@ impl ComponentServiceLocalFileSystem {
                 }),
         }
     }
-
 
     async fn get_component_from_path(
         &self,
@@ -700,29 +701,30 @@ impl ComponentServiceLocalFileSystem {
         let component_id = component_id.clone();
         let props_path = PathBuf::from(props_path);
 
-        let key = ComponentKey { component_id: component_id.clone(), component_version };
+        let key = ComponentKey {
+            component_id: component_id.clone(),
+            component_version,
+        };
 
-        self.component_metadata_cache.get_or_insert_simple(
-            &key,
-            || Box::pin(async move {
-                let data = tokio::fs::read_to_string(props_path)
-                    .await
-                    .map_err( |e|
+        self.component_metadata_cache
+            .get_or_insert_simple(&key, || {
+                Box::pin(async move {
+                    let data = tokio::fs::read_to_string(props_path).await.map_err(|e| {
                         GolemError::GetLatestVersionOfComponentFailed {
                             component_id: component_id.clone(),
                             reason: format!("Failed to read properties of component: {}", e),
                         }
-                    )?;
+                    })?;
 
-                serde_json::from_str(&data)
-                    .map_err( |e|
+                    serde_json::from_str(&data).map_err(|e| {
                         GolemError::GetLatestVersionOfComponentFailed {
                             component_id: component_id.clone(),
                             reason: format!("Failed to read properties of component: {}", e),
                         }
-                    )
+                    })
+                })
             })
-        ).await
+            .await
     }
 
     fn extract_version(file_name: &str) -> Option<ComponentVersion> {
@@ -739,10 +741,16 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<(Component, ComponentMetadata), GolemError> {
-        let (version, wasm_path, props_path) = self.find_component_files(component_id, Some(component_version)).await?;
+        let (version, wasm_path, props_path) = self
+            .find_component_files(component_id, Some(component_version))
+            .await?;
 
-        let component = self.get_component_from_path(&wasm_path, engine, component_id, version).await?;
-        let metadata = self.get_metadata_from_path(&props_path, component_id, version).await?;
+        let component = self
+            .get_component_from_path(&wasm_path, engine, component_id, version)
+            .await?;
+        let metadata = self
+            .get_metadata_from_path(&props_path, component_id, version)
+            .await?;
         Ok((component, metadata))
     }
 
@@ -751,8 +759,11 @@ impl ComponentService for ComponentServiceLocalFileSystem {
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
     ) -> Result<ComponentMetadata, GolemError> {
-        let (version, _, props_path) = self.find_component_files(component_id, forced_version).await?;
-        self.get_metadata_from_path(&props_path, component_id, version).await
+        let (version, _, props_path) = self
+            .find_component_files(component_id, forced_version)
+            .await?;
+        self.get_metadata_from_path(&props_path, component_id, version)
+            .await
     }
 }
 

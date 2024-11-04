@@ -23,7 +23,15 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse, ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError
+    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetFileContentsRequest,
+    GetOplogRequest, GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest,
+    InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
+    ListDirectoryRequest, ListDirectoryResponse, ListDirectorySuccessResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, LogEvent, WorkerId};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
@@ -732,9 +740,7 @@ impl WorkerService for ForwardingWorkerService {
             Some(workerexecutor::v1::list_directory_response::Result::Success(data)) => {
                 Ok(ListDirectoryResponse {
                     result: Some(worker::v1::list_directory_response::Result::Success(
-                        ListDirectorySuccessResponse {
-                            nodes: data.nodes,
-                        },
+                        ListDirectorySuccessResponse { nodes: data.nodes },
                     )),
                 })
             }
@@ -747,34 +753,31 @@ impl WorkerService for ForwardingWorkerService {
                     )),
                 })
             }
-            Some(_) => Err(anyhow!("Unsupported response from golem-worker-executor list-directory call")),
+            Some(_) => Err(anyhow!(
+                "Unsupported response from golem-worker-executor list-directory call"
+            )),
         }
     }
 
-    async fn get_file_contents(
-        &self,
-        request: GetFileContentsRequest,
-    ) -> crate::Result<Bytes> {
+    async fn get_file_contents(&self, request: GetFileContentsRequest) -> crate::Result<Bytes> {
         let mut stream = self
             .worker_executor
             .client()
             .await?
-            .get_file_contents(
-                workerexecutor::v1::GetFileContentsRequest {
-                    worker_id: request.worker_id,
-                    account_id: Some(
-                        AccountId {
-                            value: "test-account".to_string(),
-                        }
-                        .into(),
-                    ),
-                    account_limits: Some(ResourceLimits {
-                        available_fuel: i64::MAX,
-                        max_memory_per_worker: i64::MAX,
-                    }),
-                    file_path: request.file_path,
-                }
-            )
+            .get_file_contents(workerexecutor::v1::GetFileContentsRequest {
+                worker_id: request.worker_id,
+                account_id: Some(
+                    AccountId {
+                        value: "test-account".to_string(),
+                    }
+                    .into(),
+                ),
+                account_limits: Some(ResourceLimits {
+                    available_fuel: i64::MAX,
+                    max_memory_per_worker: i64::MAX,
+                }),
+                file_path: request.file_path,
+            })
             .await?
             .into_inner();
 
@@ -786,7 +789,11 @@ impl WorkerService for ForwardingWorkerService {
                 }
                 Some(workerexecutor::v1::get_file_contents_response::Result::Header(header)) => {
                     match header.result {
-                        Some(workerexecutor::v1::get_file_contents_response_header::Result::Success(_)) => {}
+                        Some(
+                            workerexecutor::v1::get_file_contents_response_header::Result::Success(
+                                _,
+                            ),
+                        ) => {}
                         _ => {
                             return Err(anyhow!("Unexpected header from get_file_contents"));
                         }
@@ -799,7 +806,7 @@ impl WorkerService for ForwardingWorkerService {
                     return Err(anyhow!("Unexpected response from get_file_contents"));
                 }
             }
-        };
+        }
         Ok(Bytes::from(bytes))
     }
 

@@ -107,9 +107,9 @@ mod tests {
     use crate::service::http::http_api_definition_validator::unique_routes;
     use crate::worker_binding::ResponseMapping;
     use golem_common::model::ComponentId;
+    use golem_common::model::WorkerBindingType;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
-    use golem_common::model::WorkerBindingType;
 
     #[test]
     fn test_unique_routes() {

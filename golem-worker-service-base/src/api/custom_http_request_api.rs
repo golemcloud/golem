@@ -108,7 +108,10 @@ impl CustomHttpRequestApi {
         {
             Ok(resolved_worker_binding) => {
                 resolved_worker_binding
-                    .interpret_response_mapping(&self.worker_service_rib_interpreter, &self.fileserver_binding_handler)
+                    .interpret_response_mapping(
+                        &self.worker_service_rib_interpreter,
+                        &self.fileserver_binding_handler,
+                    )
                     .await
             }
 

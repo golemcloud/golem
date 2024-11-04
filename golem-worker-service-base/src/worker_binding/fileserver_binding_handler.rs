@@ -1,34 +1,36 @@
 use std::{pin::Pin, str::FromStr, sync::Arc};
 
-use bytes::Bytes;
-use futures::Stream;
-use golem_common::model::{ComponentFilePath, TargetWorkerId};
-use golem_service_base::model::validate_worker_name;
-use golem_service_base::{auth::EmptyAuthCtx, service::initial_component_files::InitialComponentFilesService};
-use golem_wasm_rpc::protobuf::typed_result::ResultValue;
-use http::StatusCode;
-use poem::web::{headers::ContentType};
-use rib::RibResult;
-use async_trait::async_trait;
-use crate::service::component::{ComponentService, ComponentServiceError};
-use crate::service::worker::{WorkerService, WorkerServiceError};
 use super::WorkerDetail;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use crate::empty_worker_metadata;
 use crate::getter::{get_response_headers_or_default, get_status_code, GetterExt};
 use crate::path::Path;
-use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
-use crate::empty_worker_metadata;
+use crate::service::component::{ComponentService, ComponentServiceError};
+use crate::service::worker::{WorkerService, WorkerServiceError};
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures::Stream;
 use futures_util::TryStreamExt;
+use golem_common::model::{ComponentFilePath, TargetWorkerId};
+use golem_service_base::model::validate_worker_name;
+use golem_service_base::{
+    auth::EmptyAuthCtx, service::initial_component_files::InitialComponentFilesService,
+};
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::protobuf::typed_result::ResultValue;
+use http::StatusCode;
+use poem::web::headers::ContentType;
+use rib::RibResult;
 
 pub struct FileServerBindingSuccess {
     pub binding_details: FileServerBindingDetails,
-    pub data: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static>>
+    pub data: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static>>,
 }
 
 pub enum FileServerBindingError {
     InternalError(String),
     WorkerServiceError(WorkerServiceError),
-    ComponentServiceError(ComponentServiceError)
+    ComponentServiceError(ComponentServiceError),
 }
 
 pub type FileServerBindingResult = Result<FileServerBindingSuccess, FileServerBindingError>;
@@ -47,37 +49,34 @@ impl FileServerBindingDetails {
         // 2. A record with a 'file-path' field. Mime type and status are optionally taken from the record, otherwise guessed.
         // 3. A result of either of the above, with the same rules applied.
         match result {
-            RibResult::Val(value) => {
-                match value {
-                    TypeAnnotatedValue::Result(inner) => {
-                        let value = inner.result_value.ok_or("Expected a result value".to_string())?;
-                        match value {
-                            ResultValue::OkValue(ok) => {
-                                Self::from_rib_happy(ok.type_annotated_value.ok_or("ok unset".to_string())?)
-                            }
-                            ResultValue::ErrorValue(err) => {
-                                let value = err.type_annotated_value.ok_or("err unset".to_string())?;
-                                Err(format!("Error result: {}", value.to_json_value().to_string()))
-                            }
+            RibResult::Val(value) => match value {
+                TypeAnnotatedValue::Result(inner) => {
+                    let value = inner
+                        .result_value
+                        .ok_or("Expected a result value".to_string())?;
+                    match value {
+                        ResultValue::OkValue(ok) => Self::from_rib_happy(
+                            ok.type_annotated_value.ok_or("ok unset".to_string())?,
+                        ),
+                        ResultValue::ErrorValue(err) => {
+                            let value = err.type_annotated_value.ok_or("err unset".to_string())?;
+                            Err(format!("Error result: {}", value.to_json_value()))
                         }
-                    },
-                    other => Self::from_rib_happy(other)
+                    }
                 }
-            }
-            RibResult::Unit => {
-                Err("Expected a value".to_string())
-            }
+                other => Self::from_rib_happy(other),
+            },
+            RibResult::Unit => Err("Expected a value".to_string()),
         }
     }
 
     /// Like the above, just without the result case.
     fn from_rib_happy(value: TypeAnnotatedValue) -> Result<FileServerBindingDetails, String> {
         match value {
-            TypeAnnotatedValue::Str(raw_path) => {
-                Self::make_from(raw_path, None, None)
-            }
+            TypeAnnotatedValue::Str(raw_path) => Self::make_from(raw_path, None, None),
             record @ TypeAnnotatedValue::Record(_) => {
-                let path = record.get_optional(&Path::from_key("file-path"))
+                let path = record
+                    .get_optional(&Path::from_key("file-path"))
                     .ok_or("Record must contain 'file-path' field")?;
 
                 let path = if let TypeAnnotatedValue::Str(path) = path {
@@ -88,7 +87,7 @@ impl FileServerBindingDetails {
 
                 let status = get_status_code(&record)?;
                 let headers = get_response_headers_or_default(&record)?;
-                let content_type  = headers.get_content_type();
+                let content_type = headers.get_content_type();
 
                 Self::make_from(path, content_type, status)
             }
@@ -106,8 +105,11 @@ impl FileServerBindingDetails {
         let content_type = match content_type {
             Some(content_type) => content_type,
             None => {
-                let mime_type = mime_guess::from_path(&path).first().ok_or("Could not determine mime type")?;
-                ContentType::from_str(mime_type.as_ref()).map_err(|e| format!("Invalid mime type: {}", e))?
+                let mime_type = mime_guess::from_path(&path)
+                    .first()
+                    .ok_or("Could not determine mime type")?;
+                ContentType::from_str(mime_type.as_ref())
+                    .map_err(|e| format!("Invalid mime type: {}", e))?
             }
         };
 
@@ -158,11 +160,15 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
         original_result: RibResult,
     ) -> FileServerBindingResult {
         let binding_details = FileServerBindingDetails::from_rib(original_result)
-            .map_err(|e| FileServerBindingError::InternalError(e))?;
+            .map_err(FileServerBindingError::InternalError)?;
 
         let component_metadata = self
             .component_service
-            .get_by_version(&worker_detail.component_id.component_id, worker_detail.component_id.version, &EmptyAuthCtx())
+            .get_by_version(
+                &worker_detail.component_id.component_id,
+                worker_detail.component_id.version,
+                &EmptyAuthCtx(),
+            )
             .await
             .map_err(FileServerBindingError::ComponentServiceError)?;
 
@@ -177,11 +183,18 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
                 .initial_component_files_service
                 .get(&file.key)
                 .await
-                .map_err(|e| FileServerBindingError::InternalError(format!("Failed looking up file in storage: {e}")))?
-                .ok_or(FileServerBindingError::InternalError(format!("File not found in file storage: {}", file.key)))?;
+                .map_err(|e| {
+                    FileServerBindingError::InternalError(format!(
+                        "Failed looking up file in storage: {e}"
+                    ))
+                })?
+                .ok_or(FileServerBindingError::InternalError(format!(
+                    "File not found in file storage: {}",
+                    file.key
+                )))?;
 
             Ok(FileServerBindingSuccess {
-                binding_details: binding_details,
+                binding_details,
                 data: Box::pin(futures::stream::once(async move { Ok(data) })),
             })
         } else {
@@ -192,7 +205,9 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
                 .as_ref()
                 .map(|w| validate_worker_name(w).map(|_| w.clone()))
                 .transpose()
-                .map_err(|e| FileServerBindingError::InternalError(format!("Invalid worker name: {}", e)))?;
+                .map_err(|e| {
+                    FileServerBindingError::InternalError(format!("Invalid worker name: {}", e))
+                })?;
 
             let component_id = worker_detail.component_id.component_id.clone();
 
@@ -203,12 +218,17 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
 
             let stream = self
                 .worker_service
-                .get_file_contents(&worker_id, binding_details.file_path.clone(), empty_worker_metadata(), &EmptyAuthCtx())
+                .get_file_contents(
+                    &worker_id,
+                    binding_details.file_path.clone(),
+                    empty_worker_metadata(),
+                    &EmptyAuthCtx(),
+                )
                 .await
                 .map_err(FileServerBindingError::WorkerServiceError)?;
 
-            let stream = stream
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
+            let stream =
+                stream.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()));
 
             Ok(FileServerBindingSuccess {
                 binding_details,

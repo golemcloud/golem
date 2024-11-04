@@ -23,12 +23,19 @@ use tonic::transport::{Channel, Endpoint};
 use tonic::Streaming;
 use tracing::Level;
 
+use anyhow::anyhow;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    get_file_contents_response, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetFileContentsRequest, GetOplogRequest, GetOplogResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ListDirectoryRequest, ListDirectoryResponse, ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse
+    get_file_contents_response, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    GetFileContentsRequest, GetOplogRequest, GetOplogResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    ListDirectoryRequest, ListDirectoryResponse, ResumeWorkerRequest, ResumeWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::LogEvent;
-use anyhow::anyhow;
 
 use crate::components::component_service::ComponentService;
 use crate::components::rdb::Rdb;
@@ -209,10 +216,7 @@ pub trait WorkerService {
             .into_inner())
     }
 
-    async fn get_file_contents(
-        &self,
-        request: GetFileContentsRequest,
-    ) -> crate::Result<Bytes> {
+    async fn get_file_contents(&self, request: GetFileContentsRequest) -> crate::Result<Bytes> {
         let mut stream = self
             .client()
             .await?
@@ -233,7 +237,7 @@ pub trait WorkerService {
                     return Err(anyhow!("Unexpected response from get_file_contents"));
                 }
             }
-        };
+        }
         Ok(Bytes::from(bytes))
     }
 

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use golem_service_base::service::initial_component_files::{InitialComponentFilesService};
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -23,6 +23,7 @@ use test_r::{tag_suite, test_dep};
 use tracing::Level;
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
 use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 use golem_test_framework::components::component_service::ComponentService;
@@ -39,7 +40,6 @@ use golem_test_framework::components::worker_executor_cluster::WorkerExecutorClu
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
 use golem_test_framework::config::TestDependencies;
-use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 
 mod common;
 
@@ -177,8 +177,13 @@ impl WorkerExecutorTestDependencies {
         let component_service: Arc<dyn ComponentService + Send + Sync + 'static> = Arc::new(
             FileSystemComponentService::new(Path::new("data/components")),
         );
-        let blob_storage = Arc::new(FileSystemBlobStorage::new(Path::new("data/blobs")).await.unwrap());
-        let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(Path::new("data/blobs"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         Self {
             redis,

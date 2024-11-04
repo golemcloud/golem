@@ -9,7 +9,10 @@ use golem_service_base::config::ComponentStoreLocalConfig;
 use golem_service_base::db;
 
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::{ComponentId, ComponentType, ComponentFilePath, ComponentFilePathAndPermissions, ComponentFilePermissions};
+use golem_common::model::{
+    ComponentFilePath, ComponentFilePathAndPermissions, ComponentFilePermissions, ComponentId,
+    ComponentType,
+};
 use golem_common::SafeDisplay;
 use golem_component_service_base::model::{Component, InitialComponentFilesArchiveAndPermissions};
 use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
@@ -23,13 +26,13 @@ use golem_service_base::model::ComponentName;
 use golem_service_base::service::component_object_store;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
 use rib::RegistryKey;
-use tokio::fs::File;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
+use tokio::fs::File;
 use uuid::Uuid;
 
 test_r::enable!();
@@ -143,7 +146,8 @@ async fn test_component_constraint_incompatible_updates(
             .expect("Failed to create blob storage"),
     );
 
-    let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+    let initial_component_files_service =
+        Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
     let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
         Arc::new(ComponentCompilationServiceDisabled);
@@ -241,7 +245,8 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             .expect("Failed to create blob storage"),
     );
 
-    let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blop_store.clone()));
+    let initial_component_files_service =
+        Arc::new(InitialComponentFilesService::new(blop_store.clone()));
 
     let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
         Arc::new(ComponentServiceDefault::new(
@@ -256,7 +261,9 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     test_initial_component_file_data_sharing(component_service.clone()).await;
 }
 
-async fn test_complex_component_service_flow(component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>) {
+async fn test_complex_component_service_flow(
+    component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
+) {
     let component_name1 = ComponentName("shopping-cart".to_string());
     let component_name2 = ComponentName("rust-echo".to_string());
 
@@ -528,7 +535,9 @@ async fn test_complex_component_service_flow(component_service: Arc<dyn Componen
     assert!(component1_result.is_none());
 }
 
-async fn test_initial_component_file_upload(component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>) {
+async fn test_initial_component_file_upload(
+    component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
+) {
     let data = get_component_data("shopping-cart");
 
     let component_name = ComponentName("shopping-cart-initial-component-file-upload".to_string());
@@ -541,8 +550,8 @@ async fn test_initial_component_file_upload(component_service: Arc<dyn Component
             data,
             Some(InitialComponentFilesArchiveAndPermissions {
                 archive: File::open(COMPONENT_ARCHIVE).await.unwrap(),
-                files: vec![ ComponentFilePathAndPermissions {
-                    path: ComponentFilePath::from_str("/foo.txt").unwrap(),
+                files: vec![ComponentFilePathAndPermissions {
+                    path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadWrite,
                 }],
             }),
@@ -551,17 +560,36 @@ async fn test_initial_component_file_upload(component_service: Arc<dyn Component
         .await
         .unwrap();
 
-    let result = component_service.get_by_version(&component.versioned_component_id, &DefaultNamespace::default()).await.unwrap();
+    let result = component_service
+        .get_by_version(
+            &component.versioned_component_id,
+            &DefaultNamespace::default(),
+        )
+        .await
+        .unwrap();
 
     assert!(result.is_some());
 
-    let result = result.unwrap().files.into_iter().map(|f| (f.path, f.permissions)).collect::<Vec<_>>();
+    let result = result
+        .unwrap()
+        .files
+        .into_iter()
+        .map(|f| (f.path, f.permissions))
+        .collect::<Vec<_>>();
     assert_eq!(result.len(), 2);
-    assert!(result.contains(&(ComponentFilePath::from_str("/foo.txt").unwrap(), ComponentFilePermissions::ReadWrite)));
-    assert!(result.contains(&(ComponentFilePath::from_str("/bar/baz.txt").unwrap(), ComponentFilePermissions::ReadOnly)));
+    assert!(result.contains(&(
+        ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+        ComponentFilePermissions::ReadWrite
+    )));
+    assert!(result.contains(&(
+        ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+        ComponentFilePermissions::ReadOnly
+    )));
 }
 
-async fn test_initial_component_file_data_sharing(component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>) {
+async fn test_initial_component_file_data_sharing(
+    component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
+) {
     let data = get_component_data("shopping-cart");
 
     let component_name = ComponentName("test_initial_component_file_data_sharing".to_string());
@@ -588,12 +616,10 @@ async fn test_initial_component_file_data_sharing(component_service: Arc<dyn Com
             None,
             Some(InitialComponentFilesArchiveAndPermissions {
                 archive: File::open(COMPONENT_ARCHIVE).await.unwrap(),
-                files: vec![
-                    ComponentFilePathAndPermissions {
-                        path: ComponentFilePath::from_str("/foo.txt").unwrap(),
-                        permissions: ComponentFilePermissions::ReadWrite,
-                    }
-                ],
+                files: vec![ComponentFilePathAndPermissions {
+                    path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+                    permissions: ComponentFilePermissions::ReadWrite,
+                }],
             }),
             &DefaultNamespace::default(),
         )
@@ -604,11 +630,18 @@ async fn test_initial_component_file_data_sharing(component_service: Arc<dyn Com
     assert_eq!(component2.files.len(), 2);
 
     // the uploads contain the same files, so their keys should be the same
-    let component1_keys = component1.files.into_iter().map(|f| f.key.0).collect::<HashSet<_>>();
-    let component2_keys = component2.files.into_iter().map(|f| f.key.0).collect::<HashSet<_>>();
+    let component1_keys = component1
+        .files
+        .into_iter()
+        .map(|f| f.key.0)
+        .collect::<HashSet<_>>();
+    let component2_keys = component2
+        .files
+        .into_iter()
+        .map(|f| f.key.0)
+        .collect::<HashSet<_>>();
     assert_eq!(component1_keys, component2_keys);
 }
-
 
 async fn test_repo(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     test_repo_component_id_unique(component_repo.clone()).await;

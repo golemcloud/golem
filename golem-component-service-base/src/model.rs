@@ -1,13 +1,13 @@
 use chrono::Utc;
 use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
+use golem_common::model::InitialComponentFile;
 use golem_common::model::{ComponentFilePathAndPermissions, ComponentId, ComponentType};
-use golem_common::model::{InitialComponentFile};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use rib::WorkerFunctionsInRib;
 use serde::{Deserialize, Serialize};
-use tokio::fs::File;
 use std::time::SystemTime;
+use tokio::fs::File;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Component<Namespace> {
@@ -18,7 +18,7 @@ pub struct Component<Namespace> {
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<Utc>,
     pub component_type: ComponentType,
-    pub files: Vec<InitialComponentFile>
+    pub files: Vec<InitialComponentFile>,
 }
 
 impl<Namespace> Component<Namespace> {
@@ -48,7 +48,7 @@ impl<Namespace> Component<Namespace> {
             created_at: Utc::now(),
             versioned_component_id,
             component_type,
-            files
+            files,
         })
     }
 
@@ -73,7 +73,7 @@ impl<Namespace> From<Component<Namespace>> for golem_service_base::model::Compon
             metadata: value.metadata,
             created_at: Some(value.created_at),
             component_type: Some(value.component_type),
-            files: value.files
+            files: value.files,
         }
     }
 }
@@ -92,7 +92,7 @@ impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::com
                 value.created_at,
             ))),
             component_type: Some(component_type.into()),
-            files: value.files.into_iter().map(|file| file.into()).collect()
+            files: value.files.into_iter().map(|file| file.into()).collect(),
         }
     }
 }
@@ -139,7 +139,6 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
 
         Ok(component_constraints)
     }
-
 }
 
 #[derive(Debug)]

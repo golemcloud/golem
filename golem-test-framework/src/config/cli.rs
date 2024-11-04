@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 use golem_common::tracing::{init_tracing, TracingConfig};
-use golem_service_base::service::initial_component_files::{InitialComponentFilesService};
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use itertools::Itertools;
@@ -430,9 +430,13 @@ impl CliTestDependencies {
                 .await,
             );
 
-
-        let blob_storage = Arc::new(FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem")).await.unwrap());
-        let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         Self {
             rdb,
@@ -594,8 +598,13 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem")).await.unwrap());
-        let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         Self {
             rdb,
@@ -608,7 +617,7 @@ impl CliTestDependencies {
             worker_executor_cluster,
             component_directory: Path::new(&params.component_directory).to_path_buf(),
             blob_storage,
-            initial_component_files_service
+            initial_component_files_service,
         }
     }
 
@@ -731,8 +740,13 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem")).await.unwrap());
-        let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         Self {
             rdb,
@@ -878,8 +892,13 @@ impl CliTestDependencies {
                 .await,
             );
 
-        let blob_storage = Arc::new(FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem")).await.unwrap());
-        let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        let blob_storage = Arc::new(
+            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
+                .await
+                .unwrap(),
+        );
+        let initial_component_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         Self {
             rdb,
@@ -892,7 +911,7 @@ impl CliTestDependencies {
             worker_executor_cluster,
             component_directory: Path::new(&params.component_directory).to_path_buf(),
             blob_storage,
-            initial_component_files_service
+            initial_component_files_service,
         }
     }
 
@@ -971,8 +990,15 @@ impl CliTestDependencies {
                     true,
                 ));
 
-                let blob_storage = Arc::new(FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem")).await.unwrap());
-                let initial_component_files_service = Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+                let blob_storage = Arc::new(
+                    FileSystemBlobStorage::new(&PathBuf::from(
+                        "/tmp/ittest-local-object-store/golem",
+                    ))
+                    .await
+                    .unwrap(),
+                );
+                let initial_component_files_service =
+                    Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
                 Self {
                     rdb,
@@ -985,7 +1011,7 @@ impl CliTestDependencies {
                     worker_executor_cluster,
                     component_directory: Path::new(&params.component_directory).to_path_buf(),
                     blob_storage,
-                    initial_component_files_service
+                    initial_component_files_service,
                 }
             }
             TestMode::Docker {

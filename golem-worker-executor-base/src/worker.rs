@@ -23,16 +23,19 @@ use crate::durable_host::recover_stderr_logs;
 use crate::error::{GolemError, WorkerOutOfMemory};
 use crate::function_result_interpreter::interpret_function_results;
 use crate::invocation::{invoke_worker, InvokeResult};
-use crate::model::{ExecutionStatus, InterruptKind, ListDirectoryResult, LookupResult, ReadFileResult, TrapType, WorkerConfig};
+use crate::model::{
+    ExecutionStatus, InterruptKind, ListDirectoryResult, LookupResult, ReadFileResult, TrapType,
+    WorkerConfig,
+};
 use crate::services::component::ComponentMetadata;
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
-    HasExtraDeps, HasKeyValueService, HasOplog, HasOplogService, HasPromiseService, HasRpc,
-    HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService, HasWorkerProxy,
-    HasWorkerService, UsesAllDeps, HasFileLoader
+    HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPromiseService,
+    HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorker, HasWorkerEnumerationService,
+    HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
@@ -44,7 +47,7 @@ use golem_common::model::oplog::{
     WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::{exports, ComponentType, ComponentFilePath};
+use golem_common::model::{exports, ComponentFilePath, ComponentType};
 use golem_common::model::{
     ComponentVersion, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, SuccessfulUpdateRecord,
     Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata,
@@ -207,7 +210,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_metadata.last_known_status.invocation_results.clone();
 
         let queue = Arc::new(RwLock::new(VecDeque::from_iter(
-            initial_pending_invocations.iter().map(|inv| QueuedWorkerInvocation::External(inv.clone())),
+            initial_pending_invocations
+                .iter()
+                .map(|inv| QueuedWorkerInvocation::External(inv.clone())),
         )));
         let pending_updates = Arc::new(RwLock::new(VecDeque::from_iter(
             initial_pending_updates.iter().cloned(),
@@ -551,7 +556,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub fn pending_invocations(&self) -> Vec<TimestampedWorkerInvocation> {
-        self.queue.read().unwrap().iter().filter_map(|inv| inv.as_external().cloned()).collect()
+        self.queue
+            .read()
+            .unwrap()
+            .iter()
+            .filter_map(|inv| inv.as_external().cloned())
+            .collect()
     }
 
     pub fn pending_updates(&self) -> (VecDeque<TimestampedUpdateDescription>, DeletedRegions) {
@@ -784,22 +794,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // - Worker is running, we can send the invocation command and the worker will look at the queue immediately
         // - Worker is starting, it will process the request when it is started
 
-        match &*mutex {
-            WorkerInstance::Running(running) => {
-                running.sender.send(WorkerCommand::Invocation).unwrap();
-            },
-            _ => { }
-        }
+        if let WorkerInstance::Running(running) = &*mutex {
+            running.sender.send(WorkerCommand::Invocation).unwrap();
+        };
 
         drop(mutex);
 
         receiver.await.unwrap()
     }
 
-    pub async fn read_file(
-        &self,
-        path: ComponentFilePath,
-    ) -> Result<ReadFileResult, GolemError> {
+    pub async fn read_file(&self, path: ComponentFilePath) -> Result<ReadFileResult, GolemError> {
         let (sender, receiver) = oneshot::channel();
 
         let mutex = self.instance.lock().await;
@@ -809,19 +813,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .unwrap()
             .push_back(QueuedWorkerInvocation::ReadFile { path, sender });
 
-        match &*mutex {
-            WorkerInstance::Running(running) => {
-                running.sender.send(WorkerCommand::Invocation).unwrap();
-            },
-            // Worker will process the request when it is started.
-            _ => { }
-        }
+        if let WorkerInstance::Running(running) = &*mutex {
+            running.sender.send(WorkerCommand::Invocation).unwrap();
+        };
 
         drop(mutex);
 
         receiver.await.unwrap()
     }
-
 
     async fn wait_for_invocation_result(
         &self,
@@ -968,16 +967,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                     result: Err(fail_pending_invocations.clone()),
                                 })
                             }
-                        },
+                        }
                         QueuedWorkerInvocation::ListDirectory { sender, .. } => {
                             let _ = sender.send(Err(fail_pending_invocations.clone()));
-                        },
+                        }
                         QueuedWorkerInvocation::ReadFile { sender, .. } => {
                             let _ = sender.send(Err(fail_pending_invocations.clone()));
-                        },
+                        }
                     }
-
-
                 }
             } else {
                 *self.queue.write().unwrap() = queued_items;
@@ -1437,7 +1434,7 @@ impl RunningWorker {
                                 QueuedWorkerInvocation::ListDirectory { path, sender } => {
                                     let result = store.data_mut().list_directory(&path).await;
                                     let _ = sender.send(result);
-                                },
+                                }
                                 QueuedWorkerInvocation::ReadFile { path, sender } => {
                                     let result = store.data_mut().read_file(&path).await;
                                     match result {
@@ -1449,16 +1446,18 @@ impl RunningWorker {
                                             // if yes, we can make a cheap copy of the file here and serve the read from that copy.
 
                                             let (latch, latch_receiver) = oneshot::channel();
-                                            let drop_stream = DropStream::new(stream, || latch.send(()).unwrap());
-                                            let _ = sender.send(Ok(ReadFileResult::Ok(Box::pin(drop_stream))));
+                                            let drop_stream =
+                                                DropStream::new(stream, || latch.send(()).unwrap());
+                                            let _ = sender.send(Ok(ReadFileResult::Ok(Box::pin(
+                                                drop_stream,
+                                            ))));
                                             latch_receiver.await.unwrap();
                                         }
                                         other => {
                                             let _ = sender.send(other);
                                         }
-
                                     };
-                                },
+                                }
                                 QueuedWorkerInvocation::External(inner) => {
                                     match inner.invocation {
                                         WorkerInvocation::ExportedFunction {
@@ -1739,9 +1738,9 @@ impl RunningWorker {
                                             if do_break {
                                                 break;
                                             }
+                                        }
                                     }
                                 }
-                            }
                             }
                         }
                         WorkerCommand::Interrupt(kind) => {
@@ -1907,7 +1906,7 @@ pub enum RetryDecision {
 #[derive(Debug)]
 enum WorkerCommand {
     Invocation,
-    Interrupt(InterruptKind)
+    Interrupt(InterruptKind),
 }
 
 pub async fn get_component_metadata<Ctx: WorkerCtx>(

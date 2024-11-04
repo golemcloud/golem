@@ -14,26 +14,26 @@
 
 use crate::clients::component::ComponentClient;
 use crate::clients::file_download::FileDownloadClient;
-use crate::model::application_manifest::{InitialComponentFile};
+use crate::model::application_manifest::InitialComponentFile;
 use crate::model::component::{Component, ComponentView};
 use crate::model::text::component::{ComponentAddView, ComponentGetView, ComponentUpdateView};
 use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdin};
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
-use golem_client::model::{ComponentType, ComponentFilePathAndPermissionsList};
-use golem_common::model::{ComponentId, ComponentFilePathAndPermissions};
+use async_zip::{Compression, ZipEntryBuilder};
+use golem_client::model::{ComponentFilePathAndPermissionsList, ComponentType};
+use golem_common::model::{ComponentFilePathAndPermissions, ComponentId};
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_common::uri::oss::urn::ComponentUrn;
 use indoc::formatdoc;
 use itertools::Itertools;
-use tempfile::TempDir;
-use tokio_stream::wrappers::ReadDirStream;
 use std::collections::VecDeque;
 use std::fmt::Display;
 use std::path::PathBuf;
+use tempfile::TempDir;
 use tokio::fs::File;
-use async_zip::{Compression, ZipEntryBuilder};
+use tokio_stream::wrappers::ReadDirStream;
 use tokio_stream::StreamExt;
 
 #[async_trait]
@@ -48,7 +48,7 @@ pub trait ComponentService {
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
-        files: Vec<InitialComponentFile>
+        files: Vec<InitialComponentFile>,
     ) -> Result<GolemResult, GolemError>;
     async fn update(
         &self,
@@ -58,7 +58,7 @@ pub trait ComponentService {
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
-        files: Vec<InitialComponentFile>
+        files: Vec<InitialComponentFile>,
     ) -> Result<GolemResult, GolemError>;
     async fn list(
         &self,
@@ -76,10 +76,7 @@ pub trait ComponentService {
         uri: ComponentUri,
         project: &Option<Self::ProjectContext>,
     ) -> Result<ComponentUrn, GolemError>;
-    async fn resolve_component_name(
-        &self,
-        uri: &ComponentUri,
-    ) -> Result<String, GolemError>;
+    async fn resolve_component_name(&self, uri: &ComponentUri) -> Result<String, GolemError>;
     async fn get_metadata(
         &self,
         component_urn: &ComponentUrn,
@@ -96,68 +93,99 @@ pub struct ComponentServiceLive<ProjectContext> {
     pub file_download_client: Box<dyn FileDownloadClient + Send + Sync>,
 }
 
-impl <ProjectContext> ComponentServiceLive<ProjectContext> {
-
-    async fn load_file(&self, component_file: InitialComponentFile) -> Result<Vec<LoadedFile>, GolemError> {
+impl<ProjectContext> ComponentServiceLive<ProjectContext> {
+    async fn load_file(
+        &self,
+        component_file: InitialComponentFile,
+    ) -> Result<Vec<LoadedFile>, GolemError> {
         let scheme = component_file.source_path.as_url().scheme();
         match scheme {
-            "file" | ""  => self.load_local_file(component_file).await,
-            "http" | "https" => self.download_remote_file(component_file).await.map(|f| vec![f]),
+            "file" | "" => self.load_local_file(component_file).await,
+            "http" | "https" => self
+                .download_remote_file(component_file)
+                .await
+                .map(|f| vec![f]),
             _ => Err(GolemError(format!("Unsupported scheme: {}", scheme))),
         }
     }
 
-    async fn load_local_file(&self, component_file: InitialComponentFile) -> Result<Vec<LoadedFile>, GolemError> {
+    async fn load_local_file(
+        &self,
+        component_file: InitialComponentFile,
+    ) -> Result<Vec<LoadedFile>, GolemError> {
         // if it's a directory, we need to recursively load all files and combine them with their target paths and permissions.
         let source_path = PathBuf::from(component_file.source_path.as_url().path());
 
         let mut results: Vec<LoadedFile> = vec![];
-        let mut queue: VecDeque<(PathBuf, ComponentFilePathAndPermissions)> = vec![(source_path, component_file.target)].into();
+        let mut queue: VecDeque<(PathBuf, ComponentFilePathAndPermissions)> =
+            vec![(source_path, component_file.target)].into();
 
         while let Some((path, target)) = queue.pop_front() {
             if path.is_dir() {
-                let read_dir = tokio::fs::read_dir(&path).await.map_err(|err| GolemError(format!("Error reading directory {}: {}", path.display().to_string(), err)))?;
+                let read_dir = tokio::fs::read_dir(&path).await.map_err(|err| {
+                    GolemError(format!("Error reading directory {}: {err}", path.display()))
+                })?;
                 let mut read_dir_stream = ReadDirStream::new(read_dir);
 
                 while let Some(entry) = read_dir_stream.next().await {
-                    let entry = entry.map_err(|err| GolemError(format!("Error reading directory entry: {}", err)))?;
+                    let entry = entry.map_err(|err| {
+                        GolemError(format!("Error reading directory entry: {}", err))
+                    })?;
                     let next_path = entry.path();
 
-                    let file_name = entry.file_name().into_string().map_err(|_| GolemError(format!("Error converting file name to string")))?;
+                    let file_name = entry.file_name().into_string().map_err(|_| {
+                        GolemError("Error converting file name to string".to_string())
+                    })?;
 
                     let mut new_target = target.clone();
                     new_target
                         .extend_path(file_name.as_str())
-                        .map_err(|_| GolemError(format!("Error extending path")))?;
+                        .map_err(|_| GolemError("Error extending path".to_string()))?;
 
                     queue.push_back((next_path, new_target));
                 }
             } else {
-                let content = tokio::fs::read(&path).await.map_err(|err| GolemError(format!("Error reading component file {}: {}", path.display().to_string(), err)))?;
-                results.push(LoadedFile {
-                    content,
-                    target,
-                });
+                let content = tokio::fs::read(&path).await.map_err(|err| {
+                    GolemError(format!(
+                        "Error reading component file {}: {err}",
+                        path.display()
+                    ))
+                })?;
+                results.push(LoadedFile { content, target });
             }
-        };
+        }
         Ok(results)
     }
 
-
-    async fn download_remote_file(&self, component_file: InitialComponentFile) -> Result<LoadedFile, GolemError> {
-        let content = self.file_download_client.download_file(component_file.source_path.into_url()).await.expect("request failed");
+    async fn download_remote_file(
+        &self,
+        component_file: InitialComponentFile,
+    ) -> Result<LoadedFile, GolemError> {
+        let content = self
+            .file_download_client
+            .download_file(component_file.source_path.into_url())
+            .await
+            .expect("request failed");
         Ok(LoadedFile {
             content,
             target: component_file.target,
         })
     }
 
-    async fn build_files_archive(&self, component_files: Vec<InitialComponentFile>) -> Result<ComponentFilesArchiveAndProperties, GolemError> {
-        let temp_dir = tempfile::Builder::new().prefix("golem-cli-zip").tempdir().map_err(|err| GolemError(format!("Error creating temporary dir: {}", err)))?;
+    async fn build_files_archive(
+        &self,
+        component_files: Vec<InitialComponentFile>,
+    ) -> Result<ComponentFilesArchiveAndProperties, GolemError> {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("golem-cli-zip")
+            .tempdir()
+            .map_err(|err| GolemError(format!("Error creating temporary dir: {}", err)))?;
         let zip_file_path = temp_dir.path().join("data.zip");
-        let zip_file = File::create(&zip_file_path).await.map_err(|err| GolemError(format!("Error creating temporary file: {}", err)))?;
+        let zip_file = File::create(&zip_file_path)
+            .await
+            .map_err(|err| GolemError(format!("Error creating temporary file: {}", err)))?;
 
-        let mut zip_writer = ZipFileWriter::with_tokio(zip_file,);
+        let mut zip_writer = ZipFileWriter::with_tokio(zip_file);
 
         let mut properties_files: Vec<ComponentFilePathAndPermissions> = vec![];
 
@@ -167,15 +195,28 @@ impl <ProjectContext> ComponentServiceLive<ProjectContext> {
                 let zip_entry_name = target.path.to_string();
                 let builder = ZipEntryBuilder::new(zip_entry_name.into(), Compression::Deflate);
 
-                zip_writer.write_entry_whole(builder, &content).await.map_err(|err| GolemError(format!("Error writing to archive: {}", err)))?;
+                zip_writer
+                    .write_entry_whole(builder, &content)
+                    .await
+                    .map_err(|err| GolemError(format!("Error writing to archive: {}", err)))?;
                 properties_files.push(target);
             }
         }
-        zip_writer.close().await.map_err(|err| GolemError(format!("Error finishing archive: {}", err)))?;
+        zip_writer
+            .close()
+            .await
+            .map_err(|err| GolemError(format!("Error finishing archive: {}", err)))?;
 
         // there should not be any conflicting paths in the properties file
-        if properties_files.iter().unique_by(|f| f.path.clone()).count() != properties_files.len() {
-            return Err(GolemError("Conflicting paths in component files".to_string()));
+        if properties_files
+            .iter()
+            .unique_by(|f| f.path.clone())
+            .count()
+            != properties_files.len()
+        {
+            return Err(GolemError(
+                "Conflicting paths in component files".to_string(),
+            ));
         };
 
         let properties = ComponentFilePathAndPermissionsList {
@@ -188,7 +229,6 @@ impl <ProjectContext> ComponentServiceLive<ProjectContext> {
             properties,
         })
     }
-
 }
 
 #[async_trait]
@@ -205,10 +245,9 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
-        files: Vec<InitialComponentFile>
+        files: Vec<InitialComponentFile>,
     ) -> Result<GolemResult, GolemError> {
-
-        let files_archive = if files.len() > 0 {
+        let files_archive = if !files.is_empty() {
             Some(self.build_files_archive(files).await?)
         } else {
             None
@@ -225,7 +264,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
                 &project,
                 component_type,
                 files_archive_path,
-                files_archive_properties
+                files_archive_properties,
             )
             .await;
 
@@ -284,11 +323,11 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         project: Option<Self::ProjectContext>,
         non_interactive: bool,
         format: Format,
-        files: Vec<InitialComponentFile>
+        files: Vec<InitialComponentFile>,
     ) -> Result<GolemResult, GolemError> {
         let result = self.resolve_uri(component_uri.clone(), &project).await;
 
-        let files_archive = if files.len() > 0 {
+        let files_archive = if !files.is_empty() {
             Some(self.build_files_archive(files).await?)
         } else {
             None
@@ -332,7 +371,13 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
             Err(other) => Err(other),
             Ok(urn) => self
                 .client
-                .update(urn, component_file.clone(), component_type, files_archive_path, files_archive_properties)
+                .update(
+                    urn,
+                    component_file.clone(),
+                    component_type,
+                    files_archive_path,
+                    files_archive_properties,
+                )
                 .await
                 .map(|component| GolemResult::Ok(Box::new(ComponentUpdateView(component.into())))),
         }?;
@@ -421,13 +466,10 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         }
     }
 
-    async fn resolve_component_name(
-        &self,
-        uri: &ComponentUri,
-    ) -> Result<String, GolemError> {
+    async fn resolve_component_name(&self, uri: &ComponentUri) -> Result<String, GolemError> {
         match uri {
             ComponentUri::URN(urn) => {
-                let component = self.get_metadata(&urn, 0).await?;
+                let component = self.get_metadata(urn, 0).await?;
                 Ok(component.component_name)
             }
             ComponentUri::URL(ComponentUrl { name }) => Ok(name.clone()),
@@ -450,12 +492,12 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
 #[derive(Debug, Clone)]
 struct LoadedFile {
     content: Vec<u8>,
-    target: ComponentFilePathAndPermissions
+    target: ComponentFilePathAndPermissions,
 }
 
 #[derive(Debug)]
 struct ComponentFilesArchiveAndProperties {
     pub archive_path: PathBuf,
     pub properties: ComponentFilePathAndPermissionsList,
-    _temp_dir: TempDir // archive_path is only valid as long as this is alive
+    _temp_dir: TempDir, // archive_path is only valid as long as this is alive
 }

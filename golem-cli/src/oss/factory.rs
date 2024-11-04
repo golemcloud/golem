@@ -56,8 +56,8 @@ impl OssServiceFactory {
     pub fn new(config: OssServiceFactoryConfig) -> Result<Self, GolemError> {
         let service_http_client = make_reqwest_client(&config.service_http_client_config)?;
         let healthcheck_http_client = make_reqwest_client(&config.health_check_http_client_config)?;
-        let file_download_http_client = make_reqwest_client(&config.file_download_http_client_config)?;
-
+        let file_download_http_client =
+            make_reqwest_client(&config.file_download_http_client_config)?;
 
         Ok(Self {
             config,
@@ -80,7 +80,9 @@ impl OssServiceFactory {
             worker_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
             health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
-            file_download_http_client_config: HttpClientConfig::new_for_file_download(allow_insecure),
+            file_download_http_client_config: HttpClientConfig::new_for_file_download(
+                allow_insecure,
+            ),
             allow_insecure,
         })
     }
@@ -124,9 +126,7 @@ impl ServiceFactory for OssServiceFactory {
         Arc::new(ProjectResolverOss::DUMMY)
     }
 
-    fn file_download_client(
-        &self,
-    ) -> Box<dyn file_download::FileDownloadClient + Send + Sync> {
+    fn file_download_client(&self) -> Box<dyn file_download::FileDownloadClient + Send + Sync> {
         Box::new(file_download::FileDownloadClientLive {
             client: self.http_client_file_download.clone(),
         })

@@ -5,7 +5,7 @@ use golem_service_base::service::initial_component_files::InitialComponentFilesS
 use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
-use golem_worker_executor_base::services::file_loader::{FileLoader};
+use golem_worker_executor_base::services::file_loader::FileLoader;
 use prometheus::Registry;
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
@@ -16,22 +16,23 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, ComponentFilePath, OwnedWorkerId, ScanCursor, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord
-};
-use golem_worker_executor_base::error::GolemError;
-use golem_worker_executor_base::services::golem_config::{
-    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
-    ComponentServiceConfig, ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, WorkerServiceGrpcConfig,
+    AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
+use golem_worker_executor_base::error::GolemError;
+use golem_worker_executor_base::services::golem_config::{
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
+    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
+    MemoryConfig, ShardManagerServiceConfig, WorkerServiceGrpcConfig,
+};
 
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult, ReadFileResult, TrapType, WorkerConfig
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -48,7 +49,8 @@ use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::{All, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
-    ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks, InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx
+    ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks,
+    InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::Bootstrap;
 
@@ -748,7 +750,10 @@ impl ResourceLimiterAsync for TestWorkerCtx {
 
 #[async_trait]
 impl FileSystemReading for TestWorkerCtx {
-    async fn list_directory(&self, path: &ComponentFilePath) -> Result<ListDirectoryResult, GolemError> {
+    async fn list_directory(
+        &self,
+        path: &ComponentFilePath,
+    ) -> Result<ListDirectoryResult, GolemError> {
         self.durable_ctx.list_directory(path).await
     }
 

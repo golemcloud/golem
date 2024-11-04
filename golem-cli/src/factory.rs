@@ -35,7 +35,9 @@ pub trait ServiceFactory {
         &self,
     ) -> Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync>;
 
-    fn file_download_client(&self) -> Box<dyn crate::clients::file_download::FileDownloadClient + Send + Sync>;
+    fn file_download_client(
+        &self,
+    ) -> Box<dyn crate::clients::file_download::FileDownloadClient + Send + Sync>;
 
     fn component_client(
         &self,

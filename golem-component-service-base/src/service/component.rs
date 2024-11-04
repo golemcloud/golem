@@ -12,37 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::fmt::{Debug, Display, Formatter};
-use std::collections::{HashMap, HashSet};
-use std::vec;
 use async_zip::ZipEntry;
 use bytes::Bytes;
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Display, Formatter};
 use std::num::TryFromIntError;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::vec;
 
 use crate::model::{Component, ComponentConstraints, InitialComponentFilesArchiveAndPermissions};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
 use async_trait::async_trait;
+use async_zip::tokio::read::seek::ZipFileReader;
 use chrono::Utc;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
-use golem_common::model::{ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile, InitialComponentFileKey};
+use golem_common::model::{
+    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
+    InitialComponentFileKey,
+};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store::ComponentObjectStore;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use tap::TapFallible;
+use tokio::io::BufReader;
 use tokio_stream::Stream;
 use tracing::{error, info};
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use async_zip::tokio::read::seek::ZipFileReader;
-use tokio::io::BufReader;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -65,7 +68,10 @@ pub enum ComponentError {
     #[error("Component Constraint Create Error: {0}")]
     ComponentConstraintCreateError(String),
     #[error("Malformed component archive error: {message}: {error:?}")]
-    MalformedComponentArchiveError { message: String, error: Option<String> },
+    MalformedComponentArchiveError {
+        message: String,
+        error: Option<String>,
+    },
     #[error("Failed uploading initial component files: {message}: {error}")]
     InitialComponentFileUploadError { message: String, error: String },
     #[error("Provided component file not found: {path} (key: {key})")]
@@ -94,21 +100,30 @@ impl ComponentError {
         }
     }
 
-    pub fn malformed_component_archive_from_error(message: impl AsRef<str>, error: anyhow::Error) -> Self {
+    pub fn malformed_component_archive_from_error(
+        message: impl AsRef<str>,
+        error: anyhow::Error,
+    ) -> Self {
         Self::MalformedComponentArchiveError {
             message: message.as_ref().to_string(),
             error: Some(format!("{error}")),
         }
     }
 
-    pub fn initial_component_file_upload_error(message: impl AsRef<str>, error: impl AsRef<str>) -> Self {
+    pub fn initial_component_file_upload_error(
+        message: impl AsRef<str>,
+        error: impl AsRef<str>,
+    ) -> Self {
         Self::InitialComponentFileUploadError {
             message: message.as_ref().to_string(),
             error: error.as_ref().to_string(),
         }
     }
 
-    pub fn initial_component_file_not_found(path: &ComponentFilePath, key: &InitialComponentFileKey) -> Self {
+    pub fn initial_component_file_not_found(
+        path: &ComponentFilePath,
+        key: &InitialComponentFileKey,
+    ) -> Self {
         Self::InitialComponentFileNotFound {
             path: path.to_string(),
             key: key.to_string(),
@@ -203,9 +218,7 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
     }
 }
 
-pub fn create_new_versioned_component_id(
-    component_id: &ComponentId,
-) -> VersionedComponentId {
+pub fn create_new_versioned_component_id(component_id: &ComponentId) -> VersionedComponentId {
     VersionedComponentId {
         component_id: component_id.clone(),
         version: 0,
@@ -413,8 +426,8 @@ impl ComponentServiceDefault {
     ) -> Result<Component<Namespace>, ComponentError>
     where
         Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
-        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static
-     {
+        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
+    {
         let versioned_component_id = create_new_versioned_component_id(component_id);
 
         // analyze component before uploading anything so we fail early
@@ -469,7 +482,7 @@ impl ComponentServiceDefault {
     ) -> Result<Component<Namespace>, ComponentError>
     where
         Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
-        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static
+        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
     {
         let created_at = Utc::now();
 
@@ -536,7 +549,6 @@ impl ComponentServiceDefault {
 
         Ok(component)
     }
-
 }
 
 #[derive(Debug)]
@@ -643,7 +655,15 @@ where
             None => vec![],
         };
 
-        self.create_unchecked(component_id, component_name, component_type, data, uploaded_files, namespace).await
+        self.create_unchecked(
+            component_id,
+            component_name,
+            component_type,
+            data,
+            uploaded_files,
+            namespace,
+        )
+        .await
     }
 
     async fn create_internal(
@@ -662,17 +682,33 @@ where
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
         for file in &files {
-            let exists = self.initial_component_files_service
+            let exists = self
+                .initial_component_files_service
                 .exists(&file.key)
                 .await
-                .map_err(|e| ComponentError::initial_component_file_upload_error("Error checking if file exists", e))?;
+                .map_err(|e| {
+                    ComponentError::initial_component_file_upload_error(
+                        "Error checking if file exists",
+                        e,
+                    )
+                })?;
 
             if !exists {
-                return Err(ComponentError::initial_component_file_not_found(&file.path, &file.key));
+                return Err(ComponentError::initial_component_file_not_found(
+                    &file.path, &file.key,
+                ));
             }
         }
 
-        self.create_unchecked(component_id, component_name, component_type, data, files, namespace).await
+        self.create_unchecked(
+            component_id,
+            component_name,
+            component_type,
+            data,
+            files,
+            namespace,
+        )
+        .await
     }
 
     async fn update(
@@ -690,7 +726,14 @@ where
             None => None,
         };
 
-        self.update_unchecked(component_id, data, component_type, uploaded_files, namespace).await
+        self.update_unchecked(
+            component_id,
+            data,
+            component_type,
+            uploaded_files,
+            namespace,
+        )
+        .await
     }
 
     async fn update_internal(
@@ -704,17 +747,26 @@ where
         info!(namespace = %namespace, "Update component");
 
         for file in files.iter().flatten() {
-            let exists = self.initial_component_files_service
+            let exists = self
+                .initial_component_files_service
                 .exists(&file.key)
                 .await
-                .map_err(|e| ComponentError::initial_component_file_upload_error("Error checking if file exists", e))?;
+                .map_err(|e| {
+                    ComponentError::initial_component_file_upload_error(
+                        "Error checking if file exists",
+                        e,
+                    )
+                })?;
 
             if !exists {
-                return Err(ComponentError::initial_component_file_not_found(&file.path, &file.key));
+                return Err(ComponentError::initial_component_file_not_found(
+                    &file.path, &file.key,
+                ));
             }
         }
 
-        self.update_unchecked(component_id, data, component_type, files, namespace).await
+        self.update_unchecked(component_id, data, component_type, files, namespace)
+            .await
     }
 
     async fn download(
@@ -1037,67 +1089,100 @@ impl ComponentServiceDefault {
         payload: InitialComponentFilesArchiveAndPermissions,
     ) -> Result<Vec<InitialComponentFile>, ComponentError> {
         let files_file = payload.archive;
-        let path_permissions: HashMap<ComponentFilePath, ComponentFilePermissions> = HashMap::from_iter(
-            payload.files.iter().map(|f| (f.path.clone(), f.permissions)),
-        );
+        let path_permissions: HashMap<ComponentFilePath, ComponentFilePermissions> =
+            HashMap::from_iter(
+                payload
+                    .files
+                    .iter()
+                    .map(|f| (f.path.clone(), f.permissions)),
+            );
 
         let mut buf_reader = BufReader::new(files_file);
 
-        let mut zip_archive = ZipFileReader::with_tokio(&mut buf_reader).await.map_err(|e| {
-            ComponentError::malformed_component_archive_from_error("Failed to unpack provided component files", e.into())
-        })?;
+        let mut zip_archive = ZipFileReader::with_tokio(&mut buf_reader)
+            .await
+            .map_err(|e| {
+                ComponentError::malformed_component_archive_from_error(
+                    "Failed to unpack provided component files",
+                    e.into(),
+                )
+            })?;
 
         let mut uploaded: Vec<InitialComponentFile> = vec![];
 
         for i in 0..zip_archive.file().entries().len() {
             let (path, permissions, content) = {
                 let mut entry_reader = zip_archive.reader_with_entry(i).await.map_err(|e| {
-                    ComponentError::malformed_component_archive_from_error("Failed to read entry from archive", e.into())
+                    ComponentError::malformed_component_archive_from_error(
+                        "Failed to read entry from archive",
+                        e.into(),
+                    )
                 })?;
 
                 let entry = entry_reader.entry();
 
                 let is_dir = entry.dir().map_err(|e| {
-                    ComponentError::malformed_component_archive_from_error("Failed to check if entry is a directory", e.into())
+                    ComponentError::malformed_component_archive_from_error(
+                        "Failed to check if entry is a directory",
+                        e.into(),
+                    )
                 })?;
 
                 if is_dir {
                     continue;
                 }
 
-                let path = initial_component_file_path_from_zip_entry(&entry)?;
+                let path = initial_component_file_path_from_zip_entry(entry)?;
 
                 let mut buffer = Vec::new();
-                entry_reader.read_to_end_checked(&mut buffer).await.map_err(|e| {
-                    ComponentError::malformed_component_archive_from_error("Failed to read entry content", e.into())
-                })?;
+                entry_reader
+                    .read_to_end_checked(&mut buffer)
+                    .await
+                    .map_err(|e| {
+                        ComponentError::malformed_component_archive_from_error(
+                            "Failed to read entry content",
+                            e.into(),
+                        )
+                    })?;
 
                 // if permissions are not provided, default to read-only
-                let permissions = path_permissions.get(&path).cloned().unwrap_or(ComponentFilePermissions::ReadOnly);
+                let permissions = path_permissions
+                    .get(&path)
+                    .cloned()
+                    .unwrap_or(ComponentFilePermissions::ReadOnly);
 
                 (path, permissions, Bytes::from(buffer))
             };
 
             info!("Uploading file: {}", path.to_string());
 
-            let key = self.initial_component_files_service
+            let key = self
+                .initial_component_files_service
                 .put_if_not_exists(&content)
                 .await
                 .map_err(|e| {
-                    ComponentError::initial_component_file_upload_error("Failed to upload component files", e)
+                    ComponentError::initial_component_file_upload_error(
+                        "Failed to upload component files",
+                        e,
+                    )
                 })?;
 
             uploaded.push(InitialComponentFile {
                 key,
                 path,
-                permissions
+                permissions,
             });
         }
 
-        let uploaded_paths = uploaded.iter().map(|f| f.path.clone()).collect::<HashSet<_>>();
+        let uploaded_paths = uploaded
+            .iter()
+            .map(|f| f.path.clone())
+            .collect::<HashSet<_>>();
         for path in path_permissions.keys() {
             if !uploaded_paths.contains(path) {
-                return Err(ComponentError::malformed_component_archive_from_message(format!("Didn't find expected file in the archive: {}", path.to_string())));
+                return Err(ComponentError::malformed_component_archive_from_message(
+                    format!("Didn't find expected file in the archive: {path}"),
+                ));
             }
         }
 
@@ -1134,9 +1219,14 @@ impl ComponentServiceDefault {
     }
 }
 
-fn initial_component_file_path_from_zip_entry(entry: &ZipEntry) -> Result<ComponentFilePath, ComponentError> {
+fn initial_component_file_path_from_zip_entry(
+    entry: &ZipEntry,
+) -> Result<ComponentFilePath, ComponentError> {
     let file_path = entry.filename().as_str().map_err(|e| {
-        ComponentError::malformed_component_archive_from_message(format!("Failed to convert filename to string: {}", e))
+        ComponentError::malformed_component_archive_from_message(format!(
+            "Failed to convert filename to string: {}",
+            e
+        ))
     })?;
 
     // convert windows path separators to unix and sanitize the path
@@ -1147,8 +1237,11 @@ fn initial_component_file_path_from_zip_entry(entry: &ZipEntry) -> Result<Compon
         .collect::<Vec<_>>()
         .join("/");
 
-    ComponentFilePath::from_str(&format!("/{file_path}")).map_err(|e| {
-        ComponentError::malformed_component_archive_from_message(format!("Failed to convert path to InitialComponentFilePath: {}", e))
+    ComponentFilePath::from_abs_str(&format!("/{file_path}")).map_err(|e| {
+        ComponentError::malformed_component_archive_from_message(format!(
+            "Failed to convert path to InitialComponentFilePath: {}",
+            e
+        ))
     })
 }
 

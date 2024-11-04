@@ -16,19 +16,17 @@ use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
 use aws_sdk_s3::Client;
-use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
-use tempfile::{tempdir, TempDir};
-use testcontainers_modules::minio::MinIO;
-use uuid::Uuid;
 use golem_common::model::{AccountId, ComponentId};
 use golem_service_base::config::S3BlobStorageConfig;
-use golem_service_base::storage::blob::{
-    fs, memory, s3, BlobStorage, BlobStorageNamespace,
-};
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::blob::{fs, memory, s3, BlobStorage, BlobStorageNamespace};
 use golem_service_base::storage::sqlite::SqlitePool;
 use sqlx::sqlite::SqlitePoolOptions;
+use tempfile::{tempdir, TempDir};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::ContainerAsync;
+use testcontainers_modules::minio::MinIO;
+use uuid::Uuid;
 
 macro_rules! test_blob_storage {
     ( $name:ident, $init:expr, $ns:expr ) => {

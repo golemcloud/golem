@@ -21,7 +21,15 @@ use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::update_record::Update;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
-    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response, invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response, search_oplog_response, update_worker_response, worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError
+    get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
+    interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
+    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
+    search_oplog_response, update_worker_response, worker_execution_error, ConnectWorkerRequest,
+    DeleteWorkerRequest, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
+    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
+    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest,
+    LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{
     log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
@@ -32,7 +40,10 @@ use golem_common::model::oplog::{
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
-    ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor, SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatusRecord
+    ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
+    IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor,
+    SuccessfulUpdateRecord, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatusRecord,
 };
 use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_wasm_rpc::Value;
@@ -51,10 +62,25 @@ pub trait TestDsl {
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
-    async fn store_unique_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId;
-    async fn store_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId;
+    async fn store_unique_component_with_files(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        files: &[InitialComponentFile],
+    ) -> ComponentId;
+    async fn store_component_with_files(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        files: &[InitialComponentFile],
+    ) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
-    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, files: &Option<Vec<InitialComponentFile>>) -> ComponentVersion;
+    async fn update_component_with_files(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        files: &Option<Vec<InitialComponentFile>>,
+    ) -> ComponentVersion;
     async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
@@ -174,9 +200,17 @@ pub trait TestDsl {
         query: &str,
     ) -> crate::Result<Vec<PublicOplogEntryWithIndex>>;
 
-    async fn list_directory(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> crate::Result<Vec<ComponentFileSystemNode>>;
+    async fn list_directory(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        path: &str,
+    ) -> crate::Result<Vec<ComponentFileSystemNode>>;
 
-    async fn get_file_contents(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> crate::Result<Bytes>;
+    async fn get_file_contents(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        path: &str,
+    ) -> crate::Result<Bytes>;
 }
 
 #[async_trait]
@@ -184,23 +218,17 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
     async fn store_component(&self, name: &str) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
 
-        let component_id = self
-            .component_service()
+        self.component_service()
             .get_or_add_component(&source_path, ComponentType::Durable)
-            .await;
-
-        component_id
+            .await
     }
 
     async fn store_ephemeral_component(&self, name: &str) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
 
-        let component_id = self
-            .component_service()
+        self.component_service()
             .get_or_add_component(&source_path, ComponentType::Ephemeral)
-            .await;
-
-        component_id
+            .await
     }
 
     async fn store_unique_component(&self, name: &str) -> ComponentId {
@@ -228,7 +256,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .expect("Failed to store component");
     }
 
-    async fn store_unique_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId {
+    async fn store_unique_component_with_files(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        files: &[InitialComponentFile],
+    ) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         let uuid = Uuid::new_v4();
         let unique_name = format!("{name}-{uuid}");
@@ -238,8 +271,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .expect("Failed to store component")
     }
 
-
-    async fn store_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId {
+    async fn store_component_with_files(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        files: &[InitialComponentFile],
+    ) -> ComponentId {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
             .add_component_with_files(&source_path, name, component_type, files)
@@ -249,7 +286,9 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
     async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
         let source_path = self.component_directory().join(path);
-        let data = tokio::fs::read(&source_path).await.expect("Failed to read file");
+        let data = tokio::fs::read(&source_path)
+            .await
+            .expect("Failed to read file");
         let bytes = Bytes::from(data);
         self.initial_component_files_service()
             .put_if_not_exists(&bytes)
@@ -264,7 +303,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .await
     }
 
-    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, files: &Option<Vec<InitialComponentFile>>) -> ComponentVersion {
+    async fn update_component_with_files(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        files: &Option<Vec<InitialComponentFile>>,
+    ) -> ComponentVersion {
         let source_path = self.component_directory().join(format!("{name}.wasm"));
         self.component_service()
             .update_component_with_files(component_id, &source_path, ComponentType::Durable, files)
@@ -910,7 +954,11 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         Ok(result)
     }
 
-    async fn list_directory(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> crate::Result<Vec<ComponentFileSystemNode>> {
+    async fn list_directory(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        path: &str,
+    ) -> crate::Result<Vec<ComponentFileSystemNode>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
 
         let response = self
@@ -935,10 +983,13 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         }
     }
 
-    async fn get_file_contents(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> crate::Result<Bytes> {
+    async fn get_file_contents(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        path: &str,
+    ) -> crate::Result<Bytes> {
         let target_worker_id: TargetWorkerId = worker_id.into();
-        self
-            .worker_service()
+        self.worker_service()
             .get_file_contents(GetFileContentsRequest {
                 worker_id: Some(target_worker_id.into()),
                 file_path: path.to_string(),
@@ -1261,10 +1312,25 @@ pub trait TestDslUnsafe {
     async fn store_unique_component(&self, name: &str) -> ComponentId;
     async fn store_component_unverified(&self, name: &str) -> ComponentId;
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
-    async fn store_unique_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId;
-    async fn store_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId;
+    async fn store_unique_component_with_files(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        files: &[InitialComponentFile],
+    ) -> ComponentId;
+    async fn store_component_with_files(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        files: &[InitialComponentFile],
+    ) -> ComponentId;
     async fn update_component(&self, component_id: &ComponentId, name: &str) -> ComponentVersion;
-    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, files: &Option<Vec<InitialComponentFile>>) -> ComponentVersion;
+    async fn update_component_with_files(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        files: &Option<Vec<InitialComponentFile>>,
+    ) -> ComponentVersion;
     async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
@@ -1358,8 +1424,16 @@ pub trait TestDslUnsafe {
         query: &str,
     ) -> Vec<PublicOplogEntryWithIndex>;
 
-    async fn list_directory(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> Vec<ComponentFileSystemNode>;
-    async fn get_file_contents(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> Bytes;
+    async fn list_directory(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        path: &str,
+    ) -> Vec<ComponentFileSystemNode>;
+    async fn get_file_contents(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        path: &str,
+    ) -> Bytes;
 }
 
 #[async_trait]
@@ -1384,11 +1458,21 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::store_component_with_id(self, name, component_id).await
     }
 
-    async fn store_unique_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId {
+    async fn store_unique_component_with_files(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        files: &[InitialComponentFile],
+    ) -> ComponentId {
         <T as TestDsl>::store_unique_component_with_files(self, name, component_type, files).await
     }
 
-    async fn store_component_with_files(&self, name: &str, component_type: ComponentType, files: &Vec<InitialComponentFile>) -> ComponentId {
+    async fn store_component_with_files(
+        &self,
+        name: &str,
+        component_type: ComponentType,
+        files: &[InitialComponentFile],
+    ) -> ComponentId {
         <T as TestDsl>::store_component_with_files(self, name, component_type, files).await
     }
 
@@ -1396,7 +1480,12 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::update_component(self, component_id, name).await
     }
 
-    async fn update_component_with_files(&self, component_id: &ComponentId, name: &str, files: &Option<Vec<InitialComponentFile>>) -> ComponentVersion {
+    async fn update_component_with_files(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        files: &Option<Vec<InitialComponentFile>>,
+    ) -> ComponentVersion {
         <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
     }
 
@@ -1603,14 +1692,22 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             .expect("Failed to search oplog")
     }
 
-    async fn list_directory(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> Vec<ComponentFileSystemNode> {
+    async fn list_directory(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        path: &str,
+    ) -> Vec<ComponentFileSystemNode> {
         <T as TestDsl>::list_directory(self, worker_id, path)
             .await
             .expect("Failed to list directory")
     }
-    async fn get_file_contents(&self, worker_id: impl Into<TargetWorkerId> + Send + Sync, path: &str) -> Bytes {
+    async fn get_file_contents(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        path: &str,
+    ) -> Bytes {
         <T as TestDsl>::get_file_contents(self, worker_id, path)
-        .await
-        .expect("Failed to get file contents")
+            .await
+            .expect("Failed to get file contents")
     }
 }

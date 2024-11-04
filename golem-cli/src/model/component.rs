@@ -16,7 +16,9 @@ use crate::cloud::ProjectId;
 use crate::model::wave::function_wave_compatible;
 use crate::model::GolemError;
 use chrono::{DateTime, Utc};
-use golem_client::model::{AnalysedType, ComponentMetadata, ComponentType, VersionedComponentId, InitialComponentFile};
+use golem_client::model::{
+    AnalysedType, ComponentMetadata, ComponentType, InitialComponentFile, VersionedComponentId,
+};
 use golem_common::model::trim_date::TrimDateTime;
 use golem_common::model::ComponentId;
 use golem_common::uri::oss::urn::ComponentUrn;
@@ -62,7 +64,7 @@ impl From<golem_client::model::Component> for Component {
             metadata,
             project_id: None,
             created_at,
-            files
+            files,
         }
     }
 }

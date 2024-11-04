@@ -2,9 +2,9 @@ use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 use crate::worker_binding::CompiledGolemWorkerBinding;
+use golem_common::model::WorkerBindingType;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
-use golem_common::model::WorkerBindingType;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
