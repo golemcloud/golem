@@ -49,7 +49,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "open");
 
-
         // let result = Durability::<Ctx, String, String, SerializableError>::wrap(
         //     self,
         //     WrappedFunctionType::ReadRemote,

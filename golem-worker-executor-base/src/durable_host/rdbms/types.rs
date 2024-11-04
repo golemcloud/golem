@@ -22,11 +22,11 @@ use crate::preview2::wasi::rdbms::types::{
 use crate::services::rdbms::types as rdbms_types;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use std::ops::Deref;
 use std::sync::Arc;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::WasiView;
-use std::ops::Deref;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 
@@ -57,11 +57,20 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Vec<DbColumnTypeMeta>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::types::db-result-set", "get-column-metadata");
+
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<DbResultSetEntry>(&self_)?.internal.clone();
-        let columns = internal.deref().get_column_metadata().await.map_err(Error::Error)?;
+            .get::<DbResultSetEntry>(&self_)?
+            .internal
+            .clone();
+
+        let columns = internal
+            .deref()
+            .get_column_metadata()
+            .await
+            .map_err(Error::Error)?;
+
         let columns = columns.into_iter().map(|c| c.into()).collect();
         Ok(columns)
     }
@@ -75,7 +84,9 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
         let internal = self
             .as_wasi_view()
             .table()
-            .get::<DbResultSetEntry>(&self_)?.internal.clone();
+            .get::<DbResultSetEntry>(&self_)?
+            .internal
+            .clone();
 
         let rows = internal.deref().get_next().await.map_err(Error::Error)?;
         let rows = rows.map(|r| r.into_iter().map(|r| r.into()).collect());

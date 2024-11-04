@@ -49,11 +49,7 @@ async fn rdbms_postgres_select1(
         .await;
 
     let _result = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:it/api.{check}",
-            vec![],
-        )
+        .invoke_and_await(&worker_id, "golem:it/api.{check}", vec![])
         .await
         .unwrap();
 
@@ -79,5 +75,5 @@ async fn rdbms_postgres_select1(
 
     check!(result_execute == vec![Value::Result(Ok(Some(Box::new(Value::U64(1)))))]);
 
-    check!(result_query.is_empty());
+    check!(result_query == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![])))))]);
 }

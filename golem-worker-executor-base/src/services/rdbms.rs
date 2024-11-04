@@ -75,8 +75,11 @@ pub mod postgres {
     #[async_trait]
     pub trait Postgres {
         async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String>;
+
         async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
-        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String>;
+
+        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String>;
+
         async fn execute(
             &self,
             worker_id: &OwnedWorkerId,
@@ -108,8 +111,8 @@ pub mod postgres {
             false
         }
 
-        async fn remove(&self, _worker_id: &OwnedWorkerId, _address: &str) -> Result<(), String> {
-            Ok(())
+        async fn remove(&self, _worker_id: &OwnedWorkerId, _address: &str) -> Result<bool, String> {
+            Ok(false)
         }
 
         async fn execute(
@@ -155,16 +158,17 @@ pub mod postgres {
             }
         }
 
-        async fn get_or_create(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<Arc<Pool<sqlx::Postgres>>, String> {
+        async fn get_or_create(
+            &self,
+            _worker_id: &OwnedWorkerId,
+            address: &str,
+        ) -> Result<Arc<Pool<sqlx::Postgres>>, String> {
             let key = RdbmsPoolKey::new(address.to_string());
             let pool_config = self.pool_config.clone();
 
-            self
-                .pool_cache
+            self.pool_cache
                 .get_or_insert_simple(&key.clone(), || {
-                    Box::pin(async move {
-                        Ok(Arc::new(create_pool(&key, &pool_config).await?))
-                    })
+                    Box::pin(async move { Ok(Arc::new(create_pool(&key, &pool_config).await?)) })
                 })
                 .await
         }
@@ -185,20 +189,21 @@ pub mod postgres {
             Ok(())
         }
 
-        async fn remove(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
+        async fn remove(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String> {
             let key = RdbmsPoolKey::new(address.to_string());
-            let pool = self.pool_cache.get(&key).await;
+            let pool = self.pool_cache.try_get(&key);
             if let Some(pool) = pool {
                 self.pool_cache.remove(&key);
                 pool.close().await;
+                Ok(true)
+            } else {
+                Ok(false)
             }
-            Ok(())
         }
 
         async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
             let key = RdbmsPoolKey::new(address.to_string());
-            let pool = self.pool_cache.get(&key).await;
-            pool.is_some()
+            self.pool_cache.contains_key(&key)
         }
 
         async fn execute(
@@ -208,11 +213,20 @@ pub mod postgres {
             statement: &str,
             params: Vec<DbValue>,
         ) -> Result<u64, String> {
-            info!("execute - address: {}, statement: {} - 0", address, statement);
+            info!(
+                "execute - address: {}, statement: {} - 0",
+                address, statement
+            );
             let pool = self.get_or_create(worker_id, address).await?;
-            info!("execute - address: {}, statement: {} - 1", address, statement);
+            info!(
+                "execute - address: {}, statement: {} - 1",
+                address, statement
+            );
             let result = execute(statement, params, pool.deref()).await;
-            info!("execute - address: {}, statement: {} - 2", address, statement);
+            info!(
+                "execute - address: {}, statement: {} - 2",
+                address, statement
+            );
             result
         }
 
@@ -232,7 +246,11 @@ pub mod postgres {
         }
     }
 
-    async fn query(statement: &str, params: Vec<DbValue>, pool: &Pool<sqlx::Postgres>) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+    async fn query(
+        statement: &str,
+        params: Vec<DbValue>,
+        pool: &Pool<sqlx::Postgres>,
+    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
         let mut query: Query<sqlx::Postgres, PgArguments> = sqlx::query(statement);
 
         for param in params {
@@ -252,7 +270,11 @@ pub mod postgres {
         }
     }
 
-    async fn execute(statement: &str, params: Vec<DbValue>, pool: &Pool<sqlx::Postgres>) -> Result<u64, String> {
+    async fn execute(
+        statement: &str,
+        params: Vec<DbValue>,
+        pool: &Pool<sqlx::Postgres>,
+    ) -> Result<u64, String> {
         let mut query: Query<sqlx::Postgres, PgArguments> = sqlx::query(statement);
 
         for param in params {
@@ -293,7 +315,7 @@ pub mod postgres {
     ) -> Result<Query<sqlx::Postgres, PgArguments>, String> {
         match value {
             DbValue::Primitive(v) => bind_value_primitive(query, v),
-            DbValue::Array(v) => Err("Array param not supported".to_string()),
+            DbValue::Array(_) => Err("Array param not supported".to_string()),
         }
     }
 
@@ -340,7 +362,10 @@ pub mod postgres {
             .connect(&key.address)
             .await
             .map_err(|e| {
-                error!("DB Pool: {}, connections: {} -  error {}", key.address, pool_config.max_connections, e);
+                error!(
+                    "DB Pool: {}, connections: {} -  error {}",
+                    key.address, pool_config.max_connections, e
+                );
                 e.to_string()
             })?;
         info!(
@@ -353,11 +378,11 @@ pub mod postgres {
 
 pub mod types {
     use async_trait::async_trait;
+    use golem_common::tracing::directive::default::info;
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
-    use uuid::Uuid;
-    use golem_common::tracing::directive::default::info;
     use tracing::{error, info};
+    use uuid::Uuid;
 
     #[async_trait]
     pub trait DbResultSet {
@@ -396,7 +421,7 @@ pub mod types {
             let rows = self.rows.lock().unwrap().clone();
             info!("get_next {}", rows.is_some());
             if rows.is_some() {
-              *self.rows.lock().unwrap() = None;
+                *self.rows.lock().unwrap() = None;
             }
             Ok(rows)
         }
@@ -482,11 +507,13 @@ pub mod types {
 
 #[cfg(test)]
 mod tests {
+    use crate::services::rdbms::types::{DbValue, DbValuePrimitive};
+    use crate::services::rdbms::RdbmsService;
+    use crate::services::rdbms::{RdbmsPoolKey, RdbmsServiceDefault};
+    use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
     use std::hash::Hash;
     use test_r::{test, timeout};
-    use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
-    use crate::services::rdbms::{RdbmsPoolKey, RdbmsServiceDefault};
-    use crate::services::rdbms::RdbmsService;
+    use uuid::Uuid;
 
     #[test]
     #[timeout(30000)]
@@ -495,21 +522,22 @@ mod tests {
 
         let address = "postgresql://postgres:postgres@localhost:5444/postgres";
 
-        let worker_id = OwnedWorkerId::new(&AccountId::generate(), &WorkerId {
-            component_id: ComponentId::new_v4(),
-            worker_name: "test".to_string(),
-        });
-
-        let key1 = RdbmsPoolKey::new(address.to_string());
-        let key2 = RdbmsPoolKey::new(address.to_string());
-
-        assert!(key1 == key2);
+        let worker_id = OwnedWorkerId::new(
+            &AccountId::generate(),
+            &WorkerId {
+                component_id: ComponentId::new_v4(),
+                worker_name: "test".to_string(),
+            },
+        );
 
         let connection = rdbms_service.postgres().create(&worker_id, &address).await;
 
         assert!(connection.is_ok());
 
-        let result = rdbms_service.postgres().execute(&worker_id, &address, "SELECT 1",vec![]).await;
+        let result = rdbms_service
+            .postgres()
+            .execute(&worker_id, &address, "SELECT 1", vec![])
+            .await;
 
         assert!(result.is_ok());
 
@@ -517,8 +545,59 @@ mod tests {
 
         assert!(connection.is_ok());
 
-        let result = rdbms_service.postgres().query(&worker_id, &address, "SELECT 1",vec![]).await;
+        let exists = rdbms_service.postgres().exists(&worker_id, &address).await;
+
+        assert!(exists);
+
+        let result = rdbms_service
+            .postgres()
+            .query(&worker_id, &address, "SELECT 1", vec![])
+            .await;
 
         assert!(result.is_ok());
+
+        let create_table_statement = r#"
+            CREATE TABLE IF NOT EXISTS components
+            (
+                component_id        uuid    NOT NULL PRIMARY KEY,
+                namespace           text    NOT NULL,
+                name                text    NOT NULL
+            );
+        "#;
+
+        let insert_statement = r#"
+            INSERT INTO components
+            (component_id, namespace, name)
+            VALUES
+            ($1, $2, $3)
+        "#;
+
+        let result = rdbms_service
+            .postgres()
+            .execute(&worker_id, &address, create_table_statement, vec![])
+            .await;
+
+        assert!(result.is_ok());
+
+        let params: Vec<DbValue> = vec![
+            DbValue::Primitive(DbValuePrimitive::Uuid(Uuid::new_v4())),
+            DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
+            DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
+        ];
+
+        let result = rdbms_service
+            .postgres()
+            .execute(&worker_id, &address, insert_statement, params)
+            .await;
+
+        assert!(result.is_ok_and(|v| v == 1));
+
+        let result = rdbms_service.postgres().remove(&worker_id, &address).await;
+
+        assert!(result.is_ok_and(|v| v));
+
+        let exists = rdbms_service.postgres().exists(&worker_id, &address).await;
+
+        assert!(!exists);
     }
 }
