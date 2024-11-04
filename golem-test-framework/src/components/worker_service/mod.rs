@@ -304,6 +304,11 @@ impl WorkerServiceEnvVars for GolemEnvVars {
         verbosity: Level,
     ) -> HashMap<String, String> {
         EnvVarBuilder::golem_service(verbosity)
+            .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+            .with_str(
+                "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+                "/tmp/ittest-local-object-store/golem",
+            )
             .with(
                 "GOLEM__COMPONENT_SERVICE__HOST",
                 component_service.private_host(),

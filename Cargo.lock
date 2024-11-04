@@ -7394,6 +7394,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes 1.8.0",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2 0.4.6",

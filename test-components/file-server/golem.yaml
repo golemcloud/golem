@@ -1,0 +1,90 @@
+apiVersion: core.oam.dev/v1beta1
+kind: Application
+metadata:
+  name: App
+spec:
+  components:
+    - name: api_deployment_fileserver_simpleCLI_short
+      type: wasm
+      properties:
+        inputWasm: ../file-server.wasm
+        outputWasm: ../file-server.wasm
+        wit: ./wit
+        componentType: durable
+        files:
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/foo.txt
+          permissions: read-only
+        - sourcePath: ./files/bar.txt
+          targetPath: /files/bar.txt
+          permissions: read-write
+    - name: api_deployment_fileserver_simpleCLI_long
+      type: wasm
+      properties:
+        inputWasm: ../file-server.wasm
+        outputWasm: ../file-server.wasm
+        wit: ./wit
+        componentType: durable
+        files:
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/foo.txt
+          permissions: read-only
+        - sourcePath: ./files/bar.txt
+          targetPath: /files/bar.txt
+          permissions: read-write
+    - name: api_deployment_fileserver_complexCLI_short
+      type: wasm
+      properties:
+        inputWasm: ../file-server.wasm
+        outputWasm: ../file-server.wasm
+        wit: ./wit
+        componentType: durable
+        files:
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/foo.txt
+          permissions: read-only
+        - sourcePath: ./files/bar.txt
+          targetPath: /files/bar.txt
+          permissions: read-write
+    - name: api_deployment_fileserver_complexCLI_long
+      type: wasm
+      properties:
+        inputWasm: ../file-server.wasm
+        outputWasm: ../file-server.wasm
+        wit: ./wit
+        componentType: durable
+        files:
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/foo.txt
+          permissions: read-only
+        - sourcePath: ./files/bar.txt
+          targetPath: /files/bar.txt
+          permissions: read-write
+    - name: api_deployment_fileserver_stateful_workerCLI_short
+      type: wasm
+      properties:
+        inputWasm: ../file-server.wasm
+        outputWasm: ../file-server.wasm
+        wit: ./wit
+        componentType: durable
+        files:
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/foo.txt
+          permissions: read-only
+        - sourcePath: ./files/bar.txt
+          targetPath: /files/bar.txt
+          permissions: read-write
+    - name: api_deployment_fileserver_stateful_workerCLI_long
+      type: wasm
+      properties:
+        inputWasm: ../file-server.wasm
+        outputWasm: ../file-server.wasm
+        wit: ./wit
+        componentType: durable
+        files:
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/foo.txt
+          permissions: read-only
+        - sourcePath: ./files/bar.txt
+          targetPath: /files/bar.txt
+          permissions: read-write

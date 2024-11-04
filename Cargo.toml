@@ -31,6 +31,7 @@ exclude = [
     "test-components/environment-service",
     "test-components/failing-component",
     "test-components/file-service",
+    "test-components/file-server",
     "test-components/file-write-read-delete",
     "test-components/flags-service",
     "test-components/golem-rust-tests",

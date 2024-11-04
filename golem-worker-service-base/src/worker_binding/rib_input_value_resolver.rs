@@ -2,6 +2,7 @@ use crate::worker_binding::{RequestDetails, WorkerDetail};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::{RibInput, RibInputTypeInfo};
+use tracing::warn;
 use std::collections::HashMap;
 use std::fmt::Display;
 
@@ -36,6 +37,7 @@ impl RibInputValueResolver for RequestDetails {
 
         match request_type_info {
             Some(request_type) => {
+                warn!("received: {:?}", rib_input_with_request_content);
                 let input = TypeAnnotatedValue::parse_with_type(rib_input_with_request_content, request_type)
                         .map_err(|err| RibInputTypeMismatch(format!("Input request details don't match the requirements for rib expression to execute: {}. Requirements. {:?}", err.join(", "), request_type)))?;
 
