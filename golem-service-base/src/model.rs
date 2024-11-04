@@ -17,13 +17,16 @@ use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::FileListing;
 use golem_common::model::{
     ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
     WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use poem_openapi::{Enum, NewType, Object, Union};
+use poem::Body;
+use poem_openapi::payload::{Attachment, Json};
+use poem_openapi::{ApiResponse, Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
@@ -1719,4 +1722,28 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for ResourceLimi
             max_memory_per_worker: value.max_memory_per_worker,
         }
     }
+}
+
+#[derive(ApiResponse)]
+pub enum WorkerFileOrListingsResponse {
+    // TODO: Fix bugs described below:
+    //
+    // Steps to reproduce Bug A:
+    // 1) Set status 201-299 (e.g. 206, both responses have different status)
+    // 2) cargo make generate-openapi
+    // 3) Copy `golem/openapi/golem-service.yaml` to `golem/golem-client/openapi/golem-service.yaml` if needed
+    // 4) Resave `golem/golem-api-grpc/build.rs` to trigger rebuild with Rust Analyzer
+    // 5) Notice broken `golem/target/debug/build/golem-client-4f37dfdc6daf63b0/out/src/api.rs` (missing `WorkerError`, extra Errors) and broken Rust imports
+    //
+    // Steps to reproduce Bug B:
+    // 1) Set status 200 (both responses have the same status)
+    // 2) cargo make generate-openapi
+    // 3) Found `operationId: get_worker_files_or_listings` in `golem/openapi/golem-service.yaml`
+    // 4) Notice only one `response` for status 200
+    //
+    // Workaround: Generate OpenAPI with different statuses and then manually set both to 200 in `golem-service.yaml`
+    #[oai(status = 200)]
+    File(Attachment<Body>),
+    #[oai(status = 200)]
+    Listings(Json<Vec<FileListing>>),
 }

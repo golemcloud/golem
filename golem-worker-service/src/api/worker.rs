@@ -8,12 +8,17 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
+use golem_worker_service_base::service::worker::FileOrFileListings;
+use poem::Body;
 use poem_openapi::param::{Header, Path, Query};
-use poem_openapi::payload::Json;
+use poem_openapi::payload::{Attachment, AttachmentType, Json};
 use poem_openapi::*;
 use std::path::PathBuf;
 use std::str::FromStr;
 use tap::TapFallible;
+use tempfile::TempPath;
+use tokio::fs::File;
+use tokio::io::AsyncRead;
 
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
@@ -25,6 +30,19 @@ pub struct WorkerApi {
 }
 
 type Result<T> = std::result::Result<T, WorkerApiBaseError>;
+
+// TODO: Replace with `async_tempfile::TempFile` while replacing `tempfile` with a crate like `async-tempfile`
+pub struct TempFile(pub File, pub TempPath);
+
+impl AsyncRead for TempFile {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
@@ -375,45 +393,72 @@ impl WorkerApi {
 
     /// Get files of a worker
     ///
-    /// `.../{worker_name}/files` retrieves the top-level listing of nodes in the worker’s file system.
+    /// **Examples:**
     ///
-    /// The listing contains information on the type of each node, as well as other metadata:
-    /// ```json
-    /// [{"type": "directory", "name": "foo"}, {"type": "file", "name": "bar.txt"}, ...]`
-    /// ``````
+    /// 1. `.../{worker_name}/files` retrieves the top-level listing of nodes in the worker’s file system.
     ///
-    /// `.../{worker_name}/files?path=/root_in_worker/my_file.txt` retrieves the file at the specified path or lists the contents of the directory
+    /// 2. `.../{worker_name}/files?recursive=true` retrieves the listing of nodes including sub-directories.
+    ///
+    /// 3. `.../{worker_name}/files?path=a_dir/my_file.txt` retrieves the file at the specified path or lists the contents of the directory
     /// at the specified path, depending on whether or not the path points to a file node or a directory node.
+    ///
+    ///  The listing contains information on the type of each node, as well as other metadata:
+    /// ```json
+    /// [{"type": "directory", "path": "foo"}, {"type": "file", "path": "bar.txt"}, ...]
+    /// ```
     #[oai(
         path = "/:component_id/workers/:worker_name/files",
         method = "get",
-        operation_id = "get_worker_files"
+        operation_id = "get_worker_files_or_listings"
     )]
-    async fn get_worker_file_or_dir_contents(
+    async fn get_worker_file_or_listings(
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
         path: Query<Option<String>>,
-    ) -> Result<Json<String>> {
+        recursive: Query<Option<bool>>,
+    ) -> Result<WorkerFileOrListingsResponse> {
         let worker_id = make_worker_id(component_id.0, worker_name.0)?;
 
-        let record =
-            recorded_http_api_request!("get_worker_files", worker_id = worker_id.to_string());
-
-        let path = PathBuf::from(path.0.unwrap_or_default());
+        let record = recorded_http_api_request!(
+            "get_worker_files_or_listings",
+            worker_id = worker_id.to_string()
+        );
 
         let response = self
             .worker_service
-            .get_file_or_dir_contents(
+            .get_file_or_listings(
                 &worker_id,
-                path,
+                path.0.map(PathBuf::from),
+                recursive.0,
                 empty_worker_metadata(),
                 &EmptyAuthCtx::default(),
             )
             .instrument(record.span.clone())
             .await
-            .map_err(|e| e.into())
-            .map(Json);
+            .map_err(|e| e.into());
+
+        let response = match response {
+            Ok(FileOrFileListings::File {
+                file_name,
+                temp_path,
+            }) => {
+                let file = File::open(&temp_path).await.map_err(|error| {
+                    WorkerApiBaseError::from(format!(
+                        "Failed to open temporary worker file: {error}"
+                    ))
+                })?;
+                let temp_file: TempFile = TempFile(file, temp_path);
+                let attachment = Attachment::new(Body::from_async_read(temp_file))
+                    .filename(file_name)
+                    .attachment_type(AttachmentType::Attachment);
+                Ok(WorkerFileOrListingsResponse::File(attachment))
+            }
+            Ok(FileOrFileListings::Listings(listings)) => {
+                Ok(WorkerFileOrListingsResponse::Listings(Json(listings)))
+            }
+            Err(error) => Err(error),
+        };
 
         record.result(response)
     }

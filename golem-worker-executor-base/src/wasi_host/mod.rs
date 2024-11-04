@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::Path;
 use std::time::Duration;
 
 use crate::durable_host::DurableWorkerCtx;
+use crate::worker_fs::{PathsToPreopen, SYSTEM_ROOT};
 use crate::workerctx::WorkerCtx;
 use wasmtime::component::Linker;
 use wasmtime::Engine;
@@ -87,7 +87,7 @@ where
 pub fn create_context(
     args: &[impl AsRef<str>],
     env: &[(impl AsRef<str>, impl AsRef<str>)],
-    root_dir: &Path,
+    paths_to_preopen: &PathsToPreopen,
     stdin: impl StdinStream + Sized + 'static,
     stdout: impl StdoutStream + Sized + 'static,
     stderr: impl StdoutStream + Sized + 'static,
@@ -102,8 +102,36 @@ pub fn create_context(
         .stdout(stdout)
         .stderr(stderr)
         .monotonic_clock(helpers::clocks::monotonic_clock())
-        .preopened_dir(root_dir, "/", DirPerms::all(), FilePerms::all())?
-        .preopened_dir(root_dir, ".", DirPerms::all(), FilePerms::all())?
+        .preopened_dir(
+            &paths_to_preopen.root_path,
+            ".",
+            DirPerms::all(),
+            FilePerms::all(),
+        )?
+        .preopened_dir(
+            &paths_to_preopen.root_path,
+            "/",
+            DirPerms::all(),
+            FilePerms::all(),
+        )?
+        .preopened_dir(
+            &paths_to_preopen.system_path,
+            format!("/{SYSTEM_ROOT}"),
+            DirPerms::READ,
+            FilePerms::READ,
+        )?
+        .preopened_dir(
+            &paths_to_preopen.component_version_path,
+            format!("/{SYSTEM_ROOT}/component/version"),
+            DirPerms::READ,
+            FilePerms::READ,
+        )?
+        .preopened_dir(
+            &paths_to_preopen.component_current_path,
+            format!("/{SYSTEM_ROOT}/component/current"),
+            DirPerms::READ,
+            FilePerms::READ,
+        )?
         .set_suspend(suspend_threshold, suspend_signal)
         .allow_ip_name_lookup(true)
         .build();

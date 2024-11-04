@@ -33,6 +33,8 @@ enum AsyncZipWriterCommand {
     Drop,
 }
 
+// TODO: Replace with the crate `async-zip` once it produces valid archives or with an alternative
+
 #[derive(Clone)]
 pub struct AsyncZipWriter(Arc<Mutex<AsyncZipWriterHandle>>);
 

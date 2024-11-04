@@ -196,6 +196,7 @@ tracing-subscriber = { version = "0.3.18", features = [
 tracing-test = "0.2.5"
 url = { version = "2.5.0", features = ["serde"] }
 uuid = { version = "1.7.0", features = ["serde", "v4", "v5"] }
+walkdir = "2.5.0"
 warp = "0.3.6"
 wasm-wave = "=0.6.0"
 wasmtime = { version = "=21.0.1", features = ["component-model"] }

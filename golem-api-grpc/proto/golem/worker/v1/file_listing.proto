@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package golem.worker.v1;
+
+message FileListings {
+  repeated FileListing file_listings = 1;
+}
+
+message FileListing {
+  oneof result {
+    DirectoryInfo directory_info = 1;
+    FileInfo file_info = 2;
+  }
+}
+
+message DirectoryInfo {
+  string path = 1;
+  uint64 last_modified = 2;
+  optional Permissions permissions = 3;
+}
+
+message FileInfo {
+  string path = 1;
+  uint64 last_modified = 2;
+  optional Permissions permissions = 3;
+  uint64 size = 4;
+}
+
+enum Permissions {
+  ALWAYS_READ_ONLY = 0;
+  READ_ONLY = 1;
+  READ_WRITE = 2;
+}

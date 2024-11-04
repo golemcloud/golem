@@ -31,6 +31,7 @@ use crate::services::shard::ShardService;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
+use crate::worker_fs;
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
@@ -301,12 +302,14 @@ impl WorkerService for DefaultWorkerService {
                 )
             });
 
-        let root_dir_path = owned_worker_id.worker_id.to_root_dir_path();
-        if root_dir_path.is_dir() {
-            fs::remove_dir_all(root_dir_path)
+        let worker_host_root_dir_path =
+            worker_fs::get_worker_host_root_path(&owned_worker_id.worker_id);
+        if worker_host_root_dir_path.is_dir() {
+            fs::remove_dir_all(worker_host_root_dir_path)
                 .await
-                .unwrap_or_else(|error| panic!("failed to remove worker root dir: {error}"));
+                .unwrap_or_else(|error| panic!("failed to remove worker host root dir: {error}"));
         }
+        // TODO: Remove also associated `files` if no other Worker needs it (see `worker_fs.rs`)?
     }
 
     async fn remove_cached_status(&self, owned_worker_id: &OwnedWorkerId) {

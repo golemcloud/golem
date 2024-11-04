@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 use std::{collections::HashMap, sync::Arc};
 
@@ -19,11 +20,14 @@ use async_trait::async_trait;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use tempfile::{NamedTempFile, TempPath};
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use tonic::transport::Channel;
 use tonic::Code;
 use tracing::{error, info};
 
-use golem_api_grpc::proto::golem::worker::UpdateMode;
+use golem_api_grpc::proto::golem::worker::{self, UpdateMode};
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -37,10 +41,13 @@ use golem_common::config::RetryConfig;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, FilterComparator, IdempotencyKey, PromiseId,
-    ScanCursor, TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
+    AccountId, ComponentId, ComponentVersion, DirectoryInfo, FileInfo, FileListing,
+    FileListingPermissions, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
+    TargetWorkerId, WorkerFilter, WorkerId, WorkerStatus,
 };
-use golem_service_base::model::{Component, GolemError, GolemErrorInvalidRequest};
+use golem_service_base::model::{
+    Component, GolemError, GolemErrorInvalidRequest, GolemErrorRuntimeError,
+};
 use golem_service_base::model::{
     GetOplogResponse, GolemErrorUnknown, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
 };
@@ -54,6 +61,14 @@ use super::{
 };
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
+
+pub enum FileOrFileListings {
+    File {
+        file_name: String,
+        temp_path: TempPath,
+    },
+    Listings(Vec<FileListing>),
+}
 
 #[async_trait]
 pub trait WorkerService<AuthCtx> {
@@ -185,13 +200,14 @@ pub trait WorkerService<AuthCtx> {
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
-    async fn get_file_or_dir_contents(
+    async fn get_file_or_listings(
         &self,
         worker_id: &WorkerId,
-        path: PathBuf,
+        path: Option<PathBuf>,
+        recursive: Option<bool>,
         metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
-    ) -> WorkerResult<String>;
+    ) -> WorkerResult<FileOrFileListings>;
 
     async fn get_metadata(
         &self,
@@ -706,48 +722,184 @@ where
         Ok(())
     }
 
-    async fn get_file_or_dir_contents(
+    async fn get_file_or_listings(
         &self,
         worker_id: &WorkerId,
-        path: PathBuf,
+        path: Option<PathBuf>,
+        recursive: Option<bool>,
         metadata: WorkerRequestMetadata,
         _auth_ctx: &AuthCtx,
-    ) -> WorkerResult<String> {
+    ) -> WorkerResult<FileOrFileListings> {
         let worker_id = worker_id.clone();
-        let path = path.into_os_string().into_string().map_err(|os_string| {
-            WorkerServiceError::Golem(GolemError::InvalidRequest(GolemErrorInvalidRequest {
-                details: format!("Path contains invalid Unicode data, path: {os_string:?}"),
-            }))
-        })?;
-        let file_or_dir_contents = self.call_worker_executor(
-            worker_id.clone(),
-            "get_files",
-            move |worker_executor_client| {
-                info!("Get files");
-                let worker_id = worker_id.clone();
-                Box::pin(
-                    worker_executor_client.get_worker_files(GetWorkerFilesRequest {
-                        worker_id: Some(worker_id.into()),
-                        path: path.clone(),
-                        account_id: metadata.account_id.clone().map(|id| id.into()),
-                    }),
-                )
-            },
-            |response| match response.into_inner() {
-                workerexecutor::v1::GetWorkerFilesResponse {
-                    result: Some(workerexecutor::v1::get_worker_files_response::Result::DirContents(file_or_dir_contents)),
-                } => Ok(file_or_dir_contents),
-                workerexecutor::v1::GetWorkerFilesResponse {
-                    result:
-                        Some(workerexecutor::v1::get_worker_files_response::Result::Failure(err)),
-                } => Err(err.into()),
-                workerexecutor::v1::GetWorkerFilesResponse { .. } => Err("Empty response".into()),
-            },
-            WorkerServiceError::InternalCallError,
-        )
-        .await?;
 
-        Ok(file_or_dir_contents)
+        let file_name = path.as_ref().and_then(|path| path.file_name()).map_or_else(
+            || Cow::from("worker_file"),
+            |file_name| file_name.to_string_lossy(),
+        );
+
+        let path = path
+            .as_ref()
+            .map(|path| {
+                path.as_os_str()
+                    .to_os_string()
+                    .into_string()
+                    .map_err(|os_string| {
+                        GolemError::InvalidRequest(GolemErrorInvalidRequest {
+                            details: format!(
+                                "Path contains invalid Unicode data, path: {os_string:?}"
+                            ),
+                        })
+                    })
+            })
+            .transpose()?;
+
+        let mut response = self
+            .call_worker_executor(
+                worker_id.clone(),
+                "get_files",
+                move |worker_executor_client| {
+                    info!("Get files");
+                    let worker_id = worker_id.clone();
+                    Box::pin(
+                        worker_executor_client.get_worker_files(GetWorkerFilesRequest {
+                            worker_id: Some(worker_id.into()),
+                            path: path.clone(),
+                            recursive,
+                            account_id: metadata.account_id.clone().map(|id| id.into()),
+                        }),
+                    )
+                },
+                // TODO: Allow to return Futures?
+                |response| Ok(response.into_inner()),
+                WorkerServiceError::InternalCallError,
+            )
+            .await?;
+
+        let mut temp_path_and_file: Option<(TempPath, File)> = None;
+
+        while let Some(workerexecutor::v1::GetWorkerFilesResponse {
+            result: Some(result),
+        }) = response.message().await.unwrap()
+        {
+            match result {
+                workerexecutor::v1::get_worker_files_response::Result::FileListings(
+                    file_listings,
+                ) => {
+                    fn i32_permissions_to_enum(
+                        value: i32,
+                    ) -> Result<FileListingPermissions, GolemError> {
+                        let grpc_permissions = worker::v1::Permissions::try_from(value).map_err(|error| {
+                            GolemError::RuntimeError(GolemErrorRuntimeError {
+                                details: format!("Failed to convert number permissions to enum, value: {value}, error: {error}")
+                            })
+                        })?;
+                        let model_permissions = match grpc_permissions {
+                            worker::v1::Permissions::AlwaysReadOnly => {
+                                FileListingPermissions::AlwaysReadOnly
+                            }
+                            worker::v1::Permissions::ReadOnly => FileListingPermissions::ReadOnly,
+                            worker::v1::Permissions::ReadWrite => FileListingPermissions::ReadWrite,
+                        };
+                        Ok(model_permissions)
+                    }
+                    return Ok(FileOrFileListings::Listings(
+                        file_listings
+                            .file_listings
+                            .into_iter()
+                            .filter_map(|worker::v1::FileListing { result }| {
+                                result.map(|result| {
+                                    Ok(match result {
+                                        worker::v1::file_listing::Result::DirectoryInfo(
+                                            worker::v1::DirectoryInfo {
+                                                path,
+                                                last_modified,
+                                                permissions,
+                                            },
+                                        ) => FileListing::Directory(DirectoryInfo {
+                                            path: golem_common::model::Path(path),
+                                            last_modified,
+                                            permissions: permissions
+                                                .map(i32_permissions_to_enum)
+                                                .transpose()?,
+                                        }),
+                                        worker::v1::file_listing::Result::FileInfo(
+                                            worker::v1::FileInfo {
+                                                path,
+                                                last_modified,
+                                                permissions,
+                                                size,
+                                            },
+                                        ) => FileListing::File(FileInfo {
+                                            path: golem_common::model::Path(path),
+                                            last_modified,
+                                            permissions: permissions
+                                                .map(i32_permissions_to_enum)
+                                                .transpose()?,
+                                            size,
+                                        }),
+                                    })
+                                })
+                            })
+                            .collect::<Result<_, GolemError>>()?,
+                    ));
+                }
+                workerexecutor::v1::get_worker_files_response::Result::FileChunk(file_chunk) => {
+                    if temp_path_and_file.is_none() {
+                        let temp_path = NamedTempFile::with_prefix("golem_worker_file")
+                            .map_err(|error| {
+                                GolemError::RuntimeError(GolemErrorRuntimeError {
+                                    details: format!(
+                                        "Failed to create temporary worker file: {error:?}"
+                                    ),
+                                })
+                            })?
+                            .into_temp_path();
+                        let file = File::create(&temp_path).await.map_err(|error| {
+                            GolemError::RuntimeError(GolemErrorRuntimeError {
+                                details: format!("Failed to open temporary worker file: {error:?}"),
+                            })
+                        })?;
+                        temp_path_and_file = Some((temp_path, file));
+                    }
+                    if let Some((_, file)) = &mut temp_path_and_file {
+                        file.write_all(&file_chunk).await.map_err(|error| {
+                            GolemError::RuntimeError(GolemErrorRuntimeError {
+                                details: format!(
+                                    "Failed to write to temporary worker file: {error:?}"
+                                ),
+                            })
+                        })?;
+                    }
+                }
+                workerexecutor::v1::get_worker_files_response::Result::Failure(error) => {
+                    Err(GolemError::RuntimeError(GolemErrorRuntimeError {
+                        details: format!("Failed to get file chunk or listing: {error:?}"),
+                    }))?
+                }
+            }
+        }
+
+        let temp_path = if let Some((temp_path, mut file)) = temp_path_and_file {
+            file.flush().await.map_err(|error| {
+                GolemError::RuntimeError(GolemErrorRuntimeError {
+                    details: format!("Failed to flush temporary worker file: {error:?}"),
+                })
+            })?;
+            temp_path
+        } else {
+            NamedTempFile::with_prefix("golem_worker_file_empty")
+                .map_err(|error| {
+                    GolemError::RuntimeError(GolemErrorRuntimeError {
+                        details: format!("Failed to create empty temporary worker file: {error:?}"),
+                    })
+                })?
+                .into_temp_path()
+        };
+
+        Ok(FileOrFileListings::File {
+            file_name: file_name.into_owned(),
+            temp_path,
+        })
     }
 
     async fn get_metadata(

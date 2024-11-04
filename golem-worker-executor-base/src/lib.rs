@@ -26,6 +26,7 @@ pub mod services;
 pub mod storage;
 pub mod wasi_host;
 pub mod worker;
+pub mod worker_fs;
 pub mod workerctx;
 
 #[cfg(test)]

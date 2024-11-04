@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::ops::Not;
 use std::pin::Pin;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -280,10 +279,8 @@ impl ComponentService for ComponentGrpcApi {
         let mut maybe_header = None;
         let mut component_data = Vec::new();
 
-        let temp_dir = tempfile::Builder::new().prefix("golem").tempdir()?;
-        let mut initial_fs_archive =
-            File::create_new(temp_dir.path().join("initial_fs_archive.zip")).await?;
-        let mut initial_fs_archive_is_empty = true;
+        let mut initial_fs_archive = None;
+        let mut temp_dir_for_archive = None;
 
         let mut request_stream = request.into_inner();
         while let Some(CreateComponentRequest { data: Some(data) }) =
@@ -297,10 +294,27 @@ impl ComponentService for ComponentGrpcApi {
                     component_data.append(&mut component_chunk.component_chunk);
                 }
                 create_component_request::Data::FilesChunk(files_chunk) => {
+                    if temp_dir_for_archive.is_none() {
+                        temp_dir_for_archive =
+                            Some(tempfile::Builder::new().prefix("golem").tempdir()?);
+                    }
+                    if initial_fs_archive.is_none() {
+                        initial_fs_archive = Some(
+                            File::create_new(
+                                temp_dir_for_archive
+                                    .as_ref()
+                                    .unwrap()
+                                    .path()
+                                    .join("initial_fs_archive.zip"),
+                            )
+                            .await?,
+                        );
+                    }
                     initial_fs_archive
+                        .as_mut()
+                        .unwrap()
                         .write_all(&files_chunk.files_chunk)
                         .await?;
-                    initial_fs_archive_is_empty = false;
                 }
             }
         }
@@ -319,9 +333,7 @@ impl ComponentService for ComponentGrpcApi {
                 component_id,
                 request_header,
                 component_data,
-                initial_fs_archive_is_empty
-                    .not()
-                    .then_some(initial_fs_archive),
+                initial_fs_archive,
             )
             .instrument(record.span.clone())
             .await
@@ -381,7 +393,7 @@ impl ComponentService for ComponentGrpcApi {
                     };
 
                     let stream: Self::DownloadComponentStream =
-                        Box::pin(tokio_stream::iter([Ok(res)]));
+                        Box::pin(tokio_stream::once(Ok(res)));
                     record.fail(stream, &ComponentTraceErrorKind(&err))
                 }
             };
@@ -433,7 +445,7 @@ impl ComponentService for ComponentGrpcApi {
                 };
 
                 let stream: Self::DownloadComponentFilesStream =
-                    Box::pin(tokio_stream::iter([Ok(res)]));
+                    Box::pin(tokio_stream::once(Ok(res)));
                 record.fail(stream, &ComponentTraceErrorKind(&err))
             }
         };
@@ -506,10 +518,8 @@ impl ComponentService for ComponentGrpcApi {
         let mut maybe_header = None;
         let mut component_data = Vec::new();
 
-        let temp_dir = tempfile::Builder::new().prefix("golem").tempdir()?;
-        let mut initial_fs_archive =
-            File::create_new(temp_dir.path().join("initial_fs_archive.zip")).await?;
-        let mut initial_fs_archive_is_empty = true;
+        let mut initial_fs_archive = None;
+        let mut temp_dir_for_archive = None;
 
         let mut request_stream = request.into_inner();
         while let Some(UpdateComponentRequest { data: Some(data) }) =
@@ -523,10 +533,27 @@ impl ComponentService for ComponentGrpcApi {
                     component_data.append(&mut component_chunk.component_chunk);
                 }
                 update_component_request::Data::FilesChunk(files_chunk) => {
+                    if temp_dir_for_archive.is_none() {
+                        temp_dir_for_archive =
+                            Some(tempfile::Builder::new().prefix("golem").tempdir()?);
+                    }
+                    if initial_fs_archive.is_none() {
+                        initial_fs_archive = Some(
+                            File::create_new(
+                                temp_dir_for_archive
+                                    .as_ref()
+                                    .unwrap()
+                                    .path()
+                                    .join("initial_fs_archive.zip"),
+                            )
+                            .await?,
+                        );
+                    }
                     initial_fs_archive
+                        .as_mut()
+                        .unwrap()
                         .write_all(&files_chunk.files_chunk)
                         .await?;
-                    initial_fs_archive_is_empty = false;
                 }
             }
         }
@@ -541,15 +568,9 @@ impl ComponentService for ComponentGrpcApi {
         );
 
         let result = if let Some(request_header) = maybe_header {
-            self.update(
-                request_header,
-                component_data,
-                initial_fs_archive_is_empty
-                    .not()
-                    .then_some(initial_fs_archive),
-            )
-            .instrument(record.span.clone())
-            .await
+            self.update(request_header, component_data, initial_fs_archive)
+                .instrument(record.span.clone())
+                .await
         } else {
             Err(bad_request_error("Missing request"))
         };

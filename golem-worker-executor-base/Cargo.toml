@@ -40,6 +40,7 @@ cap-time-ext = "3.0.0"                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
 evicting_cache_map = "0.4.0"
+faccess = "0.2.4"
 figment = { workspace = true }
 flume = "0.11.0"
 fred = { workspace = true }
@@ -84,6 +85,7 @@ tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
+walkdir = { workspace = true }
 warp = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }

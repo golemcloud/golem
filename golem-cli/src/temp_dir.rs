@@ -15,6 +15,9 @@
 use std::path::{Path, PathBuf};
 use tokio::{fs, io};
 
+// TODO: Replace with the crate `async-tempfile` once it's stable enough
+// and there is an alternative to the method `TempDir::remove`
+
 pub struct TempDir {
     path: PathBuf,
     removed: bool,

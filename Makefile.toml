@@ -16,6 +16,7 @@
 # - `cargo make generate-openapi`: generates openapi spec from the code and saves it to the openapi directory
 # - `cargo make publish`: publishes packages to crates.io
 # - `cargo make run`: runs all services locally, requires redis, lnav and nginx
+# - `cargo make run-fast`: runs all services locally, requires redis, lnav and nginx, builds only necessary bins
 # - `cargo make check-configs`: generates configs from code deafults and checks if it is up-to-date
 # - `cargo make generate-configs`: generates configs from code defaults
 # - `cargo make elastic-up`: starts elastic, kibana, filebeat (in detached mode) and loads logs into elastic
@@ -612,6 +613,16 @@ kill $shard_manager_pid || true
 kill $router_pid || true
 kill $redis_pid || true
 '''
+
+[tasks.build-bins-fast]
+description = "Builds executables (exluding 'integration-tests') in debug mode"
+command = "cargo"
+args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
+
+[tasks.run-fast]
+extend = "run"
+description = "Runs all the services locally, builds only necessary bins"
+dependencies = ["build-bins-fast"]
 
 ## ** GENERATE CONFIGS **
 

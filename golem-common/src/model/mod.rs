@@ -17,7 +17,6 @@ use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -267,14 +266,6 @@ impl WorkerId {
             component_id: self.component_id,
             worker_name: Some(self.worker_name),
         }
-    }
-
-    pub fn to_root_dir_path(&self) -> PathBuf {
-        format!(
-            "data/workers/root_dir__{}__{}",
-            self.component_id.0, self.worker_name
-        )
-        .into()
     }
 }
 
@@ -2493,6 +2484,47 @@ impl FromStr for ComponentType {
             _ => Err(format!("Unknown Component Type: {}", s)),
         }
     }
+}
+
+pub type TimestampSeconds = u64;
+pub type ByteCount = u64;
+
+#[derive(Clone, Serialize, Deserialize, poem_openapi::NewType)]
+pub struct Path(pub String);
+
+#[derive(Clone, Serialize, Deserialize, poem_openapi::Union)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+#[oai(discriminator_name = "type", one_of = "true")]
+pub enum FileListing {
+    Directory(DirectoryInfo),
+    File(FileInfo),
+}
+
+#[derive(Clone, Serialize, Deserialize, poem_openapi::Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct DirectoryInfo {
+    pub path: Path,
+    pub last_modified: TimestampSeconds,
+    pub permissions: Option<FileListingPermissions>,
+}
+
+#[derive(Clone, Serialize, Deserialize, poem_openapi::Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct FileInfo {
+    pub path: Path,
+    pub last_modified: TimestampSeconds,
+    pub permissions: Option<FileListingPermissions>,
+    pub size: ByteCount,
+}
+
+#[derive(Copy, Clone, Serialize, Deserialize, poem_openapi::Enum)]
+#[serde(rename_all = "kebab-case")]
+pub enum FileListingPermissions {
+    AlwaysReadOnly,
+    ReadOnly,
+    ReadWrite,
 }
 
 #[cfg(test)]

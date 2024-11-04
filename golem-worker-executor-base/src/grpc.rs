@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::anyhow;
+use futures_util::stream::BoxStream;
 use futures_util::Stream;
 use gethostname::gethostname;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -20,11 +22,15 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use tokio::fs::File;
 use tokio::sync::broadcast::error::RecvError;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::StreamExt;
+use tokio_util::io::ReaderStream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
@@ -49,9 +55,10 @@ use golem_common::grpc::{
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
-    TargetWorkerId, TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId,
-    WorkerInvocation, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentId, ComponentType, DirectoryInfo, FileInfo, FileListing,
+    FileListingPermissions, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, TargetWorkerId,
+    TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 
@@ -68,6 +75,7 @@ use crate::services::{
     HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::Worker;
+use crate::worker_fs;
 use crate::workerctx::WorkerCtx;
 
 pub enum GrpcError<E> {
@@ -126,6 +134,11 @@ pub fn is_grpc_retriable<E>(error: &GrpcError<E>) -> bool {
         GrpcError::Domain(_) => false,
         GrpcError::Unexpected(_) => false,
     }
+}
+
+enum FilePathOrListings {
+    Path(PathBuf),
+    Listings(Vec<FileListing>),
 }
 
 /// This is the implementation of the Worker Executor gRPC API
@@ -504,7 +517,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     async fn get_worker_files_internal(
         &self,
         request: golem::workerexecutor::v1::GetWorkerFilesRequest,
-    ) -> Result<String, GolemError> {
+    ) -> Result<FilePathOrListings, GolemError> {
         let worker_id = request
             .worker_id
             .ok_or(GolemError::invalid_request("worker_id not found"))?;
@@ -522,20 +535,37 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.validate_worker_status(&owned_worker_id, &metadata)
             .await?;
 
-        // @TODO continue with implementation
-        let root_dir_path = worker_id.to_root_dir_path();
-        let mut file_or_dir_contents = String::from("worker root contents: [");
-        if root_dir_path.is_dir() {
-            if let Ok(mut dir) = tokio::fs::read_dir(root_dir_path).await {
-                while let Ok(Some(entry)) = dir.next_entry().await {
-                    file_or_dir_contents.push_str(&entry.file_name().to_string_lossy());
-                    file_or_dir_contents.push(',');
-                }
-            }
-        }
-        file_or_dir_contents.push(']');
+        let root_dir_path = worker_fs::get_preopened_root_path(&worker_id)
+            .canonicalize()
+            .map_err(|error| anyhow!("Failed to read worker root dir: {error}"))?;
 
-        Ok(file_or_dir_contents)
+        let selected_path = if let Some(request_path) = request.path {
+            root_dir_path
+                .join(&request_path)
+                .canonicalize()
+                .ok()
+                .and_then(|path| path.starts_with(&root_dir_path).then_some(path))
+                .ok_or_else(|| {
+                    GolemError::invalid_request(format!(
+                        "Failed to read dir or file '{request_path}'"
+                    ))
+                })?
+        } else {
+            root_dir_path
+        };
+
+        let selected_path_metadata = selected_path
+            .metadata()
+            .map_err(|error| anyhow!("Failed to read dir or file metadata: {error}"))?;
+
+        if selected_path_metadata.is_dir() {
+            Ok(FilePathOrListings::Listings(worker_fs::file_listings(
+                &selected_path,
+                request.recursive,
+            )?))
+        } else {
+            Ok(FilePathOrListings::Path(selected_path))
+        }
     }
 
     async fn resume_worker_internal(
@@ -1650,43 +1680,123 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
     }
 
+    type GetWorkerFilesStream =
+        BoxStream<'static, Result<golem::workerexecutor::v1::GetWorkerFilesResponse, Status>>;
+
     async fn get_worker_files(
         &self,
         request: Request<golem::workerexecutor::v1::GetWorkerFilesRequest>,
-    ) -> Result<Response<golem::workerexecutor::v1::GetWorkerFilesResponse>, Status> {
+    ) -> Result<Response<Self::GetWorkerFilesStream>, Status> {
         let request = request.into_inner();
         let record = recorded_grpc_api_request!(
             "get_worker_files",
             worker_id = proto_worker_id_string(&request.worker_id),
         );
 
-        match self
+        let file_path_or_listings = self
             .get_worker_files_internal(request)
             .instrument(record.span.clone())
-            .await
-        {
-            Ok(dir_contents) => record.succeed(Ok(Response::new(
-                golem::workerexecutor::v1::GetWorkerFilesResponse {
+            .await;
+
+        let new_error_stream = |error: GolemError| {
+            let response = golem::workerexecutor::v1::GetWorkerFilesResponse {
+                result: Some(
+                    golem::workerexecutor::v1::get_worker_files_response::Result::Failure(
+                        error.into(),
+                    ),
+                ),
+            };
+            Box::pin(tokio_stream::once(Ok(response)))
+        };
+
+        let file_path_or_listings = match file_path_or_listings {
+            Ok(file_path_or_listings) => file_path_or_listings,
+            Err(error) => {
+                return Ok(Response::new(
+                    record.fail(new_error_stream(error.clone()), &error),
+                ))
+            }
+        };
+
+        let file_path = match file_path_or_listings {
+            FilePathOrListings::Path(path) => path,
+            FilePathOrListings::Listings(file_listings) => {
+                let response = golem::workerexecutor::v1::GetWorkerFilesResponse {
+                    result: Some(golem::workerexecutor::v1::get_worker_files_response::Result::FileListings(
+                        golem::worker::v1::FileListings {
+                            file_listings: file_listings.into_iter().map(|listing| {
+                                golem::worker::v1::FileListing {
+                                    result: Some(match listing{
+                                        FileListing::Directory(DirectoryInfo { path: golem_common::model::Path(path), last_modified, permissions }) => {
+                                            golem::worker::v1::file_listing::Result::DirectoryInfo(
+                                                golem::worker::v1::DirectoryInfo {
+                                                    path,
+                                                    last_modified,
+                                                    permissions: permissions.map(|permissions| match permissions {
+                                                        FileListingPermissions::AlwaysReadOnly => golem::worker::v1::Permissions::AlwaysReadOnly,
+                                                        FileListingPermissions::ReadOnly => golem::worker::v1::Permissions::ReadOnly,
+                                                        FileListingPermissions::ReadWrite => golem::worker::v1::Permissions::ReadWrite,
+                                                    } as i32)
+                                                }
+                                            )
+                                        }
+                                        FileListing::File(FileInfo { path: golem_common::model::Path(path), last_modified, permissions, size}) => {
+                                            golem::worker::v1::file_listing::Result::FileInfo(
+                                                golem::worker::v1::FileInfo {
+                                                    path,
+                                                    last_modified,
+                                                    permissions: permissions.map(|permissions| match permissions {
+                                                        FileListingPermissions::AlwaysReadOnly => golem::worker::v1::Permissions::AlwaysReadOnly,
+                                                        FileListingPermissions::ReadOnly => golem::worker::v1::Permissions::ReadOnly,
+                                                        FileListingPermissions::ReadWrite => golem::worker::v1::Permissions::ReadWrite,
+                                                    } as i32),
+                                                    size,
+                                                }
+                                            )
+                                        }
+                                    })
+                                }
+                            }).collect()
+                        }
+                    ))
+                };
+                let stream: Self::GetWorkerFilesStream = Box::pin(tokio_stream::once(Ok(response)));
+                return Ok(Response::new(record.succeed(stream)));
+            }
+        };
+
+        let file = match File::open(file_path).await {
+            Ok(file) => file,
+            Err(error) => {
+                let error = GolemError::from(error);
+                return Ok(Response::new(
+                    record.fail(new_error_stream(error.clone()), &error),
+                ));
+            }
+        };
+
+        let stream = ReaderStream::new(file).map(|bytes| {
+            let response = match bytes {
+                Ok(bytes) => golem::workerexecutor::v1::GetWorkerFilesResponse {
                     result: Some(
-                        golem::workerexecutor::v1::get_worker_files_response::Result::DirContents(
-                            dir_contents,
+                        golem::workerexecutor::v1::get_worker_files_response::Result::FileChunk(
+                            Vec::from(bytes),
                         ),
                     ),
                 },
-            ))),
-            Err(err) => record.fail(
-                Ok(Response::new(
-                    golem::workerexecutor::v1::GetWorkerFilesResponse {
-                        result: Some(
-                            golem::workerexecutor::v1::get_worker_files_response::Result::Failure(
-                                err.clone().into(),
-                            ),
+                Err(error) => golem::workerexecutor::v1::GetWorkerFilesResponse {
+                    result: Some(
+                        golem::workerexecutor::v1::get_worker_files_response::Result::Failure(
+                            GolemError::from(error).into(),
                         ),
-                    },
-                )),
-                &err,
-            ),
-        }
+                    ),
+                },
+            };
+            Ok(response)
+        });
+
+        let stream: Self::GetWorkerFilesStream = Box::pin(stream);
+        Ok(Response::new(record.succeed(stream)))
     }
 
     async fn revoke_shards(

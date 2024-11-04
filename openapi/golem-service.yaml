@@ -840,16 +840,20 @@ paths:
       - Worker
       summary: Get files of a worker
       description: |-
-        `.../{worker_name}/files` retrieves the top-level listing of nodes in the worker’s file system.
+        **Examples:**
+
+        1. `.../{worker_name}/files` retrieves the top-level listing of nodes in the worker’s file system.
+
+        2. `.../{worker_name}/files?recursive=true` retrieves the listing of nodes including sub-directories.
+
+        3. `.../{worker_name}/files?path=a_dir/my_file.txt` retrieves the file at the specified path or lists the contents of the directory
+        at the specified path, depending on whether or not the path points to a file node or a directory node.
 
         The listing contains information on the type of each node, as well as other metadata:
         ```json
-        [{"type": "directory", "name": "foo"}, {"type": "file", "name": "bar.txt"}, ...]`
-        ``````
-
-        `.../{worker_name}/files?path=/root_in_worker/my_file.txt` retrieves the file at the specified path or lists the contents of the directory
-        at the specified path, depending on whether or not the path points to a file node or a directory node.
-      operationId: get_worker_files
+        [{"type": "directory", "path": "foo"}, {"type": "file", "path": "bar.txt"}, ...]
+        ```
+      operationId: get_worker_files_or_listings
       parameters:
       - in: path
         name: component_id
@@ -875,13 +879,29 @@ paths:
           type: string
         explode: true
         style: form
+      - in: query
+        name: recursive
+        deprecated: false
+        schema:
+          type: boolean
+        explode: true
+        style: form
       responses:
+        '200':
+            description: ''
+            content:
+              application/octet-stream:
+                schema:
+                  type: string
+                  format: binary
         '200':
           description: ''
           content:
             application/json; charset=utf-8:
               schema:
-                type: string
+                type: array
+                items:
+                  $ref: '#/components/schemas/FileListing'
         '400':
           description: ''
           content:
@@ -2894,6 +2914,19 @@ components:
       - id
       - resource_name
       - resource_params
+    DirectoryInfo:
+      type: object
+      properties:
+        path:
+          type: string
+        lastModified:
+          type: integer
+          format: uint64
+        permissions:
+          $ref: '#/components/schemas/FileListingPermissions'
+      required:
+      - path
+      - lastModified
     Empty:
       type: object
     EndRegionParameters:
@@ -3011,6 +3044,63 @@ components:
       required:
       - timestamp
       - target_version
+    FileInfo:
+      type: object
+      properties:
+        path:
+          type: string
+        lastModified:
+          type: integer
+          format: uint64
+        permissions:
+          $ref: '#/components/schemas/FileListingPermissions'
+        size:
+          type: integer
+          format: uint64
+      required:
+      - path
+      - lastModified
+      - size
+    FileListing:
+      discriminator:
+        propertyName: type
+        mapping:
+          Directory: '#/components/schemas/FileListing_DirectoryInfo'
+          File: '#/components/schemas/FileListing_FileInfo'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/FileListing_DirectoryInfo'
+      - $ref: '#/components/schemas/FileListing_FileInfo'
+    FileListingPermissions:
+      type: string
+      enum:
+      - AlwaysReadOnly
+      - ReadOnly
+      - ReadWrite
+    FileListing_DirectoryInfo:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Directory
+            type: string
+            enum:
+            - Directory
+        required:
+        - type
+      - $ref: '#/components/schemas/DirectoryInfo'
+    FileListing_FileInfo:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: File
+            type: string
+            enum:
+            - File
+        required:
+        - type
+      - $ref: '#/components/schemas/FileInfo'
     FilterComparator:
       type: string
       enum:
