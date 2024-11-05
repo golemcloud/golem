@@ -1,4 +1,4 @@
-use crate::services::rdbms::postgres::{Postgres, PostgresDefault, PostgresNoOp};
+use crate::services::rdbms::postgres::{Postgres, PostgresDefault};
 use std::error::Error;
 use std::sync::Arc;
 
@@ -61,14 +61,13 @@ pub mod postgres {
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
     use chrono::DateTime;
+    use deadpool_postgres::{Pool, PoolError};
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::model::OwnedWorkerId;
-    use sqlx::postgres::{PgArguments, PgColumn, PgPoolOptions, PgTypeInfo, PgTypeKind};
-    use sqlx::query::Query;
-    use sqlx::{Column, Execute, Pool, Row};
     use std::collections::HashSet;
     use std::ops::Deref;
     use std::sync::Arc;
+    use tokio_postgres::{Connection, NoTls};
     use tracing::{error, info};
     use uuid::Uuid;
 
@@ -141,7 +140,7 @@ pub mod postgres {
     #[derive(Clone)]
     pub struct PostgresDefault {
         pool_config: RdbmsPoolConfig,
-        pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<sqlx::Postgres>>, String>,
+        pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool>, String>,
     }
 
     impl PostgresDefault {
@@ -162,7 +161,7 @@ pub mod postgres {
             &self,
             _worker_id: &OwnedWorkerId,
             address: &str,
-        ) -> Result<Arc<Pool<sqlx::Postgres>>, String> {
+        ) -> Result<Arc<Pool>, String> {
             let key = RdbmsPoolKey::new(address.to_string());
             let pool_config = self.pool_config.clone();
 
@@ -194,14 +193,14 @@ pub mod postgres {
             let pool = self.pool_cache.try_get(&key);
             if let Some(pool) = pool {
                 self.pool_cache.remove(&key);
-                pool.close().await;
+                pool.close();
                 Ok(true)
             } else {
                 Ok(false)
             }
         }
 
-        async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
+        async fn exists(&self, _worker_id: &OwnedWorkerId, address: &str) -> bool {
             let key = RdbmsPoolKey::new(address.to_string());
             self.pool_cache.contains_key(&key)
         }
@@ -249,41 +248,107 @@ pub mod postgres {
     async fn query(
         statement: &str,
         params: Vec<DbValue>,
-        pool: &Pool<sqlx::Postgres>,
+        pool: &Pool,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-        let mut query: Query<sqlx::Postgres, PgArguments> = sqlx::query(statement);
+        let query_params = to_sql_params(params)?;
 
-        for param in params {
-            query = bind_value(query, param)?;
-        }
+        let query_params = query_params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect::<Vec<_>>();
 
-        let result = query.fetch_all(pool).await.map_err(|e| e.to_string())?;
+        let client = pool.get().await.map_err(|e| e.to_string())?;
+
+        let result = client
+            .query(statement, &query_params)
+            .await
+            .map_err(|e| e.to_string())?;
 
         if result.is_empty() {
             Ok(Arc::new(SimpleDbResultSet::empty()))
         } else {
             let first = &result[0];
-            let _columns = first.columns();
-            let columns = vec![];
-            let values = vec![];
+            let columns = first
+                .columns()
+                .into_iter()
+                .map(|c| c.try_into())
+                .collect::<Result<Vec<_>, String>>()?;
+            let values = vec![]; // TODO
             Ok(Arc::new(SimpleDbResultSet::new(columns, Some(values))))
         }
     }
 
-    async fn execute(
-        statement: &str,
-        params: Vec<DbValue>,
-        pool: &Pool<sqlx::Postgres>,
-    ) -> Result<u64, String> {
-        let mut query: Query<sqlx::Postgres, PgArguments> = sqlx::query(statement);
+    async fn execute(statement: &str, params: Vec<DbValue>, pool: &Pool) -> Result<u64, String> {
+        let query_params = to_sql_params(params)?;
 
-        for param in params {
-            query = bind_value(query, param)?;
-        }
+        let query_params = query_params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect::<Vec<_>>();
 
-        let result = query.execute(pool).await.map_err(|e| e.to_string())?;
-        Ok(result.rows_affected())
+        let client = pool.get().await.map_err(|e| e.to_string())?;
+
+        let result = client
+            .execute(statement, &query_params)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(result)
     }
+
+    async fn create_pool(
+        key: &RdbmsPoolKey,
+        pool_config: &RdbmsPoolConfig,
+    ) -> Result<Pool, String> {
+        info!(
+            "DB Pool: {}, connections: {}",
+            key.address, pool_config.max_connections
+        );
+        use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod};
+        use std::env;
+        use std::str::FromStr;
+        use tokio_postgres::Config;
+        use tokio_postgres::NoTls;
+
+        let pg_config = Config::from_str(&key.address).map_err(|e| e.to_string())?;
+        let mgr_config = ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        };
+        let mgr = Manager::from_config(pg_config, NoTls, mgr_config);
+        let pool = Pool::builder(mgr)
+            .max_size(pool_config.max_connections as usize)
+            .build()
+            .map_err(|e| e.to_string())?;
+
+        info!(
+            "DB Pool: {}, connections: {} - created",
+            key.address, pool_config.max_connections
+        );
+        Ok(pool)
+    }
+
+    fn to_sql_params(
+        params: Vec<DbValue>,
+    ) -> Result<Vec<Box<dyn tokio_postgres::types::ToSql + Send + Sync>>, String> {
+        params
+            .into_iter()
+            .map(|p| p.try_into())
+            .collect::<Result<Vec<_>, String>>()
+    }
+
+    // fn to_sql_params(params: Vec<DbValue>) -> Result<Vec<&(dyn tokio_postgres::types::ToSql + Sync)>, String> {
+    //     let query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Send + Sync>>  = params
+    //         .into_iter()
+    //         .map(|p| p.try_into())
+    //         .collect::<Result<Vec<_>, String>>()?;
+    //
+    //     let query_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
+    //         .into_iter()
+    //         .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+    //         .collect();
+    //
+    //     Ok(query_params)
+    // }
 
     // fn get_column_types(columns: &[PgColumn]) -> Result<Vec<DbColumnTypeMeta>, String> {
     //     let mut result = vec![columns.len()];
@@ -309,70 +374,87 @@ pub mod postgres {
     //     }
     // }
 
-    fn bind_value(
-        query: Query<sqlx::Postgres, PgArguments>,
-        value: DbValue,
-    ) -> Result<Query<sqlx::Postgres, PgArguments>, String> {
-        match value {
-            DbValue::Primitive(v) => bind_value_primitive(query, v),
-            DbValue::Array(_) => Err("Array param not supported".to_string()),
+    impl TryFrom<&tokio_postgres::Column> for DbColumnTypeMeta {
+        type Error = String;
+
+        fn try_from(value: &tokio_postgres::Column) -> Result<Self, Self::Error> {
+            let db_type: DbColumnType = value.type_().try_into()?;
+            let name = value.name().to_string();
+            Ok(DbColumnTypeMeta {
+                name,
+                db_type,
+                db_type_flags: HashSet::new(),
+                foreign_key: None,
+            })
         }
     }
 
-    fn bind_value_primitive(
-        query: Query<sqlx::Postgres, PgArguments>,
-        value: DbValuePrimitive,
-    ) -> Result<Query<sqlx::Postgres, PgArguments>, String> {
-        match value {
-            DbValuePrimitive::Integer(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Decimal(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Float(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Boolean(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Chars(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Text(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Binary(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Blob(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Json(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Spatial(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Enumeration(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Other(_, v) => Ok(query.bind(v)),
-            DbValuePrimitive::Datetime(v) => {
-                Ok(query.bind(chrono::DateTime::from_timestamp_millis(v as i64)))
+    impl TryFrom<&tokio_postgres::types::Type> for DbColumnType {
+        type Error = String;
+
+        fn try_from(value: &tokio_postgres::types::Type) -> Result<Self, Self::Error> {
+            match *value {
+                tokio_postgres::types::Type::BOOL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
+                tokio_postgres::types::Type::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(Some(2)))),
+                tokio_postgres::types::Type::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(Some(4)))),
+                tokio_postgres::types::Type::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(Some(8)))),
+                tokio_postgres::types::Type::NUMERIC => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Decimal(0, 0))),
+                tokio_postgres::types::Type::FLOAT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
+                tokio_postgres::types::Type::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
+                tokio_postgres::types::Type::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
+                tokio_postgres::types::Type::TEXT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
+                tokio_postgres::types::Type::VARCHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(None))),
+                tokio_postgres::types::Type::CHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(Some(1)))),
+                tokio_postgres::types::Type::CHAR_ARRAY => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(Some(1)))),
+                tokio_postgres::types::Type::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
+                tokio_postgres::types::Type::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
+                tokio_postgres::types::Type::TIMESTAMP => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime)),
+                tokio_postgres::types::Type::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime)),
+                _ => Err(format!("Unsupported type: {:?}", value)),
             }
-            DbValuePrimitive::Interval(v) => {
-                Ok(query.bind(chrono::Duration::milliseconds(v as i64)))
-            }
-            DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
         }
     }
 
-    async fn create_pool(
-        key: &RdbmsPoolKey,
-        pool_config: &RdbmsPoolConfig,
-    ) -> Result<Pool<sqlx::Postgres>, String> {
-        info!(
-            "DB Pool: {}, connections: {}",
-            key.address, pool_config.max_connections
-        );
+    impl TryFrom<DbValue> for Box<dyn tokio_postgres::types::ToSql + Send + Sync> {
+        type Error = String;
 
-        let pool = PgPoolOptions::new()
-            .max_connections(pool_config.max_connections)
-            .connect(&key.address)
-            .await
-            .map_err(|e| {
-                error!(
-                    "DB Pool: {}, connections: {} -  error {}",
-                    key.address, pool_config.max_connections, e
-                );
-                e.to_string()
-            })?;
-        info!(
-            "DB Pool: {}, connections: {} - created",
-            key.address, pool_config.max_connections
-        );
-        Ok(pool)
+        fn try_from(value: DbValue) -> Result<Self, Self::Error> {
+            match value {
+                DbValue::Primitive(v) => v.try_into(),
+                DbValue::Array(_) => Err("Array param not supported".to_string()),
+            }
+        }
+    }
+
+    impl TryFrom<DbValuePrimitive> for Box<dyn tokio_postgres::types::ToSql + Send + Sync> {
+        type Error = String;
+
+        fn try_from(value: DbValuePrimitive) -> Result<Self, Self::Error> {
+            match value {
+                DbValuePrimitive::Integer(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Decimal(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Float(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Boolean(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Chars(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Text(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Binary(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Blob(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Uuid(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Json(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Xml(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Spatial(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Enumeration(v) => Ok(Box::new(v)),
+                DbValuePrimitive::Other(_, v) => Ok(Box::new(v)),
+                DbValuePrimitive::Datetime(v) => {
+                    Ok(Box::new(chrono::DateTime::from_timestamp_millis(v as i64)))
+                }
+                DbValuePrimitive::Interval(v) => {
+                    // Ok(Box::new(chrono::Duration::milliseconds(v as i64)))
+                    Ok(Box::new(v as i64))
+                }
+                DbValuePrimitive::DbNull => Ok(Box::new(None::<String>)),
+            }
+        }
     }
 }
 
@@ -512,6 +594,7 @@ mod tests {
     use crate::services::rdbms::{RdbmsPoolKey, RdbmsServiceDefault};
     use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
     use std::hash::Hash;
+    use golem_wasm_ast::analysis::analysed_type::result;
     use test_r::{test, timeout};
     use uuid::Uuid;
 
@@ -554,7 +637,12 @@ mod tests {
             .query(&worker_id, &address, "SELECT 1", vec![])
             .await;
 
+
         assert!(result.is_ok());
+
+        let columns = result.unwrap().get_column_metadata().await.unwrap();
+
+        assert!(columns.len() > 0);
 
         let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components

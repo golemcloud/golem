@@ -41,6 +41,7 @@ cap-time-ext = "3.4.2"                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
 drop-stream = { workspace = true }
+deadpool-postgres = { workspace = true }
 evicting_cache_map = "0.4.0"
 figment = { workspace = true }
 flume = "0.11.1"
@@ -78,6 +79,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-postgres = { workspace = true, features = ["with-chrono-0_4", "with-uuid-1"] }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
