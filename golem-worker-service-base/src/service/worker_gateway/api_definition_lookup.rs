@@ -21,11 +21,6 @@ use crate::service::api_deployment::ApiDeploymentService;
 use async_trait::async_trait;
 use tracing::error;
 
-// TODO; We could optimise this further
-// to pick the exact API Definition (instead of a vector),
-// by doing route resolution at this stage rather than
-// delegating that task to worker-binding resolver.
-// However, requires lot more work.
 #[async_trait]
 pub trait ApiDefinitionsLookup<Input, ApiDefinition> {
     async fn get(&self, input: Input) -> Result<Vec<ApiDefinition>, ApiDefinitionLookupError>;

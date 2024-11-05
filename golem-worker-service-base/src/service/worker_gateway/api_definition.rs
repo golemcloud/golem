@@ -30,9 +30,8 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use tracing::{error, info};
-
-use super::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
-use super::component::ComponentService;
+use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
+use crate::service::component::ComponentService;
 
 pub type ApiResult<T, E> = Result<T, ApiDefinitionError<E>>;
 
@@ -454,9 +453,9 @@ where
 mod tests {
     use test_r::test;
 
-    use crate::service::api_definition::ApiDefinitionError;
     use golem_common::{SafeDisplay, SafeString};
     use golem_service_base::repo::RepoError;
+    use crate::service::worker_gateway::api_definition::ApiDefinitionError;
 
     #[test]
     pub fn test_repo_error_to_service_error() {

@@ -12,14 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod api_definition;
-pub mod api_definition_lookup;
 pub mod api_definition_validator;
 pub mod api_deployment;
 pub mod component;
 pub mod worker;
 
 pub mod http;
+mod worker_gateway;
 
 pub fn with_metadata<T, I, K, V>(request: T, metadata: I) -> tonic::Request<T>
 where

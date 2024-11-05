@@ -10,7 +10,7 @@ use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
 use crate::http::{ApiInputPath, InputHttpRequest};
-use crate::service::api_definition_lookup::ApiDefinitionsLookup;
+use crate::service::worker_gateway::api_definition_lookup::ApiDefinitionsLookup;
 
 use crate::worker_binding::RequestToWorkerBindingResolver;
 use crate::worker_bridge_execution::WorkerRequestExecutor;
