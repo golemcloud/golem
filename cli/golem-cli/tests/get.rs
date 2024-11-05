@@ -15,7 +15,8 @@
 use test_r::{inherit_test_dep, test, test_dep};
 
 use crate::api_definition::{
-    golem_def, make_golem_file, make_shopping_cart_component, to_definition,
+    make_json_file, make_shopping_cart_component, native_api_definition_request,
+    to_api_definition_with_type_info,
 };
 use crate::api_deployment::make_definition;
 use crate::cli::{Cli, CliLive};
@@ -52,8 +53,8 @@ fn top_level_get_api_definition(
     let component_name = "top_level_get_api_definition";
     let component = make_shopping_cart_component(deps, component_name, cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_def(component_name, &component_id);
-    let path = make_golem_file(&def)?;
+    let def = native_api_definition_request(component_name, &component_id);
+    let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -65,7 +66,7 @@ fn top_level_get_api_definition(
 
     let res: HttpApiDefinitionWithTypeInfo = cli.run(&["get", &url.to_string()])?;
 
-    let expected = to_definition(def.clone(), res.created_at);
+    let expected = to_api_definition_with_type_info(def.clone(), res.created_at);
     assert_eq!(res, expected);
 
     let urn = ApiDefinitionUrn {
@@ -74,7 +75,7 @@ fn top_level_get_api_definition(
     };
 
     let res: HttpApiDefinitionWithTypeInfo = cli.run(&["get", &urn.to_string()])?;
-    let expected = to_definition(def.clone(), res.created_at);
+    let expected = to_api_definition_with_type_info(def.clone(), res.created_at);
     assert_eq!(res, expected);
 
     Ok(())

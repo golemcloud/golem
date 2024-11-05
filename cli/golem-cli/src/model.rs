@@ -29,7 +29,7 @@ use crate::cloud::AccountId;
 use crate::model::text::fmt::TextFormat;
 use clap::builder::{StringValueParser, TypedValueParser};
 use clap::error::{ContextKind, ContextValue, ErrorKind};
-use clap::{Arg, ArgMatches, Error, FromArgMatches};
+use clap::{Arg, ArgMatches, Error, FromArgMatches, ValueEnum};
 use clap_verbosity_flag::Verbosity;
 use derive_more::{Display, FromStr};
 use golem_client::model::{ApiDefinitionInfo, ApiSite, ScanCursor};
@@ -381,6 +381,22 @@ impl FromStr for ApiDefinitionIdWithVersion {
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 pub struct ApiDefinitionId(pub String); // TODO: Validate
+
+#[derive(ValueEnum, Clone, Debug)]
+pub enum ApiDefinitionFileFormat {
+    Json,
+    Yaml,
+}
+
+impl Display for ApiDefinitionFileFormat {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Json => "json",
+            Self::Yaml => "yaml",
+        };
+        Display::fmt(&s, f)
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr)]
 pub struct ApiDefinitionVersion(pub String); // TODO: Validate
