@@ -55,7 +55,8 @@ pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
     component_id: Option<Uuid>,
     component_version: Option<i64>,
 
-    #[allow(dead_code)] deleted: bool
+    #[allow(dead_code)]
+    deleted: bool,
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>>
@@ -105,7 +106,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>
                 }
                 _ => None,
             },
-            deleted: false
+            deleted: false,
         }
     }
 }

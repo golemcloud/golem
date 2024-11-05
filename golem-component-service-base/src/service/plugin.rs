@@ -18,7 +18,7 @@ use crate::model::{
 };
 use crate::repo::plugin::{PluginRecord, PluginRepo};
 use crate::repo::plugin_installation::{
-    ComponentPluginInstallationRow, PluginInstallationRecord, PluginInstallationRepo,
+    ComponentPluginInstallationRow, PluginInstallationRecord, PluginInstallationRepoQueries,
 };
 use crate::service::component::{ComponentError, ComponentService};
 use async_trait::async_trait;
@@ -135,22 +135,16 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope> {
 
 pub struct PluginServiceDefault<Owner: PluginOwner, Scope: PluginScope> {
     plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
-    component_plugin_installations_repo:
-        Arc<dyn PluginInstallationRepo<Owner, ComponentPluginInstallationTarget> + Send + Sync>,
     component_service: Arc<dyn ComponentService<Owner::Namespace> + Send + Sync>,
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> {
     pub fn new(
         plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
-        component_plugin_installations_repo: Arc<
-            dyn PluginInstallationRepo<Owner, ComponentPluginInstallationTarget> + Send + Sync,
-        >,
         component_service: Arc<dyn ComponentService<Owner::Namespace> + Send + Sync>,
     ) -> Self {
         Self {
             plugin_repo,
-            component_plugin_installations_repo,
             component_service,
         }
     }
@@ -250,21 +244,25 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
         component_version: ComponentVersion,
     ) -> Result<Vec<PluginInstallation>, PluginError> {
         let owner_record: Owner::Row = owner.clone().into();
-        let records = self
-            .component_plugin_installations_repo
-            .get_all(
-                &owner_record,
-                &ComponentPluginInstallationRow {
-                    component_id: component_id.0,
-                    component_version: component_version as i64,
-                },
-            )
-            .await?;
-        records
-            .into_iter()
-            .map(PluginInstallation::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| PluginError::conversion_error("plugin installation", e))
+
+        // let records = self
+        //     .component_plugin_installations_repo
+        //     .get_all(
+        //         &owner_record,
+        //         &ComponentPluginInstallationRow {
+        //             component_id: component_id.0,
+        //             component_version: component_version as i64,
+        //         },
+        //     )
+        //     .await?;
+
+        todo!()
+
+        // records
+        //     .into_iter()
+        //     .map(PluginInstallation::try_from)
+        //     .collect::<Result<Vec<_>, _>>()
+        //     .map_err(|e| PluginError::conversion_error("plugin installation", e))
     }
 
     async fn create_plugin_installation_for_component(
@@ -282,29 +280,31 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
             .await?;
 
         if let Some(latest) = latest {
-            // TODO: installation needs to transactionally create a new latest component version
+            // let target = ComponentPluginInstallationTarget {
+            //     component_id: component_id.clone(),
+            //     component_version: latest.versioned_component_id.version,
+            // }
+            // .into();
+            // let installation = installation.with_generated_id();
+            // let record = PluginInstallationRecord {
+            //     installation_id: installation.id.0,
+            //     plugin_name: installation.name.clone(),
+            //     plugin_version: installation.version.clone(),
+            //     priority: installation.priority,
+            //     parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
+            //         PluginError::conversion_error("plugin installation parameters", e.to_string())
+            //     })?,
+            //     target,
+            //     owner,
+            // };
 
-            let target = ComponentPluginInstallationTarget {
-                component_id: component_id.clone(),
-                component_version: latest.versioned_component_id.version,
-            }
-            .into();
-            let installation = installation.with_generated_id();
-            let record = PluginInstallationRecord {
-                installation_id: installation.id.0,
-                plugin_name: installation.name.clone(),
-                plugin_version: installation.version.clone(),
-                priority: installation.priority,
-                parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
-                    PluginError::conversion_error("plugin installation parameters", e.to_string())
-                })?,
-                target,
-                owner,
-            };
-            self.component_plugin_installations_repo
-                .create(&record)
-                .await?;
-            Ok(installation)
+            // TODO
+            // self.component_plugin_installations_repo
+            //     .create(&record)
+            //     .await?;
+
+            todo!()
+            // Ok(installation)
         } else {
             Err(PluginError::ComponentNotFound {
                 component_id: component_id.clone(),
@@ -320,7 +320,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
         update: PluginInstallationUpdate,
         namespace: &Owner::Namespace,
     ) -> Result<(), PluginError> {
-        let owner = owner.clone().into();
+        // let owner = owner.clone().into();
 
         let latest = self
             .component_service
@@ -328,27 +328,27 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
             .await?;
 
         if let Some(latest) = latest {
-            // TODO: installation needs to transactionally create a new latest component version
+            // let target = ComponentPluginInstallationTarget {
+            //     component_id: component_id.clone(),
+            //     component_version: latest.versioned_component_id.version,
+            // }
+            // .into();
 
-            let target = ComponentPluginInstallationTarget {
-                component_id: component_id.clone(),
-                component_version: latest.versioned_component_id.version,
-            }
-            .into();
-            self.component_plugin_installations_repo
-                .update(
-                    &owner,
-                    &target,
-                    &installation_id.0,
-                    update.priority,
-                    serde_json::to_vec(&update.parameters).map_err(|e| {
-                        PluginError::conversion_error(
-                            "plugin installation parameters",
-                            e.to_string(),
-                        )
-                    })?,
-                )
-                .await?;
+            // TODO
+            // self.component_plugin_installations_repo
+            //     .update(
+            //         &owner,
+            //         &target,
+            //         &installation_id.0,
+            //         update.priority,
+            //         serde_json::to_vec(&update.parameters).map_err(|e| {
+            //             PluginError::conversion_error(
+            //                 "plugin installation parameters",
+            //                 e.to_string(),
+            //             )
+            //         })?,
+            //     )
+            //     .await?;
 
             Ok(())
         } else {
@@ -365,22 +365,23 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
         component_id: &ComponentId,
         namespace: &Owner::Namespace,
     ) -> Result<(), PluginError> {
-        let owner = owner.clone().into();
+        // let owner = owner.clone().into();
         let latest = self
             .component_service
             .get_latest_version(component_id, namespace)
             .await?;
         if let Some(latest) = latest {
-            // TODO: installation needs to transactionally create a new latest component version
+            // let target = ComponentPluginInstallationTarget {
+            //     component_id: component_id.clone(),
+            //     component_version: latest.versioned_component_id.version,
+            // }
+            // .into();
 
-            let target = ComponentPluginInstallationTarget {
-                component_id: component_id.clone(),
-                component_version: latest.versioned_component_id.version,
-            }
-            .into();
-            self.component_plugin_installations_repo
-                .delete(&owner, &target, &installation_id.0)
-                .await?;
+            // TODO
+            // self.component_plugin_installations_repo
+            //     .delete(&owner, &target, &installation_id.0)
+            //     .await?;
+
             Ok(())
         } else {
             Err(PluginError::ComponentNotFound {

@@ -182,6 +182,7 @@ pub trait PluginOwner:
         + for<'r> sqlx::FromRow<'r, PgRow>
         + From<Self>
         + TryInto<Self, Error = String>
+        + Clone
         + Send
         + Sync
         + Unpin
@@ -265,6 +266,7 @@ pub trait PluginInstallationTarget:
         + for<'r> sqlx::FromRow<'r, PgRow>
         + From<Self>
         + TryInto<Self, Error = String>
+        + Clone
         + Send
         + Sync
         + Unpin

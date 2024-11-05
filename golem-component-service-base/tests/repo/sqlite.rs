@@ -37,7 +37,7 @@ mod tests {
     use golem_component_service_base::model::ComponentPluginInstallationTarget;
     use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
     use golem_component_service_base::repo::plugin_installation::{
-        DbPluginInstallationRepo, LoggedPluginInstallationRepo, PluginInstallationRepo,
+        DbPluginInstallationRepoQueries, LoggedPluginInstallationRepo, PluginInstallationRepo,
     };
     use golem_service_base::repo::RepoError;
     use test_r::{inherit_test_dep, test, test_dep};
@@ -72,7 +72,7 @@ mod tests {
             + Sync,
     > {
         Arc::new(LoggedPluginInstallationRepo::new(
-            DbPluginInstallationRepo::new(db.pool.clone()),
+            DbPluginInstallationRepoQueries::new(db.pool.clone()),
         ))
     }
 

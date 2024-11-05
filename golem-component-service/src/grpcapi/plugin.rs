@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::{
     CreatePluginRequest, CreatePluginResponse, DeletePluginRequest, DeletePluginResponse,
     GetPluginRequest, GetPluginResponse, ListPluginVersionsRequest, ListPluginsRequest,
@@ -22,7 +23,6 @@ use golem_component_service_base::service::component;
 use golem_component_service_base::service::plugin::PluginService;
 use golem_service_base::auth::DefaultNamespace;
 use std::sync::Arc;
-use async_trait::async_trait;
 use tonic::{Request, Response, Status};
 
 pub struct PluginGrpcApi {

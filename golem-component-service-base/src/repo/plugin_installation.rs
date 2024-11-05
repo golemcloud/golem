@@ -135,139 +135,60 @@ impl From<ComponentPluginInstallationTarget> for ComponentPluginInstallationRow 
     }
 }
 
-#[async_trait]
-pub trait PluginInstallationRepo<Owner: PluginOwner, Target: PluginInstallationTarget> {
-    async fn get_all(
-        &self,
-        owner: &Owner::Row,
-        target: &Target::Row,
-    ) -> Result<Vec<PluginInstallationRecord<Owner, Target>>, RepoError>;
-
-    async fn create(
-        &self,
-        record: &PluginInstallationRecord<Owner, Target>,
-    ) -> Result<(), RepoError>;
-
-    async fn update(
-        &self,
-        owner: &Owner::Row,
-        target: &Target::Row,
-        id: &Uuid,
-        new_priority: i16,
-        new_parameters: Vec<u8>,
-    ) -> Result<(), RepoError>;
-
-    async fn delete(
-        &self,
-        owner: &Owner::Row,
-        target: &Target::Row,
-        id: &Uuid,
-    ) -> Result<(), RepoError>;
-}
-
-pub struct LoggedPluginInstallationRepo<
+/// Interface for generating the queries for a plugin installation repo - it is not the interface
+/// for the actual repo, as for components (or any other plugin installation target that requires
+/// immutable installations) the actual implementation needs to be in transactional context of
+/// the target repo.
+pub trait PluginInstallationRepoQueries<
+    DB: Database,
     Owner: PluginOwner,
     Target: PluginInstallationTarget,
-    Repo: PluginInstallationRepo<Owner, Target>,
-> {
-    repo: Repo,
-    _owner: PhantomData<Owner>,
-    _target: PhantomData<Target>,
-}
-
-impl<
-        Owner: PluginOwner,
-        Target: PluginInstallationTarget,
-        Repo: PluginInstallationRepo<Owner, Target>,
-    > LoggedPluginInstallationRepo<Owner, Target, Repo>
+>
 {
-    pub fn new(repo: Repo) -> Self {
-        Self {
-            repo,
-            _owner: PhantomData,
-            _target: PhantomData,
-        }
-    }
+    fn get_all<'a>(&self, owner: &'a Owner::Row, target: &'a Target::Row) -> QueryBuilder<'a, DB>;
 
-    fn logged<R>(message: &'static str, result: Result<R, RepoError>) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!("{}", message),
-            Err(error) => error!(error = error.to_string(), "{message}"),
-        }
-        result
-    }
-}
-
-#[async_trait]
-impl<
-        Owner: PluginOwner,
-        Target: PluginInstallationTarget,
-        Repo: PluginInstallationRepo<Owner, Target> + Sync,
-    > PluginInstallationRepo<Owner, Target> for LoggedPluginInstallationRepo<Owner, Target, Repo>
-{
-    async fn get_all(
+    fn create<'a>(
         &self,
-        owner: &Owner::Row,
-        target: &Target::Row,
-    ) -> Result<Vec<PluginInstallationRecord<Owner, Target>>, RepoError> {
-        let result = self.repo.get_all(owner, target).await;
-        Self::logged("get_all", result)
-    }
+        record: &'a PluginInstallationRecord<Owner, Target>,
+    ) -> QueryBuilder<'a, DB>;
 
-    async fn create(
+    fn update<'a>(
         &self,
-        record: &PluginInstallationRecord<Owner, Target>,
-    ) -> Result<(), RepoError> {
-        let result = self.repo.create(record).await;
-        Self::logged("create", result)
-    }
-
-    async fn update(
-        &self,
-        owner: &Owner::Row,
-        target: &Target::Row,
-        id: &Uuid,
+        owner: &'a Owner::Row,
+        target: &'a Target::Row,
+        id: &'a Uuid,
         new_priority: i16,
         new_parameters: Vec<u8>,
-    ) -> Result<(), RepoError> {
-        let result = self
-            .repo
-            .update(owner, target, id, new_priority, new_parameters)
-            .await;
-        Self::logged("update", result)
-    }
+    ) -> QueryBuilder<'a, DB>;
 
-    async fn delete(
+    fn delete<'a>(
         &self,
-        owner: &Owner::Row,
-        target: &Target::Row,
-        id: &Uuid,
-    ) -> Result<(), RepoError> {
-        let result = self.repo.delete(owner, target, id).await;
-        Self::logged("delete", result)
-    }
+        owner: &'a Owner::Row,
+        target: &'a Target::Row,
+        id: &'a Uuid,
+    ) -> QueryBuilder<'a, DB>;
 }
 
-pub struct DbPluginInstallationRepo<DB: Database> {
+pub struct DbPluginInstallationRepoQueries<DB: Database> {
     db_pool: Arc<Pool<DB>>,
 }
 
-impl<DB: Database> DbPluginInstallationRepo<DB> {
+impl<DB: Database> DbPluginInstallationRepoQueries<DB> {
     pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
         Self { db_pool }
     }
 }
 
 #[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
-#[async_trait]
-impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRepo<Owner, Target>
-    for DbPluginInstallationRepo<sqlx::Postgres>
+impl<Owner: PluginOwner, Target: PluginInstallationTarget>
+    PluginInstallationRepoQueries<sqlx::Postgres, Owner, Target>
+    for DbPluginInstallationRepoQueries<sqlx::Postgres>
 {
-    async fn get_all(
+    fn get_all<'a>(
         &self,
-        owner: &Owner::Row,
-        target: &Target::Row,
-    ) -> Result<Vec<PluginInstallationRecord<Owner, Target>>, RepoError> {
+        owner: &'a Owner::Row,
+        target: &'a Target::Row,
+    ) -> QueryBuilder<'a, sqlx::Postgres> {
         let mut query = QueryBuilder::new("SELECT ");
 
         let mut column_list = query.separated(", ");
@@ -290,16 +211,13 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
 
         debug!("Generated query for get_all: {}", query.sql());
 
-        Ok(query
-            .build_query_as::<PluginInstallationRecord<Owner, Target>>()
-            .fetch_all(self.db_pool.deref())
-            .await?)
+        query
     }
 
-    async fn create(
+    fn create<'a>(
         &self,
-        record: &PluginInstallationRecord<Owner, Target>,
-    ) -> Result<(), RepoError> {
+        record: &'a PluginInstallationRecord<Owner, Target>,
+    ) -> QueryBuilder<'a, sqlx::Postgres> {
         let mut query = QueryBuilder::new("INSERT INTO ");
         query.push(Target::table_name());
         query.push(" (");
@@ -329,19 +247,17 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
 
         debug!("Generated query for create: {}", query.sql());
 
-        query.build().execute(self.db_pool.deref()).await?;
-
-        Ok(())
+        query
     }
 
-    async fn update(
+    fn update<'a>(
         &self,
-        owner: &Owner::Row,
-        target: &Target::Row,
-        id: &Uuid,
+        owner: &'a Owner::Row,
+        target: &'a Target::Row,
+        id: &'a Uuid,
         new_priority: i16,
         new_parameters: Vec<u8>,
-    ) -> Result<(), RepoError> {
+    ) -> QueryBuilder<'a, sqlx::Postgres> {
         let mut query = QueryBuilder::new("UPDATE ");
         query.push(Target::table_name());
         query.push(" SET priority = ");
@@ -357,17 +273,17 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
 
         debug!("Generated query for update: {}", query.sql());
 
-        query.build().execute(self.db_pool.deref()).await?;
+        // query.build().execute(self.db_pool.deref()).await?;
 
-        Ok(())
+        query
     }
 
-    async fn delete(
+    fn delete<'a>(
         &self,
-        owner: &Owner::Row,
-        target: &Target::Row,
-        id: &Uuid,
-    ) -> Result<(), RepoError> {
+        owner: &'a Owner::Row,
+        target: &'a Target::Row,
+        id: &'a Uuid,
+    ) -> QueryBuilder<'a, sqlx::Postgres> {
         let mut query = QueryBuilder::new("DELETE FROM ");
         query.push(Target::table_name());
         query.push(" WHERE installation_id = ");
@@ -379,8 +295,8 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
 
         debug!("Generated query for delete: {}", query.sql());
 
-        query.build().execute(self.db_pool.deref()).await?;
+        // query.build().execute(self.db_pool.deref()).await?;
 
-        Ok(())
+        query
     }
 }

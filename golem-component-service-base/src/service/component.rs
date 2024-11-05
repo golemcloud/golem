@@ -26,6 +26,7 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
+use golem_common::model::plugin::DefaultPluginOwner;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
@@ -240,14 +241,14 @@ pub trait ComponentService<Namespace> {
 }
 
 pub struct ComponentServiceDefault {
-    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
     object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
     component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
 }
 
 impl ComponentServiceDefault {
     pub fn new(
-        component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+        component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
         object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
         component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
     ) -> Self {
@@ -450,7 +451,7 @@ where
         let metadata = ComponentMetadata::analyse_component(&data)
             .map_err(ComponentError::ComponentProcessingError)?;
 
-        let constraints = self.component_repo.get_constraint(component_id).await?;
+        let constraints = self.component_repo.get_constraint(&component_id.0).await?;
 
         let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
 
@@ -758,7 +759,7 @@ where
             .await?;
         let result = self
             .component_repo
-            .get_constraint(&component_constraint.component_id)
+            .get_constraint(&component_constraint.component_id.0)
             .await?
             .ok_or(ComponentError::ComponentConstraintCreateError(format!(
                 "Failed to create constraints for {}",
@@ -778,7 +779,7 @@ where
         &self,
         component_id: &ComponentId,
     ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
-        let result = self.component_repo.get_constraint(component_id).await?;
+        let result = self.component_repo.get_constraint(&component_id.0).await?;
         Ok(result)
     }
 }

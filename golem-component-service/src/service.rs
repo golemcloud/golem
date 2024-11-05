@@ -16,14 +16,10 @@ use crate::config::ComponentServiceConfig;
 use golem_common::config::DbConfig;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_component_service_base::model::ComponentPluginInstallationTarget;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
 use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
-use golem_component_service_base::repo::plugin_installation::{
-    DbPluginInstallationRepo, LoggedPluginInstallationRepo, PluginInstallationRepo,
-};
 use golem_component_service_base::service::component::{ComponentService, ComponentServiceDefault};
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
@@ -49,67 +45,37 @@ pub struct Services {
 
 impl Services {
     pub async fn new(config: &ComponentServiceConfig) -> Result<Services, String> {
-        // TODO: shared db pool for the repos
-
-        let component_repo: Arc<dyn ComponentRepo + Sync + Send> = match config.db.clone() {
-            DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
+        let (component_repo, plugin_repo) = match &config.db {
+            DbConfig::Postgres(db_config) => {
+                let db_pool = db::create_postgres_pool(db_config)
                     .await
                     .map_err(|e| e.to_string())?;
-                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
-                    db_pool.clone().into(),
-                )))
-            }
-            DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
-                    db_pool.clone().into(),
-                )))
-            }
-        };
 
-        let plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Sync + Send> =
-            match config.db.clone() {
-                DbConfig::Postgres(c) => {
-                    let db_pool = db::create_postgres_pool(&c)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
+                let component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send> =
+                    Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
                         db_pool.clone().into(),
-                    )))
-                }
-                DbConfig::Sqlite(c) => {
-                    let db_pool = db::create_sqlite_pool(&c)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
-                        db_pool.clone().into(),
-                    )))
-                }
-            };
-
-        let component_plugin_installations_repo: Arc<
-            dyn PluginInstallationRepo<DefaultPluginOwner, ComponentPluginInstallationTarget>
-                + Sync
-                + Send,
-        > = match config.db.clone() {
-            DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Arc::new(LoggedPluginInstallationRepo::new(
-                    DbPluginInstallationRepo::new(db_pool.clone().into()),
-                ))
+                    )));
+                let plugin_repo: Arc<
+                    dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
+                    db_pool.clone().into(),
+                )));
+                (component_repo, plugin_repo)
             }
-            DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
+            DbConfig::Sqlite(db_config) => {
+                let db_pool = db::create_sqlite_pool(db_config)
                     .await
                     .map_err(|e| e.to_string())?;
-                Arc::new(LoggedPluginInstallationRepo::new(
-                    DbPluginInstallationRepo::new(db_pool.clone().into()),
-                ))
+                let component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send> =
+                    Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
+                        db_pool.clone().into(),
+                    )));
+                let plugin_repo: Arc<
+                    dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
+                    db_pool.clone().into(),
+                )));
+                (component_repo, plugin_repo)
             }
         };
 
@@ -152,7 +118,6 @@ impl Services {
             dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
         > = Arc::new(PluginServiceDefault::new(
             plugin_repo,
-            component_plugin_installations_repo,
             component_service.clone(),
         ));
 
