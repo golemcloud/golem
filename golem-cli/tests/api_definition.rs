@@ -20,12 +20,14 @@ use crate::Tracing;
 use assert2::assert;
 use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
+use golem_cli::model::ApiDefinitionFileFormat;
 use golem_client::model::{
     GolemWorkerBinding, GolemWorkerBindingWithTypeInfo, HttpApiDefinitionRequest,
     HttpApiDefinitionWithTypeInfo, MethodPattern, RibInputTypeInfo, Route, RouteWithTypeInfo,
     VersionedComponentId,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
@@ -54,7 +56,10 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
         format!("api_definition_json_import{suffix}"),
         TestType::IntegrationTest,
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
-            api_definition_json_import((deps, name.to_string(), cli.with_args(short)))
+            api_definition_import(
+                (deps, name.to_string(), cli.with_args(short)),
+                &ApiDefinitionFileFormat::Json,
+            )
         }
     );
     add_test!(
@@ -62,23 +67,54 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
         format!("api_definition_yaml_import{suffix}"),
         TestType::IntegrationTest,
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
-            api_definition_yaml_import((deps, name.to_string(), cli.with_args(short)))
+            api_definition_import(
+                (deps, name.to_string(), cli.with_args(short)),
+                &ApiDefinitionFileFormat::Yaml,
+            )
         }
     );
     add_test!(
         r,
-        format!("api_definition_add{suffix}"),
+        format!("api_definition_yaml_add{suffix}"),
         TestType::IntegrationTest,
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
-            api_definition_add((deps, name.to_string(), cli.with_args(short)))
+            api_definition_add(
+                (deps, name.to_string(), cli.with_args(short)),
+                &ApiDefinitionFileFormat::Yaml,
+            )
         }
     );
     add_test!(
         r,
-        format!("api_definition_update{suffix}"),
+        format!("api_definition_json_add{suffix}"),
         TestType::IntegrationTest,
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
-            api_definition_update((deps, name.to_string(), cli.with_args(short)))
+            api_definition_add(
+                (deps, name.to_string(), cli.with_args(short)),
+                &ApiDefinitionFileFormat::Json,
+            )
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_yaml_update{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_update(
+                (deps, name.to_string(), cli.with_args(short)),
+                &ApiDefinitionFileFormat::Yaml,
+            )
+        }
+    );
+    add_test!(
+        r,
+        format!("api_definition_json_update{suffix}"),
+        TestType::IntegrationTest,
+        move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
+            api_definition_update(
+                (deps, name.to_string(), cli.with_args(short)),
+                &ApiDefinitionFileFormat::Json,
+            )
         }
     );
     add_test!(
@@ -131,10 +167,20 @@ pub fn make_shopping_cart_component(
     add_component_from_file(deps, component_name, cli, "shopping-cart.wasm")
 }
 
-fn make_file(id: &str, json: &serde_json::value::Value) -> anyhow::Result<PathBuf> {
-    let text = serde_json::to_string_pretty(json)?;
+pub fn make_json_file<T: Serialize>(id: &str, value: &T) -> anyhow::Result<PathBuf> {
+    let text = serde_json::to_string_pretty(value)?;
 
-    let path = PathBuf::from(format!("../target/api-definition-{id}.json"));
+    let path = PathBuf::from(format!("../target/{id}.json"));
+
+    fs::write(&path, text)?;
+
+    Ok(path)
+}
+
+pub fn make_yaml_file<T: Serialize>(id: &str, value: &T) -> anyhow::Result<PathBuf> {
+    let text = serde_yaml::to_string(value)?;
+
+    let path = PathBuf::from(format!("../target/{id}.yaml"));
 
     fs::write(&path, text)?;
 
@@ -166,19 +212,13 @@ fn golem_def_with_response(
     }
 }
 
-pub fn golem_json_def(id: &str, component_id: &str) -> HttpApiDefinitionRequest {
+pub fn native_api_definition_request(id: &str, component_id: &str) -> HttpApiDefinitionRequest {
     golem_def_with_response(
         id,
         component_id,
         "let x = golem:it/api.{checkout}();\nlet status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
             .to_string(),
     )
-}
-
-pub fn make_golem_file(def: &HttpApiDefinitionRequest) -> anyhow::Result<PathBuf> {
-    let golem_json = serde_json::to_value(def)?;
-
-    make_file(&def.id, &golem_json)
 }
 
 pub fn make_open_api_yaml_file(
@@ -193,8 +233,8 @@ openapi: "3.0.0"
 info:
   title: "Sample API"
   version: "1.0.3"
-x-golem-api-definition-id: "{component_id}"
-x-golem-api-definition-version: "0.1.1"
+x-golem-api-definition-id: "{id}"
+x-golem-api-definition-version: "0.1.0"
 paths:
   "/{{user-id}}/get-cart-contents":
     x-golem-worker-bridge:
@@ -226,7 +266,7 @@ paths:
     let open_api_yaml: serde_json::Value = serde_yaml::from_str(&yaml_open_api_str)?;
 
     // Implement your `make_file` logic here to save `open_api_yaml` to a file
-    make_file(id, &open_api_yaml)
+    make_yaml_file(id, &open_api_yaml)
 }
 
 pub fn make_open_api_json_file(
@@ -304,10 +344,10 @@ pub fn make_open_api_json_file(
         }
     );
 
-    make_file(id, &open_api_json)
+    make_json_file(id, &open_api_json)
 }
 
-pub fn to_definition(
+pub fn to_api_definition_with_type_info(
     request: HttpApiDefinitionRequest,
     created_at: Option<DateTime<Utc>>,
 ) -> HttpApiDefinitionWithTypeInfo {
@@ -350,19 +390,32 @@ fn api_definition_import(
         String,
         CliLive,
     ),
-    make_open_api_file: fn(&str, &str, u64) -> anyhow::Result<PathBuf>,
+    api_definition_format: &ApiDefinitionFileFormat,
 ) -> anyhow::Result<()> {
-    let component_name = format!("api_definition_import{name}");
+    let component_name = format!("api_definition_{api_definition_format}_import{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
     let component_version = component.component_version;
-    let path = make_open_api_file(&component_name, &component_id, component_version)?;
 
-    let res: HttpApiDefinitionWithTypeInfo =
-        cli.run(&["api-definition", "import", path.to_str().unwrap()])?;
+    let res: HttpApiDefinitionWithTypeInfo = match api_definition_format {
+        ApiDefinitionFileFormat::Json => {
+            let path = make_open_api_json_file(&component_name, &component_id, component_version)?;
+            cli.run(&["api-definition", "import", path.to_str().unwrap()])?
+        }
+        ApiDefinitionFileFormat::Yaml => {
+            let path = make_open_api_yaml_file(&component_name, &component_id, component_version)?;
+            cli.run(&[
+                "api-definition",
+                "import",
+                "--def-format",
+                "yaml",
+                path.to_str().unwrap(),
+            ])?
+        }
+    };
 
-    let expected = to_definition(
-        golem_json_def(&component_name, &component_id),
+    let expected = to_api_definition_with_type_info(
+        native_api_definition_request(&component_name, &component_id),
         res.created_at,
     );
 
@@ -371,43 +424,38 @@ fn api_definition_import(
     Ok(())
 }
 
-fn api_definition_json_import(
-    (deps, name, cli): (
-        &(impl TestDependencies + Send + Sync + 'static),
-        String,
-        CliLive,
-    ),
-) -> anyhow::Result<()> {
-    api_definition_import((deps, name, cli), make_open_api_json_file)
-}
-
-fn api_definition_yaml_import(
-    (deps, name, cli): (
-        &(impl TestDependencies + Send + Sync + 'static),
-        String,
-        CliLive,
-    ),
-) -> anyhow::Result<()> {
-    api_definition_import((deps, name, cli), make_open_api_yaml_file)
-}
-
 fn api_definition_add(
     (deps, name, cli): (
         &(impl TestDependencies + Send + Sync + 'static),
         String,
         CliLive,
     ),
+    api_definition_format: &ApiDefinitionFileFormat,
 ) -> anyhow::Result<()> {
-    let component_name = format!("api_definition_add{name}");
+    let component_name = format!("api_definition_{api_definition_format}_add{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_json_def(&component_name, &component_id);
-    let path = make_golem_file(&def)?;
+    let def = native_api_definition_request(&component_name, &component_id);
 
-    let res: HttpApiDefinitionWithTypeInfo =
-        cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
+    let res: HttpApiDefinitionWithTypeInfo = match api_definition_format {
+        ApiDefinitionFileFormat::Json => {
+            let path = make_json_file(&def.id, &def)?;
+            cli.run(&["api-definition", "add", path.to_str().unwrap()])?
+        }
+        ApiDefinitionFileFormat::Yaml => {
+            let path = make_yaml_file(&def.id, &def)?;
+            cli.run(&[
+                "api-definition",
+                "add",
+                "--def-format",
+                "yaml",
+                path.to_str().unwrap(),
+            ])?
+        }
+    };
 
-    let expected = to_definition(def, res.created_at);
+    let expected = to_api_definition_with_type_info(def, res.created_at);
+
     assert_eq!(res, expected);
 
     Ok(())
@@ -419,13 +467,14 @@ fn api_definition_update(
         String,
         CliLive,
     ),
+    api_definition_format: &ApiDefinitionFileFormat,
 ) -> anyhow::Result<()> {
-    let component_name = format!("api_definition_update{name}");
+    let component_name = format!("api_definition_{api_definition_format}_update{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
 
-    let def = golem_json_def(&component_name, &component_id);
-    let path = make_golem_file(&def)?;
+    let def = native_api_definition_request(&component_name, &component_id);
+    let path = make_json_file(&def.id, &def)?;
     let _: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
@@ -435,11 +484,25 @@ fn api_definition_update(
         "let status: u64 = 200;\n{headers: {ContentType: \"json\", userid: \"bar\"}, body: \"baz\", status: status}"
             .to_string(),
     );
-    let path = make_golem_file(&updated)?;
-    let res: HttpApiDefinitionWithTypeInfo =
-        cli.run(&["api-definition", "update", path.to_str().unwrap()])?;
 
-    let expected = to_definition(updated, res.created_at);
+    let res: HttpApiDefinitionWithTypeInfo = match api_definition_format {
+        ApiDefinitionFileFormat::Json => {
+            let path = make_json_file(&updated.id, &updated)?;
+            cli.run(&["api-definition", "update", path.to_str().unwrap()])?
+        }
+        ApiDefinitionFileFormat::Yaml => {
+            let path = make_yaml_file(&updated.id, &updated)?;
+            cli.run(&[
+                "api-definition",
+                "update",
+                "--def-format",
+                "yaml",
+                path.to_str().unwrap(),
+            ])?
+        }
+    };
+
+    let expected = to_api_definition_with_type_info(updated, res.created_at);
 
     assert_eq!(res, expected);
 
@@ -457,14 +520,14 @@ fn api_definition_update_immutable(
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
 
-    let mut def = golem_json_def(&component_name, &component_id);
+    let mut def = native_api_definition_request(&component_name, &component_id);
     def.draft = false;
-    let path = make_golem_file(&def)?;
+    let path = make_json_file(&def.id, &def)?;
     let _: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
 
     let updated = golem_def_with_response(&component_name, &component_id, "${let status: u64 = 200; {headers: {ContentType: \"json\", userid: \"bar\"}, body: worker.response, status: status}}".to_string());
-    let path = make_golem_file(&updated)?;
+    let path = make_json_file(&updated.id, &updated)?;
     let res = cli.run_string(&["api-definition", "update", path.to_str().unwrap()]);
 
     assert!(res.is_err());
@@ -482,8 +545,8 @@ fn api_definition_list(
     let component_name = format!("api_definition_list{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_json_def(&component_name, &component_id);
-    let path = make_golem_file(&def)?;
+    let def = native_api_definition_request(&component_name, &component_id);
+    let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -491,7 +554,7 @@ fn api_definition_list(
     let res: Vec<HttpApiDefinitionWithTypeInfo> = cli.run(&["api-definition", "list"])?;
 
     let found = res.into_iter().find(|d| {
-        let e = to_definition(def.clone(), d.created_at);
+        let e = to_api_definition_with_type_info(def.clone(), d.created_at);
         d == &e
     });
 
@@ -510,8 +573,8 @@ fn api_definition_list_versions(
     let component_name = format!("api_definition_list_versions{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_json_def(&component_name, &component_id);
-    let path = make_golem_file(&def)?;
+    let def = native_api_definition_request(&component_name, &component_id);
+    let path = make_json_file(&def.id, &def)?;
     let cfg = &cli.config;
 
     let _: HttpApiDefinitionWithTypeInfo =
@@ -527,7 +590,7 @@ fn api_definition_list_versions(
     assert_eq!(res.len(), 1);
 
     let res: HttpApiDefinitionWithTypeInfo = res.first().unwrap().clone();
-    let expected = to_definition(def, res.created_at);
+    let expected = to_api_definition_with_type_info(def, res.created_at);
 
     assert_eq!(res, expected);
 
@@ -544,8 +607,8 @@ fn api_definition_get(
     let component_name = format!("api_definition_get{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_json_def(&component_name, &component_id);
-    let path = make_golem_file(&def)?;
+    let def = native_api_definition_request(&component_name, &component_id);
+    let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -561,7 +624,7 @@ fn api_definition_get(
         "0.1.0",
     ])?;
 
-    let expected = to_definition(def, res.created_at);
+    let expected = to_api_definition_with_type_info(def, res.created_at);
 
     assert_eq!(res, expected);
 
@@ -578,8 +641,8 @@ fn api_definition_delete(
     let component_name = format!("api_definition_delete{name}");
     let component = make_shopping_cart_component(deps, &component_name, &cli)?;
     let component_id = component.component_urn.id.0.to_string();
-    let def = golem_json_def(&component_name, &component_id);
-    let path = make_golem_file(&def)?;
+    let def = native_api_definition_request(&component_name, &component_id);
+    let path = make_json_file(&def.id, &def)?;
 
     let _: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", path.to_str().unwrap()])?;
@@ -595,7 +658,7 @@ fn api_definition_delete(
         "0.1.0",
     ])?;
 
-    let expected = to_definition(def, res.created_at);
+    let expected = to_api_definition_with_type_info(def, res.created_at);
 
     assert_eq!(res, expected);
 

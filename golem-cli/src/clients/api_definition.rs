@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrStdin};
+use crate::model::{
+    ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrStdin,
+};
 use async_trait::async_trait;
 use golem_client::model::HttpApiDefinitionWithTypeInfo;
 
@@ -35,16 +37,19 @@ pub trait ApiDefinitionClient {
         &self,
         path: PathBufOrStdin,
         project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError>;
     async fn update(
         &self,
         path: PathBufOrStdin,
         project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError>;
     async fn import(
         &self,
         path: PathBufOrStdin,
         project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError>;
     async fn delete(
         &self,
