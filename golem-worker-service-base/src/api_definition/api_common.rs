@@ -1,13 +1,13 @@
 use std::fmt::Debug;
 use std::fmt::Display;
 
-use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use bincode::{Decode, Encode};
 use poem_openapi::NewType;
 use serde::{Deserialize, Serialize};
 
 use crate::worker_binding::GolemWorkerBinding;
 use poem_openapi::Object;
+use crate::service::worker_gateway::api_definition::ApiDefinitionIdWithVersion;
 
 // Common to API definitions regardless of different protocols
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]

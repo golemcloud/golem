@@ -31,7 +31,6 @@ use crate::http::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
-use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use crate::service::component::ComponentService;
 use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
@@ -40,6 +39,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use rib::WorkerFunctionsInRib;
 use std::fmt::{Debug, Display};
+use crate::service::worker_gateway::api_definition::ApiDefinitionIdWithVersion;
 
 #[async_trait]
 pub trait ApiDeploymentService<AuthCtx, Namespace> {
@@ -645,7 +645,7 @@ where
 mod tests {
     use test_r::test;
 
-    use crate::service::api_deployment::ApiDeploymentError;
+    use crate::service::worker_gateway::api_deployment::ApiDeploymentError;
     use golem_common::SafeDisplay;
     use golem_service_base::repo::RepoError;
 

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
 
 use crate::http::router::{Router, RouterPattern};
-use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
+use crate::service::worker_gateway::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]

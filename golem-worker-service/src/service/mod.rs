@@ -14,13 +14,13 @@ use golem_worker_service_base::http::InputHttpRequest;
 
 use golem_worker_service_base::repo::api_definition;
 use golem_worker_service_base::repo::api_deployment;
-use golem_worker_service_base::service::api_definition::{
+use golem_worker_service_base::service::worker_gateway::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::worker_gateway::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
 };
-use golem_worker_service_base::service::api_definition_validator::ApiDefinitionValidatorService;
+use golem_worker_service_base::service::worker_gateway::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::component::RemoteComponentService;
 use golem_worker_service_base::service::http::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
@@ -34,7 +34,7 @@ use golem_common::config::RetryConfig;
 
 use golem_common::config::DbConfig;
 use golem_service_base::db;
-use golem_worker_service_base::service::api_deployment::{
+use golem_worker_service_base::service::worker_gateway::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
 };
 use std::sync::Arc;

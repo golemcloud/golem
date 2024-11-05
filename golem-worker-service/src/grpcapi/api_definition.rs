@@ -35,7 +35,7 @@ use golem_worker_service_base::{
 #[derive(Clone)]
 pub struct GrpcApiDefinitionService {
     definition_service: Arc<
-        dyn golem_worker_service_base::service::api_definition::ApiDefinitionService<
+        dyn golem_worker_service_base::service::worker_gateway::api_definition::ApiDefinitionService<
                 EmptyAuthCtx,
                 DefaultNamespace,
                 RouteValidationError,
@@ -47,7 +47,7 @@ pub struct GrpcApiDefinitionService {
 impl GrpcApiDefinitionService {
     pub fn new(
         definition_service: Arc<
-            dyn golem_worker_service_base::service::api_definition::ApiDefinitionService<
+            dyn golem_worker_service_base::service::worker_gateway::api_definition::ApiDefinitionService<
                     EmptyAuthCtx,
                     DefaultNamespace,
                     RouteValidationError,

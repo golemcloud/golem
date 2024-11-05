@@ -14,7 +14,6 @@
 
 use crate::api_definition::ApiSite;
 use crate::repo::api_definition::ApiDefinitionRecord;
-use crate::service::api_definition::ApiDefinitionIdWithVersion;
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_service_base::repo::RepoError;
@@ -23,6 +22,7 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 use tracing::{debug, error};
+use crate::service::worker_gateway::api_definition::ApiDefinitionIdWithVersion;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDeploymentRecord {

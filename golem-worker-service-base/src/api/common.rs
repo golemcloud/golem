@@ -147,10 +147,9 @@ impl<'a> TraceErrorKind for ApiDefinitionTraceErrorKind<'a> {
 
 mod conversion {
     use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
-    use crate::service::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
-    use crate::service::api_definition_validator::ValidationErrors;
-    use crate::service::api_deployment::ApiDeploymentError;
     use crate::service::http::http_api_definition_validator::RouteValidationError;
+    use crate::service::worker_gateway::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
+    use crate::service::worker_gateway::api_deployment::ApiDeploymentError as ApiDeploymentServiceError;
     use golem_api_grpc::proto::golem::common::ErrorsBody;
     use golem_api_grpc::proto::golem::{
         apidefinition,
@@ -160,6 +159,7 @@ mod conversion {
     use golem_common::SafeDisplay;
     use poem_openapi::payload::Json;
     use std::fmt::Display;
+    use crate::service::worker_gateway::api_definition_validator::ValidationErrors;
 
     impl From<ApiDefinitionServiceError<RouteValidationError>> for ApiEndpointError {
         fn from(error: ApiDefinitionServiceError<RouteValidationError>) -> Self {
@@ -191,26 +191,26 @@ mod conversion {
         }
     }
 
-    impl<Namespace: Display> From<ApiDeploymentError<Namespace>> for ApiEndpointError {
-        fn from(error: ApiDeploymentError<Namespace>) -> Self {
+    impl<Namespace: Display> From<ApiDeploymentServiceError<Namespace>> for ApiEndpointError {
+        fn from(error: ApiDeploymentServiceError<Namespace>) -> Self {
             match error {
-                ApiDeploymentError::ApiDefinitionNotFound(_, _) => {
+                ApiDeploymentServiceError::ApiDefinitionNotFound(_, _) => {
                     ApiEndpointError::not_found(error)
                 }
-                ApiDeploymentError::ApiDeploymentNotFound(_, _) => {
+                ApiDeploymentServiceError::ApiDeploymentNotFound(_, _) => {
                     ApiEndpointError::not_found(error)
                 }
-                ApiDeploymentError::ApiDeploymentConflict(_) => {
+                ApiDeploymentServiceError::ApiDeploymentConflict(_) => {
                     ApiEndpointError::already_exists(error)
                 }
-                ApiDeploymentError::ApiDefinitionsConflict(_) => {
+                ApiDeploymentServiceError::ApiDefinitionsConflict(_) => {
                     ApiEndpointError::bad_request(error)
                 }
-                ApiDeploymentError::InternalRepoError(_) => ApiEndpointError::internal(error),
-                ApiDeploymentError::InternalConversionError { .. } => {
+                ApiDeploymentServiceError::InternalRepoError(_) => ApiEndpointError::internal(error),
+                ApiDeploymentServiceError::InternalConversionError { .. } => {
                     ApiEndpointError::internal(error)
                 }
-                ApiDeploymentError::ComponentConstraintCreateError(_) => {
+                ApiDeploymentServiceError::ComponentConstraintCreateError(_) => {
                     ApiEndpointError::internal(error)
                 }
             }

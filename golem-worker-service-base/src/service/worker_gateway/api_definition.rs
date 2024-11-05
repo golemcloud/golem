@@ -30,7 +30,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use tracing::{error, info};
-use crate::service::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
+use crate::service::worker_gateway::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use crate::service::component::ComponentService;
 
 pub type ApiResult<T, E> = Result<T, ApiDefinitionError<E>>;

@@ -16,11 +16,11 @@ use golem_worker_service_base::api_definition::{
     ApiDefinitionId, ApiDeploymentRequest, ApiSite, ApiSiteString, ApiVersion,
 };
 use golem_worker_service_base::repo::{api_definition, api_deployment};
-use golem_worker_service_base::service::api_definition::{
+use golem_worker_service_base::service::worker_gateway::api_definition::{
     ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,
     ApiDefinitionServiceDefault,
 };
-use golem_worker_service_base::service::api_deployment::{
+use golem_worker_service_base::service::worker_gateway::api_deployment::{
     ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
 };
 use golem_worker_service_base::service::component::{ComponentResult, ComponentService};

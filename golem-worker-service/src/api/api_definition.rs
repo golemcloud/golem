@@ -11,7 +11,7 @@ use golem_worker_service_base::api_definition::http::{
     get_api_definition, OpenApiDefinitionRequest,
 };
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::service::api_definition::ApiDefinitionService;
+use golem_worker_service_base::service::worker_gateway::api_definition::ApiDefinitionService;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
@@ -317,7 +317,7 @@ mod test {
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
     };
     use golem_worker_service_base::repo::api_deployment;
-    use golem_worker_service_base::service::api_definition::ApiDefinitionServiceDefault;
+    use golem_worker_service_base::service::worker_gateway::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::component::ComponentResult;
     use golem_worker_service_base::service::http::http_api_definition_validator::HttpApiDefinitionValidator;
     use http::StatusCode;

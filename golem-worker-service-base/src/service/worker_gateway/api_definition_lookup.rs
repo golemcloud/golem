@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::api_definition::http::CompiledHttpApiDefinition;
 use crate::http::InputHttpRequest;
-use crate::service::api_deployment::ApiDeploymentService;
+use crate::service::worker_gateway::api_deployment::ApiDeploymentService;
 use async_trait::async_trait;
 use tracing::error;
 
