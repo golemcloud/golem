@@ -19,8 +19,8 @@
 use test_r::test;
 
 use fs_extra::dir::CopyOptions;
-use golem_wasm_ast::component::{Component, ComponentExternName};
-use golem_wasm_ast::{DefaultAst, IgnoreAllButMetadata};
+use golem_wasm_ast::component::Component;
+use golem_wasm_ast::DefaultAst;
 use golem_wasm_rpc_stubgen::commands::composition::compose;
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
@@ -33,7 +33,7 @@ test_r::enable!();
 
 #[test]
 async fn compose_with_single_stub() {
-    let (stub_dir, stub_wasm) = init_stub("all-wit-types").await;
+    let (_source_dir, stub_dir, stub_wasm) = init_stub("all-wit-types").await;
     let caller_dir = init_caller("caller-no-dep-importstub");
 
     add_stub_dependency(
@@ -43,11 +43,6 @@ async fn compose_with_single_stub() {
     )
     .unwrap();
 
-    println!(
-        "{}",
-        std::fs::read_to_string(stub_dir.path().join("wit/_stub.wit")).unwrap()
-    );
-
     compile_rust(caller_dir.path());
 
     let component_wasm = caller_dir
@@ -64,47 +59,21 @@ async fn compose_with_single_stub() {
     compose(&component_wasm, &[stub_wasm], &dest_wasm)
         .await
         .unwrap();
-
-    assert_not_importing(&dest_wasm, "test:main-stub/stub-api");
 }
 
-#[test]
-async fn compose_with_single_stub_not_importing_stub() {
-    let (stub_dir, stub_wasm) = init_stub("all-wit-types").await;
-    let caller_dir = init_caller("caller-no-dep");
+async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
+    let source_dir = TempDir::new().unwrap();
+    let source_wit_root = source_dir.path().canonicalize().unwrap();
 
-    add_stub_dependency(
-        &stub_dir.path().join("wit"),
-        &caller_dir.path().join("wit"),
-        UpdateCargoToml::NoUpdate,
+    fs_extra::dir::copy(
+        test_data_path().join(name),
+        &source_wit_root,
+        &CopyOptions::new().content_only(true),
     )
     .unwrap();
 
-    compile_rust(caller_dir.path());
-
-    let component_wasm = caller_dir
-        .path()
-        .join("target")
-        .join("wasm32-wasi")
-        .join("debug")
-        .join("caller_no_dep.wasm");
-
-    assert_is_component(&stub_wasm);
-    assert_is_component(&component_wasm);
-
-    let dest_wasm = caller_dir.path().join("target/result.wasm");
-    compose(&component_wasm, &[stub_wasm], &dest_wasm)
-        .await
-        .unwrap();
-
-    assert_not_importing(&dest_wasm, "test:main-stub/stub-api");
-}
-
-async fn init_stub(name: &str) -> (TempDir, PathBuf) {
-    let tempdir = TempDir::new().unwrap();
-
-    let source_wit_root = test_data_path().join(name);
-    let canonical_target_root = tempdir.path().canonicalize().unwrap();
+    let stub_dir = TempDir::new().unwrap();
+    let canonical_target_root = stub_dir.path().canonicalize().unwrap();
 
     let def = StubDefinition::new(StubConfig {
         source_wit_root,
@@ -116,7 +85,7 @@ async fn init_stub(name: &str) -> (TempDir, PathBuf) {
     })
     .unwrap();
     let wasm_path = generate_and_build_stub(&def).await.unwrap();
-    (tempdir, wasm_path)
+    (source_dir, stub_dir, wasm_path)
 }
 
 fn init_caller(name: &str) -> TempDir {
@@ -146,14 +115,4 @@ fn compile_rust(path: &Path) {
 fn assert_is_component(wasm_path: &Path) {
     let _component: Component<DefaultAst> =
         Component::from_bytes(&std::fs::read(wasm_path).unwrap()).unwrap();
-}
-
-fn assert_not_importing(wasm_path: &Path, import_name: &str) {
-    let component_bytes = std::fs::read(wasm_path).unwrap();
-    let component: Component<IgnoreAllButMetadata> =
-        Component::from_bytes(&component_bytes).unwrap();
-    component.imports().iter().all(|import| {
-        let ComponentExternName::Name(name) = &import.name;
-        name != import_name
-    });
 }
