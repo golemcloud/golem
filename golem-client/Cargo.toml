@@ -33,5 +33,5 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = {git = "https://github.com/golemcloud/golem-openapi-client-generator.git", branch = "support_yaml"}
+golem-openapi-client-generator = "0.0.12"
 relative-path = "1.9.2"
