@@ -22,8 +22,7 @@ use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
 use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_rpc_stubgen::wit_generate::{
-    add_stub_as_dependency_to_wit_dir, extract_main_interface_as_wit_dep, AddStubAsDepConfig,
-    UpdateCargoToml,
+    add_stub_as_dependency_to_wit_dir, AddStubAsDepConfig, UpdateCargoToml,
 };
 use golem_wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
@@ -112,7 +111,7 @@ fn all_wit_types_re_add_with_changes() {
     assert_valid_wit_root(&dest_wit_root);
     assert_has_wasm_rpc_wit_deps(&dest_wit_root);
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-interface", None), 
+        &PackageName::new("test", "main-interface", None),
         alternative_source_dir.path(),
         &alternative_stub_wit_root,
     );
@@ -573,8 +572,6 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
     )
     .unwrap();
 
-    extract_main_interface_as_wit_dep(source.path()).unwrap();
-
     let target = TempDir::new().unwrap();
     let canonical_target = target.path().canonicalize().unwrap();
 
@@ -584,6 +581,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
+        extract_source_interface_package: true,
     })
     .unwrap();
     let _ = generate_stub_wit_dir(&def).unwrap();
@@ -597,6 +595,7 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
+        extract_source_interface_package: true,
     })
     .unwrap();
     let _ = generate_stub_wit_dir(&def).unwrap();
@@ -612,17 +611,6 @@ fn init_caller(name: &str) -> TempDir {
         &CopyOptions::new().content_only(true).overwrite(true),
     )
     .unwrap();
-
-    let wit_dir = {
-        let wit_dir = temp_dir.path().join("wit");
-        if wit_dir.exists() {
-            wit_dir
-        } else {
-            temp_dir.path().to_path_buf()
-        }
-    };
-
-    extract_main_interface_as_wit_dep(&wit_dir).unwrap();
 
     temp_dir
 }

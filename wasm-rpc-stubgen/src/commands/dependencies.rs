@@ -13,8 +13,10 @@
 // limitations under the License.
 
 use crate::wit_generate;
-use crate::wit_generate::{AddStubAsDepConfig, UpdateCargoToml};
+use crate::wit_generate::AddStubAsDepConfig;
 use std::path::Path;
+
+pub use crate::wit_generate::UpdateCargoToml;
 
 pub fn add_stub_dependency(
     stub_wit_root: &Path,

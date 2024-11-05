@@ -85,6 +85,7 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
                     wasm_rpc_path_override: app.stub_wasm_rpc_path(&component_name),
                     wasm_rpc_version_override: app.stub_wasm_rpc_version(&component_name),
                 },
+                extract_source_interface_package: true // TODO: use input output dirs
             })
             .context("Failed to gather information for the stub generator")?;
 

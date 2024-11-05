@@ -55,22 +55,6 @@ pub async fn build(
     Ok(())
 }
 
-pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
-    log_action(
-        "Generating",
-        format!(
-            "stub WIT directory to {}",
-            stub_def.config.target_root.display()
-        ),
-    );
-    let _indent = LogIndent::new();
-    generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
-    add_dependencies_to_stub_wit_dir(stub_def).context("Failed to copy the dependent wit files")?;
-    stub_def
-        .resolve_target_wit()
-        .context("Failed to resolve the result WIT root")
-}
-
 pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Result<PathBuf> {
     let _ = generate_stub_wit_dir(stub_def)?;
     generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
@@ -91,4 +75,20 @@ pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Resul
             stub_def.target_crate_name().to_snake_case()
         ));
     Ok(wasm_path)
+}
+
+pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<ResolvedWitDir> {
+    log_action(
+        "Generating",
+        format!(
+            "stub WIT directory to {}",
+            stub_def.config.target_root.display()
+        ),
+    );
+    let _indent = LogIndent::new();
+    generate_stub_wit_to_target(stub_def).context("Failed to generate the stub wit file")?;
+    add_dependencies_to_stub_wit_dir(stub_def).context("Failed to copy the dependent wit files")?;
+    stub_def
+        .resolve_target_wit()
+        .context("Failed to resolve the result WIT root")
 }

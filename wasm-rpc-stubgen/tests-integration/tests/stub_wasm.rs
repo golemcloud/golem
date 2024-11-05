@@ -26,7 +26,7 @@ use golem_wasm_ast::analysis::{
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
-use golem_wasm_rpc_stubgen::stub::StubDefinition;
+use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use tempfile::tempdir;
 use wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
 
@@ -38,14 +38,14 @@ async fn all_wit_types() {
     let target_root = tempdir().unwrap();
     let canonical_target_root = target_root.path().canonicalize().unwrap();
 
-    let def = StubDefinition::new(
-        &source_wit_root,
-        &canonical_target_root,
-        &None,
-        "1.0.0",
-        &wasm_rpc_override(),
-        false,
-    )
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root,
+        target_root: canonical_target_root,
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: wasm_rpc_override(),
+        extract_source_interface_package: true,
+    })
     .unwrap();
 
     let wasm_path = generate_and_build_stub(&def).await.unwrap();

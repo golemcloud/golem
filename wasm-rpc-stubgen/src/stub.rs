@@ -13,9 +13,10 @@
 // limitations under the License.
 
 use crate::wit_encode::EncodedWitDir;
+use crate::wit_generate::extract_main_interface_as_wit_dep;
 use crate::wit_resolve::{PackageSource, ResolvedWitDir};
 use crate::{naming, WasmRpcOverride};
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use indexmap::IndexMap;
 use itertools::Itertools;
 use std::cell::OnceCell;
@@ -33,9 +34,9 @@ pub struct StubConfig {
     pub selected_world: Option<String>,
     pub stub_crate_version: String,
     pub wasm_rpc_override: WasmRpcOverride,
+    pub extract_source_interface_package: bool,
 }
 
-/// All the gathered information for generating the stub crate.
 pub struct StubDefinition {
     pub config: StubConfig,
 
@@ -53,6 +54,11 @@ pub struct StubDefinition {
 
 impl StubDefinition {
     pub fn new(config: StubConfig) -> anyhow::Result<Self> {
+        if config.extract_source_interface_package {
+            extract_main_interface_as_wit_dep(&config.source_wit_root)
+                .context("Failed to extract the source interface package")?
+        }
+
         let resolved_source = ResolvedWitDir::new(&config.source_wit_root)?;
 
         let source_world_id = resolved_source

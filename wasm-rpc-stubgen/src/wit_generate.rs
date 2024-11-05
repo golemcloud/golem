@@ -641,7 +641,7 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
     log_action(
         "Extracting",
         format!(
-            "interface package for main component in wit directory {}",
+            "interface package from main component in wit directory {}",
             wit_dir.display()
         ),
     );

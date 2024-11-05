@@ -82,7 +82,7 @@ pub struct GenerateArgs {
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
     #[clap(long, default_value_t = false)]
-    pub always_inline_types: bool,
+    pub always_inline_types: bool, // TODO: deprecated
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -128,7 +128,7 @@ pub struct BuildArgs {
     /// it from the stub WIT. This is useful for example with ComponentizeJS currently where otherwise
     /// the original component's interface would be added as an import to the final WASM.
     #[clap(long, default_value_t = false)]
-    pub always_inline_types: bool,
+    pub always_inline_types: bool, // TODO: deprecated
 }
 
 /// Adds a generated stub as a dependency to another WASM component
@@ -146,7 +146,7 @@ pub struct AddStubDependencyArgs {
     /// This command would not do anything if it detects that it would change an existing WIT file's contents at
     /// the destination. With this flag, it can be forced to overwrite those files.
     #[clap(short, long)]
-    pub overwrite: bool,
+    pub overwrite: bool, // TODO: deprecate
     /// Enables updating the Cargo.toml file in the parent directory of `dest-wit-root` with the copied
     /// dependencies.
     #[clap(short, long)]
@@ -226,6 +226,7 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
             selected_world: args.world,
             stub_crate_version: args.stub_crate_version,
             wasm_rpc_override: args.wasm_rpc_override,
+            extract_source_interface_package: true,
         }
     )
         .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
@@ -242,6 +243,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
         selected_world: args.world,
         stub_crate_version: args.stub_crate_version,
         wasm_rpc_override: args.wasm_rpc_override,
+        extract_source_interface_package: true,
     })
     .context("Failed to gather information for the stub generator")?;
 
