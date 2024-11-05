@@ -41,7 +41,7 @@ inherit_test_dep!(Tracing);
 
 #[test_dep]
 fn cli(deps: &EnvBasedTestDependencies) -> CliLive {
-    CliLive::make("api_definition", Arc::new(deps.clone())).unwrap()
+    CliLive::make("gateway_api_definition", Arc::new(deps.clone())).unwrap()
 }
 
 #[test_gen]

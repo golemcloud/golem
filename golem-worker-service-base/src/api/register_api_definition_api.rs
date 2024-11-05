@@ -1,8 +1,8 @@
-use crate::api_definition::http::{
+use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
-use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
-use crate::worker_binding::CompiledGolemWorkerBinding;
+use crate::gateway_api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
+use crate::gateway_binding::WorkerBindingCompiled;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::VersionedComponentId;
 use poem_openapi::*;
@@ -37,7 +37,7 @@ pub struct ApiDefinitionInfo {
 }
 
 // Mostly this data structures that represents the actual incoming request
-// exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
+// exist due to the presence of complicated Expr data type in gateway_api_definition::ApiDefinition.
 // Consider them to be otherwise same
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -51,7 +51,7 @@ pub struct HttpApiDefinitionRequest {
 }
 
 // Mostly this data structures that represents the actual incoming request
-// exist due to the presence of complicated Expr data type in api_definition::ApiDefinition.
+// exist due to the presence of complicated Expr data type in gateway_api_definition::ApiDefinition.
 // Consider them to be otherwise same
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -145,8 +145,8 @@ pub struct GolemWorkerBindingWithTypeInfo {
     pub idempotency_key_input: Option<RibInputTypeInfo>,
 }
 
-impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
-    fn from(value: CompiledGolemWorkerBinding) -> Self {
+impl From<WorkerBindingCompiled> for GolemWorkerBindingWithTypeInfo {
+    fn from(value: WorkerBindingCompiled) -> Self {
         let worker_binding = value.clone();
 
         GolemWorkerBindingWithTypeInfo {
@@ -173,8 +173,8 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
     }
 }
 
-impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
-    fn from(value: crate::api_definition::ApiDeployment<N>) -> Self {
+impl<N> From<crate::gateway_api_definition::ApiDeployment<N>> for ApiDeployment {
+    fn from(value: crate::gateway_api_definition::ApiDeployment<N>) -> Self {
         let api_definitions = value
             .api_definition_keys
             .into_iter()
@@ -192,11 +192,11 @@ impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
     }
 }
 
-impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {
+impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
     fn try_from(
-        value: crate::api_definition::http::HttpApiDefinition,
+        value: crate::gateway_api_definition::http::HttpApiDefinition,
     ) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
@@ -214,12 +214,12 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefiniti
     }
 }
 
-impl TryInto<crate::api_definition::http::HttpApiDefinitionRequest> for HttpApiDefinitionRequest {
+impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest> for HttpApiDefinitionRequest {
     type Error = String;
 
     fn try_into(
         self,
-    ) -> Result<crate::api_definition::http::HttpApiDefinitionRequest, Self::Error> {
+    ) -> Result<crate::gateway_api_definition::http::HttpApiDefinitionRequest, Self::Error> {
         let mut routes = Vec::new();
 
         for route in self.routes {
@@ -227,7 +227,7 @@ impl TryInto<crate::api_definition::http::HttpApiDefinitionRequest> for HttpApiD
             routes.push(v);
         }
 
-        Ok(crate::api_definition::http::HttpApiDefinitionRequest {
+        Ok(crate::gateway_api_definition::http::HttpApiDefinitionRequest {
             id: self.id,
             version: self.version,
             routes,
@@ -236,10 +236,10 @@ impl TryInto<crate::api_definition::http::HttpApiDefinitionRequest> for HttpApiD
     }
 }
 
-impl TryFrom<crate::api_definition::http::Route> for Route {
+impl TryFrom<crate::gateway_api_definition::http::Route> for Route {
     type Error = String;
 
-    fn try_from(value: crate::api_definition::http::Route) -> Result<Self, Self::Error> {
+    fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
         let binding = GolemWorkerBinding::try_from(value.binding)?;
 
@@ -251,14 +251,14 @@ impl TryFrom<crate::api_definition::http::Route> for Route {
     }
 }
 
-impl TryInto<crate::api_definition::http::Route> for Route {
+impl TryInto<crate::gateway_api_definition::http::Route> for Route {
     type Error = String;
 
-    fn try_into(self) -> Result<crate::api_definition::http::Route, Self::Error> {
+    fn try_into(self) -> Result<crate::gateway_api_definition::http::Route, Self::Error> {
         let path = AllPathPatterns::parse(self.path.as_str()).map_err(|e| e.to_string())?;
         let binding = self.binding.try_into()?;
 
-        Ok(crate::api_definition::http::Route {
+        Ok(crate::gateway_api_definition::http::Route {
             method: self.method,
             path,
             binding,
@@ -266,10 +266,10 @@ impl TryInto<crate::api_definition::http::Route> for Route {
     }
 }
 
-impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
+impl TryFrom<crate::gateway_binding::WorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
-    fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
+    fn try_from(value: crate::gateway_binding::WorkerBinding) -> Result<Self, Self::Error> {
         let response: String = rib::to_string(&value.response.0).map_err(|e| e.to_string())?;
 
         let worker_id = value
@@ -292,13 +292,13 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     }
 }
 
-impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
+impl TryInto<crate::gateway_binding::WorkerBinding> for GolemWorkerBinding {
     type Error = String;
 
-    fn try_into(self) -> Result<crate::worker_binding::GolemWorkerBinding, Self::Error> {
-        let response: crate::worker_binding::ResponseMapping = {
+    fn try_into(self) -> Result<crate::gateway_binding::WorkerBinding, Self::Error> {
+        let response: crate::gateway_binding::ResponseMapping = {
             let r = rib::from_string(self.response.as_str()).map_err(|e| e.to_string())?;
-            crate::worker_binding::ResponseMapping(r)
+            crate::gateway_binding::ResponseMapping(r)
         };
 
         let worker_name = self
@@ -312,7 +312,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             None
         };
 
-        Ok(crate::worker_binding::GolemWorkerBinding {
+        Ok(crate::gateway_binding::WorkerBinding {
             component_id: self.component_id,
             worker_name,
             idempotency_key,
@@ -321,11 +321,11 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     }
 }
 
-impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
+impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
     type Error = String;
 
     fn try_from(
-        value: crate::api_definition::http::HttpApiDefinition,
+        value: crate::gateway_api_definition::http::HttpApiDefinition,
     ) -> Result<Self, Self::Error> {
         let routes = value
             .routes
@@ -353,7 +353,7 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinit
     }
 }
 
-impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http::HttpApiDefinition {
+impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::gateway_api_definition::http::HttpApiDefinition {
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::ApiDefinition) -> Result<Self, Self::Error> {
@@ -361,8 +361,8 @@ impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http:
             grpc_apidefinition::api_definition::Definition::Http(http) => http
                 .routes
                 .into_iter()
-                .map(crate::api_definition::http::Route::try_from)
-                .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?,
+                .map(crate::gateway_api_definition::http::Route::try_from)
+                .collect::<Result<Vec<crate::gateway_api_definition::http::Route>, String>>()?,
         };
 
         let id = value.id.ok_or("Api Definition ID is missing")?;
@@ -371,7 +371,7 @@ impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http:
             .ok_or("Created At is missing")
             .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
 
-        let result = crate::api_definition::http::HttpApiDefinition {
+        let result = crate::gateway_api_definition::http::HttpApiDefinition {
             id: ApiDefinitionId(id.value),
             version: ApiVersion(value.version),
             routes,
@@ -384,7 +384,7 @@ impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http:
 }
 
 impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
-    for crate::api_definition::http::HttpApiDefinitionRequest
+    for crate::gateway_api_definition::http::HttpApiDefinitionRequest
 {
     type Error = String;
 
@@ -393,13 +393,13 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
             grpc_apidefinition::v1::api_definition_request::Definition::Http(http) => http
                 .routes
                 .into_iter()
-                .map(crate::api_definition::http::Route::try_from)
-                .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?,
+                .map(crate::gateway_api_definition::http::Route::try_from)
+                .collect::<Result<Vec<crate::gateway_api_definition::http::Route>, String>>()?,
         };
 
         let id = value.id.ok_or("Api Definition ID is missing")?;
 
-        let result = crate::api_definition::http::HttpApiDefinitionRequest {
+        let result = crate::gateway_api_definition::http::HttpApiDefinitionRequest {
             id: ApiDefinitionId(id.value),
             version: ApiVersion(value.version),
             routes,
@@ -410,10 +410,10 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
     }
 }
 
-impl TryFrom<crate::api_definition::http::Route> for grpc_apidefinition::HttpRoute {
+impl TryFrom<crate::gateway_api_definition::http::Route> for grpc_apidefinition::HttpRoute {
     type Error = String;
 
-    fn try_from(value: crate::api_definition::http::Route) -> Result<Self, Self::Error> {
+    fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
         let binding = grpc_apidefinition::WorkerBinding::try_from(value.binding)?;
         let method: grpc_apidefinition::HttpMethod = value.method.into();
@@ -476,7 +476,7 @@ impl From<MethodPattern> for grpc_apidefinition::HttpMethod {
     }
 }
 
-impl TryFrom<grpc_apidefinition::HttpRoute> for crate::api_definition::http::Route {
+impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::http::Route {
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
@@ -485,7 +485,7 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::api_definition::http::Rou
 
         let method: MethodPattern = value.method.try_into()?;
 
-        let result = crate::api_definition::http::Route {
+        let result = crate::gateway_api_definition::http::Route {
             method,
             path,
             binding,
@@ -495,10 +495,10 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::api_definition::http::Rou
     }
 }
 
-impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::WorkerBinding {
+impl TryFrom<crate::gateway_binding::WorkerBinding> for grpc_apidefinition::WorkerBinding {
     type Error = String;
 
-    fn try_from(value: crate::worker_binding::GolemWorkerBinding) -> Result<Self, Self::Error> {
+    fn try_from(value: crate::gateway_binding::WorkerBinding) -> Result<Self, Self::Error> {
         let response = Some(value.response.0.into());
 
         let worker_name = value.worker_name.map(|w| w.into());
@@ -516,13 +516,13 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
     }
 }
 
-impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::GolemWorkerBinding {
+impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::gateway_binding::WorkerBinding {
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::WorkerBinding) -> Result<Self, Self::Error> {
-        let response: crate::worker_binding::ResponseMapping = {
+        let response: crate::gateway_binding::ResponseMapping = {
             let r: Expr = value.response.ok_or("response is missing")?.try_into()?;
-            crate::worker_binding::ResponseMapping(r)
+            crate::gateway_binding::ResponseMapping(r)
         };
 
         let worker_name = value.worker_name.map(|expr| expr.try_into()).transpose()?;
@@ -535,7 +535,7 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             None
         };
 
-        let result = crate::worker_binding::GolemWorkerBinding {
+        let result = crate::gateway_binding::WorkerBinding {
             component_id,
             worker_name,
             idempotency_key,
@@ -548,7 +548,7 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::http::MethodPattern;
+    use crate::gateway_api_definition::http::MethodPattern;
     use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
     use test_r::test;
 

@@ -61,7 +61,7 @@ fn take_until_unbalanced(
 
 #[cfg(test)]
 mod tests {
-    use crate::parser::place_holder_parser::parse_place_holder;
+    use crate::gateway_api_definition::http::place_holder_parser::parse_place_holder;
     use test_r::test;
 
     #[test]

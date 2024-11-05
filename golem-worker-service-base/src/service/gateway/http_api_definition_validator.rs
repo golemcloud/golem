@@ -5,10 +5,10 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use serde::{Deserialize, Serialize};
 
-use crate::api_definition::http::{HttpApiDefinition, MethodPattern, Route};
+use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern, Route};
 
 use crate::http::router::{Router, RouterPattern};
-use crate::service::worker_gateway::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
+use crate::service::gateway::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -103,9 +103,9 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
 mod tests {
     use test_r::test;
 
-    use crate::api_definition::http::{MethodPattern, Route};
-    use crate::service::worker_gateway::http_api_definition_validator::unique_routes;
-    use crate::worker_binding::ResponseMapping;
+    use crate::gateway_api_definition::http::{MethodPattern, Route};
+    use crate::service::gateway::http_api_definition_validator::unique_routes;
+    use crate::gateway_binding::ResponseMapping;
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
@@ -115,8 +115,8 @@ mod tests {
         fn make_route(method: MethodPattern, path: &str) -> Route {
             Route {
                 method,
-                path: crate::api_definition::http::AllPathPatterns::parse(path).unwrap(),
-                binding: crate::worker_binding::GolemWorkerBinding {
+                path: crate::gateway_api_definition::http::AllPathPatterns::parse(path).unwrap(),
+                binding: crate::gateway_binding::WorkerBinding {
                     component_id: VersionedComponentId {
                         component_id: ComponentId::new_v4(),
                         version: 1,

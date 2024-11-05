@@ -9,7 +9,7 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 
 use rib::{RibByteCode, RibFunctionInvoke, RibInput, RibResult};
 
-use crate::worker_bridge_execution::{WorkerRequest, WorkerRequestExecutor};
+use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
 
 // A wrapper service over original RibInterpreter concerning
 // the details of the worker service.
@@ -43,12 +43,12 @@ impl From<String> for EvaluationError {
 }
 
 pub struct DefaultRibInterpreter {
-    worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+    worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
 }
 
 impl DefaultRibInterpreter {
     pub fn from_worker_request_executor(
-        worker_request_executor: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+        worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
     ) -> Self {
         DefaultRibInterpreter {
             worker_request_executor,
@@ -80,7 +80,7 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
                 let executor = executor.clone();
 
                 async move {
-                    let worker_request = WorkerRequest {
+                    let worker_request = GatewayResolvedWorkerRequest {
                         component_id,
                         worker_name,
                         function_name,

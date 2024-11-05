@@ -5,14 +5,14 @@ use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionWithTypeInfo;
-use golem_worker_service_base::api_definition::http::CompiledHttpApiDefinition;
-use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::api_definition::http::{
+use golem_worker_service_base::gateway_api_definition::http::CompiledHttpApiDefinition;
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::http::{
     get_api_definition, OpenApiDefinitionRequest,
 };
-use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
-use golem_worker_service_base::service::worker_gateway::api_definition::ApiDefinitionService;
-use golem_worker_service_base::service::worker_gateway::http_api_definition_validator::RouteValidationError;
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
+use golem_worker_service_base::service::gateway::http_api_definition_validator::RouteValidationError;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -317,9 +317,9 @@ mod test {
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
     };
     use golem_worker_service_base::repo::api_deployment;
-    use golem_worker_service_base::service::worker_gateway::api_definition::ApiDefinitionServiceDefault;
+    use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::component::ComponentResult;
-    use golem_worker_service_base::service::worker_gateway::http_api_definition_validator::HttpApiDefinitionValidator;
+    use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
@@ -420,7 +420,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: ApiDefinitionId("test".to_string()),
                 version: ApiVersion("1.0".to_string()),
                 routes: vec![],
@@ -450,7 +450,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: ApiDefinitionId("sample".to_string()),
                 version: ApiVersion("42.0".to_string()),
                 routes: vec![],
@@ -472,7 +472,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: ApiDefinitionId("sample".to_string()),
                 version: ApiVersion("42.0".to_string()),
                 routes: vec![],
@@ -494,7 +494,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: ApiDefinitionId("test".to_string()),
                 version: ApiVersion("42.0".to_string()),
                 routes: vec![],
@@ -519,7 +519,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: ApiDefinitionId("test".to_string()),
                 version: ApiVersion("1.0".to_string()),
                 routes: vec![],
@@ -533,7 +533,7 @@ mod test {
         response.assert_status_is_ok();
 
         let definition =
-            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: ApiDefinitionId("test".to_string()),
                 version: ApiVersion("2.0".to_string()),
                 routes: vec![],

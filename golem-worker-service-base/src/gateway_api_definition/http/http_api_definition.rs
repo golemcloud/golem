@@ -3,11 +3,11 @@ use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use Iterator;
 
-use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
-use crate::parser::path_pattern_parser::PathPatternParser;
-use crate::parser::{GolemParser, ParseError};
-use crate::worker_binding::CompiledGolemWorkerBinding;
-use crate::worker_binding::GolemWorkerBinding;
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
+use crate::gateway_api_definition::http::path_pattern_parser::{parse_path_pattern, PathPatternParser};
+use crate::parser::{Parser, ParseError};
+use crate::gateway_binding::WorkerBindingCompiled;
+use crate::gateway_binding::WorkerBinding;
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use golem_service_base::model::{Component, VersionedComponentId};
@@ -116,7 +116,7 @@ impl CompiledHttpApiDefinition {
 }
 
 impl HasGolemWorkerBindings for HttpApiDefinition {
-    fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding> {
+    fn get_golem_worker_bindings(&self) -> Vec<WorkerBinding> {
         self.routes
             .iter()
             .map(|route| route.binding.clone())
@@ -283,10 +283,11 @@ impl Display for AllPathPatterns {
 }
 
 impl FromStr for AllPathPatterns {
-    type Err = ParseError;
+    type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        PathPatternParser.parse(s)
+        parse_path_pattern(s).map(|(_, result)| result)
+            .map_err(|err| err.to_string())
     }
 }
 
@@ -349,14 +350,14 @@ impl Display for PathPattern {
 pub struct Route {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
-    pub binding: GolemWorkerBinding,
+    pub binding: WorkerBinding,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledRoute {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
-    pub binding: CompiledGolemWorkerBinding,
+    pub binding: WorkerBindingCompiled,
 }
 
 #[derive(Debug)]
@@ -397,7 +398,7 @@ impl CompiledRoute {
             ))?;
 
         let binding =
-            CompiledGolemWorkerBinding::from_golem_worker_binding(&route.binding, metadata)
+            WorkerBindingCompiled::from_gateway_worker_binding(&route.binding, metadata)
                 .map_err(RouteCompilationErrors::RibCompilationError)?;
 
         Ok(CompiledRoute {

@@ -1,15 +1,17 @@
-use crate::worker_bridge_execution::WorkerRequest;
+use crate::gateway_execution::GatewayResolvedWorkerRequest;
 use async_trait::async_trait;
 
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::fmt::Display;
 
+// How to execute a worker-request that's formed
+// as part of gateway
 #[async_trait]
-pub trait WorkerRequestExecutor {
+pub trait GatewayWorkerRequestExecutor {
     async fn execute(
         &self,
-        resolved_worker_request: WorkerRequest,
-    ) -> Result<WorkerResponse, WorkerRequestExecutorError>;
+        resolved_worker_request: GatewayResolvedWorkerRequest,
+    ) -> Result<WorkerResponse, GatewayWorkerRequestExecutorError>;
 }
 
 // The result of a worker execution from worker-bridge,
@@ -25,16 +27,16 @@ impl WorkerResponse {
 }
 
 #[derive(Clone, Debug)]
-pub struct WorkerRequestExecutorError(String);
+pub struct GatewayWorkerRequestExecutorError(String);
 
-impl Display for WorkerRequestExecutorError {
+impl Display for GatewayWorkerRequestExecutorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl<T: AsRef<str>> From<T> for WorkerRequestExecutorError {
+impl<T: AsRef<str>> From<T> for GatewayWorkerRequestExecutorError {
     fn from(err: T) -> Self {
-        WorkerRequestExecutorError(err.as_ref().to_string())
+        GatewayWorkerRequestExecutorError(err.as_ref().to_string())
     }
 }

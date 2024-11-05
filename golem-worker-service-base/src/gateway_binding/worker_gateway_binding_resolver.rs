@@ -1,12 +1,12 @@
-use crate::api_definition::http::{CompiledHttpApiDefinition, VarInfo};
+use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
 use crate::http::http_request::router;
 use crate::http::router::RouterPattern;
 use crate::http::InputHttpRequest;
-use crate::worker_binding::rib_input_value_resolver::RibInputValueResolver;
-use crate::worker_binding::{RequestDetails, ResponseMappingCompiled, RibInputTypeMismatch};
-use crate::worker_bridge_execution::to_response::ToResponse;
-use crate::worker_service_rib_interpreter::EvaluationError;
-use crate::worker_service_rib_interpreter::WorkerServiceRibInterpreter;
+use crate::gateway_binding::rib_input_value_resolver::RibInputValueResolver;
+use crate::gateway_binding::{ResponseMappingCompiled, RibInputTypeMismatch};
+use crate::gateway_execution::to_response::ToResponse;
+use crate::worker_gateway_rib_interpreter::EvaluationError;
+use crate::worker_gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
 use golem_service_base::model::VersionedComponentId;
@@ -15,16 +15,17 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
+use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
-// to resolve a single worker-binding is then executed with the help of worker_service_rib_interpreter, which internally
+// to resolve a single worker-binding is then executed with the help of worker_gateway_rib_interpreter, which internally
 // calls the worker function.
 #[async_trait]
-pub trait RequestToWorkerBindingResolver<ApiDefinition> {
+pub trait WorkerGatewayBindingResolver<ApiDefinition> {
     async fn resolve_worker_binding(
         &self,
         api_definitions: Vec<ApiDefinition>,
-    ) -> Result<ResolvedWorkerBindingFromRequest, WorkerBindingResolutionError>;
+    ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError>;
 }
 
 #[derive(Debug)]
@@ -43,9 +44,9 @@ impl Display for WorkerBindingResolutionError {
 }
 
 #[derive(Debug, Clone)]
-pub struct ResolvedWorkerBindingFromRequest {
+pub struct ResolvedWorkerBinding {
     pub worker_detail: WorkerDetail,
-    pub request_details: RequestDetails,
+    pub request_details: GatewayRequestDetails,
     pub compiled_response_mapping: ResponseMappingCompiled,
 }
 
@@ -82,7 +83,7 @@ impl WorkerDetail {
     }
 }
 
-impl ResolvedWorkerBindingFromRequest {
+impl ResolvedWorkerBinding {
     pub async fn interpret_response_mapping<R>(
         &self,
         evaluator: &Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
@@ -125,11 +126,11 @@ impl ResolvedWorkerBindingFromRequest {
 }
 
 #[async_trait]
-impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
+impl WorkerGatewayBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
     async fn resolve_worker_binding(
         &self,
         compiled_api_definitions: Vec<CompiledHttpApiDefinition>,
-    ) -> Result<ResolvedWorkerBindingFromRequest, WorkerBindingResolutionError> {
+    ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError> {
         let compiled_routes = compiled_api_definitions
             .iter()
             .flat_map(|x| x.routes.clone())
@@ -157,7 +158,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
                 .collect()
         };
 
-        let http_request_details = RequestDetails::from(
+        let http_request_details = GatewayRequestDetails::from(
             &zipped_path_params,
             &request_query_variables,
             query_params,
@@ -231,7 +232,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
             idempotency_key,
         };
 
-        let resolved_binding = ResolvedWorkerBindingFromRequest {
+        let resolved_binding = ResolvedWorkerBinding {
             worker_detail,
             request_details: http_request_details,
             compiled_response_mapping: binding.response_compiled.clone(),

@@ -7,22 +7,10 @@ use nom::multi::{separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, tuple};
 use nom::IResult;
 
-use crate::api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
-use crate::parser::{place_holder_parser, ParseError};
+use crate::gateway_api_definition::http::{place_holder_parser, AllPathPatterns, PathPattern, QueryInfo};
+use crate::parser::*;
 
-use super::*;
-
-pub struct PathPatternParser;
-
-impl GolemParser<AllPathPatterns> for PathPatternParser {
-    fn parse(&self, input: &str) -> Result<AllPathPatterns, ParseError> {
-        parse_path_pattern(input)
-            .map(|(_, result)| result)
-            .map_err(|err| ParseError::Message(err.to_string()))
-    }
-}
-
-fn parse_path_pattern(input: &str) -> IResult<&str, AllPathPatterns> {
+pub fn parse_path_pattern(input: &str) -> IResult<&str, AllPathPatterns> {
     let (input, (path, query)) = tuple((
         delimited(opt(char('/')), path_parser, opt(char('/'))),
         opt(preceded(char('?'), query_parser)),
@@ -86,13 +74,13 @@ fn literal_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
-    use crate::parser::path_pattern_parser::parse_path_pattern;
+    use crate::gateway_api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
+    use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
     use test_r::test;
 
     #[test]
     fn test_parse() {
-        use crate::api_definition::http::LiteralInfo;
+        use crate::gateway_api_definition::http::LiteralInfo;
 
         let result = parse_path_pattern("/api/{id}/test/{name}/test2?{query1}&{query2}");
         assert_eq!(

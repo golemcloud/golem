@@ -1,14 +1,14 @@
-use crate::api_definition::http::{QueryInfo, VarInfo};
+use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
-pub enum RequestDetails {
+pub enum GatewayRequestDetails {
     Http(HttpRequestDetails),
 }
-impl RequestDetails {
+impl GatewayRequestDetails {
     pub fn from(
         path_params: &HashMap<VarInfo, &str>,
         query_variable_values: &HashMap<String, String>,
@@ -27,7 +27,7 @@ impl RequestDetails {
 
     pub fn as_json(&self) -> Value {
         match self {
-            RequestDetails::Http(http_request_details) => {
+            GatewayRequestDetails::Http(http_request_details) => {
                 let typed_path_values = http_request_details.request_path_values.clone().0;
                 let typed_query_values = http_request_details.request_query_values.clone().0;
 

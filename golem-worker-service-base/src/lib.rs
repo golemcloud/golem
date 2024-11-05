@@ -2,7 +2,7 @@ use ::http::Uri;
 use golem_common::golem_version;
 
 pub mod api;
-pub mod api_definition;
+pub mod gateway_api_definition;
 pub mod app_config;
 pub mod getter;
 pub mod http;
@@ -11,10 +11,12 @@ mod parser;
 pub(crate) mod path;
 pub mod repo;
 pub mod service;
-mod worker_binding;
-pub mod worker_bridge_execution;
-mod worker_service_rib_compiler;
-pub mod worker_service_rib_interpreter;
+mod gateway_binding;
+pub mod gateway_execution;
+mod gateway_rib_compiler;
+pub mod worker_gateway_rib_interpreter;
+pub mod gateway_request;
+pub mod gateway_api_deployment;
 
 #[cfg(test)]
 test_r::enable!();

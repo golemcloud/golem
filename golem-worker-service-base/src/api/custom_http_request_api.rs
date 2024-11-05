@@ -1,8 +1,8 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::api_definition::http::CompiledHttpApiDefinition;
-use crate::worker_service_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
+use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
+use crate::worker_gateway_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
 use futures_util::FutureExt;
 use hyper::header::HOST;
 use poem::http::StatusCode;
@@ -10,10 +10,10 @@ use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
 use crate::http::{ApiInputPath, InputHttpRequest};
-use crate::service::worker_gateway::api_definition_lookup::ApiDefinitionsLookup;
+use crate::service::gateway::api_definition_lookup::ApiDefinitionsLookup;
 
-use crate::worker_binding::RequestToWorkerBindingResolver;
-use crate::worker_bridge_execution::WorkerRequestExecutor;
+use crate::gateway_binding::WorkerGatewayBindingResolver;
+use crate::gateway_execution::GatewayWorkerRequestExecutor;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
@@ -26,7 +26,7 @@ pub struct CustomHttpRequestApi {
 
 impl CustomHttpRequestApi {
     pub fn new(
-        worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+        worker_request_executor_service: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send,
         >,

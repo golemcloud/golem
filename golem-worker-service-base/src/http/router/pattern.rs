@@ -35,7 +35,7 @@ impl RouterPattern {
     }
 }
 
-use crate::api_definition::http::PathPattern;
+use crate::gateway_api_definition::http::PathPattern;
 
 impl From<PathPattern> for RouterPattern {
     fn from(path: PathPattern) -> Self {

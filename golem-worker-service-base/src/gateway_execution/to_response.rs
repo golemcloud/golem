@@ -1,30 +1,39 @@
-use crate::worker_binding::{RequestDetails, RibInputTypeMismatch};
-use crate::worker_service_rib_interpreter::EvaluationError;
+use crate::gateway_binding::{WorkerGatewayRequestDetails, RibInputTypeMismatch};
+use crate::worker_gateway_rib_interpreter::EvaluationError;
 
 use http::StatusCode;
 use poem::Body;
 use rib::RibResult;
 
 pub trait ToResponse<A> {
-    fn to_response(&self, request_details: &RequestDetails) -> A;
+    fn to_response(&self, request_details: &WorkerGatewayRequestDetails) -> A;
 }
 
 impl ToResponse<poem::Response> for RibResult {
-    fn to_response(&self, request_details: &RequestDetails) -> poem::Response {
-        match internal::IntermediateHttpResponse::from(self) {
-            Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
-            Err(e) => poem::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from_string(format!(
-                    "Error when  converting worker response to http response. Error: {}",
-                    e
-                ))),
+    fn to_response(&self, request_details: &WorkerGatewayRequestDetails) -> poem::Response {
+        match request_details {
+            // Only if the input request detail is of the type Http, we can form a Http Response with the help of
+            // evaluated rib script
+            WorkerGatewayRequestDetails::Http(http_request_details) => {
+                match internal::IntermediateHttpResponse::from(self) {
+                    Ok(intermediate_response) => {
+                        intermediate_response.to_http_response(http_request_details)
+                    }
+                    Err(e) => poem::Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from_string(format!(
+                            "Error when  converting worker response to http response. Error: {}",
+                            e
+                        ))),
+                }
+
+            }
         }
     }
 }
 
 impl ToResponse<poem::Response> for RibInputTypeMismatch {
-    fn to_response(&self, _request_details: &RequestDetails) -> poem::Response {
+    fn to_response(&self, _request_details: &WorkerGatewayRequestDetails) -> poem::Response {
         poem::Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .body(Body::from_string(format!("Error {}", self.0).to_string()))
@@ -32,7 +41,7 @@ impl ToResponse<poem::Response> for RibInputTypeMismatch {
 }
 
 impl ToResponse<poem::Response> for EvaluationError {
-    fn to_response(&self, _request_details: &RequestDetails) -> poem::Response {
+    fn to_response(&self, _request_details: &WorkerGatewayRequestDetails) -> poem::Response {
         poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::from_string(format!("Error {}", self).to_string()))
@@ -40,7 +49,7 @@ impl ToResponse<poem::Response> for EvaluationError {
 }
 
 impl ToResponse<poem::Response> for String {
-    fn to_response(&self, _request_details: &RequestDetails) -> poem::Response {
+    fn to_response(&self, _request_details: &WorkerGatewayRequestDetails) -> poem::Response {
         poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::from_string(self.to_string()))
@@ -48,11 +57,11 @@ impl ToResponse<poem::Response> for String {
 }
 
 mod internal {
-    use crate::worker_binding::RequestDetails;
-    use crate::worker_bridge_execution::content_type_mapper::{
+    use crate::gateway_binding::{HttpRequestDetails, WorkerGatewayRequestDetails};
+    use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
-    use crate::worker_service_rib_interpreter::EvaluationError;
+    use crate::worker_gateway_rib_interpreter::EvaluationError;
     use http::{HeaderMap, StatusCode};
     use std::str::FromStr;
 
@@ -74,9 +83,9 @@ mod internal {
 
     impl IntermediateHttpResponse {
         pub(crate) fn from(
-            evaluation_result: &RibResult,
+            rib_result: &RibResult,
         ) -> Result<IntermediateHttpResponse, EvaluationError> {
-            match evaluation_result {
+            match rib_result {
                 RibResult::Val(typed_value) => {
                     let status = match typed_value.get_optional(&Path::from_key("status")) {
                         Some(typed_value) => get_status_code(&typed_value),
@@ -106,7 +115,7 @@ mod internal {
             }
         }
 
-        pub(crate) fn to_http_response(&self, request_details: &RequestDetails) -> poem::Response {
+        pub(crate) fn to_http_response(&self, request_details: &HttpRequestDetails) -> poem::Response {
             let headers: Result<HeaderMap, String> = (&self.headers.headers)
                 .try_into()
                 .map_err(|e: hyper::http::Error| e.to_string());
@@ -119,9 +128,7 @@ mod internal {
                     let response_content_type =
                         get_content_type_from_response_headers(&response_headers);
 
-                    let accepted_content_types = match request_details {
-                        RequestDetails::Http(http) => http.get_accept_content_type_header(),
-                    };
+                    let accepted_content_types = request_details.get_accept_content_type_header();
 
                     let content_type =
                         ContentTypeHeaders::from(response_content_type, accepted_content_types);
@@ -247,13 +254,13 @@ mod internal {
 mod test {
     use test_r::test;
 
-    use crate::worker_bridge_execution::to_response::internal::ResolvedResponseHeaders;
+    use crate::gateway_execution::to_response::internal::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
 
-    use crate::worker_binding::{HttpRequestDetails, RequestDetails};
-    use crate::worker_bridge_execution::to_response::ToResponse;
+    use crate::gateway_binding::{HttpRequestDetails, WorkerGatewayRequestDetails};
+    use crate::gateway_execution::to_response::ToResponse;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;
@@ -304,7 +311,7 @@ mod test {
         let evaluation_result: RibResult = RibResult::Val(record);
 
         let http_response: poem::Response =
-            evaluation_result.to_response(&RequestDetails::Http(HttpRequestDetails::empty()));
+            evaluation_result.to_response(&WorkerGatewayRequestDetails::Http(HttpRequestDetails::empty()));
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();
@@ -330,7 +337,7 @@ mod test {
             RibResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
         let http_response: poem::Response =
-            evaluation_result.to_response(&RequestDetails::Http(HttpRequestDetails::empty()));
+            evaluation_result.to_response(&WorkerGatewayRequestDetails::Http(HttpRequestDetails::empty()));
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();

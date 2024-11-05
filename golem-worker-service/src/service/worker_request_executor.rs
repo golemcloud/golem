@@ -3,8 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_worker_service_base::service::worker::WorkerService;
-use golem_worker_service_base::worker_bridge_execution::{
-    WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
+use golem_worker_service_base::gateway_execution::{
+    GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, GatewayWorkerRequestExecutorError, WorkerResponse,
 };
 
 // The open source deviates from the proprietary codebase here, only in terms of authorisation
@@ -19,11 +19,11 @@ impl UnauthorisedWorkerRequestExecutor {
 }
 
 #[async_trait]
-impl WorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
+impl GatewayWorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
     async fn execute(
         &self,
-        worker_request_params: WorkerRequest,
-    ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
+        worker_request_params: GatewayResolvedWorkerRequest,
+    ) -> Result<WorkerResponse, GatewayWorkerRequestExecutorError> {
         internal::execute(self, worker_request_params.clone()).await
     }
 }
@@ -34,15 +34,15 @@ mod internal {
 
     use golem_common::model::TargetWorkerId;
     use golem_service_base::model::validate_worker_name;
-    use golem_worker_service_base::worker_bridge_execution::{
-        WorkerRequest, WorkerRequestExecutorError, WorkerResponse,
+    use golem_worker_service_base::gateway_execution::{
+        GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutorError, WorkerResponse,
     };
     use tracing::{debug, info};
 
     pub(crate) async fn execute(
         default_executor: &UnauthorisedWorkerRequestExecutor,
-        worker_request_params: WorkerRequest,
-    ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
+        worker_request_params: GatewayResolvedWorkerRequest,
+    ) -> Result<WorkerResponse, GatewayWorkerRequestExecutorError> {
         let worker_name_opt_validated = worker_request_params
             .worker_name
             .map(|w| validate_worker_name(w.as_str()).map(|_| w))

@@ -1,24 +1,24 @@
-use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
-use crate::worker_service_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
+use crate::gateway_binding::{WorkerBinding, ResponseMapping};
+use crate::gateway_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo, WorkerFunctionsInRib};
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct CompiledGolemWorkerBinding {
+pub struct WorkerBindingCompiled {
     pub component_id: VersionedComponentId,
     pub worker_name_compiled: Option<WorkerNameCompiled>,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub response_compiled: ResponseMappingCompiled,
 }
 
-impl CompiledGolemWorkerBinding {
-    pub fn from_golem_worker_binding(
-        golem_worker_binding: &GolemWorkerBinding,
+impl WorkerBindingCompiled {
+    pub fn from_gateway_worker_binding(
+        gateway_worker_binding: &WorkerBinding,
         export_metadata: &[AnalysedExport],
     ) -> Result<Self, String> {
-        let worker_name_compiled: Option<WorkerNameCompiled> = golem_worker_binding
+        let worker_name_compiled: Option<WorkerNameCompiled> = gateway_worker_binding
             .worker_name
             .clone()
             .map(|worker_name_expr| {
@@ -26,7 +26,7 @@ impl CompiledGolemWorkerBinding {
             })
             .transpose()?;
 
-        let idempotency_key_compiled = match &golem_worker_binding.idempotency_key {
+        let idempotency_key_compiled = match &gateway_worker_binding.idempotency_key {
             Some(idempotency_key) => Some(IdempotencyKeyCompiled::from_idempotency_key(
                 idempotency_key,
                 export_metadata,
@@ -34,12 +34,12 @@ impl CompiledGolemWorkerBinding {
             None => None,
         };
         let response_compiled = ResponseMappingCompiled::from_response_mapping(
-            &golem_worker_binding.response,
+            &gateway_worker_binding.response,
             export_metadata,
         )?;
 
-        Ok(CompiledGolemWorkerBinding {
-            component_id: golem_worker_binding.component_id.clone(),
+        Ok(WorkerBindingCompiled {
+            component_id: gateway_worker_binding.component_id.clone(),
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
@@ -116,7 +116,7 @@ impl ResponseMappingCompiled {
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
-    for CompiledGolemWorkerBinding
+    for WorkerBindingCompiled
 {
     type Error = String;
 
@@ -199,7 +199,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             worker_calls,
         };
 
-        Ok(CompiledGolemWorkerBinding {
+        Ok(WorkerBindingCompiled {
             component_id,
             worker_name_compiled,
             idempotency_key_compiled,
@@ -208,12 +208,12 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
     }
 }
 
-impl TryFrom<CompiledGolemWorkerBinding>
+impl TryFrom<WorkerBindingCompiled>
     for golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding
 {
     type Error = String;
 
-    fn try_from(value: CompiledGolemWorkerBinding) -> Result<Self, Self::Error> {
+    fn try_from(value: WorkerBindingCompiled) -> Result<Self, Self::Error> {
         let component = Some(value.component_id.into());
         let worker_name = value
             .worker_name_compiled

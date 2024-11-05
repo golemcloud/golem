@@ -16,11 +16,11 @@ use std::fmt::{Debug, Display};
 use std::hash::Hash;
 use std::sync::Arc;
 
-use crate::api_definition::http::{
+use crate::gateway_api_definition::http::{
     CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     HttpApiDefinitionRequest, RouteCompilationErrors,
 };
-use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRepo;
@@ -30,7 +30,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use tracing::{error, info};
-use crate::service::worker_gateway::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
+use crate::service::gateway::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 use crate::service::component::ComponentService;
 
 pub type ApiResult<T, E> = Result<T, ApiDefinitionError<E>>;
@@ -455,7 +455,7 @@ mod tests {
 
     use golem_common::{SafeDisplay, SafeString};
     use golem_service_base::repo::RepoError;
-    use crate::service::worker_gateway::api_definition::ApiDefinitionError;
+    use crate::service::gateway::api_definition::ApiDefinitionError;
 
     #[test]
     pub fn test_repo_error_to_service_error() {

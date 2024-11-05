@@ -10,21 +10,21 @@ use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
     AnalysedInstance,
 };
-use golem_worker_service_base::api_definition::http::HttpApiDefinition;
-use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest;
-use golem_worker_service_base::api_definition::{
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::{
     ApiDefinitionId, ApiDeploymentRequest, ApiSite, ApiSiteString, ApiVersion,
 };
 use golem_worker_service_base::repo::{api_definition, api_deployment};
-use golem_worker_service_base::service::worker_gateway::api_definition::{
+use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,
     ApiDefinitionServiceDefault,
 };
-use golem_worker_service_base::service::worker_gateway::api_deployment::{
+use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
 };
 use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
-use golem_worker_service_base::service::worker_gateway::http_api_definition_validator::{
+use golem_worker_service_base::service::gateway::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
 

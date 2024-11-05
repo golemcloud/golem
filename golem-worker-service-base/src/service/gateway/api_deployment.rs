@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api_definition::{
-    ApiDefinitionId, ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString,
-};
-
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
@@ -23,7 +19,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::{error, info};
 
-use crate::api_definition::http::{
+use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, HttpApiDefinition, Route,
 };
 
@@ -39,7 +35,9 @@ use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use rib::WorkerFunctionsInRib;
 use std::fmt::{Debug, Display};
-use crate::service::worker_gateway::api_definition::ApiDefinitionIdWithVersion;
+use crate::gateway_api_definition::ApiDefinitionId;
+use crate::gateway_api_deployment::{ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString};
+use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 
 #[async_trait]
 pub trait ApiDeploymentService<AuthCtx, Namespace> {
@@ -645,7 +643,7 @@ where
 mod tests {
     use test_r::test;
 
-    use crate::service::worker_gateway::api_deployment::ApiDeploymentError;
+    use crate::service::gateway::api_deployment::ApiDeploymentError;
     use golem_common::SafeDisplay;
     use golem_service_base::repo::RepoError;
 

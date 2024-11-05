@@ -4,7 +4,7 @@ pub mod worker_request_executor;
 
 use worker_request_executor::UnauthorisedWorkerRequestExecutor;
 
-use golem_worker_service_base::api_definition::http::{
+use golem_worker_service_base::gateway_api_definition::http::{
     CompiledHttpApiDefinition, HttpApiDefinition,
 };
 
@@ -14,19 +14,19 @@ use golem_worker_service_base::http::InputHttpRequest;
 
 use golem_worker_service_base::repo::api_definition;
 use golem_worker_service_base::repo::api_deployment;
-use golem_worker_service_base::service::worker_gateway::api_definition::{
+use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceDefault,
 };
-use golem_worker_service_base::service::worker_gateway::api_definition_lookup::{
+use golem_worker_service_base::service::gateway::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
 };
-use golem_worker_service_base::service::worker_gateway::api_definition_validator::ApiDefinitionValidatorService;
+use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::component::RemoteComponentService;
-use golem_worker_service_base::service::worker_gateway::http_api_definition_validator::{
+use golem_worker_service_base::service::gateway::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
 use golem_worker_service_base::service::worker::WorkerServiceDefault;
-use golem_worker_service_base::worker_bridge_execution::WorkerRequestExecutor;
+use golem_worker_service_base::gateway_execution::GatewayWorkerRequestExecutor;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
@@ -34,7 +34,7 @@ use golem_common::config::RetryConfig;
 
 use golem_common::config::DbConfig;
 use golem_service_base::db;
-use golem_worker_service_base::service::worker_gateway::api_deployment::{
+use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
 };
 use std::sync::Arc;
@@ -54,7 +54,7 @@ pub struct Services {
         Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub http_definition_lookup_service:
         Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
-    pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+    pub worker_to_http_service: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
@@ -104,7 +104,7 @@ impl Services {
             routing_table_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send> = Arc::new(
+        let worker_to_http_service: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send> = Arc::new(
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
         );
 

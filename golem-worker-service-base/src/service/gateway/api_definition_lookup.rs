@@ -15,9 +15,9 @@
 use std::fmt::Display;
 use std::sync::Arc;
 
-use crate::api_definition::http::CompiledHttpApiDefinition;
+use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::http::InputHttpRequest;
-use crate::service::worker_gateway::api_deployment::ApiDeploymentService;
+use crate::service::gateway::api_deployment::ApiDeploymentService;
 use async_trait::async_trait;
 use tracing::error;
 

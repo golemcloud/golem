@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use crate::api_definition::ApiSiteString;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
+use crate::gateway_api_deployment::ApiSiteString;
 
 #[derive(Clone)]
 pub struct InputHttpRequest {
@@ -49,10 +49,10 @@ impl ApiInputPath {
 }
 
 pub mod router {
-    use crate::api_definition::http::CompiledRoute;
-    use crate::worker_binding::CompiledGolemWorkerBinding;
+    use crate::gateway_api_definition::http::CompiledRoute;
+    use crate::gateway_binding::WorkerBindingCompiled;
     use crate::{
-        api_definition::http::{PathPattern, QueryInfo, VarInfo},
+        gateway_api_definition::http::{PathPattern, QueryInfo, VarInfo},
         http::router::{Router, RouterPattern},
     };
 
@@ -61,7 +61,7 @@ pub mod router {
         // size is the index of all path patterns.
         pub path_params: Vec<(VarInfo, usize)>,
         pub query_params: Vec<QueryInfo>,
-        pub binding: CompiledGolemWorkerBinding,
+        pub binding: WorkerBindingCompiled,
     }
 
     pub fn build(routes: Vec<CompiledRoute>) -> Router<RouteEntry> {
@@ -105,20 +105,20 @@ pub mod router {
 mod tests {
     use test_r::test;
 
-    use crate::api_definition::http::{
+    use crate::gateway_api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     };
     use crate::getter::Getter;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::path::Path;
-    use crate::worker_binding::{
-        RequestDetails, RequestToWorkerBindingResolver, RibInputTypeMismatch,
+    use crate::gateway_binding::{
+         WorkerGatewayBindingResolver, RibInputTypeMismatch,
     };
-    use crate::worker_bridge_execution::to_response::ToResponse;
-    use crate::worker_bridge_execution::{
-        WorkerRequest, WorkerRequestExecutor, WorkerRequestExecutorError, WorkerResponse,
+    use crate::gateway_execution::to_response::ToResponse;
+    use crate::gateway_execution::{
+        GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, GatewayWorkerRequestExecutorError, WorkerResponse,
     };
-    use crate::worker_service_rib_interpreter::{
+    use crate::worker_gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
     use async_trait::async_trait;
@@ -137,16 +137,17 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
     struct TestWorkerRequestExecutor {}
 
     #[async_trait]
-    impl WorkerRequestExecutor for TestWorkerRequestExecutor {
+    impl GatewayWorkerRequestExecutor for TestWorkerRequestExecutor {
         // This test executor simply returns the worker request details itself to a type-annotated-value
         async fn execute(
             &self,
-            resolved_worker_request: WorkerRequest,
-        ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
+            resolved_worker_request: GatewayResolvedWorkerRequest,
+        ) -> Result<WorkerResponse, GatewayWorkerRequestExecutorError> {
             let response = convert_to_worker_response(&resolved_worker_request);
             let response_dummy = create_tuple(vec![response]);
 
@@ -201,7 +202,7 @@ mod tests {
         }))
     }
 
-    fn convert_to_worker_response(worker_request: &WorkerRequest) -> TypeAnnotatedValue {
+    fn convert_to_worker_response(worker_request: &GatewayResolvedWorkerRequest) -> TypeAnnotatedValue {
         let mut record_elems = vec![
             (
                 "component_id".to_string(),
@@ -245,19 +246,19 @@ mod tests {
     }
 
     impl ToResponse<TestResponse> for EvaluationError {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+        fn to_response(&self, _request_details: &GatewayRequestDetails) -> TestResponse {
             panic!("{}", self.to_string())
         }
     }
 
     impl ToResponse<TestResponse> for RibInputTypeMismatch {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+        fn to_response(&self, _request_details: &GatewayRequestDetails) -> TestResponse {
             panic!("{}", self.to_string())
         }
     }
 
     impl ToResponse<TestResponse> for RibResult {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+        fn to_response(&self, _request_details: &GatewayRequestDetails) -> TestResponse {
             let function_name = self
                 .get_val()
                 .map(|x| x.get(&Path::from_key("function_name")).unwrap())

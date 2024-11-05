@@ -1,4 +1,4 @@
-use crate::worker_binding::{RequestDetails, WorkerDetail};
+use crate::gateway_binding::{WorkerGatewayRequestDetails, WorkerDetail};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::{RibInput, RibInputTypeInfo};
@@ -25,7 +25,7 @@ impl Display for RibInputTypeMismatch {
     }
 }
 
-impl RibInputValueResolver for RequestDetails {
+impl RibInputValueResolver for WorkerGatewayRequestDetails {
     fn resolve_rib_input_value(
         &self,
         required_types: &RibInputTypeInfo,

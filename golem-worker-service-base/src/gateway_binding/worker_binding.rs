@@ -1,13 +1,13 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
-use crate::worker_binding::CompiledGolemWorkerBinding;
+use crate::gateway_binding::WorkerBindingCompiled;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
-pub struct GolemWorkerBinding {
+pub struct WorkerBinding {
     pub component_id: VersionedComponentId,
     pub worker_name: Option<Expr>,
     pub idempotency_key: Option<Expr>,
@@ -18,11 +18,11 @@ pub struct GolemWorkerBinding {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 pub struct ResponseMapping(pub Expr);
 
-impl From<CompiledGolemWorkerBinding> for GolemWorkerBinding {
-    fn from(value: CompiledGolemWorkerBinding) -> Self {
+impl From<WorkerBindingCompiled> for WorkerBinding {
+    fn from(value: WorkerBindingCompiled) -> Self {
         let worker_binding = value.clone();
 
-        GolemWorkerBinding {
+        WorkerBinding {
             component_id: worker_binding.component_id,
             worker_name: worker_binding
                 .worker_name_compiled

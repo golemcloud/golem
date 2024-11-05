@@ -151,7 +151,7 @@ impl Display for ContentTypeMapError {
 }
 
 mod internal {
-    use crate::worker_bridge_execution::content_type_mapper::{
+    use crate::gateway_execution::http_content_type_mapper::{
         AcceptHeaders, ContentTypeHeaderExt, ContentTypeMapError,
     };
     use golem_wasm_ast::analysis::analysed_type::{

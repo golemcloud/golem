@@ -1,5 +1,5 @@
-use crate::api_definition::http::HttpApiDefinitionRequest;
-use crate::api_definition::{ApiDefinitionId, ApiVersion};
+use crate::gateway_api_definition::http::HttpApiDefinitionRequest;
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 use openapiv3::OpenAPI;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
@@ -95,8 +95,8 @@ impl poem_openapi::types::Type for OpenApiDefinitionRequest {
 }
 
 mod internal {
-    use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
+    use crate::gateway_binding::{WorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use rib::Expr;
@@ -173,7 +173,7 @@ mod internal {
                 GOLEM_WORKER_BRIDGE_EXTENSION
             ))?;
 
-        let binding = GolemWorkerBinding {
+        let binding = WorkerBinding {
             worker_name: get_worker_id_expr(worker_bridge_info)?,
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
@@ -266,8 +266,8 @@ mod tests {
     use test_r::test;
 
     use super::*;
-    use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
+    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
+    use crate::gateway_binding::{WorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
     use openapiv3::PathItem;
     use rib::Expr;
@@ -297,7 +297,7 @@ mod tests {
             Ok(Route {
                 path: path_pattern,
                 method: MethodPattern::Get,
-                binding: GolemWorkerBinding {
+                binding: WorkerBinding {
                     worker_name: Some(Expr::expr_block(vec![
                         Expr::let_binding_with_type(
                             "x",
