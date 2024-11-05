@@ -85,7 +85,6 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
                     wasm_rpc_path_override: app.stub_wasm_rpc_path(&component_name),
                     wasm_rpc_version_override: app.stub_wasm_rpc_version(&component_name),
                 },
-                inline_source_types: app.stub_always_inline_types(&component_name),
             })
             .context("Failed to gather information for the stub generator")?;
 
@@ -131,8 +130,6 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
             add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
                 stub_wit_root: app.stub_wit(dep_component_name),
                 dest_wit_root: app.component_wit(component_name),
-                overwrite: true, // NOTE: in declarative mode we always use overwrite
-                remove_dest_imports: false,
                 update_cargo_toml: UpdateCargoToml::Update,
             })?
         }

@@ -24,7 +24,6 @@ pub mod stub;
 pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
-pub mod wit_transform;
 
 use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
@@ -227,7 +226,6 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
             selected_world: args.world,
             stub_crate_version: args.stub_crate_version,
             wasm_rpc_override: args.wasm_rpc_override,
-            inline_source_types: args.always_inline_types,
         }
     )
         .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
@@ -244,7 +242,6 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
         selected_world: args.world,
         stub_crate_version: args.stub_crate_version,
         wasm_rpc_override: args.wasm_rpc_override,
-        inline_source_types: args.always_inline_types,
     })
     .context("Failed to gather information for the stub generator")?;
 
@@ -255,7 +252,6 @@ pub fn add_stub_dependency(args: AddStubDependencyArgs) -> anyhow::Result<()> {
     commands::dependencies::add_stub_dependency(
         &args.stub_wit_root,
         &args.dest_wit_root,
-        args.overwrite,
         if args.update_cargo_toml {
             UpdateCargoToml::Update
         } else {
