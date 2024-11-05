@@ -97,11 +97,9 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
             wit_dependencies.insert(
                 format_package_name_without_version(&def.source_package_name),
                 WitDependency {
-                    path: naming::wit::package_wit_dep_dir_from_package_name(
-                        &def.source_package_name,
-                    )
-                    .to_string_lossy()
-                    .to_string(),
+                    path: naming::wit::package_wit_dep_dir_from_parser(&def.source_package_name)
+                        .to_string_lossy()
+                        .to_string(),
                 },
             );
         } else {

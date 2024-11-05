@@ -14,27 +14,25 @@
 
 use crate::commands::log::{log_action, log_action_plan, log_warn_action, LogIndent};
 use crate::fs::{
-    copy, copy_transformed, get_file_name, strip_path_prefix, OverwriteSafeAction,
-    OverwriteSafeActions,
+    copy, get_file_name, strip_path_prefix, write_str, OverwriteSafeAction, OverwriteSafeActions,
 };
+use crate::naming::wit::package_dep_dir_name_from_encoder;
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubTypeDef,
-    StubConfig, StubDefinition,
+    StubDefinition,
 };
 use crate::wit_encode::EncodedWitDir;
-use crate::wit_resolve::{PackageSource, ResolvedWitDir};
-use crate::wit_transform::{
-    add_world_named_interface_import, import_remover, world_named_interface_import_remover,
-};
+use crate::wit_resolve::ResolvedWitDir;
 use crate::{cargo, naming};
 use anyhow::{anyhow, bail, Context};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use wit_encoder::{
-    Ident, Interface, Package, PackageName, Params, ResourceFunc, Results, Type, TypeDef,
-    TypeDefKind, VariantCase, World,
+    Ident, Interface, Package, PackageItem, PackageName, Params, ResourceFunc, Results,
+    StandaloneFunc, Type, TypeDef, TypeDefKind, VariantCase, World, WorldItem,
 };
+use wit_parser::PackageId;
 
 pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
@@ -46,20 +44,6 @@ pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     fs::create_dir_all(def.target_wit_root())?;
     fs::write(def.target_wit_path(), out)?;
     Ok(())
-}
-
-pub fn generate_stub_wit_from_wit_dir(
-    source_wit_root: &Path,
-    inline_source_types: bool,
-) -> anyhow::Result<String> {
-    generate_stub_wit_from_stub_def(&StubDefinition::new(StubConfig {
-        source_wit_root: source_wit_root.to_path_buf(),
-        target_root: source_wit_root.to_path_buf(), // Not used
-        selected_world: None,                       // TODO: would this fail with multiple worlds?
-        stub_crate_version: "".to_string(),         // Not used
-        wasm_rpc_override: Default::default(),      // Not used
-        inline_source_types,
-    })?)
 }
 
 pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<String> {
@@ -93,15 +77,11 @@ pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> Package {
 
         // Used or inlined type defs
         for type_def in def.stub_used_type_defs() {
-            if type_def.inlined {
-                stub_interface.type_def(type_def.to_encoder(def))
-            } else {
-                stub_interface.use_type(
-                    type_def.interface_identifier.clone(),
-                    type_def.type_name.clone(),
-                    type_def.type_name_alias.clone().map(Ident::from),
-                );
-            }
+            stub_interface.use_type(
+                type_def.interface_identifier.clone(),
+                type_def.type_name.clone(),
+                type_def.type_name_alias.clone().map(Ident::from),
+            );
         }
 
         // Async return types
@@ -229,60 +209,36 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
     log_action(
         "Adding",
         format!(
-            "WIT dependencies from {} to {}",
+            "WIT dependencies to {} from {}",
+            def.config.target_root.display(),
             def.config.source_wit_root.display(),
-            def.config.target_root.display()
         ),
     );
 
-    let stub_package_name = def.stub_package_name();
+    let _indent = LogIndent::new();
+
     let stub_dep_packages = def.stub_dep_package_ids();
-    let remove_stub_imports = import_remover(&stub_package_name);
 
     let target_wit_root = def.target_wit_root();
     let target_deps = target_wit_root.join(naming::wit::DEPS_DIR);
 
-    let _indent = LogIndent::new();
     for (package_id, package, package_sources) in def.packages_with_wit_sources() {
-        if !stub_dep_packages.contains(&package_id) {
-            log_warn_action(
-                "Skipping",
-                format!(
-                    "package dependency {}, not used in the stub interface",
-                    package.name
-                ),
-            );
+        if !stub_dep_packages.contains(&package_id) || package_id == def.source_package_id {
+            log_warn_action("Skipping", format!("package dependency {}", package.name));
             continue;
         }
-
-        let is_source_package = package.name == def.source_package_name;
 
         log_action("Copying", format!("package dependency {}", package.name));
 
         let _indent = LogIndent::new();
         for source in &package_sources.files {
-            if is_source_package {
-                let dest = target_deps
-                    .join(naming::wit::package_dep_dir_name(&def.source_package_name))
-                    .join(get_file_name(source)?);
-                log_action(
-                    "Copying",
-                    format!(
-                        "(with source imports removed) {} to {}",
-                        source.display(),
-                        dest.display()
-                    ),
-                );
-                copy_transformed(source, &dest, &remove_stub_imports)?;
-            } else {
-                let relative = source.strip_prefix(&def.config.source_wit_root)?;
-                let dest = target_wit_root.join(relative);
-                log_action(
-                    "Copying",
-                    format!("{} to {}", source.display(), dest.display()),
-                );
-                copy(source, &dest)?;
-            }
+            let relative = source.strip_prefix(&def.config.source_wit_root)?;
+            let dest = target_wit_root.join(relative);
+            log_action(
+                "Copying",
+                format!("{} to {}", source.display(), dest.display()),
+            );
+            copy(source, &dest)?;
         }
     }
 
@@ -324,12 +280,9 @@ pub enum UpdateCargoToml {
 pub struct AddStubAsDepConfig {
     pub stub_wit_root: PathBuf,
     pub dest_wit_root: PathBuf,
-    pub overwrite: bool,
-    pub remove_dest_imports: bool,
     pub update_cargo_toml: UpdateCargoToml,
 }
 
-// TODO: "named" args?
 pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::Result<()> {
     log_action(
         "Adding",
@@ -344,35 +297,10 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
 
     let stub_resolved_wit_root = ResolvedWitDir::new(&config.stub_wit_root)?;
     let stub_package = stub_resolved_wit_root.main_package()?;
-    let stub_wit = config.stub_wit_root.join(naming::wit::STUB_WIT_FILE_NAME);
 
-    let dest_deps_dir = config.dest_wit_root.join(naming::wit::DEPS_DIR);
     let dest_resolved_wit_root = ResolvedWitDir::new(&config.dest_wit_root)?;
-    let dest_package = dest_resolved_wit_root.main_package()?;
-    let dest_stub_package_name = naming::wit::stub_package_name(&dest_package.name);
 
-    // TODO: these could be made optional depending on remove_dest_imports
-    let mut stub_encoded_wit_root = EncodedWitDir::new(&stub_resolved_wit_root.resolve)?;
-    let remove_dest_package_import = world_named_interface_import_remover(&dest_package.name);
-    let remove_dest_stub_package_import =
-        world_named_interface_import_remover(&dest_stub_package_name);
-
-    // TODO: this could be made optional depending on "add stub import" (=overwrite)
     let mut dest_encoded_wit_root = EncodedWitDir::new(&dest_resolved_wit_root.resolve)?;
-
-    // TODO: make this optional (not needed for declarative)
-    {
-        let is_self_stub_by_name =
-            dest_package.name == naming::wit::stub_target_package_name(&stub_package.name);
-        let is_self_stub_by_content = is_self_stub(&stub_wit, &config.dest_wit_root);
-
-        if is_self_stub_by_name && !is_self_stub_by_content? {
-            return Err(anyhow!(
-            "Both the caller and the target components are using the same package name ({}), which is not supported.",
-            dest_package.name
-        ));
-        }
-    }
 
     let mut actions = OverwriteSafeActions::new();
     let mut package_names_to_package_path = BTreeMap::<wit_parser::PackageName, PathBuf>::new();
@@ -382,65 +310,30 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
             .package_sources
             .get(package_id)
             .ok_or_else(|| anyhow!("Failed to get package sources for {}", package_name))?;
-        let package_path = naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(
-            &package_sources.dir,
-        )?);
 
-        let is_stub_main_package = *package_id == stub_resolved_wit_root.package_id;
-        let is_dest_package = *package_name == dest_package.name;
-        let is_dest_stub_package = *package_name == dest_stub_package_name;
+        if *package_id == stub_resolved_wit_root.package_id {
+            let package_path = naming::wit::package_wit_dep_dir_from_parser(package_name);
 
-        // We skip self as a dependency
-        if is_dest_package {
-            log_warn_action(
-                "Skipping",
-                format!("cyclic self dependency for {}", package_name),
-            );
-        } else if is_dest_stub_package || is_stub_main_package {
-            let package_dep_dir_name = naming::wit::package_dep_dir_name(package_name);
-            let package_path = naming::wit::package_wit_dep_dir_from_package_name(package_name);
+            package_names_to_package_path.insert(package_name.clone(), package_path.clone());
 
-            package_names_to_package_path.insert(package_name.clone(), package_path);
-
-            // Handle self stub packages: use regenerated stub with inlining, to break the recursive cycle
-            if is_dest_stub_package {
-                actions.add(OverwriteSafeAction::WriteFile {
-                    // TODO: this call potentially builds another EncodedWitDir for source
-                    content: generate_stub_wit_from_wit_dir(&config.dest_wit_root, true)?,
-                    target: dest_deps_dir
-                        .join(&package_dep_dir_name)
-                        .join(naming::wit::STUB_WIT_FILE_NAME),
+            for source in &package_sources.files {
+                actions.add(OverwriteSafeAction::CopyFile {
+                    source: source.clone(),
+                    target: config
+                        .dest_wit_root
+                        .join(naming::wit::DEPS_DIR)
+                        .join(naming::wit::package_dep_dir_name_from_parser(package_name))
+                        .join(get_file_name(source)?),
                 });
-            // Non-self stub package has to be copied into target deps
-            } else {
-                for source in &package_sources.files {
-                    actions.add(OverwriteSafeAction::CopyFile {
-                        source: source.clone(),
-                        target: dest_deps_dir
-                            .join(&package_dep_dir_name)
-                            .join(get_file_name(source)?),
-                    });
-                }
             }
-        // Handle other package by copying and removing cyclic imports
-        } else if config.remove_dest_imports {
-            package_names_to_package_path.insert(package_name.clone(), package_path);
-
-            let package = stub_encoded_wit_root.package(*package_id)?;
-            remove_dest_package_import(package);
-            remove_dest_stub_package_import(package);
-            let content = package.to_string();
-
-            let target = wit_dep_transformed_target_file(
-                &config.stub_wit_root,
-                &config.dest_wit_root,
-                package_name,
-                package_sources,
-            )?;
-
-            actions.add(OverwriteSafeAction::WriteFile { content, target });
-        // Handle other package by copying and no transformations
         } else {
+            package_names_to_package_path.insert(
+                package_name.clone(),
+                naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(
+                    &package_sources.dir,
+                )?),
+            );
+
             for source in &package_sources.files {
                 actions.add(OverwriteSafeAction::CopyFile {
                     source: source.clone(),
@@ -452,33 +345,39 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
         }
     }
 
-    // Import stub if overwrite enabled // TODO: use a different flag, or always import?
-    if config.overwrite {
-        let dest_main_package_id = dest_resolved_wit_root.package_id;
+    // Import stub and remove source interfaces
+    let dest_main_package_id = dest_resolved_wit_root.package_id;
 
-        let dest_main_package_sources = dest_resolved_wit_root
-            .package_sources
-            .get(&dest_main_package_id)
-            .ok_or_else(|| anyhow!("Failed to get dest main package sources"))?;
+    let dest_main_package_sources = dest_resolved_wit_root
+        .package_sources
+        .get(&dest_main_package_id)
+        .ok_or_else(|| anyhow!("Failed to get dest main package sources"))?;
 
-        if dest_main_package_sources.files.len() != 1 {
-            bail!(
-                "Expected exactly one dest main package source, got sources: {:?}",
-                dest_main_package_sources.files
-            );
-        }
-
-        let package = dest_encoded_wit_root.package(dest_main_package_id)?;
-        add_world_named_interface_import(package, &naming::wit::stub_import_name(stub_package)?);
-        let content = package.to_string();
-
-        actions.add(OverwriteSafeAction::WriteFile {
-            content,
-            target: dest_main_package_sources.files[0].clone(),
-        });
+    if dest_main_package_sources.files.len() != 1 {
+        bail!(
+            "Expected exactly one dest main package source, got sources: {:?}",
+            dest_main_package_sources.files
+        );
     }
 
-    let forbidden_overwrites = actions.run(config.overwrite, log_action_plan)?;
+    let package = dest_encoded_wit_root.package(dest_main_package_id)?;
+    // NOTE: wit_encoder "inlines" all transitive imports, so we have to clean up transitive
+    //       imports from the source-interface package, given they might have been removed or renamed
+    //       in the source, and could create invalid imports.
+    remove_world_named_interface_imports(
+        package,
+        &naming::wit::stub_import_interface_prefix_from_stub_package_name(&stub_package.name)?,
+    );
+    add_world_named_interface_import(package, &naming::wit::stub_import_name(stub_package)?);
+    let content = package.to_string();
+
+    actions.add(OverwriteSafeAction::WriteFile {
+        content,
+        target: dest_main_package_sources.files[0].clone(),
+    });
+
+    // Check overwrites
+    let forbidden_overwrites = actions.run(true, log_action_plan)?;
     if !forbidden_overwrites.is_empty() {
         eprintln!("The following files would have been overwritten with new content:");
         for action in forbidden_overwrites {
@@ -488,6 +387,7 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
         eprintln!("Use --overwrite to force overwrite.");
     }
 
+    // Optionally update Cargo.toml
     if let Some(target_parent) = config.dest_wit_root.parent() {
         let target_cargo_toml = target_parent.join("Cargo.toml");
         if target_cargo_toml.exists() && target_cargo_toml.is_file() {
@@ -513,46 +413,6 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
     }
 
     Ok(())
-}
-
-// TODO: let's find another way to identify self stubs, as this is quite diverging now based on content
-/// Checks whether `stub_wit` is a stub generated for `dest_wit_root`
-fn is_self_stub(stub_wit: &Path, dest_wit_root: &Path) -> anyhow::Result<bool> {
-    // TODO: can we make it diff exports instead of generated content?
-    let dest_stub_wit_imported = generate_stub_wit_from_wit_dir(dest_wit_root, false)?;
-    let dest_stub_wit_inlined = generate_stub_wit_from_wit_dir(dest_wit_root, true)?;
-    let stub_wit = std::fs::read_to_string(stub_wit)?;
-
-    // TODO: this can also be false in case the stub is lagging
-    Ok(stub_wit == dest_stub_wit_imported || stub_wit == dest_stub_wit_inlined)
-}
-
-fn wit_dep_transformed_target_file(
-    source_wit_root: &Path,
-    target_wit_root: &Path,
-    package_name: &wit_parser::PackageName,
-    package_sources: &PackageSource,
-) -> anyhow::Result<PathBuf> {
-    let first_source = package_sources.files.first().ok_or_else(|| {
-        anyhow!(
-            "Expected at least one source for wit package: {}",
-            package_name
-        )
-    })?;
-    let first_source_relative_path = strip_path_prefix(source_wit_root, first_source)?;
-
-    if package_sources.files.len() == 1 {
-        Ok(target_wit_root.join(first_source_relative_path))
-    } else {
-        Ok(target_wit_root
-            .join(first_source_relative_path.parent().ok_or_else(|| {
-                anyhow!(
-                    "Failed to get parent of wit source: {}",
-                    first_source_relative_path.display()
-                )
-            })?)
-            .join(naming::wit::package_merged_wit_name(package_name)))
-    }
 }
 
 trait ToEncoder {
@@ -655,7 +515,7 @@ impl ToEncoder for InterfaceStubTypeDef {
     type EncoderType = TypeDef;
 
     fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
-        (self.stub_type_name(), self.stub_type_def()).to_encoder(def)
+        (self.stub_type_name(), &self.type_def).to_encoder(def)
     }
 }
 
@@ -744,4 +604,232 @@ impl ToEncoder for (&str, &wit_parser::TypeDef) {
             ),
         }
     }
+}
+
+fn add_world_named_interface_import(package: &mut Package, import_name: &str) {
+    for world_item in package.items_mut() {
+        if let PackageItem::World(world) = world_item {
+            let is_already_imported = world.items_mut().iter().any(|item| {
+                if let WorldItem::NamedInterfaceImport(import) = item {
+                    import.name().raw_name() == import_name
+                } else {
+                    false
+                }
+            });
+            if !is_already_imported {
+                world.named_interface_import(import_name.to_string());
+            }
+        }
+    }
+}
+
+fn remove_world_named_interface_imports(package: &mut Package, import_prefix: &str) {
+    for world_item in package.items_mut() {
+        if let PackageItem::World(world) = world_item {
+            world.items_mut().retain(|item| {
+                if let WorldItem::NamedInterfaceImport(import) = item {
+                    !import.name().raw_name().starts_with(import_prefix)
+                } else {
+                    true
+                }
+            })
+        }
+    }
+}
+
+pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
+    log_action(
+        "Extracting",
+        format!(
+            "interface package for main component in wit directory {}",
+            wit_dir.display()
+        ),
+    );
+
+    let resolved_wit_dir = ResolvedWitDir::new(wit_dir)?;
+    let main_package_id = resolved_wit_dir.package_id;
+    let mut encoded_wit_dir = EncodedWitDir::new(&resolved_wit_dir.resolve)?;
+
+    let resolved_wit_dir = ResolvedWitDir::new(wit_dir)?;
+
+    let (main_package, interface_package) =
+        extract_main_interface_package(main_package_id, &mut encoded_wit_dir)?;
+    let sources = resolved_wit_dir
+        .package_sources
+        .get(&resolved_wit_dir.package_id)
+        .ok_or_else(|| {
+            anyhow!(
+                "Failed to get sources for main package, wit dir: {}",
+                wit_dir.display()
+            )
+        })?;
+
+    if sources.files.len() != 1 {
+        bail!(
+            "Expected exactly one source for main package, wit dir: {}",
+            wit_dir.display()
+        );
+    }
+
+    let _indent = LogIndent::new();
+
+    let interface_package_path = wit_dir
+        .join(naming::wit::DEPS_DIR)
+        .join(package_dep_dir_name_from_encoder(interface_package.name()))
+        .join(naming::wit::INTERFACE_WIT_FILE_NAME);
+    log_action(
+        "Writing",
+        format!("interface package to {}", interface_package_path.display()),
+    );
+    write_str(&interface_package_path, interface_package.to_string())?;
+
+    let main_package_path = &sources.files[0];
+    log_action(
+        "Writing",
+        format!("main package to {}", main_package_path.display()),
+    );
+    write_str(main_package_path, main_package.to_string())?;
+
+    Ok(())
+}
+
+// TODO: handle world include
+// TODO: handle world use
+// TODO: maybe transform inline interfaces and functions into included world?
+fn extract_main_interface_package(
+    main_package_id: PackageId,
+    encoded_wit_dir: &mut EncodedWitDir,
+) -> anyhow::Result<(Package, Package)> {
+    let package = encoded_wit_dir.package(main_package_id)?;
+
+    let mut interface_package = package.clone();
+    interface_package.set_name(naming::wit::interface_package_name(package.name()));
+
+    let interface_export_prefix = format!(
+        "{}:{}/",
+        package.name().namespace(),
+        interface_package.name().name()
+    );
+    let interface_export_suffix = package
+        .name()
+        .version()
+        .map(|version| format!("@{}", version))
+        .unwrap_or_default();
+
+    // TODO: is import and exporting the same interface allowed?
+    let mut exported_interface_identifiers = HashSet::<Ident>::new();
+    let mut inline_interface_exports = BTreeMap::<Ident, Vec<Interface>>::new();
+    let mut inline_function_exports = BTreeMap::<Ident, Vec<StandaloneFunc>>::new();
+    for package_item in package.items_mut() {
+        if let PackageItem::World(world) = package_item {
+            let world_name = world.name().clone();
+
+            world.items_mut().retain(|world_item| match world_item {
+                // Remove and collect inline interface exports
+                WorldItem::InlineInterfaceExport(interface) => {
+                    let mut interface = interface.clone();
+                    interface.set_name(naming::wit::interface_package_world_inline_interface_name(
+                        &world_name,
+                        interface.name(),
+                    ));
+
+                    inline_interface_exports
+                        .entry(world_name.clone())
+                        .or_default()
+                        .push(interface.clone());
+                    false
+                }
+                // Remove and collect inline function exports
+                WorldItem::FunctionExport(function) => {
+                    inline_function_exports
+                        .entry(world_name.clone())
+                        .or_default()
+                        .push(function.clone());
+                    false
+                }
+                // Collect named interface export identifiers
+                WorldItem::NamedInterfaceExport(interface) => {
+                    exported_interface_identifiers.insert(interface.name().clone());
+                    true
+                }
+                _ => true,
+            });
+
+            // Insert named imports for extracted inline interfaces
+            if let Some(interfaces) = inline_interface_exports.get(&world_name) {
+                for interface in interfaces {
+                    world.named_interface_export(interface.name().clone());
+                }
+            }
+
+            // Insert named import for extracted inline functions
+            if inline_function_exports.contains_key(&world_name) {
+                world.named_interface_export(format!(
+                    "{}{}{}",
+                    interface_export_prefix,
+                    naming::wit::interface_package_world_inline_functions_interface_name(
+                        &world_name
+                    ),
+                    interface_export_suffix
+                ));
+            }
+        }
+    }
+
+    package.items_mut().retain(|item| match item {
+        // Drop exported interfaces from original package
+        PackageItem::Interface(interface) => {
+            !exported_interface_identifiers.contains(interface.name())
+        }
+        PackageItem::World(_) => true,
+    });
+
+    interface_package.items_mut().retain(|item| match item {
+        // Drop non-exported interfaces from interface package
+        PackageItem::Interface(interface) => {
+            exported_interface_identifiers.contains(interface.name())
+        }
+        // Drop all worlds from interface package
+        PackageItem::World(_) => false,
+    });
+
+    // Rename named self imports to use the extracted interface names
+    for package_item in package.items_mut() {
+        if let PackageItem::World(world) = package_item {
+            for world_item in world.items_mut() {
+                if let WorldItem::NamedInterfaceExport(export) = world_item {
+                    if !export.name().raw_name().contains("/") {
+                        export.set_name(format!(
+                            "{}{}{}",
+                            interface_export_prefix,
+                            export.name(),
+                            interface_export_suffix
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    // Add inlined exported interfaces to the interface package
+    for (_, interfaces) in inline_interface_exports {
+        for interface in interfaces {
+            interface_package.interface(interface);
+        }
+    }
+
+    // Add interface for inlined functions to the interface package
+    for (world_name, functions) in inline_function_exports {
+        let mut interface = Interface::new(
+            naming::wit::interface_package_world_inline_functions_interface_name(&world_name),
+        );
+
+        for function in functions {
+            interface.function(function);
+        }
+
+        interface_package.interface(interface);
+    }
+
+    Ok((package.clone(), interface_package))
 }

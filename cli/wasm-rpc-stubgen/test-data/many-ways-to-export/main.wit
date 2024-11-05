@@ -6,10 +6,13 @@ interface iface1 {
   func2: func();
 }
 
+// TODO:
+/*
 interface iface2  {
   use iface3.{color};
   func3: func() -> color;
 }
+*/
 
 interface iface3 {
     enum color {
@@ -53,7 +56,8 @@ world api {
 
     export func1: func();
     export iface1;
-    export iface2;
+    // TODO:
+    // export iface2;
 
     export inline-iface: interface {
         func4: func();

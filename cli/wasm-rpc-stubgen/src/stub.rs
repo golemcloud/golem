@@ -33,7 +33,6 @@ pub struct StubConfig {
     pub selected_world: Option<String>,
     pub stub_crate_version: String,
     pub wasm_rpc_override: WasmRpcOverride,
-    pub inline_source_types: bool,
 }
 
 /// All the gathered information for generating the stub crate.
@@ -169,40 +168,6 @@ impl StubDefinition {
         ResolvedWitDir::new(&self.target_wit_root())
     }
 
-    pub fn fix_inlined_owner(&self, typedef: &TypeDef) -> StubTypeOwner {
-        if self.is_inlined(typedef) {
-            StubTypeOwner::StubInterface
-        } else {
-            StubTypeOwner::Source(typedef.owner)
-        }
-    }
-
-    fn is_inlined(&self, typedef: &TypeDef) -> bool {
-        match &typedef.owner {
-            TypeOwner::Interface(interface_id) => {
-                if self.config.inline_source_types {
-                    if let Some(resolved_owner_interface) =
-                        self.resolve.interfaces.get(*interface_id)
-                    {
-                        if let Some(name) = resolved_owner_interface.name.as_ref() {
-                            self.stub_imported_interfaces()
-                                .iter()
-                                .any(|interface| &interface.name == name)
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
-            }
-            TypeOwner::World(_) => true,
-            TypeOwner::None => false,
-        }
-    }
-
     pub fn stub_imported_interfaces(&self) -> &Vec<InterfaceStub> {
         self.stub_imported_interfaces.get_or_init(|| {
             let WorldItemsByType {
@@ -304,41 +269,13 @@ impl StubDefinition {
                             None => format!("{}-{}", interface_name, type_name),
                         });
 
-                        let inlined = self.config.inline_source_types
-                            && interface.package == Some(self.source_package_id);
-
-                        let inlined_type_def = match type_def.kind {
-                            TypeDefKind::Type(Type::Id(type_id)) if inlined => {
-                                let mut type_def = self
-                                    .resolve
-                                    .types
-                                    .get(type_id)
-                                    .unwrap_or_else(|| {
-                                        panic!("Failed to get type def for inlining")
-                                    })
-                                    .clone();
-
-                                // Alias to alias does not need inlining
-                                if let TypeDefKind::Type(Type::Id(_)) = type_def.kind {
-                                    None
-                                } else {
-                                    type_def.name =
-                                        type_name_alias.clone().or_else(|| Some(type_name.clone()));
-                                    Some(type_def)
-                                }
-                            }
-                            _ => None,
-                        };
-
                         InterfaceStubTypeDef {
                             package_id: interface.package,
                             type_id,
                             type_def,
-                            inlined_type_def,
                             interface_identifier,
                             type_name: type_name.clone(),
                             type_name_alias,
-                            inlined,
                         }
                     })
                 })
@@ -353,10 +290,9 @@ impl StubDefinition {
 
     pub fn stub_dep_package_ids(&self) -> &HashSet<PackageId> {
         self.stub_dep_package_ids.get_or_init(|| {
-            self.resolve
-                .packages
+            self.stub_used_type_defs()
                 .iter()
-                .map(|(package_id, _)| package_id)
+                .filter_map(|type_def| type_def.package_id)
                 .collect()
         })
     }
@@ -677,20 +613,14 @@ pub struct InterfaceStubTypeDef {
     pub package_id: Option<PackageId>,
     pub type_id: TypeId,
     pub type_def: TypeDef,
-    pub inlined_type_def: Option<TypeDef>,
     pub interface_identifier: String,
     pub type_name: String,
     pub type_name_alias: Option<String>,
-    pub inlined: bool,
 }
 
 impl InterfaceStubTypeDef {
     pub fn stub_type_name(&self) -> &str {
         self.type_name_alias.as_deref().unwrap_or(&self.type_name)
-    }
-
-    pub fn stub_type_def(&self) -> &TypeDef {
-        self.inlined_type_def.as_ref().unwrap_or(&self.type_def)
     }
 }
 
@@ -773,10 +703,4 @@ impl FunctionResultStub {
             FunctionResultStub::SelfType => false,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum StubTypeOwner {
-    StubInterface,
-    Source(TypeOwner),
 }

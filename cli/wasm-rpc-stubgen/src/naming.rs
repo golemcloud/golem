@@ -1,11 +1,12 @@
 pub mod wit {
-    use anyhow::bail;
+    use anyhow::{anyhow, bail};
     use std::path::{Path, PathBuf};
 
     pub static DEPS_DIR: &str = "deps";
     pub static WIT_DIR: &str = "wit";
 
     pub static STUB_WIT_FILE_NAME: &str = "_stub.wit";
+    pub static INTERFACE_WIT_FILE_NAME: &str = "_interface.wit";
 
     pub fn stub_package_name(package_name: &wit_parser::PackageName) -> wit_parser::PackageName {
         wit_parser::PackageName {
@@ -77,8 +78,29 @@ pub mod wit {
         ))
     }
 
-    pub fn package_dep_dir_name(package_name: &wit_parser::PackageName) -> String {
+    pub fn stub_import_interface_prefix_from_stub_package_name(
+        stub_package: &wit_parser::PackageName,
+    ) -> anyhow::Result<String> {
+        Ok(format!(
+            "{}:{}-interface/",
+            stub_package.namespace,
+            stub_package
+                .name
+                .clone()
+                .strip_suffix("-stub")
+                .ok_or_else(|| anyhow!(
+                    "Expected \"-stub\" suffix in stub package name: {}",
+                    stub_package.to_string()
+                ))?
+        ))
+    }
+
+    pub fn package_dep_dir_name_from_parser(package_name: &wit_parser::PackageName) -> String {
         format!("{}_{}", package_name.namespace, package_name.name)
+    }
+
+    pub fn package_dep_dir_name_from_encoder(package_name: &wit_encoder::PackageName) -> String {
+        format!("{}_{}", package_name.namespace(), package_name.name())
     }
 
     pub fn package_merged_wit_name(package_name: &wit_parser::PackageName) -> String {
@@ -89,9 +111,11 @@ pub mod wit {
         Path::new(WIT_DIR).join(DEPS_DIR).join(package_dir_name)
     }
 
-    pub fn package_wit_dep_dir_from_package_name(
-        package_name: &wit_parser::PackageName,
-    ) -> PathBuf {
-        package_wit_dep_dir_from_package_dir_name(&package_dep_dir_name(package_name))
+    pub fn package_wit_dep_dir_from_parser(package_name: &wit_parser::PackageName) -> PathBuf {
+        package_wit_dep_dir_from_package_dir_name(&package_dep_dir_name_from_parser(package_name))
+    }
+
+    pub fn package_wit_dep_dir_from_encode(package_name: &wit_encoder::PackageName) -> PathBuf {
+        package_wit_dep_dir_from_package_dir_name(&package_dep_dir_name_from_encoder(package_name))
     }
 }

@@ -19,14 +19,11 @@ use std::path::Path;
 pub fn add_stub_dependency(
     stub_wit_root: &Path,
     dest_wit_root: &Path,
-    overwrite: bool,
     update_cargo_toml: UpdateCargoToml,
 ) -> anyhow::Result<()> {
     wit_generate::add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_wit_root.to_path_buf(),
         dest_wit_root: dest_wit_root.to_path_buf(),
-        overwrite,
-        remove_dest_imports: true,
         update_cargo_toml,
     })
 }

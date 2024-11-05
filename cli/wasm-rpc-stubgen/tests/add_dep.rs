@@ -22,7 +22,8 @@ use golem_wasm_rpc::{WASI_POLL_WIT, WASM_RPC_WIT};
 use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_wasm_rpc_stubgen::wit_generate::{
-    add_stub_as_dependency_to_wit_dir, AddStubAsDepConfig, UpdateCargoToml,
+    add_stub_as_dependency_to_wit_dir, extract_main_interface_as_wit_dep, AddStubAsDepConfig,
+    UpdateCargoToml,
 };
 use golem_wasm_rpc_stubgen::wit_resolve::ResolvedWitDir;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
@@ -36,7 +37,7 @@ test_r::enable!();
 
 #[test]
 fn all_wit_types_no_collision() {
-    let stub_dir = init_stub("all-wit-types");
+    let (_source_dir, stub_dir) = init_stub("all-wit-types");
     let dest_dir = init_caller("caller-no-dep");
 
     let stub_wit_root = stub_dir.path().join("wit");
@@ -45,8 +46,6 @@ fn all_wit_types_no_collision() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_wit_root.clone(),
         dest_wit_root: dest_wit_root.clone(),
-        overwrite: false,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -62,16 +61,16 @@ fn all_wit_types_no_collision() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "main", None),
+        &PackageName::new("test", "main-interface", None),
         &dest_wit_root,
-        &Path::new("test-data").join("all-wit-types/main.wit"),
+        &stub_wit_root,
     );
 }
 
 #[test]
-fn all_wit_types_overwrite_protection() {
-    let stub_dir = init_stub("all-wit-types");
-    let alternative_stub_dir = init_stub("all-wit-types-alternative");
+fn all_wit_types_re_add_with_changes() {
+    let (source_dir, stub_dir) = init_stub("all-wit-types");
+    let (alternative_source_dir, alternative_stub_dir) = init_stub("all-wit-types-alternative");
     let dest_dir = init_caller("caller-no-dep");
 
     let stub_wit_root = stub_dir.path().join("wit");
@@ -81,85 +80,57 @@ fn all_wit_types_overwrite_protection() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_wit_root.clone(),
         dest_wit_root: dest_wit_root.clone(),
-        overwrite: false,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
+
+    assert_valid_wit_root(&dest_wit_root);
+    assert_has_wasm_rpc_wit_deps(&dest_wit_root);
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main-interface", None),
+        source_dir.path(),
+        &stub_wit_root,
+    );
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main-interface", None),
+        source_dir.path(),
+        &dest_wit_root,
+    );
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main-stub", None),
+        &stub_wit_root,
+        &dest_wit_root,
+    );
+
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: alternative_stub_wit_root.clone(),
         dest_wit_root: dest_wit_root.clone(),
-        overwrite: false,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
 
     assert_valid_wit_root(&dest_wit_root);
-
     assert_has_wasm_rpc_wit_deps(&dest_wit_root);
-
     assert_has_same_wit_package(
-        &PackageName::new("test", "main-stub", None),
-        &dest_wit_root,
-        &stub_wit_root,
-    );
-
-    assert_has_same_wit_package(
-        &PackageName::new("test", "main", None),
-        &dest_wit_root,
-        &Path::new("test-data").join("all-wit-types/main.wit"),
-    );
-}
-
-#[ignore] // TODO
-#[test]
-fn all_wit_types_overwrite_protection_disabled() {
-    let stub_dir = init_stub("all-wit-types");
-    let alternative_stub_dir = init_stub("all-wit-types-alternative");
-    let dest_dir = init_caller("caller-no-dep");
-
-    let stub_wit_root = stub_dir.path().join("wit");
-    let alternative_stub_wit_root = alternative_stub_dir.path().join("wit");
-    let dest_wit_root = dest_dir.path().join("wit");
-
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_wit_root.clone(),
-        dest_wit_root: dest_wit_root.clone(),
-        overwrite: false,
-        remove_dest_imports: true,
-        update_cargo_toml: UpdateCargoToml::NoUpdate,
-    })
-    .unwrap();
-    add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-        stub_wit_root: stub_wit_root.clone(),
-        dest_wit_root: dest_wit_root.clone(),
-        overwrite: true,
-        remove_dest_imports: true,
-        update_cargo_toml: UpdateCargoToml::NoUpdate,
-    })
-    .unwrap();
-
-    assert_valid_wit_root(&dest_wit_root);
-
-    assert_has_wasm_rpc_wit_deps(&dest_wit_root);
-
-    assert_has_same_wit_package(
-        &PackageName::new("test", "main-stub", None),
-        &dest_wit_root,
+        &PackageName::new("test", "main-interface", None), 
+        alternative_source_dir.path(),
         &alternative_stub_wit_root,
     );
-
     assert_has_same_wit_package(
-        &PackageName::new("test", "main", None),
+        &PackageName::new("test", "main-interface", None),
+        alternative_source_dir.path(),
         &dest_wit_root,
-        &Path::new("test-data").join("all-wit-types-alternative/main.wit"),
+    );
+    assert_has_same_wit_package(
+        &PackageName::new("test", "main-stub", None),
+        &alternative_stub_wit_root,
+        &dest_wit_root,
     );
 }
 
 #[test]
 fn many_ways_to_export_no_collision() {
-    let stub_dir = init_stub("many-ways-to-export");
+    let (source_dir, stub_dir) = init_stub("many-ways-to-export");
     let dest_dir = init_caller("caller-no-dep");
 
     let stub_wit_root = stub_dir.path().join("wit");
@@ -168,8 +139,6 @@ fn many_ways_to_export_no_collision() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_wit_root.clone(),
         dest_wit_root: dest_wit_root.clone(),
-        overwrite: false,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -185,9 +154,9 @@ fn many_ways_to_export_no_collision() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "exports", None),
+        &PackageName::new("test", "exports-interface", None),
+        source_dir.path(),
         &dest_wit_root,
-        &Path::new("test-data").join("many-ways-to-export"),
     );
 
     assert_has_same_wit_package(
@@ -199,8 +168,8 @@ fn many_ways_to_export_no_collision() {
 
 #[test]
 fn direct_circular() {
-    let stub_a_dir = init_stub("direct-circular-a");
-    let stub_b_dir = init_stub("direct-circular-b");
+    let (_source_a_dir, stub_a_dir) = init_stub("direct-circular-a");
+    let (_source_b_dir, stub_b_dir) = init_stub("direct-circular-b");
 
     let dest_a = init_caller("direct-circular-a");
     let dest_b = init_caller("direct-circular-b");
@@ -208,16 +177,12 @@ fn direct_circular() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -234,9 +199,9 @@ fn direct_circular() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b", None),
+        &PackageName::new("test", "b-interface", None),
         dest_a.path(),
-        &Path::new("test-data").join("direct-circular-b/b.wit"),
+        _source_b_dir.path(),
     );
 
     assert_has_wasm_rpc_wit_deps(dest_b.path());
@@ -248,16 +213,16 @@ fn direct_circular() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a", None),
+        &PackageName::new("test", "a-interface", None),
         dest_b.path(),
-        &Path::new("test-data").join("direct-circular-a/a.wit"),
+        _source_a_dir.path(),
     );
 }
 
 #[test]
 fn direct_circular_readd() {
-    let stub_a_dir = init_stub("direct-circular-a");
-    let stub_b_dir = init_stub("direct-circular-b");
+    let (_source_a_dir, stub_a_dir) = init_stub("direct-circular-a");
+    let (_source_b_dir, stub_b_dir) = init_stub("direct-circular-b");
 
     let dest_a = init_caller("direct-circular-a");
     let dest_b = init_caller("direct-circular-b");
@@ -265,16 +230,12 @@ fn direct_circular_readd() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -292,16 +253,12 @@ fn direct_circular_readd() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -344,8 +301,8 @@ fn direct_circular_readd() {
 
 #[test]
 fn direct_circular_same_world_name() {
-    let stub_a_dir = init_stub("direct-circular-a-same-world-name");
-    let stub_b_dir = init_stub("direct-circular-b-same-world-name");
+    let (source_a_dir, stub_a_dir) = init_stub("direct-circular-a-same-world-name");
+    let (source_b_dir, stub_b_dir) = init_stub("direct-circular-b-same-world-name");
 
     let dest_a = init_caller("direct-circular-a-same-world-name");
     let dest_b = init_caller("direct-circular-b-same-world-name");
@@ -353,16 +310,12 @@ fn direct_circular_same_world_name() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -379,9 +332,9 @@ fn direct_circular_same_world_name() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b", None),
+        &PackageName::new("test", "b-interface", None),
         dest_a.path(),
-        &Path::new("test-data").join("direct-circular-b-same-world-name/b.wit"),
+        source_b_dir.path(),
     );
 
     assert_has_wasm_rpc_wit_deps(dest_b.path());
@@ -393,17 +346,17 @@ fn direct_circular_same_world_name() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a", None),
+        &PackageName::new("test", "a-interface", None),
         dest_b.path(),
-        &Path::new("test-data").join("direct-circular-a-same-world-name/a.wit"),
+        source_a_dir.path(),
     );
 }
 
 #[test]
 fn indirect_circular() {
-    let stub_a_dir = init_stub("indirect-circular-a");
-    let stub_b_dir = init_stub("indirect-circular-b");
-    let stub_c_dir = init_stub("indirect-circular-c");
+    let (source_a_dir, stub_a_dir) = init_stub("indirect-circular-a");
+    let (_source_b_dir, stub_b_dir) = init_stub("indirect-circular-b");
+    let (_source_c_dir, stub_c_dir) = init_stub("indirect-circular-c");
 
     let dest_a = init_caller("indirect-circular-a");
     let dest_b = init_caller("indirect-circular-b");
@@ -412,24 +365,18 @@ fn indirect_circular() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_c.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_c_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -447,9 +394,9 @@ fn indirect_circular() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b", None),
+        &PackageName::new("test", "b-interface", None),
         dest_a.path(),
-        &Path::new("test-data").join("indirect-circular-b/b.wit"),
+        &stub_b_dir.path().join("wit"),
     );
 
     assert_has_wasm_rpc_wit_deps(dest_b.path());
@@ -458,12 +405,6 @@ fn indirect_circular() {
         &PackageName::new("test", "c-stub", None),
         dest_b.path(),
         &stub_c_dir.path().join("wit"),
-    );
-
-    assert_has_same_wit_package(
-        &PackageName::new("test", "c", None),
-        dest_b.path(),
-        &Path::new("test-data").join("indirect-circular-c/c.wit"),
     );
 
     assert_has_wasm_rpc_wit_deps(dest_c.path());
@@ -475,17 +416,17 @@ fn indirect_circular() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a", None),
+        &PackageName::new("test", "a-interface", None),
         dest_c.path(),
-        &Path::new("test-data").join("indirect-circular-a/a.wit"),
+        source_a_dir.path(),
     );
 }
 
 #[test]
 fn indirect_circular_readd() {
-    let stub_a_dir = init_stub("indirect-circular-a");
-    let stub_b_dir = init_stub("indirect-circular-b");
-    let stub_c_dir = init_stub("indirect-circular-c");
+    let (_source_a_dir, stub_a_dir) = init_stub("indirect-circular-a");
+    let (_source_b_dir, stub_b_dir) = init_stub("indirect-circular-b");
+    let (_source_c_dir, stub_c_dir) = init_stub("indirect-circular-c");
 
     let dest_a = init_caller("indirect-circular-a");
     let dest_b = init_caller("indirect-circular-b");
@@ -498,24 +439,18 @@ fn indirect_circular_readd() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_c.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_c_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -535,24 +470,18 @@ fn indirect_circular_readd() {
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_c.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_b_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_c_dir.path().join("wit"),
         dest_wit_root: dest_b.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -570,7 +499,7 @@ fn indirect_circular_readd() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "b", None),
+        &PackageName::new("test", "b-interface", None),
         dest_a.path(),
         dest_b.path(),
     );
@@ -583,9 +512,12 @@ fn indirect_circular_readd() {
         &stub_c_dir.path().join("wit"),
     );
 
-    assert_has_same_wit_package(
-        &PackageName::new("test", "c", None),
+    assert_has_no_package_by_name(
+        &PackageName::new("test", "c-interface", None),
         dest_b.path(),
+    );
+    assert_has_package_by_name(
+        &PackageName::new("test", "c-interface", None),
         dest_c.path(),
     );
 
@@ -598,24 +530,23 @@ fn indirect_circular_readd() {
     );
 
     assert_has_same_wit_package(
-        &PackageName::new("test", "a", None),
+        &PackageName::new("test", "a-interface", None),
         dest_c.path(),
         dest_a.path(),
     );
+    assert_has_no_package_by_name(&PackageName::new("test", "a", None), dest_c.path());
+    assert_has_package_by_name(&PackageName::new("test", "a", None), dest_a.path());
 }
 
 #[test]
 fn self_circular() {
-    let stub_a_dir = init_stub("self-circular");
-    let inlined_stub_a_dir = init_stub_inlined("self-circular");
+    let (_source_a_dir, stub_a_dir) = init_stub("self-circular");
 
     let dest_a = init_caller("self-circular");
 
     add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
         stub_wit_root: stub_a_dir.path().join("wit"),
         dest_wit_root: dest_a.path().to_path_buf(),
-        overwrite: true,
-        remove_dest_imports: true,
         update_cargo_toml: UpdateCargoToml::NoUpdate,
     })
     .unwrap();
@@ -627,34 +558,36 @@ fn self_circular() {
     assert_has_same_wit_package(
         &PackageName::new("test", "a-stub", None),
         dest_a.path(),
-        &inlined_stub_a_dir.path().join("wit"),
+        &stub_a_dir.path().join("wit"),
     );
 }
 
-fn init_stub(name: &str) -> TempDir {
-    init_stub_internal(name, false)
-}
+fn init_stub(name: &str) -> (TempDir, TempDir) {
+    let source = TempDir::new().unwrap();
+    let canonical_source = source.path().canonicalize().unwrap();
 
-fn init_stub_inlined(name: &str) -> TempDir {
-    init_stub_internal(name, true)
-}
+    fs_extra::dir::copy(
+        Path::new("test-data").join(name),
+        &canonical_source,
+        &CopyOptions::new().content_only(true),
+    )
+    .unwrap();
 
-fn init_stub_internal(name: &str, always_inline_types: bool) -> TempDir {
-    let tempdir = TempDir::new().unwrap();
-    let canonical_target_root = tempdir.path().canonicalize().unwrap();
+    extract_main_interface_as_wit_dep(source.path()).unwrap();
 
-    let source_wit_root = Path::new("test-data").join(name);
+    let target = TempDir::new().unwrap();
+    let canonical_target = target.path().canonicalize().unwrap();
+
     let def = StubDefinition::new(StubConfig {
-        source_wit_root,
-        target_root: canonical_target_root,
+        source_wit_root: canonical_source,
+        target_root: canonical_target,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
-        inline_source_types: always_inline_types,
     })
     .unwrap();
     let _ = generate_stub_wit_dir(&def).unwrap();
-    tempdir
+    (source, target)
 }
 
 fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
@@ -664,24 +597,34 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
-        inline_source_types: false,
     })
     .unwrap();
     let _ = generate_stub_wit_dir(&def).unwrap();
 }
 
 fn init_caller(name: &str) -> TempDir {
-    let tempdir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new().unwrap();
     let source = Path::new("test-data").join(name);
 
     fs_extra::dir::copy(
         source,
-        tempdir.path(),
+        temp_dir.path(),
         &CopyOptions::new().content_only(true).overwrite(true),
     )
     .unwrap();
 
-    tempdir
+    let wit_dir = {
+        let wit_dir = temp_dir.path().join("wit");
+        if wit_dir.exists() {
+            wit_dir
+        } else {
+            temp_dir.path().to_path_buf()
+        }
+    };
+
+    extract_main_interface_as_wit_dep(&wit_dir).unwrap();
+
+    temp_dir
 }
 
 fn assert_valid_wit_root(wit_root: &Path) {
@@ -745,6 +688,14 @@ fn assert_has_same_wit_package(
         .encoded_package_wit(package_name)
         .unwrap();
     assert!(actual_wit == expected_wit)
+}
+
+fn assert_has_no_package_by_name(package_name: &PackageName, wit_source: impl WitSource) {
+    assert!(wit_source.encoded_package(package_name).is_err())
+}
+
+fn assert_has_package_by_name(package_name: &PackageName, wit_source: impl WitSource) {
+    assert!(wit_source.encoded_package(package_name).is_ok())
 }
 
 fn assert_has_wasm_rpc_wit_deps(wit_dir: &Path) {
