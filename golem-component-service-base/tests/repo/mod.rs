@@ -1,241 +1,46 @@
-use test_r::{sequential, test_dep};
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-use golem_service_base::auth::DefaultNamespace;
-use golem_service_base::config::ComponentStoreLocalConfig;
-
+use crate::Tracing;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::{ComponentId, ComponentType};
-use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_common::SafeDisplay;
 use golem_component_service_base::model::Component;
 use golem_component_service_base::repo::component::ComponentRepo;
+use golem_component_service_base::repo::plugin::PluginRepo;
 use golem_component_service_base::service::component::{
     ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
 };
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
 };
+use golem_service_base::auth::DefaultNamespace;
+use golem_service_base::config::ComponentStoreLocalConfig;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::service::component_object_store;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
 use rib::RegistryKey;
 use std::sync::Arc;
+use test_r::inherit_test_dep;
 use uuid::Uuid;
 
-test_r::enable!();
+mod constraint_data;
+mod postgres;
+mod sqlite;
 
-#[derive(Debug)]
-pub struct Tracing;
-
-impl Tracing {
-    pub fn init() -> Self {
-        init_tracing_with_default_debug_env_filter(&TracingConfig::test("integration-tests"));
-        Self
-    }
-}
-
-#[test_dep]
-fn tracing() -> Tracing {
-    Tracing::init()
-}
-
-#[sequential]
-mod postgres {
-    use crate::Tracing;
-    use golem_common::config::DbPostgresConfig;
-    use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
-    use golem_service_base::db;
-    use sqlx::Pool;
-
-    use std::sync::Arc;
-
-    use test_r::{inherit_test_dep, test, test_dep};
-    use testcontainers::runners::AsyncRunner;
-    use testcontainers::{ContainerAsync, ImageExt};
-    use testcontainers_modules::postgres::Postgres;
-
-    inherit_test_dep!(Tracing);
-
-    #[test_dep]
-    async fn postgres_db_pool(_tracing: &Tracing) -> PostgresDb {
-        PostgresDb::new().await
-    }
-
-    #[test_dep]
-    fn postgres_component_repo(db: &PostgresDb) -> Arc<dyn ComponentRepo + Sync + Send> {
-        Arc::new(DbComponentRepo::new(db.pool.clone()))
-    }
-
-    #[test]
-    async fn repo_component_id_unique(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
-        super::test_repo_component_id_unique(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn repo_component_name_unique_in_namespace(
-        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
-    ) {
-        super::test_repo_component_name_unique_in_namespace(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn repo_component_delete(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
-        super::test_repo_component_delete(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn repo_component_constraints(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
-        super::test_repo_component_constraints(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn component_constraint_incompatible_updates(
-        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
-    ) {
-        super::test_component_constraint_incompatible_updates(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn services(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
-        super::test_services(component_repo.clone()).await
-    }
-
-    struct PostgresDb {
-        _container: ContainerAsync<Postgres>,
-        pub pool: Arc<Pool<sqlx::Postgres>>,
-    }
-
-    impl PostgresDb {
-        async fn new() -> Self {
-            let (db_config, container) = Self::start_docker_postgres().await;
-
-            db::postgres_migrate(
-                &db_config,
-                "../golem-component-service/db/migration/postgres",
-            )
-            .await
-            .unwrap();
-
-            let pool = Arc::new(db::create_postgres_pool(&db_config).await.unwrap());
-
-            Self {
-                _container: container,
-                pool,
-            }
-        }
-
-        async fn start_docker_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
-            let container = Postgres::default()
-                .with_tag("14.7-alpine")
-                .start()
-                .await
-                .expect("Failed to start postgres container");
-
-            let config = DbPostgresConfig {
-                host: "localhost".to_string(),
-                port: container
-                    .get_host_port_ipv4(5432)
-                    .await
-                    .expect("Failed to get port"),
-                database: "postgres".to_string(),
-                username: "postgres".to_string(),
-                password: "postgres".to_string(),
-                schema: Some("test".to_string()),
-                max_connections: 10,
-            };
-
-            (config, container)
-        }
-    }
-}
-
-#[sequential]
-mod sqlite {
-    use crate::Tracing;
-    use golem_common::config::DbSqliteConfig;
-    use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
-    use golem_service_base::db;
-    use sqlx::Pool;
-    use std::sync::Arc;
-
-    use test_r::{inherit_test_dep, test, test_dep};
-    use uuid::Uuid;
-
-    inherit_test_dep!(Tracing);
-
-    #[test_dep]
-    async fn db_pool() -> SqliteDb {
-        SqliteDb::new().await
-    }
-
-    #[test_dep]
-    fn sqlite_component_repo(db: &SqliteDb) -> Arc<dyn ComponentRepo + Sync + Send> {
-        Arc::new(DbComponentRepo::new(db.pool.clone()))
-    }
-
-    #[test]
-    async fn repo_component_id_unique(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
-        super::test_repo_component_id_unique(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn repo_component_name_unique_in_namespace(
-        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
-    ) {
-        super::test_repo_component_name_unique_in_namespace(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn repo_component_delete(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
-        super::test_repo_component_delete(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn repo_component_constraints(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
-        super::test_repo_component_constraints(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn component_constraint_incompatible_updates(
-        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
-    ) {
-        super::test_component_constraint_incompatible_updates(component_repo.clone()).await
-    }
-
-    #[test]
-    async fn services(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
-        super::test_services(component_repo.clone()).await
-    }
-
-    struct SqliteDb {
-        db_path: String,
-        pub pool: Arc<Pool<sqlx::Sqlite>>,
-    }
-
-    impl SqliteDb {
-        pub async fn new() -> Self {
-            let db_path = format!("/tmp/golem-component-{}.db", Uuid::new_v4());
-            let db_config = DbSqliteConfig {
-                database: db_path.clone(),
-                max_connections: 10,
-            };
-
-            db::sqlite_migrate(&db_config, "../golem-component-service/db/migration/sqlite")
-                .await
-                .unwrap();
-
-            let pool = Arc::new(db::create_sqlite_pool(&db_config).await.unwrap());
-
-            Self { db_path, pool }
-        }
-    }
-
-    impl Drop for SqliteDb {
-        fn drop(&mut self) {
-            std::fs::remove_file(&self.db_path).unwrap();
-        }
-    }
-}
+inherit_test_dep!(Tracing);
 
 fn get_component_data(name: &str) -> Vec<u8> {
     let path = format!("../test-components/{}.wasm", name);
@@ -286,7 +91,7 @@ async fn test_component_constraint_incompatible_updates(
     let incompatible_constraint =
         constraint_data::get_incompatible_constraint(&DefaultNamespace::default(), &component_id);
 
-    // Create a constraint with an unknown function (for the purpose of test), and this will act as a existing constraint of component
+    // Create a constraint with an unknown function (for the purpose of test), and this will act as an existing constraint of component
     component_service
         .create_or_update_constraint(&missing_function_constraint)
         .await
@@ -841,137 +646,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
     assert_eq!(result_constraint_get_updated, expected_updated_constraint);
 }
 
-mod constraint_data {
-    use golem_common::model::component_constraint::FunctionConstraint;
-    use golem_common::model::component_constraint::FunctionConstraintCollection;
-    use golem_common::model::ComponentId;
-    use golem_component_service_base::model::ComponentConstraints;
-    use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
-    use golem_wasm_ast::analysis::NameTypePair;
-    use rib::RegistryKey;
-
-    pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionConstraintCollection {
-        FunctionConstraintCollection {
-            function_constraints: vec![FunctionConstraint {
-                function_key: RegistryKey::FunctionNameWithInterface {
-                    interface_name: "golem:it/api".to_string(),
-                    function_name: "initialize-cart".to_string(),
-                },
-                parameter_types: vec![str()],
-                return_types: vec![],
-                usage_count: 1,
-            }],
-        }
-    }
-
-    pub(crate) fn get_shopping_cart_worker_functions_constraint2() -> FunctionConstraintCollection {
-        FunctionConstraintCollection {
-            function_constraints: vec![FunctionConstraint {
-                function_key: RegistryKey::FunctionNameWithInterface {
-                    interface_name: "golem:it/api".to_string(),
-                    function_name: "get-cart-contents".to_string(),
-                },
-                usage_count: 1,
-                parameter_types: vec![],
-
-                return_types: vec![list(record(vec![
-                    NameTypePair {
-                        name: "product-id".to_string(),
-                        typ: str(),
-                    },
-                    NameTypePair {
-                        name: "name".to_string(),
-                        typ: str(),
-                    },
-                    NameTypePair {
-                        name: "price".to_string(),
-                        typ: f32(),
-                    },
-                    NameTypePair {
-                        name: "quantity".to_string(),
-                        typ: u32(),
-                    },
-                ]))],
-            }],
-        }
-    }
-
-    pub(crate) fn get_shopping_cart_worker_functions_constraint_incompatible(
-    ) -> FunctionConstraintCollection {
-        FunctionConstraintCollection {
-            function_constraints: vec![FunctionConstraint {
-                function_key: RegistryKey::FunctionNameWithInterface {
-                    interface_name: "golem:it/api".to_string(),
-                    function_name: "initialize-cart".to_string(),
-                },
-                parameter_types: vec![u64()],
-                return_types: vec![str()],
-                usage_count: 1,
-            }],
-        }
-    }
-
-    pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraintCollection {
-        FunctionConstraintCollection {
-            function_constraints: vec![FunctionConstraint {
-                usage_count: 1,
-                function_key: RegistryKey::FunctionName("foo".to_string()),
-                parameter_types: vec![],
-                return_types: vec![list(record(vec![
-                    NameTypePair {
-                        name: "bar".to_string(),
-                        typ: str(),
-                    },
-                    NameTypePair {
-                        name: "baz".to_string(),
-                        typ: str(),
-                    },
-                ]))],
-            }],
-        }
-    }
-
-    pub(crate) fn get_shopping_cart_component_constraint1<Namespace: Clone>(
-        namespace: &Namespace,
-        component_id: &ComponentId,
-    ) -> ComponentConstraints<Namespace> {
-        ComponentConstraints {
-            namespace: namespace.clone(),
-            component_id: component_id.clone(),
-            constraints: get_shopping_cart_worker_functions_constraint1(),
-        }
-    }
-
-    pub(crate) fn get_shopping_cart_component_constraint2<Namespace: Clone>(
-        namespace: &Namespace,
-        component_id: &ComponentId,
-    ) -> ComponentConstraints<Namespace> {
-        ComponentConstraints {
-            namespace: namespace.clone(),
-            component_id: component_id.clone(),
-            constraints: get_shopping_cart_worker_functions_constraint2(),
-        }
-    }
-
-    pub(crate) fn get_random_constraint<Namespace: Clone>(
-        namespace: &Namespace,
-        component_id: &ComponentId,
-    ) -> ComponentConstraints<Namespace> {
-        ComponentConstraints {
-            namespace: namespace.clone(),
-            component_id: component_id.clone(),
-            constraints: get_random_worker_functions_constraint(),
-        }
-    }
-
-    pub(crate) fn get_incompatible_constraint<Namespace: Clone>(
-        namespace: &Namespace,
-        component_id: &ComponentId,
-    ) -> ComponentConstraints<Namespace> {
-        ComponentConstraints {
-            namespace: namespace.clone(),
-            component_id: component_id.clone(),
-            constraints: get_shopping_cart_worker_functions_constraint_incompatible(),
-        }
-    }
+async fn test_default_plugin_repo(
+    plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+) {
 }

@@ -7,7 +7,7 @@ edition = "2021"
 harness = false
 
 [[test]]
-name = "services_tests"
+name = "tests"
 harness = false
 
 [dependencies]
