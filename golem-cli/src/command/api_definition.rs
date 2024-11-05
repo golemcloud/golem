@@ -48,7 +48,7 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         #[arg(value_hint = clap::ValueHint::FilePath)]
         definition: PathBufOrStdin, // TODO: validate exists
 
-        /// Api definition id to get all versions. Optional.
+        /// Api Definition format
         #[arg(short, long)]
         def_format: Option<ApiDefinitionFileFormat>,
     },
@@ -66,7 +66,7 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         #[arg(value_hint = clap::ValueHint::FilePath)]
         definition: PathBufOrStdin, // TODO: validate exists
 
-        /// Api definition id to get all versions. Optional.
+        /// Api Definition format
         #[arg(short, long)]
         def_format: Option<ApiDefinitionFileFormat>,
     },
@@ -84,7 +84,7 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         #[arg(value_hint = clap::ValueHint::FilePath)]
         definition: PathBufOrStdin, // TODO: validate exists
 
-        /// Api definition id to get all versions. Optional.
+        /// Api Definition format
         #[arg(short, long)]
         def_format: Option<ApiDefinitionFileFormat>,
     },
