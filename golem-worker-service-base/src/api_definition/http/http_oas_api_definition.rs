@@ -3,9 +3,9 @@ use crate::api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 use openapiv3::OpenAPI;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
-use std::borrow::Cow;
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult};
 use serde_json::Value;
+use std::borrow::Cow;
 
 pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinitionRequest, String> {
     let api_definition_id = ApiDefinitionId(get_root_extension(
@@ -46,7 +46,6 @@ impl ParseFromJSON for OpenApiDefinitionRequest {
     }
 }
 
-
 impl ParseFromYAML for OpenApiDefinitionRequest {
     fn parse_from_yaml(value: Option<Value>) -> ParseResult<Self> {
         match value {
@@ -79,9 +78,7 @@ impl poem_openapi::types::Type for OpenApiDefinitionRequest {
     fn schema_ref() -> MetaSchemaRef {
         MetaSchemaRef::Inline(Box::new(MetaSchema {
             title: Some("API definition in OpenAPI format".to_string()),
-            description: Some(
-                "API definition in OpenAPI format with required custom extensions",
-            ),
+            description: Some("API definition in OpenAPI format with required custom extensions"),
             ..MetaSchema::new("OpenAPI+WorkerBridgeCustomExtension")
         }))
     }
@@ -96,7 +93,6 @@ impl poem_openapi::types::Type for OpenApiDefinitionRequest {
         Box::new(self.as_raw_value().into_iter())
     }
 }
-
 
 mod internal {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};

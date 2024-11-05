@@ -1,9 +1,10 @@
+use golem_common::json_yaml::JsonOrYaml;
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
+use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionWithTypeInfo;
-use golem_worker_service_base::api::{ApiEndpointError};
 use golem_worker_service_base::api_definition::http::CompiledHttpApiDefinition;
 use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
 use golem_worker_service_base::api_definition::http::{
@@ -18,7 +19,6 @@ use poem_openapi::*;
 use std::result::Result;
 use std::sync::Arc;
 use tracing::{error, Instrument};
-use golem_common::json_yaml::JsonOrYaml;
 
 pub struct RegisterApiDefinitionApi {
     definition_service: Arc<
@@ -52,7 +52,7 @@ impl RegisterApiDefinitionApi {
         let record = recorded_http_api_request!("import_open_api",);
 
         let response = {
-            let definition = get_api_definition(payload.0.0).map_err(|e| {
+            let definition = get_api_definition(payload.0 .0).map_err(|e| {
                 error!("Invalid Spec {}", e);
                 ApiEndpointError::bad_request(safe(e))
             })?;
