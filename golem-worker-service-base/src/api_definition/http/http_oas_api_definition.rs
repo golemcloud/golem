@@ -1,14 +1,8 @@
 use crate::api_definition::http::HttpApiDefinitionRequest;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
-use http::StatusCode;
 use internal::*;
 use openapiv3::OpenAPI;
-use poem::web::Yaml;
-use poem::Request;
-use poem_openapi::payload::Json;
-use poem_openapi::registry::{MetaMediaType, MetaRequest, MetaSchema, MetaSchemaRef};
-use poem_openapi::{registry, ApiExtractor, ApiExtractorType, ExtractParamOptions};
-use sqlx::types;
+use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use std::borrow::Cow;
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult};
 use serde_json::Value;
