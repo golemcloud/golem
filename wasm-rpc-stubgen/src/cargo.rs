@@ -87,9 +87,9 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         },
     );
 
-    let stub_package_name = def.stub_package_name();
-    for (_, dep_package, dep_package_sources) in def.packages_with_wit_sources() {
-        if dep_package.name == stub_package_name {
+    let stub_dep_package_ids = def.stub_dep_package_ids();
+    for (dep_package_id, dep_package, dep_package_sources) in def.packages_with_wit_sources() {
+        if !stub_dep_package_ids.contains(&dep_package_id) {
             continue;
         }
 
