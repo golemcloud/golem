@@ -55,13 +55,18 @@ pub async fn create_postgres_pool(
         .map_err(|e| e.into())
 }
 
-pub async fn postgres_migrate(config: &DbPostgresConfig, path: &str) -> Result<(), Box<dyn Error>> {
+pub async fn postgres_migrate(
+    config: &DbPostgresConfig,
+    path: &'static str,
+) -> Result<(), Box<dyn Error>> {
     let schema = config.schema.clone().unwrap_or("public".to_string());
     info!(
         "DB migration: postgresql://{}:{}/{}?currentSchema={}, path: {}",
         config.host, config.port, config.database, schema, path
     );
-    let mut conn = PgConnection::connect_with(&create_postgres_options(config)).await?;
+
+    let options = create_postgres_options(config);
+    let mut conn = PgConnection::connect_with(&options).await?;
     let sql = format!("CREATE SCHEMA IF NOT EXISTS {};", schema);
     conn.execute(sqlx::query(&sql)).await?;
     let sql = format!("SET SCHEMA '{}';", schema);
@@ -100,7 +105,10 @@ pub async fn create_sqlite_pool(config: &DbSqliteConfig) -> Result<Pool<Sqlite>,
         .map_err(|e| e.into())
 }
 
-pub async fn sqlite_migrate(config: &DbSqliteConfig, path: &str) -> Result<(), Box<dyn Error>> {
+pub async fn sqlite_migrate(
+    config: &DbSqliteConfig,
+    path: &'static str,
+) -> Result<(), Box<dyn Error>> {
     info!("DB migration: sqlite://{}, path: {}", config.database, path);
     let mut conn = SqliteConnection::connect_with(&create_sqlite_options(config)).await?;
     let migrator = sqlx::migrate::Migrator::new(Path::new(path)).await?;

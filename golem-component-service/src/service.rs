@@ -153,7 +153,7 @@ impl Services {
         > = Arc::new(PluginServiceDefault::new(
             plugin_repo,
             component_plugin_installations_repo,
-            component_service.clone()
+            component_service.clone(),
         ));
 
         Ok(Services {

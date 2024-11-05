@@ -316,12 +316,13 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             let namespace: String = result.get("namespace");
             let name: String = result.get("name");
             if namespace != component.namespace || name != component.name {
+                transaction.rollback().await?;
                 return Err(RepoError::Internal(
                     "Component namespace and name invalid".to_string(),
                 ));
             }
         } else {
-            sqlx::query(
+            let result = sqlx::query(
                 r#"
                   INSERT INTO components
                     (namespace, component_id, name)
@@ -333,7 +334,14 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
             .bind(component.component_id)
             .bind(component.name.clone())
             .execute(&mut *transaction)
-            .await?;
+            .await;
+
+            if let Err(err) = result {
+                // Without this explicit rollback, sqlite seems to be remain locked when a next
+                // incoming request comes in.
+                transaction.rollback().await?;
+                return Err(err.into());
+            }
         }
 
         sqlx::query(
@@ -358,7 +366,8 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
         Ok(())
     }
 
-    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
+    #[when(sqlx::Postgres -> get)]
+    async fn get_postgres(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
@@ -369,6 +378,30 @@ impl ComponentRepo for DbComponentRepo<sqlx::Postgres> {
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
+                    cv.component_type AS component_type
+                FROM components c
+                    JOIN component_versions cv ON c.component_id = cv.component_id
+                WHERE c.component_id = $1
+                "#,
+        )
+        .bind(component_id)
+        .fetch_all(self.db_pool.deref())
+        .await
+        .map_err(|e| e.into())
+    }
+
+    #[when(sqlx::Sqlite -> get)]
+    async fn get_sqlite(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
+        sqlx::query_as::<_, ComponentRecord>(
+            r#"
+                SELECT
+                    c.namespace AS namespace,
+                    c.name AS name,
+                    c.component_id AS component_id,
+                    cv.version AS version,
+                    cv.size AS size,
+                    cv.metadata AS metadata,
+                    cv.created_at AS created_at,
                     cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id

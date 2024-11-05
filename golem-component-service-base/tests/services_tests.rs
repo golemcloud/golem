@@ -1,115 +1,240 @@
-use test_r::test;
+use test_r::{sequential, test_dep};
 
-use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::config::ComponentStoreLocalConfig;
-use golem_service_base::db;
 
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::{ComponentId, ComponentType};
+use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_common::SafeDisplay;
 use golem_component_service_base::model::Component;
-use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
+use golem_component_service_base::repo::component::ComponentRepo;
 use golem_component_service_base::service::component::{
     ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
 };
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDisabled,
 };
-use golem_service_base::model::ComponentName;
+use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::service::component_object_store;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
 use rib::RegistryKey;
 use std::sync::Arc;
-use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
-use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
 
 test_r::enable!();
 
-async fn start_docker_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
-    let container = Postgres::default()
-        .with_tag("14.7-alpine")
-        .start()
-        .await
-        .expect("Failed to start postgres container");
+#[derive(Debug)]
+pub struct Tracing;
 
-    let config = DbPostgresConfig {
-        host: "localhost".to_string(),
-        port: container
-            .get_host_port_ipv4(5432)
+impl Tracing {
+    pub fn init() -> Self {
+        init_tracing_with_default_debug_env_filter(&TracingConfig::test("integration-tests"));
+        Self
+    }
+}
+
+#[test_dep]
+fn tracing() -> Tracing {
+    Tracing::init()
+}
+
+#[sequential]
+mod postgres {
+    use crate::Tracing;
+    use golem_common::config::DbPostgresConfig;
+    use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
+    use golem_service_base::db;
+    use sqlx::Pool;
+
+    use std::sync::Arc;
+
+    use test_r::{inherit_test_dep, test, test_dep};
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::{ContainerAsync, ImageExt};
+    use testcontainers_modules::postgres::Postgres;
+
+    inherit_test_dep!(Tracing);
+
+    #[test_dep]
+    async fn postgres_db_pool(_tracing: &Tracing) -> PostgresDb {
+        PostgresDb::new().await
+    }
+
+    #[test_dep]
+    fn postgres_component_repo(db: &PostgresDb) -> Arc<dyn ComponentRepo + Sync + Send> {
+        Arc::new(DbComponentRepo::new(db.pool.clone()))
+    }
+
+    #[test]
+    async fn repo_component_id_unique(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+        super::test_repo_component_id_unique(component_repo.clone()).await
+    }
+
+    #[test]
+    async fn repo_component_name_unique_in_namespace(
+        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
+    ) {
+        super::test_repo_component_name_unique_in_namespace(component_repo.clone()).await
+    }
+
+    #[test]
+    async fn repo_component_delete(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+        super::test_repo_component_delete(component_repo.clone()).await
+    }
+
+    #[test]
+    async fn repo_component_constraints(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+        super::test_repo_component_constraints(component_repo.clone()).await
+    }
+
+    #[test]
+    async fn component_constraint_incompatible_updates(
+        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
+    ) {
+        super::test_component_constraint_incompatible_updates(component_repo.clone()).await
+    }
+
+    #[test]
+    async fn services(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+        super::test_services(component_repo.clone()).await
+    }
+
+    struct PostgresDb {
+        _container: ContainerAsync<Postgres>,
+        pub pool: Arc<Pool<sqlx::Postgres>>,
+    }
+
+    impl PostgresDb {
+        async fn new() -> Self {
+            let (db_config, container) = Self::start_docker_postgres().await;
+
+            db::postgres_migrate(
+                &db_config,
+                "../golem-component-service/db/migration/postgres",
+            )
             .await
-            .expect("Failed to get port"),
-        database: "postgres".to_string(),
-        username: "postgres".to_string(),
-        password: "postgres".to_string(),
-        schema: Some("test".to_string()),
-        max_connections: 10,
-    };
+            .unwrap();
 
-    (config, container)
-}
+            let pool = Arc::new(db::create_postgres_pool(&db_config).await.unwrap());
 
-struct SqliteDb {
-    db_path: String,
-}
+            Self {
+                _container: container,
+                pool,
+            }
+        }
 
-impl Default for SqliteDb {
-    fn default() -> Self {
-        Self {
-            db_path: format!("/tmp/golem-component-{}.db", Uuid::new_v4()),
+        async fn start_docker_postgres() -> (DbPostgresConfig, ContainerAsync<Postgres>) {
+            let container = Postgres::default()
+                .with_tag("14.7-alpine")
+                .start()
+                .await
+                .expect("Failed to start postgres container");
+
+            let config = DbPostgresConfig {
+                host: "localhost".to_string(),
+                port: container
+                    .get_host_port_ipv4(5432)
+                    .await
+                    .expect("Failed to get port"),
+                database: "postgres".to_string(),
+                username: "postgres".to_string(),
+                password: "postgres".to_string(),
+                schema: Some("test".to_string()),
+                max_connections: 10,
+            };
+
+            (config, container)
         }
     }
 }
 
-impl Drop for SqliteDb {
-    fn drop(&mut self) {
-        std::fs::remove_file(&self.db_path).unwrap();
+#[sequential]
+mod sqlite {
+    use crate::Tracing;
+    use golem_common::config::DbSqliteConfig;
+    use golem_component_service_base::repo::component::{ComponentRepo, DbComponentRepo};
+    use golem_service_base::db;
+    use sqlx::Pool;
+    use std::sync::Arc;
+
+    use test_r::{inherit_test_dep, test, test_dep};
+    use uuid::Uuid;
+
+    inherit_test_dep!(Tracing);
+
+    #[test_dep]
+    async fn db_pool() -> SqliteDb {
+        SqliteDb::new().await
     }
-}
 
-#[test]
-pub async fn test_with_postgres_db() {
-    let (db_config, _container) = start_docker_postgres().await;
+    #[test_dep]
+    fn sqlite_component_repo(db: &SqliteDb) -> Arc<dyn ComponentRepo + Sync + Send> {
+        Arc::new(DbComponentRepo::new(db.pool.clone()))
+    }
 
-    db::postgres_migrate(
-        &db_config,
-        "../golem-component-service/db/migration/postgres",
-    )
-    .await
-    .unwrap();
+    #[test]
+    async fn repo_component_id_unique(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+        super::test_repo_component_id_unique(component_repo.clone()).await
+    }
 
-    let db_pool = db::create_postgres_pool(&db_config).await.unwrap();
+    #[test]
+    async fn repo_component_name_unique_in_namespace(
+        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
+    ) {
+        super::test_repo_component_name_unique_in_namespace(component_repo.clone()).await
+    }
 
-    let component_repo: Arc<dyn ComponentRepo + Sync + Send> =
-        Arc::new(DbComponentRepo::new(db_pool.clone().into()));
+    #[test]
+    async fn repo_component_delete(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+        super::test_repo_component_delete(component_repo.clone()).await
+    }
 
-    test_repo(component_repo.clone()).await;
-    test_services(component_repo.clone()).await;
-    test_component_constraint_incompatible_updates(component_repo.clone()).await;
-}
+    #[test]
+    async fn repo_component_constraints(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+        super::test_repo_component_constraints(component_repo.clone()).await
+    }
 
-#[test]
-pub async fn test_with_sqlite_db() {
-    let db = SqliteDb::default();
-    let db_config = DbSqliteConfig {
-        database: db.db_path.clone(),
-        max_connections: 10,
-    };
+    #[test]
+    async fn component_constraint_incompatible_updates(
+        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
+    ) {
+        super::test_component_constraint_incompatible_updates(component_repo.clone()).await
+    }
 
-    db::sqlite_migrate(&db_config, "../golem-component-service/db/migration/sqlite")
-        .await
-        .unwrap();
+    #[test]
+    async fn services(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+        super::test_services(component_repo.clone()).await
+    }
 
-    let db_pool = db::create_sqlite_pool(&db_config).await.unwrap();
+    struct SqliteDb {
+        db_path: String,
+        pub pool: Arc<Pool<sqlx::Sqlite>>,
+    }
 
-    let component_repo: Arc<dyn ComponentRepo + Sync + Send> =
-        Arc::new(DbComponentRepo::new(db_pool.clone().into()));
+    impl SqliteDb {
+        pub async fn new() -> Self {
+            let db_path = format!("/tmp/golem-component-{}.db", Uuid::new_v4());
+            let db_config = DbSqliteConfig {
+                database: db_path.clone(),
+                max_connections: 10,
+            };
 
-    test_repo(component_repo.clone()).await;
-    test_services(component_repo.clone()).await;
-    test_component_constraint_incompatible_updates(component_repo.clone()).await;
+            db::sqlite_migrate(&db_config, "../golem-component-service/db/migration/sqlite")
+                .await
+                .unwrap();
+
+            let pool = Arc::new(db::create_sqlite_pool(&db_config).await.unwrap());
+
+            Self { db_path, pool }
+        }
+    }
+
+    impl Drop for SqliteDb {
+        fn drop(&mut self) {
+            std::fs::remove_file(&self.db_path).unwrap();
+        }
+    }
 }
 
 fn get_component_data(name: &str) -> Vec<u8> {
@@ -139,7 +264,7 @@ async fn test_component_constraint_incompatible_updates(
             compilation_service.clone(),
         ));
 
-    let component_name = ComponentName("shopping-cart".to_string());
+    let component_name = ComponentName("shopping-cart-constraint-incompatible-updates".to_string());
 
     // Create a shopping cart
     component_service
@@ -223,8 +348,8 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
             compilation_service.clone(),
         ));
 
-    let component_name1 = ComponentName("shopping-cart".to_string());
-    let component_name2 = ComponentName("rust-echo".to_string());
+    let component_name1 = ComponentName("shopping-cart-services".to_string());
+    let component_name2 = ComponentName("rust-echo-services".to_string());
 
     let component1 = component_service
         .create(
@@ -491,18 +616,11 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     assert!(component1_result.is_none());
 }
 
-async fn test_repo(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
-    test_repo_component_id_unique(component_repo.clone()).await;
-    test_repo_component_name_unique_in_namespace(component_repo.clone()).await;
-    test_repo_component_delete(component_repo.clone()).await;
-    test_repo_component_constraints(component_repo.clone()).await;
-}
-
 async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     let namespace1 = Uuid::new_v4().to_string();
     let namespace2 = Uuid::new_v4().to_string();
 
-    let component_name1 = ComponentName("shopping-cart1".to_string());
+    let component_name1 = ComponentName("shopping-cart-component-id-unique".to_string());
     let data = get_component_data("shopping-cart");
 
     let component1 = Component::new(
@@ -542,7 +660,8 @@ async fn test_repo_component_name_unique_in_namespace(
     let namespace1 = Uuid::new_v4().to_string();
     let namespace2 = Uuid::new_v4().to_string();
 
-    let component_name1 = ComponentName("shopping-cart1".to_string());
+    let component_name1 =
+        ComponentName("shopping-cart-component-name-unique-in-namespace".to_string());
     let data = get_component_data("shopping-cart");
 
     let component1 = Component::new(
@@ -562,22 +681,34 @@ async fn test_repo_component_name_unique_in_namespace(
     )
     .unwrap();
 
+    // Component with `component_name1` in `namespace1`
     let result1 = component_repo
         .create(&component1.clone().try_into().unwrap())
         .await;
+
+    // Another component with the same name in `namespace1`
     let result2 = component_repo
         .create(
             &Component {
-                namespace: namespace2.clone(),
+                versioned_component_id: VersionedComponentId {
+                    component_id: ComponentId::new_v4(),
+                    version: 0,
+                },
                 ..component1.clone()
             }
             .try_into()
             .unwrap(),
         )
         .await;
+
+    // Another component with `component_name1` but in `namespace2`
     let result3 = component_repo
         .create(&component2.clone().try_into().unwrap())
         .await;
+
+    println!("{:?}", result1);
+    println!("{:?}", result2);
+    println!("{:?}", result3);
 
     assert!(result1.is_ok());
     assert!(result2.is_err());
@@ -587,7 +718,7 @@ async fn test_repo_component_name_unique_in_namespace(
 async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     let namespace1 = Uuid::new_v4().to_string();
 
-    let component_name1 = ComponentName("shopping-cart1".to_string());
+    let component_name1 = ComponentName("shopping-cart1-component-delete".to_string());
     let data = get_component_data("shopping-cart");
 
     let component1 = Component::new(
@@ -618,6 +749,11 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo + Sync
         .get(&component1.versioned_component_id.component_id.0)
         .await;
 
+    println!("{:?}", result1);
+    println!("{:?}", result2);
+    println!("{:?}", result3);
+    println!("{:?}", result4);
+
     assert!(result1.is_ok());
     assert!(result2.is_ok());
     assert_eq!(result2.unwrap().len(), 1);
@@ -629,7 +765,7 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo + Sync
 async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     let namespace1 = Uuid::new_v4().to_string();
 
-    let component_name1 = ComponentName("shopping-cart1".to_string());
+    let component_name1 = ComponentName("shopping-cart-component-constraints".to_string());
 
     // It has a function golem:it/api.{initialize-cart}(user-id: string)
     let data = get_component_data("shopping-cart");

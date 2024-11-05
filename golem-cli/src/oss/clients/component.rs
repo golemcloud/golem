@@ -192,7 +192,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         info!("Uninstalling plugin {installation_id} from {urn}");
 
         self.client
-            .uninstall_plugin(&urn.id.0, &installation_id.to_string())
+            .uninstall_plugin(&urn.id.0, installation_id)
             .await?;
 
         Ok(())

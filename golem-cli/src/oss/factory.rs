@@ -29,7 +29,10 @@ use crate::oss::clients::plugin::PluginClientLive;
 use crate::oss::clients::worker::WorkerClientLive;
 use crate::oss::model::OssContext;
 use crate::service::project::{ProjectResolver, ProjectResolverOss};
-use golem_client::model::{PluginDefinitionDefaultPluginOwnerDefaultPluginScope, PluginDefinitionWithoutOwnerDefaultPluginScope};
+use golem_client::model::{
+    PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
+    PluginDefinitionWithoutOwnerDefaultPluginScope,
+};
 use golem_client::Context;
 use golem_common::model::plugin::DefaultPluginScope;
 use itertools::Itertools;

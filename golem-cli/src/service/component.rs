@@ -26,7 +26,6 @@ use indoc::formatdoc;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::fmt::Display;
-use uuid::Uuid;
 
 #[async_trait]
 pub trait ComponentService {
