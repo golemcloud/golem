@@ -8,6 +8,5 @@ interface api-c {
 }
 
 world c {
-  //!!  import test:a-stub/stub-a;
   export api-c;
 }

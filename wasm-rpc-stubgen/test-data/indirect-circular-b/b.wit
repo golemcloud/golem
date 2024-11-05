@@ -11,6 +11,5 @@ interface api-b {
 }
 
 world b {
-  //!!  import test:c-stub/stub-c;
   export api-b;
 }
