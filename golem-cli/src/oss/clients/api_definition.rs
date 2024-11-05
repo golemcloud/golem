@@ -17,15 +17,17 @@ use std::fmt::Display;
 use std::io::Read;
 
 use async_trait::async_trait;
-
 use golem_client::model::HttpApiDefinitionRequest;
 use golem_client::model::HttpApiDefinitionWithTypeInfo;
+use serde::Deserialize;
 
 use crate::clients::api_definition::ApiDefinitionClient;
 use tokio::fs::read_to_string;
 use tracing::info;
 
-use crate::model::{ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrStdin};
+use crate::model::{
+    ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrStdin,
+};
 use crate::oss::model::OssContext;
 
 #[derive(Clone)]
@@ -57,6 +59,7 @@ async fn create_or_update_api_definition<
     action: Action,
     client: &C,
     path: PathBufOrStdin,
+    format: &ApiDefinitionFileFormat,
 ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError> {
     info!("{action} api definition from {path:?}");
 
@@ -75,25 +78,31 @@ async fn create_or_update_api_definition<
         }
     };
 
+    fn get_definition<'de, T: Deserialize<'de>>(
+        input: &'de str,
+        format: &ApiDefinitionFileFormat,
+    ) -> Result<T, GolemError> {
+        match format {
+            ApiDefinitionFileFormat::Json => serde_json::from_str(input)
+                .map_err(|e| GolemError(format!("Failed to parse json api definition: {e:?}"))),
+            ApiDefinitionFileFormat::Yaml => serde_yaml::from_str(input)
+                .map_err(|e| GolemError(format!("Failed to parse yaml api definition: {e:?}"))),
+        }
+    }
+
     match action {
         Action::Import => {
-            let value: serde_json::value::Value = serde_json::from_str(definition_str.as_str())
-                .map_err(|e| GolemError(format!("Failed to parse json: {e:?}")))?;
-
-            Ok(client.import_open_api(&value).await?)
+            let value = get_definition(definition_str.as_str(), format)?;
+            Ok(client.import_open_api_json(&value).await?)
         }
         Action::Create => {
-            let value: HttpApiDefinitionRequest = serde_json::from_str(definition_str.as_str())
-                .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
-
-            Ok(client.create_definition(&value).await?)
+            let value: HttpApiDefinitionRequest = get_definition(definition_str.as_str(), format)?;
+            Ok(client.create_definition_json(&value).await?)
         }
         Action::Update => {
-            let value: HttpApiDefinitionRequest = serde_json::from_str(definition_str.as_str())
-                .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
-
+            let value: HttpApiDefinitionRequest = get_definition(definition_str.as_str(), format)?;
             Ok(client
-                .update_definition(&value.id, &value.version, &value)
+                .update_definition_json(&value.id, &value.version, &value)
                 .await?)
         }
     }
@@ -136,24 +145,27 @@ impl<C: golem_client::api::ApiDefinitionClient + Sync + Send> ApiDefinitionClien
         &self,
         path: PathBufOrStdin,
         _project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError> {
-        create_or_update_api_definition(Action::Create, &self.client, path).await
+        create_or_update_api_definition(Action::Create, &self.client, path, format).await
     }
 
     async fn update(
         &self,
         path: PathBufOrStdin,
         _project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError> {
-        create_or_update_api_definition(Action::Update, &self.client, path).await
+        create_or_update_api_definition(Action::Update, &self.client, path, format).await
     }
 
     async fn import(
         &self,
         path: PathBufOrStdin,
         _project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<HttpApiDefinitionWithTypeInfo, GolemError> {
-        create_or_update_api_definition(Action::Import, &self.client, path).await
+        create_or_update_api_definition(Action::Import, &self.client, path, format).await
     }
 
     async fn delete(

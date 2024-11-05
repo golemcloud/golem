@@ -17,7 +17,8 @@ use crate::model::text::api_definition::{
     ApiDefinitionAddView, ApiDefinitionGetView, ApiDefinitionImportView, ApiDefinitionUpdateView,
 };
 use crate::model::{
-    ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult, PathBufOrStdin,
+    ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult,
+    PathBufOrStdin,
 };
 use async_trait::async_trait;
 
@@ -34,16 +35,19 @@ pub trait ApiDefinitionService {
         &self,
         definition: PathBufOrStdin,
         project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<GolemResult, GolemError>;
     async fn update(
         &self,
         definition: PathBufOrStdin,
         project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<GolemResult, GolemError>;
     async fn import(
         &self,
         definition: PathBufOrStdin,
         project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<GolemResult, GolemError>;
     async fn list(
         &self,
@@ -82,8 +86,9 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
         &self,
         definition: PathBufOrStdin,
         project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<GolemResult, GolemError> {
-        let definition = self.client.create(definition, project).await?;
+        let definition = self.client.create(definition, project, format).await?;
         Ok(GolemResult::Ok(Box::new(ApiDefinitionAddView(definition))))
     }
 
@@ -91,8 +96,9 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
         &self,
         definition: PathBufOrStdin,
         project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<GolemResult, GolemError> {
-        let definition = self.client.update(definition, project).await?;
+        let definition = self.client.update(definition, project, format).await?;
         Ok(GolemResult::Ok(Box::new(ApiDefinitionUpdateView(
             definition,
         ))))
@@ -102,8 +108,9 @@ impl<ProjectContext: Send + Sync> ApiDefinitionService
         &self,
         definition: PathBufOrStdin,
         project: &Self::ProjectContext,
+        format: &ApiDefinitionFileFormat,
     ) -> Result<GolemResult, GolemError> {
-        let definition = self.client.import(definition, project).await?;
+        let definition = self.client.import(definition, project, format).await?;
         Ok(GolemResult::Ok(Box::new(ApiDefinitionImportView(
             definition,
         ))))
