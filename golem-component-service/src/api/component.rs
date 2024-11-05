@@ -343,33 +343,30 @@ impl ComponentApi {
 
     /// Updates the priority or parameters of a plugin installation
     #[oai(
-        path = "/:component_id/versions/:version/plugins/installs/:installation_id",
+        path = "/:component_id/versions/latest/plugins/installs/:installation_id",
         method = "put",
         operation_id = "update_installed_plugin"
     )]
     async fn update_installed_plugin(
         &self,
         component_id: Path<ComponentId>,
-        version: Path<String>,
         installation_id: Path<PluginInstallationId>,
         update: Json<PluginInstallationUpdate>,
     ) -> Result<Json<Empty>> {
         let record = recorded_http_api_request!(
             "update_installed_plugin",
             component_id = component_id.0.to_string(),
-            version = version.0,
             installation_id = installation_id.0.to_string()
         );
 
-        let version_int = Self::parse_version_path_segment(&version.0)?;
         let response = self
             .plugin_service
             .update_plugin_installation_for_component(
                 &DefaultPluginOwner,
                 &installation_id.0,
                 &component_id.0,
-                version_int,
                 update.0,
+                &DefaultNamespace(),
             )
             .await
             .map_err(|e| e.into())

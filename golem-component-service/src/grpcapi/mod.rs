@@ -21,6 +21,7 @@ use tonic::transport::{Error, Server};
 use crate::grpcapi::component::ComponentGrpcApi;
 use crate::service::Services;
 mod component;
+mod plugin;
 
 pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<(), Error> {
     let (mut health_reporter, health_service) = tonic_health::server::health_reporter();

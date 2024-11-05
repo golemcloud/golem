@@ -887,16 +887,9 @@ async fn test_default_component_plugin_installation(
 
     let installations3 = installations_repo.get_all(&owner, &target1_row).await?;
 
-    installations_repo
-        .delete_all_installation_of_plugin(&owner, &plugin1.name, &plugin1.version)
-        .await?;
-
-    let installations4 = installations_repo.get_all(&owner, &target1_row).await?;
-
     assert_eq!(installations1.len(), 0);
     assert_eq!(installations2.len(), 2);
     assert_eq!(installations3.len(), 1);
-    assert_eq!(installations4.len(), 0);
 
     Ok(())
 }

@@ -143,13 +143,6 @@ pub trait PluginInstallationRepo<Owner: PluginOwner, Target: PluginInstallationT
         target: &Target::Row,
     ) -> Result<Vec<PluginInstallationRecord<Owner, Target>>, RepoError>;
 
-    async fn delete_all_installation_of_plugin(
-        &self,
-        owner: &Owner::Row,
-        plugin_name: &str,
-        plugin_version: &str,
-    ) -> Result<(), RepoError>;
-
     async fn create(
         &self,
         record: &PluginInstallationRecord<Owner, Target>,
@@ -219,19 +212,6 @@ impl<
     ) -> Result<Vec<PluginInstallationRecord<Owner, Target>>, RepoError> {
         let result = self.repo.get_all(owner, target).await;
         Self::logged("get_all", result)
-    }
-
-    async fn delete_all_installation_of_plugin(
-        &self,
-        owner: &Owner::Row,
-        plugin_name: &str,
-        plugin_version: &str,
-    ) -> Result<(), RepoError> {
-        let result = self
-            .repo
-            .delete_all_installation_of_plugin(owner, plugin_name, plugin_version)
-            .await;
-        Self::logged("delete_all_installation_of_plugin", result)
     }
 
     async fn create(
@@ -314,31 +294,6 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
             .build_query_as::<PluginInstallationRecord<Owner, Target>>()
             .fetch_all(self.db_pool.deref())
             .await?)
-    }
-
-    async fn delete_all_installation_of_plugin(
-        &self,
-        owner: &Owner::Row,
-        plugin_name: &str,
-        plugin_version: &str,
-    ) -> Result<(), RepoError> {
-        let mut query = QueryBuilder::new("DELETE FROM ");
-        query.push(Target::table_name());
-        query.push(" WHERE plugin_name = ");
-        query.push_bind(plugin_name);
-        query.push("AND plugin_version = ");
-        query.push_bind(plugin_version);
-        query.push(" AND ");
-        owner.add_where_clause(&mut query);
-
-        debug!(
-            "Generated query for delete_all_installation_of_plugin: {}",
-            query.sql()
-        );
-
-        query.build().execute(self.db_pool.deref()).await?;
-
-        Ok(())
     }
 
     async fn create(

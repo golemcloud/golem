@@ -54,6 +54,8 @@ pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
     // for OplogProcessor plugin type
     component_id: Option<Uuid>,
     component_version: Option<i64>,
+
+    #[allow(dead_code)] deleted: bool
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>>
@@ -103,6 +105,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>
                 }
                 _ => None,
             },
+            deleted: false
         }
     }
 }
@@ -405,8 +408,9 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("transform_url");
         column_list.push("component_id");
         column_list.push("component_version");
+        column_list.push("deleted");
 
-        query.push(" FROM plugins WHERE ");
+        query.push(" FROM plugins WHERE NOT deleted AND ");
 
         owner.add_where_clause(&mut query);
 
@@ -441,8 +445,9 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("transform_url");
         column_list.push("component_id");
         column_list.push("component_version");
+        column_list.push("deleted");
 
-        query.push(" FROM plugins WHERE ");
+        query.push(" FROM plugins WHERE NOT deleted AND ");
 
         owner.add_where_clause(&mut query);
 
@@ -488,8 +493,9 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("transform_url");
         column_list.push("component_id");
         column_list.push("component_version");
+        column_list.push("deleted");
 
-        query.push(" FROM plugins WHERE ");
+        query.push(" FROM plugins WHERE NOT deleted AND ");
 
         owner.add_where_clause(&mut query);
 
@@ -525,6 +531,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("transform_url");
         column_list.push("component_id");
         column_list.push("component_version");
+        column_list.push("deleted");
 
         query.push(") VALUES (");
 
@@ -545,6 +552,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         value_list.push_bind(&record.transform_url);
         value_list.push_bind(record.component_id);
         value_list.push_bind(record.component_version);
+        value_list.push_bind(false);
 
         query.push(")");
 
@@ -581,8 +589,9 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         column_list.push("transform_url");
         column_list.push("component_id");
         column_list.push("component_version");
+        column_list.push("deleted");
 
-        query.push(" FROM plugins WHERE ");
+        query.push(" FROM plugins WHERE NOT deleted AND ");
         owner.add_where_clause(&mut query);
 
         query.push(" AND name = ");
@@ -597,10 +606,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
     }
 
     async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError> {
-        let mut query = QueryBuilder::new(
-            r#"DELETE FROM plugins
-               WHERE name = "#,
-        );
+        let mut query = QueryBuilder::new("UPDATE plugins SET deleted = TRUE WHERE name = ");
 
         query.push_bind(name);
         query.push(" AND version = ");

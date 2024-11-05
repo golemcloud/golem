@@ -13,6 +13,7 @@ CREATE TABLE plugins
     transform_url        text,
     component_id         uuid REFERENCES components (component_id),
     component_version    bigint,
+    deleted              boolean  NOT NULL DEFAULT FALSE,
 
     PRIMARY KEY (name, version)
 );

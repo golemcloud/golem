@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package golem.component.v1;
 
+import public "golem/common/plugin_installation_id.proto";
 import public "golem/common/project_id.proto";
 import public "golem/common/empty.proto";
 import public "golem/component/component.proto";
@@ -9,6 +10,7 @@ import public "golem/component/component_type.proto";
 import public "golem/component/v1/component_error.proto";
 import public "golem/component/component_id.proto";
 import public "golem/component/component_constraints.proto";
+import public "golem/component/plugin_installation.proto";
 
 service ComponentService {
   rpc GetComponents (GetComponentsRequest) returns (GetComponentsResponse);
@@ -19,6 +21,11 @@ service ComponentService {
   rpc UpdateComponent (stream UpdateComponentRequest) returns (UpdateComponentResponse);
   rpc GetComponentMetadata(GetVersionedComponentRequest) returns (GetComponentMetadataResponse);
   rpc CreateComponentConstraints(CreateComponentConstraintsRequest) returns (CreateComponentConstraintsResponse);
+
+  rpc GetInstalledPlugins (GetInstalledPluginsRequest) returns (GetInstalledPluginsResponse);
+  rpc InstallPlugin (InstallPluginRequest) returns (InstallPluginResponse);
+  rpc UpdateInstalledPlugin (UpdateInstalledPluginRequest) returns (UpdateInstalledPluginResponse);
+  rpc UninstallPlugin (UninstallPluginRequest) returns (UninstallPluginResponse);
 }
 
 message CreateComponentConstraintsRequest {
@@ -143,6 +150,67 @@ message UpdateComponentRequestChunk {
 message UpdateComponentResponse {
   oneof result {
     golem.component.Component success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message GetInstalledPluginsRequest {
+  golem.component.ComponentId componentId = 1;
+  optional uint64 version = 2;
+}
+
+message GetInstalledPluginsResponse {
+  oneof result {
+    GetInstalledPluginsSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message GetInstalledPluginsSuccessResponse {
+  repeated golem.component.PluginInstallation installations = 1;
+}
+
+message InstallPluginRequest {
+  golem.component.ComponentId componentId = 1;
+  string name = 2;
+  string version = 3;
+  int32 priority = 4;
+  map<string, string> parameters = 5;
+}
+
+message InstallPluginResponse {
+  oneof result {
+    InstallPluginSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message InstallPluginSuccessResponse {
+  golem.component.PluginInstallation installation = 1;
+}
+
+message UpdateInstalledPluginRequest {
+  golem.component.ComponentId componentId = 1;
+  golem.common.PluginInstallationId installationId = 2;
+  int32 updated_priority = 3;
+  map<string, string> updated_parameters = 4;
+}
+
+message UpdateInstalledPluginResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message UninstallPluginRequest {
+  golem.component.ComponentId componentId = 1;
+  golem.common.PluginInstallationId installationId = 2;
+}
+
+message UninstallPluginResponse {
+  oneof result {
+    golem.common.Empty success = 1;
     golem.component.v1.ComponentError error = 2;
   }
 }

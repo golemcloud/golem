@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/common/plugin_installation_id.proto";
+
+message PluginInstallation {
+  golem.common.PluginInstallationId id = 1;
+  string name = 2;
+  string version = 3;
+  int32 priority = 4;
+  map<string, string> parameters = 5;
+}

@@ -120,8 +120,8 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope> {
         owner: &Owner,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
         update: PluginInstallationUpdate,
+        namespace: &Owner::Namespace,
     ) -> Result<(), PluginError>;
 
     async fn delete_plugin_installation_for_component(
@@ -237,10 +237,6 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
     async fn delete(&self, owner: &Owner, name: &str, version: &str) -> Result<(), PluginError> {
         let owner_record: Owner::Row = owner.clone().into();
 
-        self.component_plugin_installations_repo
-            .delete_all_installation_of_plugin(&owner_record, name, version)
-            .await?;
-
         self.plugin_repo
             .delete(&owner_record, name, version)
             .await?;
@@ -286,6 +282,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
             .await?;
 
         if let Some(latest) = latest {
+            // TODO: installation needs to transactionally create a new latest component version
+
             let target = ComponentPluginInstallationTarget {
                 component_id: component_id.clone(),
                 component_version: latest.versioned_component_id.version,
@@ -319,28 +317,45 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
         owner: &Owner,
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
         update: PluginInstallationUpdate,
+        namespace: &Owner::Namespace,
     ) -> Result<(), PluginError> {
         let owner = owner.clone().into();
-        let target = ComponentPluginInstallationTarget {
-            component_id: component_id.clone(),
-            component_version,
-        }
-        .into();
-        self.component_plugin_installations_repo
-            .update(
-                &owner,
-                &target,
-                &installation_id.0,
-                update.priority,
-                serde_json::to_vec(&update.parameters).map_err(|e| {
-                    PluginError::conversion_error("plugin installation parameters", e.to_string())
-                })?,
-            )
+
+        let latest = self
+            .component_service
+            .get_latest_version(component_id, namespace)
             .await?;
 
-        Ok(())
+        if let Some(latest) = latest {
+            // TODO: installation needs to transactionally create a new latest component version
+
+            let target = ComponentPluginInstallationTarget {
+                component_id: component_id.clone(),
+                component_version: latest.versioned_component_id.version,
+            }
+            .into();
+            self.component_plugin_installations_repo
+                .update(
+                    &owner,
+                    &target,
+                    &installation_id.0,
+                    update.priority,
+                    serde_json::to_vec(&update.parameters).map_err(|e| {
+                        PluginError::conversion_error(
+                            "plugin installation parameters",
+                            e.to_string(),
+                        )
+                    })?,
+                )
+                .await?;
+
+            Ok(())
+        } else {
+            Err(PluginError::ComponentNotFound {
+                component_id: component_id.clone(),
+            })
+        }
     }
 
     async fn delete_plugin_installation_for_component(
@@ -356,6 +371,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
             .get_latest_version(component_id, namespace)
             .await?;
         if let Some(latest) = latest {
+            // TODO: installation needs to transactionally create a new latest component version
+
             let target = ComponentPluginInstallationTarget {
                 component_id: component_id.clone(),
                 component_version: latest.versioned_component_id.version,

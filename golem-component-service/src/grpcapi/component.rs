@@ -21,20 +21,7 @@ use futures_util::StreamExt;
 use futures_util::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService;
-use golem_api_grpc::proto::golem::component::v1::{
-    component_error, create_component_constraints_response, create_component_request,
-    create_component_response, download_component_response,
-    get_component_metadata_all_versions_response, get_component_metadata_response,
-    get_components_response, update_component_request, update_component_response, ComponentError,
-    CreateComponentConstraintsRequest, CreateComponentConstraintsResponse,
-    CreateComponentConstraintsSuccessResponse, CreateComponentRequest,
-    CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentRequest,
-    DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
-    GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest,
-    GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse,
-    GetComponentsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
-    UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse,
-};
+use golem_api_grpc::proto::golem::component::v1::{component_error, create_component_constraints_response, create_component_request, create_component_response, download_component_response, get_component_metadata_all_versions_response, get_component_metadata_response, get_components_response, update_component_request, update_component_response, ComponentError, CreateComponentConstraintsRequest, CreateComponentConstraintsResponse, CreateComponentConstraintsSuccessResponse, CreateComponentRequest, CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentRequest, DownloadComponentResponse, GetComponentMetadataAllVersionsResponse, GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest, GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse, GetComponentsSuccessResponse, GetInstalledPluginsRequest, GetInstalledPluginsResponse, GetLatestComponentRequest, GetVersionedComponentRequest, InstallPluginRequest, InstallPluginResponse, UninstallPluginRequest, UninstallPluginResponse, UpdateComponentRequest, UpdateComponentRequestHeader, UpdateComponentResponse, UpdateInstalledPluginRequest, UpdateInstalledPluginResponse};
 use golem_api_grpc::proto::golem::component::Component;
 use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
@@ -581,5 +568,21 @@ impl ComponentService for ComponentGrpcApi {
                 }))
             }
         }
+    }
+
+    async fn get_installed_plugins(&self, request: Request<GetInstalledPluginsRequest>) -> Result<Response<GetInstalledPluginsResponse>, Status> {
+        todo!()
+    }
+
+    async fn install_plugin(&self, request: Request<InstallPluginRequest>) -> Result<Response<InstallPluginResponse>, Status> {
+        todo!()
+    }
+
+    async fn update_installed_plugin(&self, request: Request<UpdateInstalledPluginRequest>) -> Result<Response<UpdateInstalledPluginResponse>, Status> {
+        todo!()
+    }
+
+    async fn uninstall_plugin(&self, request: Request<UninstallPluginRequest>) -> Result<Response<UninstallPluginResponse>, Status> {
+        todo!()
     }
 }

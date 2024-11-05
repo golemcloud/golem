@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package golem.component.v1;
+
+import public "golem/common/project_id.proto";
+import public "golem/component/v1/component_error.proto";
+import public "golem/component/plugin_definition.proto";
+
+service PluginService {
+  rpc ListPlugins (ListPluginsRequest) returns (ListPluginsResponse);
+  rpc ListPluginVersions (ListPluginVersionsRequest) returns (ListPluginsResponse);
+  rpc CreatePlugin (CreatePluginRequest) returns (CreatePluginResponse);
+  rpc GetPlugin (GetPluginRequest) returns (GetPluginResponse);
+  rpc DeletePlugin (DeletePluginRequest) returns (DeletePluginResponse);
+}
+
+message ListPluginsRequest {
+  optional golem.component.DefaultPluginScope scope = 1;
+}
+
+message ListPluginVersionsRequest {
+  string name = 1;
+}
+
+message ListPluginsResponse {
+  oneof result {
+    ListPluginsSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message ListPluginsSuccessResponse {
+  repeated golem.component.PluginDefinition plugins = 1;
+}
+
+message CreatePluginRequest {
+  golem.component.PluginDefinition plugin = 1;
+}
+
+message CreatePluginResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message GetPluginRequest {
+  string name = 1;
+  string version = 2;
+}
+
+message GetPluginResponse {
+  oneof result {
+    GetPluginSuccessResponse success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
+
+message GetPluginSuccessResponse {
+  golem.component.PluginDefinition plugin = 1;
+}
+
+message DeletePluginRequest {
+  string name = 1;
+  string version = 2;
+}
+
+message DeletePluginResponse {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.component.v1.ComponentError error = 2;
+  }
+}
