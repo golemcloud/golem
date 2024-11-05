@@ -4,8 +4,7 @@ use std::str::FromStr;
 use Iterator;
 
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
-use crate::gateway_api_definition::http::path_pattern_parser::{parse_path_pattern, PathPatternParser};
-use crate::parser::{Parser, ParseError};
+use crate::gateway_api_definition::http::path_pattern_parser::{parse_path_pattern};
 use crate::gateway_binding::WorkerBindingCompiled;
 use crate::gateway_binding::WorkerBinding;
 use bincode::{Decode, Encode};
@@ -256,7 +255,7 @@ pub struct AllPathPatterns {
 }
 
 impl AllPathPatterns {
-    pub fn parse(input: &str) -> Result<AllPathPatterns, ParseError> {
+    pub fn parse(input: &str) -> Result<AllPathPatterns, String> {
         input.parse()
     }
 }
@@ -301,7 +300,7 @@ impl<'de> Deserialize<'de> for AllPathPatterns {
         match value {
             Value::String(value) => match AllPathPatterns::parse(value.as_str()) {
                 Ok(path_pattern) => Ok(path_pattern),
-                Err(message) => Err(serde::de::Error::custom(message.to_string())),
+                Err(message) => Err(serde::de::Error::custom(message)),
             },
 
             _ => Err(serde::de::Error::custom("Failed to parse path from yaml")),

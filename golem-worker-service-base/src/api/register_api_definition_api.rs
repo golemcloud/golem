@@ -1,7 +1,7 @@
 use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
-use crate::gateway_api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_binding::WorkerBindingCompiled;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::VersionedComponentId;
@@ -10,6 +10,7 @@ use rib::{Expr, RibInputTypeInfo};
 use serde::{Deserialize, Serialize};
 use std::result::Result;
 use std::time::SystemTime;
+use crate::gateway_api_deployment::http::ApiSite;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -173,8 +174,8 @@ impl From<WorkerBindingCompiled> for GolemWorkerBindingWithTypeInfo {
     }
 }
 
-impl<N> From<crate::gateway_api_definition::ApiDeployment<N>> for ApiDeployment {
-    fn from(value: crate::gateway_api_definition::ApiDeployment<N>) -> Self {
+impl<N> From<crate::gateway_api_deployment::http::ApiDeployment<N>> for ApiDeployment {
+    fn from(value: crate::gateway_api_deployment::http::ApiDeployment<N>) -> Self {
         let api_definitions = value
             .api_definition_keys
             .into_iter()
@@ -255,7 +256,7 @@ impl TryInto<crate::gateway_api_definition::http::Route> for Route {
     type Error = String;
 
     fn try_into(self) -> Result<crate::gateway_api_definition::http::Route, Self::Error> {
-        let path = AllPathPatterns::parse(self.path.as_str()).map_err(|e| e.to_string())?;
+        let path = AllPathPatterns::parse(self.path.as_str())?;
         let binding = self.binding.try_into()?;
 
         Ok(crate::gateway_api_definition::http::Route {
@@ -450,7 +451,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
         value: golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute,
     ) -> Result<Self, Self::Error> {
         let method = MethodPattern::try_from(value.method)?;
-        let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
+        let path = AllPathPatterns::parse(value.path.as_str())?;
         let binding = value.binding.ok_or("binding is missing")?.try_into()?;
         Ok(CompiledRoute {
             method,
@@ -480,7 +481,7 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::h
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
-        let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
+        let path = AllPathPatterns::parse(value.path.as_str())?;
         let binding = value.binding.ok_or("binding is missing")?.try_into()?;
 
         let method: MethodPattern = value.method.try_into()?;

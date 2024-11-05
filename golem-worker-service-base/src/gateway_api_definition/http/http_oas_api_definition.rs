@@ -257,7 +257,7 @@ mod internal {
     }
 
     pub(crate) fn get_path_pattern(path: &str) -> Result<AllPathPatterns, String> {
-        AllPathPatterns::parse(path).map_err(|err| err.to_string())
+        AllPathPatterns::parse(path)
     }
 }
 

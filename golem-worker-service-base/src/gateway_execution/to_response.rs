@@ -1,20 +1,21 @@
-use crate::gateway_binding::{WorkerGatewayRequestDetails, RibInputTypeMismatch};
+use crate::gateway_binding::{RibInputTypeMismatch};
 use crate::worker_gateway_rib_interpreter::EvaluationError;
 
 use http::StatusCode;
 use poem::Body;
 use rib::RibResult;
+use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
 pub trait ToResponse<A> {
-    fn to_response(&self, request_details: &WorkerGatewayRequestDetails) -> A;
+    fn to_response(&self, request_details: &GatewayRequestDetails) -> A;
 }
 
 impl ToResponse<poem::Response> for RibResult {
-    fn to_response(&self, request_details: &WorkerGatewayRequestDetails) -> poem::Response {
+    fn to_response(&self, request_details: &GatewayRequestDetails) -> poem::Response {
         match request_details {
             // Only if the input request detail is of the type Http, we can form a Http Response with the help of
             // evaluated rib script
-            WorkerGatewayRequestDetails::Http(http_request_details) => {
+            GatewayRequestDetails::Http(http_request_details) => {
                 match internal::IntermediateHttpResponse::from(self) {
                     Ok(intermediate_response) => {
                         intermediate_response.to_http_response(http_request_details)
@@ -33,7 +34,7 @@ impl ToResponse<poem::Response> for RibResult {
 }
 
 impl ToResponse<poem::Response> for RibInputTypeMismatch {
-    fn to_response(&self, _request_details: &WorkerGatewayRequestDetails) -> poem::Response {
+    fn to_response(&self, _request_details: &GatewayRequestDetails) -> poem::Response {
         poem::Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .body(Body::from_string(format!("Error {}", self.0).to_string()))
@@ -41,7 +42,7 @@ impl ToResponse<poem::Response> for RibInputTypeMismatch {
 }
 
 impl ToResponse<poem::Response> for EvaluationError {
-    fn to_response(&self, _request_details: &WorkerGatewayRequestDetails) -> poem::Response {
+    fn to_response(&self, _request_details: &GatewayRequestDetails) -> poem::Response {
         poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::from_string(format!("Error {}", self).to_string()))
@@ -49,7 +50,7 @@ impl ToResponse<poem::Response> for EvaluationError {
 }
 
 impl ToResponse<poem::Response> for String {
-    fn to_response(&self, _request_details: &WorkerGatewayRequestDetails) -> poem::Response {
+    fn to_response(&self, _request_details: &GatewayRequestDetails) -> poem::Response {
         poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .body(Body::from_string(self.to_string()))
@@ -74,6 +75,7 @@ mod internal {
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::{GetLiteralValue, LiteralValue, RibResult};
     use std::collections::HashMap;
+    use crate::gateway_request::gateway_request_details::HttpRequestDetails;
 
     pub(crate) struct IntermediateHttpResponse {
         body: Option<TypeAnnotatedValue>,
