@@ -55,7 +55,7 @@ impl RdbmsPoolKey {
 
 pub mod postgres {
     use crate::services::rdbms::types::{
-        DbColumnType, DbColumnTypeMeta, DbColumnTypePrimitive, DbResultSet, DbValue,
+        DbColumnType, DbColumnTypeMeta, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
         DbValuePrimitive, SimpleDbResultSet,
     };
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
@@ -67,7 +67,7 @@ pub mod postgres {
     use std::collections::HashSet;
     use std::ops::Deref;
     use std::sync::Arc;
-    use tokio_postgres::{Connection, NoTls};
+    use tokio_postgres::{Connection, Error, NoTls};
     use tracing::{error, info};
     use uuid::Uuid;
 
@@ -273,7 +273,10 @@ pub mod postgres {
                 .into_iter()
                 .map(|c| c.try_into())
                 .collect::<Result<Vec<_>, String>>()?;
-            let values = vec![]; // TODO
+            let values = result
+                .iter()
+                .map(|r| r.try_into())
+                .collect::<Result<Vec<_>, String>>()?;
             Ok(Arc::new(SimpleDbResultSet::new(columns, Some(values))))
         }
     }
@@ -350,29 +353,116 @@ pub mod postgres {
     //     Ok(query_params)
     // }
 
-    // fn get_column_types(columns: &[PgColumn]) -> Result<Vec<DbColumnTypeMeta>, String> {
-    //     let mut result = vec![columns.len()];
-    //
-    //     for column in columns {
-    //         result.push(DbColumnTypeMeta {
-    //             name: column.name().to_string(),
-    //             db_type: column.type_info(),
-    //             nullable: column.is_nullable(),
-    //         });
-    //     }
-    //     Ok(result)
-    // }
-    //
-    //
-    // impl TryFrom<PgTypeInfo> for DbColumnType {
-    //     type Error = String;
-    //
-    //     fn try_from(value: PgTypeInfo) -> Result<Self, Self::Error> {
-    //
-    //         let kind = value.kind();
-    //
-    //     }
-    // }
+    impl TryFrom<&tokio_postgres::Row> for DbRow {
+        type Error = String;
+
+        fn try_from(value: &tokio_postgres::Row) -> Result<Self, Self::Error> {
+            let count = value.len();
+            let mut values = Vec::with_capacity(count);
+            for index in 0..count {
+                values.push(get_db_value(index, value)?);
+            }
+            Ok(DbRow { values })
+        }
+    }
+
+    fn get_db_value(index: usize, row: &tokio_postgres::Row) -> Result<DbValue, String> {
+        let column = &row.columns()[index];
+        let tpe = column.type_();
+        let value = match *tpe {
+            tokio_postgres::types::Type::BOOL => {
+                let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Boolean(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::INT2 => {
+                let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Integer(v as i64)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::INT4 => {
+                let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Integer(v as i64)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::INT8 => {
+                let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Integer(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::FLOAT4 => {
+                let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v as f64)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::FLOAT8 => {
+                let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::VARCHAR => {
+                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Chars(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::TEXT => {
+                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::JSON => {
+                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::XML => {
+                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::UUID => {
+                let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Uuid(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            tokio_postgres::types::Type::DATE
+            | tokio_postgres::types::Type::TIMESTAMP
+            | tokio_postgres::types::Type::TIMESTAMPTZ => {
+                let v: Option<chrono::DateTime<chrono::Utc>> =
+                    row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => {
+                        DbValue::Primitive(DbValuePrimitive::Datetime(v.timestamp_millis() as u64))
+                    }
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            _ => Err(format!("Unsupported type: {:?}", tpe))?,
+        };
+        Ok(value)
+    }
 
     impl TryFrom<&tokio_postgres::Column> for DbColumnTypeMeta {
         type Error = String;
@@ -394,22 +484,54 @@ pub mod postgres {
 
         fn try_from(value: &tokio_postgres::types::Type) -> Result<Self, Self::Error> {
             match *value {
-                tokio_postgres::types::Type::BOOL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
-                tokio_postgres::types::Type::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(Some(2)))),
-                tokio_postgres::types::Type::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(Some(4)))),
-                tokio_postgres::types::Type::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(Some(8)))),
-                tokio_postgres::types::Type::NUMERIC => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Decimal(0, 0))),
-                tokio_postgres::types::Type::FLOAT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
-                tokio_postgres::types::Type::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
-                tokio_postgres::types::Type::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
-                tokio_postgres::types::Type::TEXT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
-                tokio_postgres::types::Type::VARCHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(None))),
-                tokio_postgres::types::Type::CHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(Some(1)))),
-                tokio_postgres::types::Type::CHAR_ARRAY => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(Some(1)))),
-                tokio_postgres::types::Type::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
-                tokio_postgres::types::Type::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
-                tokio_postgres::types::Type::TIMESTAMP => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime)),
-                tokio_postgres::types::Type::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime)),
+                tokio_postgres::types::Type::BOOL => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean))
+                }
+                tokio_postgres::types::Type::INT2 => Ok(DbColumnType::Primitive(
+                    DbColumnTypePrimitive::Integer(Some(2)),
+                )),
+                tokio_postgres::types::Type::INT4 => Ok(DbColumnType::Primitive(
+                    DbColumnTypePrimitive::Integer(Some(4)),
+                )),
+                tokio_postgres::types::Type::INT8 => Ok(DbColumnType::Primitive(
+                    DbColumnTypePrimitive::Integer(Some(8)),
+                )),
+                tokio_postgres::types::Type::NUMERIC => Ok(DbColumnType::Primitive(
+                    DbColumnTypePrimitive::Decimal(0, 0),
+                )),
+                tokio_postgres::types::Type::FLOAT4 => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float))
+                }
+                tokio_postgres::types::Type::FLOAT8 => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float))
+                }
+                tokio_postgres::types::Type::UUID => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid))
+                }
+                tokio_postgres::types::Type::TEXT => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text))
+                }
+                tokio_postgres::types::Type::VARCHAR => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(None)))
+                }
+                tokio_postgres::types::Type::CHAR => Ok(DbColumnType::Primitive(
+                    DbColumnTypePrimitive::Chars(Some(1)),
+                )),
+                tokio_postgres::types::Type::CHAR_ARRAY => Ok(DbColumnType::Primitive(
+                    DbColumnTypePrimitive::Chars(Some(1)),
+                )),
+                tokio_postgres::types::Type::JSON => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json))
+                }
+                tokio_postgres::types::Type::XML => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml))
+                }
+                tokio_postgres::types::Type::TIMESTAMP => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime))
+                }
+                tokio_postgres::types::Type::DATE => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime))
+                }
                 _ => Err(format!("Unsupported type: {:?}", value)),
             }
         }
@@ -593,8 +715,8 @@ mod tests {
     use crate::services::rdbms::RdbmsService;
     use crate::services::rdbms::{RdbmsPoolKey, RdbmsServiceDefault};
     use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
-    use std::hash::Hash;
     use golem_wasm_ast::analysis::analysed_type::result;
+    use std::hash::Hash;
     use test_r::{test, timeout};
     use uuid::Uuid;
 
@@ -637,11 +759,10 @@ mod tests {
             .query(&worker_id, &address, "SELECT 1", vec![])
             .await;
 
-
         assert!(result.is_ok());
 
         let columns = result.unwrap().get_column_metadata().await.unwrap();
-
+        println!("columns: {columns:?}");
         assert!(columns.len() > 0);
 
         let create_table_statement = r#"
@@ -679,6 +800,23 @@ mod tests {
             .await;
 
         assert!(result.is_ok_and(|v| v == 1));
+
+        let result = rdbms_service
+            .postgres()
+            .query(&worker_id, &address, "SELECT * from components", vec![])
+            .await;
+
+        assert!(result.is_ok());
+
+        let result = result.unwrap();
+
+        let columns = result.get_column_metadata().await.unwrap();
+        println!("columns: {columns:?}");
+        assert!(columns.len() > 0);
+
+        let rows = result.get_next().await.unwrap();
+        println!("rows: {rows:?}");
+        assert!(rows.is_some());
 
         let result = rdbms_service.postgres().remove(&worker_id, &address).await;
 
