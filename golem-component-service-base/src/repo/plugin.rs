@@ -16,7 +16,6 @@ use crate::model::{
     ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition, PluginOwner,
     PluginScope, PluginTypeSpecificDefinition,
 };
-use crate::repo::component::ComponentRepo;
 use crate::repo::RowMeta;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -24,11 +23,12 @@ use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginOwner, Defa
 use golem_common::model::ComponentId;
 use golem_common::model::Empty;
 use golem_service_base::repo::RepoError;
+use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, Pool, QueryBuilder, Type};
+use std::fmt::Display;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
-use tracing::log::Log;
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -189,9 +189,8 @@ where
     Uuid: for<'q> Encode<'q, DB> + Type<DB>,
     Option<Uuid>: for<'q> Encode<'q, DB> + Type<DB>,
 {
-    fn add_column_list(builder: &mut QueryBuilder<DB>) -> bool {
+    fn add_column_list<Sep: Display>(builder: &mut Separated<DB, Sep>) {
         builder.push("scope_component_id");
-        true
     }
 
     fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) {
@@ -203,9 +202,8 @@ where
         }
     }
 
-    fn push_bind<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) -> bool {
+    fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>) {
         builder.push_bind(self.scope_component_id);
-        true
     }
 }
 
@@ -227,17 +225,13 @@ impl TryFrom<DefaultPluginOwnerRow> for DefaultPluginOwner {
 }
 
 impl<DB: Database> RowMeta<DB> for DefaultPluginOwnerRow {
-    fn add_column_list(_builder: &mut QueryBuilder<DB>) -> bool {
-        false
-    }
+    fn add_column_list<Sep: Display>(_builder: &mut Separated<DB, Sep>) {}
 
     fn add_where_clause(&self, builder: &mut QueryBuilder<DB>) {
         builder.push("1 = 1");
     }
 
-    fn push_bind<'a>(&'a self, _builder: &mut QueryBuilder<'a, DB>) -> bool {
-        false
-    }
+    fn push_bind<'a, Sep: Display>(&'a self, _builder: &mut Separated<'_, 'a, DB, Sep>) {}
 }
 
 #[async_trait]
@@ -391,34 +385,28 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         &self,
         owner: &Owner::Row,
     ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
-        let mut query = QueryBuilder::new(
-            r#"SELECT
-                 name,
-                 version,
-                 description,
-                 icon,
-                 homepage,
-                 plugin_type,
-            "#,
-        );
+        let mut query = QueryBuilder::new("SELECT ");
 
-        if Scope::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
-        if Owner::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
+        let mut column_list = query.separated(", ");
 
-        query.push(
-            r#"provided_wit_package,
-              json_schema,
-              validate_url,
-              transform_url,
-              component_id,
-              component_version
-            FROM plugins
-            WHERE "#,
-        );
+        column_list.push("name");
+        column_list.push("version");
+        column_list.push("description");
+        column_list.push("icon");
+        column_list.push("homepage");
+        column_list.push("plugin_type");
+
+        Scope::Row::add_column_list(&mut column_list);
+        Owner::Row::add_column_list(&mut column_list);
+
+        column_list.push("provided_wit_package");
+        column_list.push("json_schema");
+        column_list.push("validate_url");
+        column_list.push("transform_url");
+        column_list.push("component_id");
+        column_list.push("component_version");
+
+        query.push(" FROM plugins WHERE ");
 
         owner.add_where_clause(&mut query);
 
@@ -433,34 +421,28 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         owner: &Owner::Row,
         scopes: &[Scope::Row],
     ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
-        let mut query = QueryBuilder::new(
-            r#"SELECT
-                 name,
-                 version,
-                 description,
-                 icon,
-                 homepage,
-                 plugin_type,
-            "#,
-        );
+        let mut query = QueryBuilder::new("SELECT ");
 
-        if Scope::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
-        if Owner::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
+        let mut column_list = query.separated(", ");
 
-        query.push(
-            r#"provided_wit_package,
-              json_schema,
-              validate_url,
-              transform_url,
-              component_id,
-              component_version
-            FROM plugins
-            WHERE "#,
-        );
+        column_list.push("name");
+        column_list.push("version");
+        column_list.push("description");
+        column_list.push("icon");
+        column_list.push("homepage");
+        column_list.push("plugin_type");
+
+        Scope::Row::add_column_list(&mut column_list);
+        Owner::Row::add_column_list(&mut column_list);
+
+        column_list.push("provided_wit_package");
+        column_list.push("json_schema");
+        column_list.push("validate_url");
+        column_list.push("transform_url");
+        column_list.push("component_id");
+        column_list.push("component_version");
+
+        query.push(" FROM plugins WHERE ");
 
         owner.add_where_clause(&mut query);
 
@@ -486,34 +468,28 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         owner: &Owner::Row,
         name: &str,
     ) -> Result<Vec<PluginRecord<Owner, Scope>>, RepoError> {
-        let mut query = QueryBuilder::new(
-            r#"SELECT
-                 name,
-                 version,
-                 description,
-                 icon,
-                 homepage,
-                 plugin_type,
-            "#,
-        );
+        let mut query = QueryBuilder::new("SELECT ");
 
-        if Scope::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
-        if Owner::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
+        let mut column_list = query.separated(", ");
 
-        query.push(
-            r#"provided_wit_package,
-              json_schema,
-              validate_url,
-              transform_url,
-              component_id,
-              component_version
-            FROM plugins
-            WHERE "#,
-        );
+        column_list.push("name");
+        column_list.push("version");
+        column_list.push("description");
+        column_list.push("icon");
+        column_list.push("homepage");
+        column_list.push("plugin_type");
+
+        Scope::Row::add_column_list(&mut column_list);
+        Owner::Row::add_column_list(&mut column_list);
+
+        column_list.push("provided_wit_package");
+        column_list.push("json_schema");
+        column_list.push("validate_url");
+        column_list.push("transform_url");
+        column_list.push("component_id");
+        column_list.push("component_version");
+
+        query.push(" FROM plugins WHERE ");
 
         owner.add_where_clause(&mut query);
 
@@ -529,66 +505,47 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
     }
 
     async fn create(&self, record: &PluginRecord<Owner, Scope>) -> Result<(), RepoError> {
-        let mut query = QueryBuilder::new(
-            r#"INSERT INTO plugins (
-                 name,
-                 version,
-                 description,
-                 icon,
-                 homepage,
-                 plugin_type,
-            "#,
-        );
+        let mut query = QueryBuilder::new("INSERT INTO plugins (");
 
-        if Scope::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
-        if Owner::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
+        let mut column_list = query.separated(", ");
 
-        query.push(
-            r#"provided_wit_package,
-              json_schema,
-              validate_url,
-              transform_url,
-              component_id,
-              component_version
-            ) VALUES (
-            "#,
-        );
+        column_list.push("name");
+        column_list.push("version");
+        column_list.push("description");
+        column_list.push("icon");
+        column_list.push("homepage");
+        column_list.push("plugin_type");
 
-        query.push_bind(&record.name);
-        query.push(", ");
-        query.push_bind(&record.version);
-        query.push(", ");
-        query.push_bind(&record.description);
-        query.push(", ");
-        query.push_bind(&record.icon);
-        query.push(", ");
-        query.push_bind(&record.homepage);
-        query.push(", ");
-        query.push_bind(record.plugin_type);
-        query.push(", ");
+        Scope::Row::add_column_list(&mut column_list);
+        Owner::Row::add_column_list(&mut column_list);
 
-        if record.scope.push_bind(&mut query) {
-            query.push(", ");
-        }
-        if record.owner.push_bind(&mut query) {
-            query.push(", ");
-        }
+        column_list.push("provided_wit_package");
+        column_list.push("json_schema");
+        column_list.push("validate_url");
+        column_list.push("transform_url");
+        column_list.push("component_id");
+        column_list.push("component_version");
 
-        query.push_bind(&record.provided_wit_package);
-        query.push(", ");
-        query.push_bind(&record.json_schema);
-        query.push(", ");
-        query.push_bind(&record.validate_url);
-        query.push(", ");
-        query.push_bind(&record.transform_url);
-        query.push(", ");
-        query.push_bind(record.component_id);
-        query.push(", ");
-        query.push_bind(record.component_version);
+        query.push(") VALUES (");
+
+        let mut value_list = query.separated(", ");
+        value_list.push_bind(&record.name);
+        value_list.push_bind(&record.version);
+        value_list.push_bind(&record.description);
+        value_list.push_bind(&record.icon);
+        value_list.push_bind(&record.homepage);
+        value_list.push_bind(record.plugin_type);
+
+        record.scope.push_bind(&mut value_list);
+        record.owner.push_bind(&mut value_list);
+
+        value_list.push_bind(&record.provided_wit_package);
+        value_list.push_bind(&record.json_schema);
+        value_list.push_bind(&record.validate_url);
+        value_list.push_bind(&record.transform_url);
+        value_list.push_bind(record.component_id);
+        value_list.push_bind(record.component_version);
+
         query.push(")");
 
         debug!("Built query for create: {}", query.sql());
@@ -604,35 +561,28 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         name: &str,
         version: &str,
     ) -> Result<Option<PluginRecord<Owner, Scope>>, RepoError> {
-        let mut query = QueryBuilder::new(
-            r#"SELECT
-                 name,
-                 version,
-                 description,
-                 icon,
-                 homepage,
-                 plugin_type,
-            "#,
-        );
+        let mut query = QueryBuilder::new("SELECT ");
 
-        if Scope::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
-        if Owner::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
+        let mut column_list = query.separated(", ");
 
-        query.push(
-            r#"provided_wit_package,
-              json_schema,
-              validate_url,
-              transform_url,
-              component_id,
-              component_version
-            FROM plugins
-            WHERE "#,
-        );
+        column_list.push("name");
+        column_list.push("version");
+        column_list.push("description");
+        column_list.push("icon");
+        column_list.push("homepage");
+        column_list.push("plugin_type");
 
+        Scope::Row::add_column_list(&mut column_list);
+        Owner::Row::add_column_list(&mut column_list);
+
+        column_list.push("provided_wit_package");
+        column_list.push("json_schema");
+        column_list.push("validate_url");
+        column_list.push("transform_url");
+        column_list.push("component_id");
+        column_list.push("component_version");
+
+        query.push(" FROM plugins WHERE ");
         owner.add_where_clause(&mut query);
 
         query.push(" AND name = ");

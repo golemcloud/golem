@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::repo::plugin_installation::PluginInstallationRecord;
 use crate::repo::RowMeta;
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::{ComponentId, ComponentVersion, PluginInstallationId};
 use golem_service_base::auth::DefaultNamespace;
 use http::Uri;
-use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ToJSON, Type};
+use poem_openapi::types::{ParseFromJSON, ToJSON, Type};
 use poem_openapi::{Enum, Object, Union};
 use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
@@ -204,6 +205,16 @@ pub struct PluginInstallation {
     pub version: String,
     pub priority: i16,
     pub parameters: HashMap<String, String>,
+}
+
+impl PluginInstallation {
+    pub fn try_into<Owner: PluginOwner, Target: PluginInstallationTarget>(
+        self,
+        owner: Owner::Row,
+        target: Target::Row,
+    ) -> Result<PluginInstallationRecord<Owner, Target>, String> {
+        PluginInstallationRecord::try_from(self, owner, target)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]

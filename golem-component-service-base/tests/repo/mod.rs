@@ -15,15 +15,18 @@
 use crate::Tracing;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginOwner, DefaultPluginScope};
-use golem_common::model::{ComponentId, ComponentType, Empty};
+use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::SafeDisplay;
 use golem_component_service_base::model::{
-    Component, ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition,
-    PluginTypeSpecificDefinition,
+    Component, ComponentPluginInstallationTarget, ComponentTransformerDefinition,
+    OplogProcessorDefinition, PluginDefinition, PluginInstallation, PluginTypeSpecificDefinition,
 };
 use golem_component_service_base::repo::component::ComponentRepo;
 use golem_component_service_base::repo::plugin::{
     DefaultPluginOwnerRow, DefaultPluginScopeRow, PluginRepo,
+};
+use golem_component_service_base::repo::plugin_installation::{
+    ComponentPluginInstallationRow, PluginInstallationRepo,
 };
 use golem_component_service_base::service::component::{
     ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
@@ -37,7 +40,9 @@ use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
+use poem_openapi::__private::serde_json;
 use rib::RegistryKey;
+use std::collections::HashMap;
 use std::sync::Arc;
 use test_r::inherit_test_dep;
 use uuid::Uuid;
@@ -682,10 +687,10 @@ async fn test_default_plugin_repo(
     )
     .unwrap();
 
-    let _ = component_repo
+    component_repo
         .create(&component1.clone().try_into().unwrap())
         .await?;
-    let _ = component_repo
+    component_repo
         .create(&component2.clone().try_into().unwrap())
         .await?;
 
@@ -763,22 +768,135 @@ async fn test_default_plugin_repo(
         .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
         .unwrap();
 
-    assert!(all1.is_empty());
     assert!(scoped1.is_empty());
     assert!(named1.is_empty());
 
-    assert_eq!(defs.len(), 2);
+    assert_eq!(defs.len(), all1.len() + 2);
     assert_eq!(scoped.len(), 1);
     assert_eq!(named.len(), 1);
 
-    assert_eq!(defs[0], plugin1);
-    assert_eq!(defs[1], plugin2);
+    assert!(defs.contains(&plugin1));
+    assert!(defs.contains(&plugin2));
 
     assert_eq!(scoped[0], plugin2);
     assert_eq!(named[0], plugin1);
 
-    assert_eq!(after_delete.len(), 1);
-    assert_eq!(after_delete[0], plugin2);
+    assert_eq!(after_delete.len(), all1.len() + 1);
+    assert!(after_delete.iter().any(|p| p == &plugin2));
+
+    Ok(())
+}
+
+async fn test_default_component_plugin_installation(
+    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+    plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+    installations_repo: Arc<
+        dyn PluginInstallationRepo<DefaultPluginOwner, ComponentPluginInstallationTarget>
+            + Send
+            + Sync,
+    >,
+) -> Result<(), RepoError> {
+    let owner: DefaultPluginOwnerRow = DefaultPluginOwner.into();
+    let component_id = ComponentId::new_v4();
+
+    let namespace = Uuid::new_v4().to_string();
+    let component1 = Component::new(
+        &component_id,
+        &ComponentName("default-component-plugin-installation-component1".to_string()),
+        ComponentType::Ephemeral,
+        &get_component_data("shopping-cart"),
+        &namespace,
+    )
+    .unwrap();
+
+    let plugin1 = PluginDefinition {
+        name: "plugin2".to_string(),
+        version: "v2".to_string(),
+        description: "another test plugin".to_string(),
+        icon: vec![1, 2, 3, 4],
+        homepage: "https://plugin2.com".to_string(),
+        specs: PluginTypeSpecificDefinition::ComponentTransformer(ComponentTransformerDefinition {
+            provided_wit_package: Some("wit".to_string()),
+            json_schema: Some("schema".to_string()),
+            validate_url: "https://plugin2.com/validate".to_string(),
+            transform_url: "https://plugin2.com/transform".to_string(),
+        }),
+        scope: DefaultPluginScope::Global(Empty),
+        owner: DefaultPluginOwner,
+    };
+    let plugin1_row = plugin1.clone().into();
+
+    component_repo
+        .create(&component1.clone().try_into().unwrap())
+        .await?;
+    plugin_repo.create(&plugin1_row).await?;
+
+    let target1 = ComponentPluginInstallationTarget {
+        component_id: component_id.clone(),
+        component_version: 0,
+    };
+    let target1_row: ComponentPluginInstallationRow = target1.clone().into();
+
+    let installations1 = installations_repo.get_all(&owner, &target1_row).await?;
+
+    let installation1 = PluginInstallation {
+        id: PluginInstallationId::new_v4(),
+        name: plugin1.name.clone(),
+        version: plugin1.version.clone(),
+        priority: 1000,
+        parameters: HashMap::from_iter(vec![("param1".to_string(), "value1".to_string())]),
+    };
+    let installation1_row = installation1
+        .clone()
+        .try_into(owner.clone(), target1_row.clone())
+        .unwrap();
+
+    installations_repo.create(&installation1_row).await?;
+
+    let installation2 = PluginInstallation {
+        id: PluginInstallationId::new_v4(),
+        name: plugin1.name.clone(),
+        version: plugin1.version.clone(),
+        priority: 800,
+        parameters: HashMap::default(),
+    };
+    let installation2_row = installation2
+        .clone()
+        .try_into(owner.clone(), target1_row.clone())
+        .unwrap();
+
+    installations_repo.create(&installation2_row).await?;
+
+    let new_params: HashMap<String, String> =
+        HashMap::from_iter(vec![("param2".to_string(), "value2".to_string())]);
+    installations_repo
+        .update(
+            &owner,
+            &target1_row,
+            &installation2.id.0,
+            600,
+            serde_json::to_vec(&new_params).unwrap(),
+        )
+        .await?;
+
+    let installations2 = installations_repo.get_all(&owner, &target1_row).await?;
+
+    installations_repo
+        .delete(&owner, &target1_row, &installation1.id.0)
+        .await?;
+
+    let installations3 = installations_repo.get_all(&owner, &target1_row).await?;
+
+    installations_repo
+        .delete_all_installation_of_plugin(&owner, &plugin1.name, &plugin1.version)
+        .await?;
+
+    let installations4 = installations_repo.get_all(&owner, &target1_row).await?;
+
+    assert_eq!(installations1.len(), 0);
+    assert_eq!(installations2.len(), 2);
+    assert_eq!(installations3.len(), 1);
+    assert_eq!(installations4.len(), 0);
 
     Ok(())
 }

@@ -19,11 +19,11 @@ CREATE TABLE plugins
 
 CREATE TABLE component_plugin_installation
 (
-    installation_id   uuid  NOT NULL PRIMARY KEY,
-    plugin_name       text  NOT NULL,
-    plugin_version    text  NOT NULL,
-    priority          int   NOT NULL,
-    parameters        bytea NOT NULL,
+    installation_id   uuid     NOT NULL PRIMARY KEY,
+    plugin_name       text     NOT NULL,
+    plugin_version    text     NOT NULL,
+    priority          smallint NOT NULL,
+    parameters        bytea    NOT NULL,
     component_id      uuid REFERENCES components (component_id),
     component_version bigint,
 

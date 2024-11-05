@@ -17,7 +17,7 @@ use golem_common::config::DbSqliteConfig;
 use golem_service_base::db;
 use sqlx::Pool;
 use std::sync::Arc;
-use test_r::{inherit_test_dep, sequential, test};
+use test_r::{inherit_test_dep, sequential};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
@@ -26,19 +26,21 @@ inherit_test_dep!(Tracing);
 mod tests {
     use super::SqliteDb;
     use crate::Tracing;
-    use golem_common::config::DbSqliteConfig;
+
     use golem_component_service_base::repo::component::{
         ComponentRepo, DbComponentRepo, LoggedComponentRepo,
     };
-    use golem_service_base::db;
-    use sqlx::Pool;
+
     use std::sync::Arc;
 
     use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+    use golem_component_service_base::model::ComponentPluginInstallationTarget;
     use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
+    use golem_component_service_base::repo::plugin_installation::{
+        DbPluginInstallationRepo, LoggedPluginInstallationRepo, PluginInstallationRepo,
+    };
     use golem_service_base::repo::RepoError;
     use test_r::{inherit_test_dep, test, test_dep};
-    use uuid::Uuid;
 
     inherit_test_dep!(Tracing);
 
@@ -59,6 +61,19 @@ mod tests {
         db: &SqliteDb,
     ) -> Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync> {
         Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db.pool.clone())))
+    }
+
+    #[test_dep]
+    fn sqlite_component_plugin_installations_repo(
+        db: &SqliteDb,
+    ) -> Arc<
+        dyn PluginInstallationRepo<DefaultPluginOwner, ComponentPluginInstallationTarget>
+            + Send
+            + Sync,
+    > {
+        Arc::new(LoggedPluginInstallationRepo::new(
+            DbPluginInstallationRepo::new(db.pool.clone()),
+        ))
     }
 
     #[test]
@@ -101,6 +116,24 @@ mod tests {
         plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
     ) -> Result<(), RepoError> {
         crate::repo::test_default_plugin_repo(component_repo.clone(), plugin_repo.clone()).await
+    }
+
+    #[test]
+    async fn default_component_plugin_installation(
+        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
+        plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        plugin_installation_repo: &Arc<
+            dyn PluginInstallationRepo<DefaultPluginOwner, ComponentPluginInstallationTarget>
+                + Send
+                + Sync,
+        >,
+    ) -> Result<(), RepoError> {
+        crate::repo::test_default_component_plugin_installation(
+            component_repo.clone(),
+            plugin_repo.clone(),
+            plugin_installation_repo.clone(),
+        )
+        .await
     }
 }
 

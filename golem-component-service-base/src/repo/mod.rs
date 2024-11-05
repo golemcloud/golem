@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use sqlx::query_builder::Separated;
 use sqlx::{Database, QueryBuilder};
+use std::fmt::Display;
 
 pub mod component;
 pub mod plugin;
 pub mod plugin_installation;
 
 pub trait RowMeta<DB: Database> {
-    fn add_column_list(builder: &mut QueryBuilder<DB>) -> bool;
+    fn add_column_list<Sep: Display>(builder: &mut Separated<DB, Sep>);
     fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>);
-    fn push_bind<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) -> bool;
+    fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>);
 }

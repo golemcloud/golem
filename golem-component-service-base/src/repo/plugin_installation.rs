@@ -15,16 +15,16 @@
 use crate::model::{
     ComponentPluginInstallationTarget, PluginInstallation, PluginInstallationTarget, PluginOwner,
 };
-use crate::repo::plugin::PluginRepo;
 use crate::repo::RowMeta;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::{ComponentId, PluginInstallationId};
 use golem_service_base::repo::RepoError;
 use poem_openapi::__private::serde_json;
+use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, Pool, QueryBuilder};
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -42,6 +42,25 @@ pub struct PluginInstallationRecord<Owner: PluginOwner, Target: PluginInstallati
     pub target: Target::Row,
     #[sqlx(flatten)]
     pub owner: Owner::Row,
+}
+
+impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRecord<Owner, Target> {
+    pub fn try_from(
+        installation: PluginInstallation,
+        owner: Owner::Row,
+        target: Target::Row,
+    ) -> Result<Self, String> {
+        Ok(PluginInstallationRecord {
+            installation_id: installation.id.0,
+            plugin_name: installation.name,
+            plugin_version: installation.version,
+            priority: installation.priority,
+            parameters: serde_json::to_vec(&installation.parameters)
+                .map_err(|e| format!("Failed to serialize plugin installation parameters: {e}"))?,
+            target,
+            owner,
+        })
+    }
 }
 
 impl<Owner: PluginOwner, Target: PluginInstallationTarget>
@@ -78,9 +97,9 @@ where
     Uuid: for<'q> Encode<'q, DB> + sqlx::Type<DB>,
     i64: for<'q> Encode<'q, DB> + sqlx::Type<DB>,
 {
-    fn add_column_list(builder: &mut QueryBuilder<DB>) -> bool {
-        builder.push("component_id, component_version");
-        true
+    fn add_column_list<Sep: Display>(builder: &mut Separated<DB, Sep>) {
+        builder.push("component_id");
+        builder.push("component_version");
     }
 
     fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) {
@@ -90,11 +109,9 @@ where
         builder.push_bind(self.component_version);
     }
 
-    fn push_bind<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) -> bool {
+    fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>) {
         builder.push_bind(self.component_id);
-        builder.push(", ");
         builder.push_bind(self.component_version);
-        true
     }
 }
 
@@ -271,20 +288,18 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
         owner: &Owner::Row,
         target: &Target::Row,
     ) -> Result<Vec<PluginInstallationRecord<Owner, Target>>, RepoError> {
-        let mut query = QueryBuilder::new(
-            r#"SELECT
-                 installation_id,
-                 plugin_name,
-                 plugin_version,
-                 priority,
-                 parameters,
-            "#,
-        );
+        let mut query = QueryBuilder::new("SELECT ");
 
-        if Target::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
-        Owner::Row::add_column_list(&mut query);
+        let mut column_list = query.separated(", ");
+
+        column_list.push("installation_id");
+        column_list.push("plugin_name");
+        column_list.push("plugin_version");
+        column_list.push("priority");
+        column_list.push("parameters");
+
+        Target::Row::add_column_list(&mut column_list);
+        Owner::Row::add_column_list(&mut column_list);
 
         query.push(" FROM ");
         query.push(Target::table_name());
@@ -292,6 +307,8 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
         target.add_where_clause(&mut query);
         query.push(" AND ");
         owner.add_where_clause(&mut query);
+
+        debug!("Generated query for get_all: {}", query.sql());
 
         Ok(query
             .build_query_as::<PluginInstallationRecord<Owner, Target>>()
@@ -307,10 +324,17 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
     ) -> Result<(), RepoError> {
         let mut query = QueryBuilder::new("DELETE FROM ");
         query.push(Target::table_name());
-        query.push(" WHERE plugin_name = ? AND plugin_version = ? AND ");
+        query.push(" WHERE plugin_name = ");
         query.push_bind(plugin_name);
+        query.push("AND plugin_version = ");
         query.push_bind(plugin_version);
+        query.push(" AND ");
         owner.add_where_clause(&mut query);
+
+        debug!(
+            "Generated query for delete_all_installation_of_plugin: {}",
+            query.sql()
+        );
 
         query.build().execute(self.db_pool.deref()).await?;
 
@@ -323,27 +347,32 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
     ) -> Result<(), RepoError> {
         let mut query = QueryBuilder::new("INSERT INTO ");
         query.push(Target::table_name());
-        query.push(" (installation_id, plugin_name, plugin_version, priority, parameters, ");
-        if Target::Row::add_column_list(&mut query) {
-            query.push(", ");
-        }
-        Owner::Row::add_column_list(&mut query);
+        query.push(" (");
+
+        let mut column_list = query.separated(", ");
+
+        column_list.push("installation_id");
+        column_list.push("plugin_name");
+        column_list.push("plugin_version");
+        column_list.push("priority");
+        column_list.push("parameters");
+
+        Target::Row::add_column_list(&mut column_list);
+        Owner::Row::add_column_list(&mut column_list);
+
         query.push(") VALUES (");
-        query.push_bind(record.installation_id);
-        query.push(", ");
-        query.push_bind(&record.plugin_name);
-        query.push(", ");
-        query.push_bind(&record.plugin_version);
-        query.push(", ");
-        query.push_bind(record.priority);
-        query.push(", ");
-        query.push_bind(&record.parameters);
-        query.push(", ");
-        if record.target.push_bind(&mut query) {
-            query.push(", ");
-        }
-        record.owner.push_bind(&mut query);
+
+        let mut value_list = query.separated(", ");
+        value_list.push_bind(record.installation_id);
+        value_list.push_bind(&record.plugin_name);
+        value_list.push_bind(&record.plugin_version);
+        value_list.push_bind(record.priority);
+        value_list.push_bind(&record.parameters);
+        record.target.push_bind(&mut value_list);
+        record.owner.push_bind(&mut value_list);
         query.push(")");
+
+        debug!("Generated query for create: {}", query.sql());
 
         query.build().execute(self.db_pool.deref()).await?;
 
@@ -371,6 +400,8 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
         query.push(" AND ");
         target.add_where_clause(&mut query);
 
+        debug!("Generated query for update: {}", query.sql());
+
         query.build().execute(self.db_pool.deref()).await?;
 
         Ok(())
@@ -386,10 +417,12 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
         query.push(Target::table_name());
         query.push(" WHERE installation_id = ");
         query.push_bind(id);
-        query.push(" AND");
+        query.push(" AND ");
         owner.add_where_clause(&mut query);
         query.push(" AND ");
         target.add_where_clause(&mut query);
+
+        debug!("Generated query for delete: {}", query.sql());
 
         query.build().execute(self.db_pool.deref()).await?;
 
