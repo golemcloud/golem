@@ -2,6 +2,7 @@
 grpc_address = "0.0.0.0"
 http_address = "0.0.0.0"
 http_port = 8082
+initial_files_cache_dir = "/tmp/golem/initial_files"
 port = 9000
 tracing_file_name_with_port = true
 
@@ -159,6 +160,7 @@ without_time = false
 # grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
+# initial_files_cache_dir = "/tmp/golem/initial_files"
 # port = 9000
 # tracing_file_name_with_port = true
 # 
@@ -318,6 +320,7 @@ without_time = false
 # grpc_address = "0.0.0.0"
 # http_address = "0.0.0.0"
 # http_port = 8082
+# initial_files_cache_dir = "/tmp/golem/initial_files"
 # port = 9000
 # tracing_file_name_with_port = true
 # 

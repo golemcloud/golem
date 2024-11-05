@@ -53,6 +53,7 @@ pub struct GolemConfig {
     pub port: u16,
     pub http_address: String,
     pub http_port: u16,
+    pub initial_files_cache_dir: PathBuf,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -321,6 +322,7 @@ impl Default for GolemConfig {
             port: 9000,
             http_address: "0.0.0.0".to_string(),
             http_port: 8082,
+            initial_files_cache_dir: PathBuf::from("/tmp/golem/initial_files"),
         }
     }
 }
