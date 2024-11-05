@@ -15,10 +15,12 @@
 use anyhow::anyhow;
 use async_lock::Mutex;
 use golem_common::model::InitialComponentFileKey;
+use serde::de;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Weak;
 use std::{path::PathBuf, sync::Arc};
+use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
@@ -26,28 +28,33 @@ use crate::error::GolemError;
 
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 
+// Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
+// Make sure to not drop this token until you are done with the file.
+pub struct FileUseToken {
+    _handle: Arc<CacheEntry>,
+}
+
 /// Interface for loading files and making them available to workers.
 /// This will hardlink to a temporary directory to avoid copying files between workers. Beware
 /// that hardlinking is only possible within the same filesystem.
 pub struct FileLoader {
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    cache_dir: PathBuf,
-    cache: Mutex<HashMap<InitialComponentFileKey, Weak<CacheEntry>>>,
+    cache_dir: TempDir,
+    cache: Cache,
 }
 
 impl FileLoader {
-    pub async fn new(
+    pub fn new(
         initial_component_files_service: Arc<InitialComponentFilesService>,
-        cache_dir: &Path,
     ) -> Result<Self, anyhow::Error> {
-        if !cache_dir.exists() {
-            tokio::fs::create_dir_all(cache_dir).await?
-        };
+        let cache_dir = tempfile::Builder::new()
+            .prefix("golem-initial-component-files")
+            .tempdir()?;
 
         Ok(Self {
             initial_component_files_service,
             cache: Mutex::new(HashMap::new()),
-            cache_dir: cache_dir.to_owned(),
+            cache_dir,
         })
     }
 
@@ -83,22 +90,16 @@ impl FileLoader {
             tokio::fs::create_dir_all(parent).await?;
         };
 
-        let cache_entry = self.get_or_add_cache_entry(key).await?;
+        let (token, cache_entry_path) = self.get_or_add_cache_entry(key).await?;
 
         debug!(
             "Hardlinking {} to {}",
-            cache_entry.path.display(),
+            cache_entry_path.display(),
             target.display()
         );
-        tokio::fs::hard_link(&cache_entry.path, target).await?;
+        tokio::fs::hard_link(&cache_entry_path, target).await?;
 
-        let mut perms = tokio::fs::metadata(target).await?.permissions();
-        perms.set_readonly(true);
-        tokio::fs::set_permissions(target, perms).await?;
-
-        Ok(FileUseToken {
-            _cache_entry: cache_entry,
-        })
+        Ok(token)
     }
 
     async fn get_read_write_to_impl(
@@ -114,82 +115,137 @@ impl FileLoader {
         {
             let cache_guard = self.cache.lock().await;
             if let Some(cache_entry) = cache_guard.get(key).and_then(|weak| weak.upgrade()) {
-                debug!(
-                    "Copying {} to {}",
-                    cache_entry.path.display(),
-                    target.display()
-                );
-                tokio::fs::copy(&cache_entry.path, target).await?;
-                return Ok(());
+                // get access to inner data;
+                let cache_entry_guard = cache_entry.lock().await;
+
+                match cache_entry_guard.as_ref() {
+                    Ok(path_handle) => {
+                        debug!(
+                            "Copying {} to {}",
+                            path_handle.path.display(),
+                            target.display()
+                        );
+                        tokio::fs::copy(&path_handle.path, target).await?;
+                        drop(cache_entry_guard);
+                        drop(cache_entry);
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        return Err(anyhow!("Failed to download file: {}", e));
+                    }
+                };
             }
             drop(cache_guard);
         }
 
         // alternative, download the file directly to the target
-        {
-            let data = self
-                .initial_component_files_service
-                .get(key)
-                .await
-                .map_err(|e| anyhow!(e))?
-                .ok_or_else(|| anyhow!("File not found"))?;
-
-            let mut file = tokio::fs::File::create(&target).await?;
-            file.write_all(&data).await?;
-            Ok(())
-        }
+        self.download_file_to_path(target, key).await?;
+        Ok(())
     }
 
     async fn get_or_add_cache_entry(
         &self,
         key: &InitialComponentFileKey,
-    ) -> Result<Arc<CacheEntry>, anyhow::Error> {
-        let mut cache_guard = self.cache.lock().await;
-        let result = if let Some(cache_entry) = cache_guard.get(key).and_then(|weak| weak.upgrade())
-        {
-            // we have a file, we can just return it
-            cache_entry
-        } else {
-            // we never had a file or it was dropped, we need to download it.
-            let path = self.cache_dir.join(key.to_string());
+    ) -> Result<(FileUseToken, PathBuf), anyhow::Error> {
+        let (cache_entry, maybe_prelocked_entry) = {
+            let mut cache_guard = self.cache.lock().await;
+            let result =
+                if let Some(cache_entry) = cache_guard.get(key).and_then(|weak| weak.upgrade()) {
+                    // we have a file, we can just return it
+                    (cache_entry, None)
+                } else {
+                    // insert an entry so no one else tries to download the file
+                    let cache_entry = Arc::new(Mutex::new(Err(anyhow!("File not downloaded yet"))));
 
-            // Downloading the user data inside the lock is not great.
-            // Refactor this to load the file outside the lock and then make it available to the worker.
-            let data = self
-                .initial_component_files_service
-                .get(key)
-                .await
-                .map_err(|e| anyhow!(e))?
-                .ok_or_else(|| anyhow!("File not found"))?;
+                    // immediately lock the entry so no one accesses the file while we are downloading it
+                    let prelocked_entry = cache_entry.clone().lock_arc().await;
 
-            debug!("Writing {} to cache {}", key, path.display());
-
-            tokio::fs::write(&path, data).await?;
-
-            // store the file so we can reuse it later
-            let cache_entry = Arc::new(CacheEntry { path });
-            // we don't want to keep a copy if we are the only ones holding it, so we use a weak reference
-            cache_guard.insert(key.clone(), Arc::downgrade(&cache_entry));
-            cache_entry
+                    // we don't want to keep a copy if we are the only ones holding it, so we use a weak reference
+                    cache_guard.insert(key.clone(), Arc::downgrade(&cache_entry));
+                    (cache_entry, Some(prelocked_entry))
+                };
+            drop(cache_guard);
+            result
         };
 
-        // make sure we held the lock until we are done with the dance.
-        drop(cache_guard);
-        Ok(result)
+        let path = self.cache_dir.path().join(key.to_string());
+        // we may need to initialize the file in case we are the first ones to access it
+        if let Some(mut prelocked_entry) = maybe_prelocked_entry {
+            debug!("Adding {} to cache", key);
+            match self.download_file_to_path(&path, key).await {
+                Ok(()) => {
+                    let mut perms = tokio::fs::metadata(&path).await?.permissions();
+                    perms.set_readonly(true);
+                    tokio::fs::set_permissions(&path, perms).await?;
+
+                    // we successfully downloaded the file, set the cache entry to the file
+                    *prelocked_entry = Ok(PathHandle { path: path.clone() });
+
+                    Ok((
+                        FileUseToken {
+                            _handle: cache_entry,
+                        },
+                        path,
+                    ))
+                }
+                Err(e) => {
+                    // we failed to download the file, we need to fail the cache entry, remove it from the cache and return the error
+                    *prelocked_entry = Err(anyhow!("Other thread failed to download: {}", e));
+
+                    let mut cache_guard = self.cache.lock().await;
+                    cache_guard.remove(key);
+                    drop(cache_guard);
+
+                    Err(e)
+                }
+            }
+        } else {
+            // we already have the file, just return it
+            Ok((
+                FileUseToken {
+                    _handle: cache_entry,
+                },
+                path,
+            ))
+        }
+    }
+
+    async fn download_file_to_path(
+        &self,
+        path: &Path,
+        key: &InitialComponentFileKey,
+    ) -> Result<(), anyhow::Error> {
+        debug!("Downloading {} to {}", key, path.display());
+
+        let data = self
+            .initial_component_files_service
+            .get(key)
+            .await
+            .map_err(|e| anyhow!(e))?
+            .ok_or_else(|| anyhow!("File not found"))?;
+
+        tokio::fs::write(&path, data).await?;
+        Ok(())
     }
 }
 
-// Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
-// Make sure to not drop this token until you are done with the file.
-pub struct FileUseToken {
-    _cache_entry: Arc<CacheEntry>,
-}
+// Scary type, let's break it down:
+// Outer Mutex: This is the lock that protects the cache from concurrent access.
+// HashMap: The cache itself, mapping keys to weak references to the cache entries.
+// InitialComponentFileKey: The key used to identify the cache entry.
+// Weak: A weak reference to the cache entry. This is used to avoid keeping the cache entry alive if no one else is using it.
+// Mutex: The cache entry itself. This is used to ensure that no one is accessing the file while it is being downloaded.
+// Result: The result of the cache entry. This is used to store the file path and any errors that occurred while downloading the file.
+// CacheEntry: The cache entry itself. This is used to store the file path and ensure that the file is deleted when the cache entry is dropped.
+type Cache = Mutex<HashMap<InitialComponentFileKey, Weak<CacheEntry>>>;
 
-struct CacheEntry {
+type CacheEntry = Mutex<Result<PathHandle, anyhow::Error>>;
+
+struct PathHandle {
     path: PathBuf,
 }
 
-impl Drop for CacheEntry {
+impl Drop for PathHandle {
     fn drop(&mut self) {
         if let Err(e) = std::fs::remove_file(&self.path) {
             tracing::error!("Failed to remove file {}: {}", self.path.display(), e);

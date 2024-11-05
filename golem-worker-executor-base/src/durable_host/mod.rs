@@ -54,6 +54,7 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 pub use durability::*;
+use futures::future::try_join_all;
 use futures_util::TryFutureExt;
 use futures_util::TryStreamExt;
 use golem_common::config::RetryConfig;
@@ -2162,26 +2163,37 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
 async fn prepare_filesystem(
     file_loader: Arc<FileLoader>,
     root: &Path,
-    files: &Vec<InitialComponentFile>,
+    files: &[InitialComponentFile],
 ) -> Result<(Vec<FileUseToken>, HashSet<PathBuf>), GolemError> {
+    let futures = files.iter().map(|file| {
+        let path = root.join(PathBuf::from(file.path.to_rel_string()));
+        let key = file.key.clone();
+        let permissions = file.permissions;
+        let file_loader = file_loader.clone();
+        async move {
+            match permissions {
+                ComponentFilePermissions::ReadOnly => {
+                    debug!("Loading read-only file {}", path.display());
+                    let token = file_loader.get_read_only_to(&key, &path).await?;
+                    Ok::<_, GolemError>(Some((token, path)))
+                }
+                ComponentFilePermissions::ReadWrite => {
+                    debug!("Loading read-write file {}", path.display());
+                    file_loader.get_read_write_to(&key, &path).await?;
+                    Ok(None)
+                }
+            }
+        }
+    });
+
+    let results = try_join_all(futures).await?;
+
     let mut read_only_files = HashSet::with_capacity(files.len());
     let mut file_use_tokens = Vec::new();
 
-    for file in files {
-        let path = root.join(PathBuf::from(file.path.to_rel_string()));
-
-        match file.permissions {
-            ComponentFilePermissions::ReadOnly => {
-                debug!("Loading read-only file {}", path.display());
-                let token = file_loader.get_read_only_to(&file.key, &path).await?;
-                read_only_files.insert(path);
-                file_use_tokens.push(token);
-            }
-            ComponentFilePermissions::ReadWrite => {
-                debug!("Loading read-write file {}", path.display());
-                file_loader.get_read_write_to(&file.key, &path).await?;
-            }
-        }
+    for (token, path) in results.into_iter().flatten() {
+        read_only_files.insert(path);
+        file_use_tokens.push(token);
     }
     Ok((file_use_tokens, read_only_files))
 }
