@@ -70,7 +70,7 @@ impl<'a, T: ParseFromJSON + ParseFromYAML> ApiExtractor<'a> for JsonOrYaml<T> {
 
 impl<T: ParseFromYAML + ParseFromJSON> ParsePayload for JsonOrYaml<T> {
     const IS_REQUIRED: bool = true;
-    
+
     async fn from_request(request: &Request, body: &mut RequestBody) -> poem::Result<Self> {
         let content_type = request
             .headers()
