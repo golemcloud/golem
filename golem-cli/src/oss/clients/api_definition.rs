@@ -85,14 +85,14 @@ async fn create_or_update_api_definition<
             let value: HttpApiDefinitionRequest = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
-            Ok(client.create_definition(&value).await?)
+            Ok(client.create_definition_json(&value).await?)
         }
         Action::Update => {
             let value: HttpApiDefinitionRequest = serde_json::from_str(definition_str.as_str())
                 .map_err(|e| GolemError(format!("Failed to parse HttpApiDefinition: {e:?}")))?;
 
             Ok(client
-                .update_definition(&value.id, &value.version, &value)
+                .update_definition_json(&value.id, &value.version, &value)
                 .await?)
         }
     }
