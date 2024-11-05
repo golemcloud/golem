@@ -30,7 +30,7 @@ use crate::model::{
 };
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
-use crate::services::file_loader::FileLoader;
+use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
@@ -124,6 +124,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     _temp_dir: Arc<TempDir>,
+    _used_files: Vec<FileUseToken>,
     read_only_paths: Arc<RwLock<HashSet<PathBuf>>>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
@@ -165,7 +166,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owned_worker_id.worker_id, worker_config.deleted_regions
         );
 
-        let read_only_paths =
+        let (file_use_tokens, read_only_paths) =
             prepare_filesystem(file_loader, temp_dir.path(), &component_metadata.files).await?;
 
         let stdin = ManagedStdIn::disabled();
@@ -218,6 +219,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await,
             _temp_dir: temp_dir,
+            _used_files: file_use_tokens,
             read_only_paths: Arc::new(RwLock::new(read_only_paths)),
             execution_status,
         })
@@ -2161,16 +2163,19 @@ async fn prepare_filesystem(
     file_loader: Arc<FileLoader>,
     root: &Path,
     files: &Vec<InitialComponentFile>,
-) -> Result<HashSet<PathBuf>, GolemError> {
+) -> Result<(Vec<FileUseToken>, HashSet<PathBuf>), GolemError> {
     let mut read_only_files = HashSet::with_capacity(files.len());
+    let mut file_use_tokens = Vec::new();
+
     for file in files {
         let path = root.join(PathBuf::from(file.path.to_rel_string()));
 
         match file.permissions {
             ComponentFilePermissions::ReadOnly => {
                 debug!("Loading read-only file {}", path.display());
-                file_loader.get_read_only_to(&file.key, &path).await?;
+                let token = file_loader.get_read_only_to(&file.key, &path).await?;
                 read_only_files.insert(path);
+                file_use_tokens.push(token);
             }
             ComponentFilePermissions::ReadWrite => {
                 debug!("Loading read-write file {}", path.display());
@@ -2178,7 +2183,7 @@ async fn prepare_filesystem(
             }
         }
     }
-    Ok(read_only_files)
+    Ok((file_use_tokens, read_only_files))
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

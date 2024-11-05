@@ -14,7 +14,7 @@
 
 use glob::glob;
 use golem_common::model::{
-    ComponentFilePath, ComponentFilePathAndPermissions, ComponentFilePermissions, ComponentType,
+    ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentType,
 };
 use golem_wasm_rpc_stubgen::commands::declarative::ApplicationResolveMode;
 use golem_wasm_rpc_stubgen::model::oam;
@@ -519,7 +519,7 @@ impl ApplicationManifest {
 
         Some(InitialComponentFile {
             source_path,
-            target: ComponentFilePathAndPermissions {
+            target: ComponentFilePathWithPermissions {
                 path: file.target_path,
                 permissions: file
                     .permissions
@@ -814,7 +814,7 @@ pub struct BuildStep {
 #[derive(Clone, Debug)]
 pub struct InitialComponentFile {
     pub source_path: DownloadableFile,
-    pub target: ComponentFilePathAndPermissions,
+    pub target: ComponentFilePathWithPermissions,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

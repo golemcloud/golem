@@ -21,14 +21,16 @@ use crate::model::{ComponentName, Format, GolemError, GolemResult, PathBufOrStdi
 use async_trait::async_trait;
 use async_zip::base::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
-use golem_client::model::{ComponentFilePathAndPermissionsList, ComponentType};
-use golem_common::model::{ComponentFilePathAndPermissions, ComponentId};
+use golem_common::model::{
+    ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePathWithPermissionsList,
+    ComponentId, ComponentType,
+};
 use golem_common::uri::oss::uri::ComponentUri;
 use golem_common::uri::oss::url::ComponentUrl;
 use golem_common::uri::oss::urn::ComponentUrn;
 use indoc::formatdoc;
 use itertools::Itertools;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fmt::Display;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -76,7 +78,6 @@ pub trait ComponentService {
         uri: ComponentUri,
         project: &Option<Self::ProjectContext>,
     ) -> Result<ComponentUrn, GolemError>;
-    async fn resolve_component_name(&self, uri: &ComponentUri) -> Result<String, GolemError>;
     async fn get_metadata(
         &self,
         component_urn: &ComponentUrn,
@@ -86,6 +87,15 @@ pub trait ComponentService {
         &self,
         component_urn: &ComponentUrn,
     ) -> Result<Component, GolemError>;
+    async fn resolve_component_name(&self, uri: &ComponentUri) -> Result<String, GolemError> {
+        match uri {
+            ComponentUri::URN(urn) => {
+                let component = self.get_metadata(urn, 0).await?;
+                Ok(component.component_name)
+            }
+            ComponentUri::URL(ComponentUrl { name }) => Ok(name.clone()),
+        }
+    }
 }
 
 pub struct ComponentServiceLive<ProjectContext> {
@@ -117,7 +127,7 @@ impl<ProjectContext> ComponentServiceLive<ProjectContext> {
         let source_path = PathBuf::from(component_file.source_path.as_url().path());
 
         let mut results: Vec<LoadedFile> = vec![];
-        let mut queue: VecDeque<(PathBuf, ComponentFilePathAndPermissions)> =
+        let mut queue: VecDeque<(PathBuf, ComponentFilePathWithPermissions)> =
             vec![(source_path, component_file.target)].into();
 
         while let Some((path, target)) = queue.pop_front() {
@@ -134,13 +144,16 @@ impl<ProjectContext> ComponentServiceLive<ProjectContext> {
                     let next_path = entry.path();
 
                     let file_name = entry.file_name().into_string().map_err(|_| {
-                        GolemError("Error converting file name to string".to_string())
+                        GolemError(
+                            "Error converting file name to string: Contains non-unicode data"
+                                .to_string(),
+                        )
                     })?;
 
                     let mut new_target = target.clone();
                     new_target
                         .extend_path(file_name.as_str())
-                        .map_err(|_| GolemError("Error extending path".to_string()))?;
+                        .map_err(|err| GolemError(format!("Error extending path: {err}")))?;
 
                     queue.push_back((next_path, new_target));
                 }
@@ -175,7 +188,7 @@ impl<ProjectContext> ComponentServiceLive<ProjectContext> {
     async fn build_files_archive(
         &self,
         component_files: Vec<InitialComponentFile>,
-    ) -> Result<ComponentFilesArchiveAndProperties, GolemError> {
+    ) -> Result<ComponentFilesArchive, GolemError> {
         let temp_dir = tempfile::Builder::new()
             .prefix("golem-cli-zip")
             .tempdir()
@@ -187,10 +200,18 @@ impl<ProjectContext> ComponentServiceLive<ProjectContext> {
 
         let mut zip_writer = ZipFileWriter::with_tokio(zip_file);
 
-        let mut properties_files: Vec<ComponentFilePathAndPermissions> = vec![];
+        let mut seen_paths: HashSet<ComponentFilePath> = HashSet::new();
+        let mut successfully_added: Vec<ComponentFilePathWithPermissions> = vec![];
 
         for component_file in component_files {
             for LoadedFile { content, target } in self.load_file(component_file).await? {
+                if !seen_paths.insert(target.path.clone()) {
+                    return Err(GolemError(format!(
+                        "Conflicting paths in component files: {}",
+                        target.path
+                    )));
+                }
+
                 // zip files do not like absolute paths. Convert the absolute component path to relative path from the root of the zip file
                 let zip_entry_name = target.path.to_string();
                 let builder = ZipEntryBuilder::new(zip_entry_name.into(), Compression::Deflate);
@@ -199,7 +220,8 @@ impl<ProjectContext> ComponentServiceLive<ProjectContext> {
                     .write_entry_whole(builder, &content)
                     .await
                     .map_err(|err| GolemError(format!("Error writing to archive: {}", err)))?;
-                properties_files.push(target);
+
+                successfully_added.push(target);
             }
         }
         zip_writer
@@ -207,23 +229,11 @@ impl<ProjectContext> ComponentServiceLive<ProjectContext> {
             .await
             .map_err(|err| GolemError(format!("Error finishing archive: {}", err)))?;
 
-        // there should not be any conflicting paths in the properties file
-        if properties_files
-            .iter()
-            .unique_by(|f| f.path.clone())
-            .count()
-            != properties_files.len()
-        {
-            return Err(GolemError(
-                "Conflicting paths in component files".to_string(),
-            ));
+        let properties = ComponentFilePathWithPermissionsList {
+            values: successfully_added,
         };
 
-        let properties = ComponentFilePathAndPermissionsList {
-            values: properties_files,
-        };
-
-        Ok(ComponentFilesArchiveAndProperties {
+        Ok(ComponentFilesArchive {
             _temp_dir: temp_dir,
             archive_path: zip_file_path,
             properties,
@@ -466,16 +476,6 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         }
     }
 
-    async fn resolve_component_name(&self, uri: &ComponentUri) -> Result<String, GolemError> {
-        match uri {
-            ComponentUri::URN(urn) => {
-                let component = self.get_metadata(urn, 0).await?;
-                Ok(component.component_name)
-            }
-            ComponentUri::URL(ComponentUrl { name }) => Ok(name.clone()),
-        }
-    }
-
     async fn get_metadata(
         &self,
         urn: &ComponentUrn,
@@ -492,12 +492,12 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
 #[derive(Debug, Clone)]
 struct LoadedFile {
     content: Vec<u8>,
-    target: ComponentFilePathAndPermissions,
+    target: ComponentFilePathWithPermissions,
 }
 
 #[derive(Debug)]
-struct ComponentFilesArchiveAndProperties {
+struct ComponentFilesArchive {
     pub archive_path: PathBuf,
-    pub properties: ComponentFilePathAndPermissionsList,
+    pub properties: ComponentFilePathWithPermissionsList,
     _temp_dir: TempDir, // archive_path is only valid as long as this is alive
 }

@@ -7,6 +7,8 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Shared code between Golem services"
 
+autotests = false
+
 [lib]
 harness = false
 
@@ -57,5 +59,17 @@ tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 url = { workspace = true }
 
 [dev-dependencies]
+golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
+
+assert2 = { workspace = true }
 proptest = { workspace = true }
+tempfile = { workspace = true }
 test-r = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+uuid = { workspace = true }
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false

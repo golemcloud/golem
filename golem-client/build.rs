@@ -51,8 +51,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::component_metadata::ComponentMetadata",
             ),
             (
-                "ComponentFilePathAndPermissionsList",
-                "golem_common::model::ComponentFilePathAndPermissionsList",
+                "ComponentFilePathWithPermissionsList",
+                "golem_common::model::ComponentFilePathWithPermissionsList",
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
             (

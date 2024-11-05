@@ -244,7 +244,6 @@ pub trait ComponentService<Namespace> {
         component_name: &ComponentName,
         component_type: ComponentType,
         data: Vec<u8>,
-        // None signals that files should be reused from the previous version
         files: Vec<InitialComponentFile>,
         namespace: &Namespace,
     ) -> Result<Component<Namespace>, ComponentError>;

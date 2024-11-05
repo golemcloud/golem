@@ -10,7 +10,7 @@ use golem_service_base::db;
 
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::{
-    ComponentFilePath, ComponentFilePathAndPermissions, ComponentFilePermissions, ComponentId,
+    ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId,
     ComponentType,
 };
 use golem_common::SafeDisplay;
@@ -550,7 +550,7 @@ async fn test_initial_component_file_upload(
             data,
             Some(InitialComponentFilesArchiveAndPermissions {
                 archive: File::open(COMPONENT_ARCHIVE).await.unwrap(),
-                files: vec![ComponentFilePathAndPermissions {
+                files: vec![ComponentFilePathWithPermissions {
                     path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadWrite,
                 }],
@@ -616,7 +616,7 @@ async fn test_initial_component_file_data_sharing(
             None,
             Some(InitialComponentFilesArchiveAndPermissions {
                 archive: File::open(COMPONENT_ARCHIVE).await.unwrap(),
-                files: vec![ComponentFilePathAndPermissions {
+                files: vec![ComponentFilePathWithPermissions {
                     path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
                     permissions: ComponentFilePermissions::ReadWrite,
                 }],

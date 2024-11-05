@@ -77,8 +77,10 @@ fn api_deployment_fileserver_simple(
         CliLive,
     ),
 ) -> anyhow::Result<()> {
-    // the port is hardcoded in the env based test dependencies. Do not change this.
-    let host = "localhost:9093";
+    let host = format!(
+        "localhost:{}",
+        deps.worker_service().private_custom_request_port()
+    );
     let component_name = format!("api_deployment_fileserver_simple{name}");
     let golem_yaml = deps.component_directory().join("file-server/golem.yaml");
 
@@ -108,15 +110,13 @@ fn api_deployment_fileserver_simple(
     let definition: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
 
-    drop(temp_dir);
-
     let _: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
         &cfg.arg('d', "definition"),
         &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
-        host,
+        &host,
     ])?;
 
     let res1 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/foo.txt"))?;
@@ -139,8 +139,10 @@ fn api_deployment_fileserver_complex(
         CliLive,
     ),
 ) -> anyhow::Result<()> {
-    // the port is hardcoded in the env based test dependencies. Do not change this.
-    let host = "localhost:9093";
+    let host = format!(
+        "localhost:{}",
+        deps.worker_service().private_custom_request_port()
+    );
     let component_name = format!("api_deployment_fileserver_complex{name}");
     let golem_yaml = deps.component_directory().join("file-server/golem.yaml");
 
@@ -170,15 +172,13 @@ fn api_deployment_fileserver_complex(
     let definition: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
 
-    drop(temp_dir);
-
     let _: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
         &cfg.arg('d', "definition"),
         &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
-        host,
+        &host,
     ])?;
 
     let res = reqwest::blocking::get(format!("http://{host}/files/{component_id}/file"))?;
@@ -199,8 +199,10 @@ fn api_deployment_fileserver_stateful_worker(
         CliLive,
     ),
 ) -> anyhow::Result<()> {
-    // the port is hardcoded in the env based test dependencies. Do not change this.
-    let host = "localhost:9093";
+    let host = format!(
+        "localhost:{}",
+        deps.worker_service().private_custom_request_port()
+    );
     let component_name = format!("api_deployment_fileserver_stateful_worker{name}");
     let golem_yaml = deps.component_directory().join("file-server/golem.yaml");
 
@@ -254,15 +256,13 @@ fn api_deployment_fileserver_stateful_worker(
     let definition: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
 
-    drop(temp_dir);
-
     let _: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
         &cfg.arg('d', "definition"),
         &format!("{}/{}", definition.id, definition.version),
         &cfg.arg('H', "host"),
-        host,
+        &host,
     ])?;
 
     let res1 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/foo.txt"))?;

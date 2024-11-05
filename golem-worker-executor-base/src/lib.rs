@@ -298,7 +298,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         let initial_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-        let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
+        let file_loader = Arc::new(FileLoader::new(initial_files_service.clone()));
 
         let component_service = component::configured(
             &golem_config.component_service,

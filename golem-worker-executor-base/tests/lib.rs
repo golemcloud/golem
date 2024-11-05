@@ -44,7 +44,6 @@ use golem_test_framework::config::TestDependencies;
 mod common;
 
 pub mod api;
-pub mod blob_storage;
 pub mod blobstore;
 pub mod compatibility;
 pub mod guest_languages1;

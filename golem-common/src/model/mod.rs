@@ -2713,39 +2713,39 @@ impl TryFrom<golem_api_grpc::proto::golem::component::InitialComponentFile>
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Object)]
-pub struct ComponentFilePathAndPermissions {
+pub struct ComponentFilePathWithPermissions {
     pub path: ComponentFilePath,
     pub permissions: ComponentFilePermissions,
 }
 
-impl ComponentFilePathAndPermissions {
+impl ComponentFilePathWithPermissions {
     pub fn extend_path(&mut self, path: &str) -> Result<(), String> {
         self.path.extend(path)
     }
 }
 
-impl Display for ComponentFilePathAndPermissions {
+impl Display for ComponentFilePathWithPermissions {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", serde_json::to_string(self).unwrap())
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Object)]
-pub struct ComponentFilePathAndPermissionsList {
-    pub values: Vec<ComponentFilePathAndPermissions>,
+pub struct ComponentFilePathWithPermissionsList {
+    pub values: Vec<ComponentFilePathWithPermissions>,
 }
 
-impl Display for ComponentFilePathAndPermissionsList {
+impl Display for ComponentFilePathWithPermissionsList {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", serde_json::to_string(self).unwrap())
     }
 }
 
-impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathAndPermissionsList {
+impl poem_openapi::types::ParseFromMultipartField for ComponentFilePathWithPermissionsList {
     async fn parse_from_multipart(field: Option<poem::web::Field>) -> ParseResult<Self> {
         String::parse_from_multipart(field)
             .await
-            .map_err(|err| err.propagate::<ComponentFilePathAndPermissionsList>())
+            .map_err(|err| err.propagate::<ComponentFilePathWithPermissionsList>())
             .and_then(|s| serde_json::from_str(&s).map_err(poem_openapi::types::ParseError::custom))
     }
 }

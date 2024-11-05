@@ -3,8 +3,8 @@ use crate::api_definition::http::{
 };
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
 use crate::worker_binding::CompiledGolemWorkerBinding;
-use golem_common::model::WorkerBindingType;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+use golem_common::model::WorkerBindingType;
 use golem_service_base::model::VersionedComponentId;
 use poem_openapi::*;
 use rib::{Expr, RibInputTypeInfo};

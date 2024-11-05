@@ -3813,6 +3813,7 @@ name = "golem-service-base"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert2",
  "async-fs 2.1.2",
  "async-trait",
  "aws-config",
@@ -3825,6 +3826,7 @@ dependencies = [
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "hex",
@@ -3842,7 +3844,10 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
+ "tempfile",
  "test-r",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -3850,6 +3855,7 @@ dependencies = [
  "tracing",
  "tracing-futures",
  "url",
+ "uuid",
 ]
 
 [[package]]
