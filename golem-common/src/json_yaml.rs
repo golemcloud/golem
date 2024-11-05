@@ -103,7 +103,7 @@ impl<T: ParseFromYAML + ParseFromJSON> ParsePayload for JsonOrYaml<T> {
                     reason: err.into_message(),
                 })?;
             Ok(Self(value))
-        } else if content_type.contains("yaml") || content_type.contains("x-yaml") {
+        } else if content_type.contains("yaml") {
             let yaml_data = serde_yaml::from_slice(&bytes).map_err(|e| {
                 poem::Error::from_string(
                     format!("Failed to read YAML data {}", e),

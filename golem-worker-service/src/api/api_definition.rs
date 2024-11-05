@@ -445,6 +445,50 @@ mod test {
     }
 
     #[test]
+    async fn create_api_definition_yaml() {
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+                id: ApiDefinitionId("sample".to_string()),
+                version: ApiVersion("42.0".to_string()),
+                routes: vec![],
+                draft: false,
+            };
+
+        let response = client
+            .post("/v1/api/definitions")
+            .body_yaml(&definition)
+            .send()
+            .await;
+
+        response.assert_status(http::StatusCode::OK);
+    }
+
+    #[test]
+    async fn create_api_definition_json() {
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+                id: ApiDefinitionId("sample".to_string()),
+                version: ApiVersion("42.0".to_string()),
+                routes: vec![],
+                draft: false,
+            };
+
+        let response = client
+            .post("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+
+        response.assert_status(http::StatusCode::OK);
+    }
+
+    #[test]
     async fn update_non_existant() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
