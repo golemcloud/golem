@@ -39,7 +39,7 @@ pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
     description: String,
     icon: Vec<u8>,
     homepage: String,
-    plugin_type: i8,
+    plugin_type: i16,
     #[sqlx(flatten)]
     scope: Scope::Row,
     #[sqlx(flatten)]
@@ -66,7 +66,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>
             description: value.description,
             icon: value.icon,
             homepage: value.homepage,
-            plugin_type: value.specs.plugin_type() as i8,
+            plugin_type: value.specs.plugin_type() as i16,
             scope: value.scope.into(),
             owner: value.owner.into(),
 
@@ -189,25 +189,23 @@ where
     Uuid: for<'q> Encode<'q, DB> + Type<DB>,
     Option<Uuid>: for<'q> Encode<'q, DB> + Type<DB>,
 {
-    fn add_column_list(builder: &mut QueryBuilder<DB>) {
-        builder.push("scope_component_id, ");
-    }
-
-    fn add_placeholder_list(builder: &mut QueryBuilder<DB>) {
-        builder.push("?, ");
+    fn add_column_list(builder: &mut QueryBuilder<DB>) -> bool {
+        builder.push("scope_component_id");
+        true
     }
 
     fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) {
         if let Some(component_id) = &self.scope_component_id {
-            builder.push("scope_component_id = ?");
+            builder.push("scope_component_id = ");
             builder.push_bind(component_id);
         } else {
             builder.push("scope_component_id IS NULL");
         }
     }
 
-    fn push_bind<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) {
+    fn push_bind<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) -> bool {
         builder.push_bind(self.scope_component_id);
+        true
     }
 }
 
@@ -229,15 +227,17 @@ impl TryFrom<DefaultPluginOwnerRow> for DefaultPluginOwner {
 }
 
 impl<DB: Database> RowMeta<DB> for DefaultPluginOwnerRow {
-    fn add_column_list(_builder: &mut QueryBuilder<DB>) {}
-
-    fn add_placeholder_list(_builder: &mut QueryBuilder<DB>) {}
+    fn add_column_list(_builder: &mut QueryBuilder<DB>) -> bool {
+        false
+    }
 
     fn add_where_clause(&self, builder: &mut QueryBuilder<DB>) {
         builder.push("1 = 1");
     }
 
-    fn push_bind<'a>(&'a self, _builder: &mut QueryBuilder<'a, DB>) {}
+    fn push_bind<'a>(&'a self, _builder: &mut QueryBuilder<'a, DB>) -> bool {
+        false
+    }
 }
 
 #[async_trait]
@@ -402,8 +402,12 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
             "#,
         );
 
-        Scope::Row::add_column_list(&mut query);
-        Owner::Row::add_column_list(&mut query);
+        if Scope::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
+        if Owner::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
 
         query.push(
             r#"provided_wit_package,
@@ -440,8 +444,12 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
             "#,
         );
 
-        Scope::Row::add_column_list(&mut query);
-        Owner::Row::add_column_list(&mut query);
+        if Scope::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
+        if Owner::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
 
         query.push(
             r#"provided_wit_package,
@@ -465,6 +473,8 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
         }
         query.push(")");
 
+        debug!("Built query for get_for_scope: {}", query.sql());
+
         Ok(query
             .build_query_as::<PluginRecord<Owner, Scope>>()
             .fetch_all(self.db_pool.deref())
@@ -487,8 +497,12 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
             "#,
         );
 
-        Scope::Row::add_column_list(&mut query);
-        Owner::Row::add_column_list(&mut query);
+        if Scope::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
+        if Owner::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
 
         query.push(
             r#"provided_wit_package,
@@ -503,8 +517,10 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         owner.add_where_clause(&mut query);
 
-        query.push(" AND name = ?");
+        query.push(" AND name = ");
         query.push_bind(name);
+
+        debug!("Built query for get_all_with_name: {}", query.sql());
 
         Ok(query
             .build_query_as::<PluginRecord<Owner, Scope>>()
@@ -524,43 +540,58 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
             "#,
         );
 
-        Scope::Row::add_column_list(&mut query);
-        Owner::Row::add_column_list(&mut query);
+        if Scope::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
+        if Owner::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
 
         query.push(
-            r#",
-              provided_wit_package,
+            r#"provided_wit_package,
               json_schema,
               validate_url,
               transform_url,
               component_id,
               component_version
             ) VALUES (
-              ?, ?, ?, ?, ?, ?,
             "#,
         );
 
-        Scope::Row::add_placeholder_list(&mut query);
-        Owner::Row::add_placeholder_list(&mut query);
-
-        query.push("?, ?, ?, ?, ?, ?)");
-
         query.push_bind(&record.name);
+        query.push(", ");
         query.push_bind(&record.version);
+        query.push(", ");
         query.push_bind(&record.description);
+        query.push(", ");
         query.push_bind(&record.icon);
+        query.push(", ");
         query.push_bind(&record.homepage);
+        query.push(", ");
         query.push_bind(record.plugin_type);
+        query.push(", ");
 
-        record.scope.push_bind(&mut query);
-        record.owner.push_bind(&mut query);
+        if record.scope.push_bind(&mut query) {
+            query.push(", ");
+        }
+        if record.owner.push_bind(&mut query) {
+            query.push(", ");
+        }
 
         query.push_bind(&record.provided_wit_package);
+        query.push(", ");
         query.push_bind(&record.json_schema);
+        query.push(", ");
         query.push_bind(&record.validate_url);
+        query.push(", ");
         query.push_bind(&record.transform_url);
+        query.push(", ");
         query.push_bind(record.component_id);
+        query.push(", ");
         query.push_bind(record.component_version);
+        query.push(")");
+
+        debug!("Built query for create: {}", query.sql());
 
         query.build().execute(self.db_pool.deref()).await?;
 
@@ -584,8 +615,12 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
             "#,
         );
 
-        Scope::Row::add_column_list(&mut query);
-        Owner::Row::add_column_list(&mut query);
+        if Scope::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
+        if Owner::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
 
         query.push(
             r#"provided_wit_package,
@@ -600,8 +635,9 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
 
         owner.add_where_clause(&mut query);
 
-        query.push(" AND name = ? AND version = ?");
+        query.push(" AND name = ");
         query.push_bind(name);
+        query.push(" AND version = ");
         query.push_bind(version);
 
         Ok(query
@@ -613,11 +649,13 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
     async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError> {
         let mut query = QueryBuilder::new(
             r#"DELETE FROM plugins
-               WHERE name = ? AND version = ? AND "#,
+               WHERE name = "#,
         );
 
         query.push_bind(name);
+        query.push(" AND version = ");
         query.push_bind(version);
+        query.push(" AND ");
         owner.add_where_clause(&mut query);
 
         query.build().execute(self.db_pool.deref()).await?;

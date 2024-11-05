@@ -19,8 +19,7 @@ pub mod plugin;
 pub mod plugin_installation;
 
 pub trait RowMeta<DB: Database> {
-    fn add_column_list(builder: &mut QueryBuilder<DB>);
-    fn add_placeholder_list(builder: &mut QueryBuilder<DB>);
+    fn add_column_list(builder: &mut QueryBuilder<DB>) -> bool;
     fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>);
-    fn push_bind<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>);
+    fn push_bind<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) -> bool;
 }

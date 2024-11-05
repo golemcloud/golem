@@ -14,12 +14,17 @@
 
 use crate::Tracing;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginOwner, DefaultPluginScope};
+use golem_common::model::{ComponentId, ComponentType, Empty};
 use golem_common::SafeDisplay;
-use golem_component_service_base::model::Component;
+use golem_component_service_base::model::{
+    Component, ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition,
+    PluginTypeSpecificDefinition,
+};
 use golem_component_service_base::repo::component::ComponentRepo;
-use golem_component_service_base::repo::plugin::PluginRepo;
+use golem_component_service_base::repo::plugin::{
+    DefaultPluginOwnerRow, DefaultPluginScopeRow, PluginRepo,
+};
 use golem_component_service_base::service::component::{
     ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
 };
@@ -29,6 +34,7 @@ use golem_component_service_base::service::component_compilation::{
 use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::config::ComponentStoreLocalConfig;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::repo::RepoError;
 use golem_service_base::service::component_object_store;
 use golem_wasm_ast::analysis::analysed_type::{str, u64};
 use rib::RegistryKey;
@@ -647,6 +653,132 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 }
 
 async fn test_default_plugin_repo(
+    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
     plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
-) {
+) -> Result<(), RepoError> {
+    let owner: DefaultPluginOwnerRow = DefaultPluginOwner.into();
+    let component_id = ComponentId::new_v4();
+    let component_id2 = ComponentId::new_v4();
+    let scope1: DefaultPluginScopeRow = DefaultPluginScope::Component(ComponentPluginScope {
+        component_id: component_id.clone(),
+    })
+    .into();
+
+    let namespace = Uuid::new_v4().to_string();
+    let component1 = Component::new(
+        &component_id,
+        &ComponentName("default-plugin-repo-component1".to_string()),
+        ComponentType::Ephemeral,
+        &get_component_data("shopping-cart"),
+        &namespace,
+    )
+    .unwrap();
+    let component2 = Component::new(
+        &component_id2,
+        &ComponentName("default-plugin-repo-component2".to_string()),
+        ComponentType::Durable,
+        &get_component_data("shopping-cart"),
+        &namespace,
+    )
+    .unwrap();
+
+    let _ = component_repo
+        .create(&component1.clone().try_into().unwrap())
+        .await?;
+    let _ = component_repo
+        .create(&component2.clone().try_into().unwrap())
+        .await?;
+
+    let all1 = plugin_repo.get_all(&owner).await?;
+    let scoped1 = plugin_repo.get_for_scope(&owner, &[scope1.clone()]).await?;
+    let named1 = plugin_repo.get_all_with_name(&owner, "plugin1").await?;
+
+    let plugin1 = PluginDefinition {
+        name: "plugin1".to_string(),
+        version: "v1".to_string(),
+        description: "the first test plugin".to_string(),
+        icon: vec![1, 2, 3, 4],
+        homepage: "https://plugin1.com".to_string(),
+        specs: PluginTypeSpecificDefinition::ComponentTransformer(ComponentTransformerDefinition {
+            provided_wit_package: Some("wit".to_string()),
+            json_schema: Some("schema".to_string()),
+            validate_url: "https://plugin1.com/validate".to_string(),
+            transform_url: "https://plugin1.com/transform".to_string(),
+        }),
+        scope: DefaultPluginScope::Global(Empty),
+        owner: DefaultPluginOwner,
+    };
+    let plugin1_row = plugin1.clone().into();
+
+    let plugin2 = PluginDefinition {
+        name: "plugin2".to_string(),
+        version: "v1".to_string(),
+        description: "the first test plugin".to_string(),
+        icon: vec![5, 6, 7, 8],
+        homepage: "https://plugin2.com".to_string(),
+        specs: PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+            component_id: component_id2.clone(),
+            component_version: 0,
+        }),
+        scope: DefaultPluginScope::Component(ComponentPluginScope {
+            component_id: component_id.clone(),
+        }),
+        owner: DefaultPluginOwner,
+    };
+    let plugin2_row = plugin2.clone().into();
+
+    plugin_repo.create(&plugin1_row).await?;
+    plugin_repo.create(&plugin2_row).await?;
+
+    let all2 = plugin_repo.get_all(&owner).await?;
+    let scoped2 = plugin_repo.get_for_scope(&owner, &[scope1.clone()]).await?;
+    let named2 = plugin_repo.get_all_with_name(&owner, "plugin1").await?;
+
+    plugin_repo.delete(&owner, "plugin1", "v1").await?;
+
+    let all3 = plugin_repo.get_all(&owner).await?;
+
+    let mut defs = all2
+        .into_iter()
+        .map(|p| p.try_into())
+        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
+        .unwrap();
+    defs.sort_by_key(|def| def.name.clone());
+
+    let scoped = scoped2
+        .into_iter()
+        .map(|p| p.try_into())
+        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
+        .unwrap();
+
+    let named = named2
+        .into_iter()
+        .map(|p| p.try_into())
+        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
+        .unwrap();
+
+    let after_delete = all3
+        .into_iter()
+        .map(|p| p.try_into())
+        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
+        .unwrap();
+
+    assert!(all1.is_empty());
+    assert!(scoped1.is_empty());
+    assert!(named1.is_empty());
+
+    assert_eq!(defs.len(), 2);
+    assert_eq!(scoped.len(), 1);
+    assert_eq!(named.len(), 1);
+
+    assert_eq!(defs[0], plugin1);
+    assert_eq!(defs[1], plugin2);
+
+    assert_eq!(scoped[0], plugin2);
+    assert_eq!(named[0], plugin1);
+
+    assert_eq!(after_delete.len(), 1);
+    assert_eq!(after_delete[0], plugin2);
+
+    Ok(())
 }

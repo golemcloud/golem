@@ -78,23 +78,23 @@ where
     Uuid: for<'q> Encode<'q, DB> + sqlx::Type<DB>,
     i64: for<'q> Encode<'q, DB> + sqlx::Type<DB>,
 {
-    fn add_column_list(builder: &mut QueryBuilder<DB>) {
+    fn add_column_list(builder: &mut QueryBuilder<DB>) -> bool {
         builder.push("component_id, component_version");
-    }
-
-    fn add_placeholder_list(builder: &mut QueryBuilder<DB>) {
-        builder.push("?, ?");
+        true
     }
 
     fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) {
-        builder.push("component_id = ? AND component_version = ?");
+        builder.push("component_id = ");
         builder.push_bind(self.component_id);
+        builder.push(" AND component_version = ");
         builder.push_bind(self.component_version);
     }
 
-    fn push_bind<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) {
+    fn push_bind<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>) -> bool {
         builder.push_bind(self.component_id);
+        builder.push(", ");
         builder.push_bind(self.component_version);
+        true
     }
 }
 
@@ -281,8 +281,9 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
             "#,
         );
 
-        Target::Row::add_column_list(&mut query);
-        query.push(", ");
+        if Target::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
         Owner::Row::add_column_list(&mut query);
 
         query.push(" FROM ");
@@ -323,23 +324,25 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
         let mut query = QueryBuilder::new("INSERT INTO ");
         query.push(Target::table_name());
         query.push(" (installation_id, plugin_name, plugin_version, priority, parameters, ");
-        Target::Row::add_column_list(&mut query);
-        query.push(", ");
+        if Target::Row::add_column_list(&mut query) {
+            query.push(", ");
+        }
         Owner::Row::add_column_list(&mut query);
-        query.push(") VALUES (?, ?, ?, ?, ?, ");
+        query.push(") VALUES (");
         query.push_bind(record.installation_id);
-        query.push_bind(&record.plugin_name);
-        query.push_bind(&record.plugin_version);
-        query.push_bind(record.priority);
-        query.push_bind(&record.parameters);
-
-        Target::Row::add_placeholder_list(&mut query);
-        record.target.push_bind(&mut query);
-
         query.push(", ");
-        Owner::Row::add_placeholder_list(&mut query);
+        query.push_bind(&record.plugin_name);
+        query.push(", ");
+        query.push_bind(&record.plugin_version);
+        query.push(", ");
+        query.push_bind(record.priority);
+        query.push(", ");
+        query.push_bind(&record.parameters);
+        query.push(", ");
+        if record.target.push_bind(&mut query) {
+            query.push(", ");
+        }
         record.owner.push_bind(&mut query);
-
         query.push(")");
 
         query.build().execute(self.db_pool.deref()).await?;
@@ -357,10 +360,13 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
     ) -> Result<(), RepoError> {
         let mut query = QueryBuilder::new("UPDATE ");
         query.push(Target::table_name());
-        query.push(" SET priority = ?, parameters = ? WHERE installation_id = ? AND ");
+        query.push(" SET priority = ");
         query.push_bind(new_priority);
+        query.push(", parameters = ");
         query.push_bind(new_parameters);
+        query.push(" WHERE installation_id = ");
         query.push_bind(id);
+        query.push(" AND ");
         owner.add_where_clause(&mut query);
         query.push(" AND ");
         target.add_where_clause(&mut query);
@@ -378,8 +384,9 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRep
     ) -> Result<(), RepoError> {
         let mut query = QueryBuilder::new("DELETE FROM ");
         query.push(Target::table_name());
-        query.push(" WHERE installation_id = ? AND ");
+        query.push(" WHERE installation_id = ");
         query.push_bind(id);
+        query.push(" AND");
         owner.add_where_clause(&mut query);
         query.push(" AND ");
         target.add_where_clause(&mut query);
