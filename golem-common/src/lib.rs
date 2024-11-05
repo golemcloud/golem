@@ -21,6 +21,7 @@ pub mod config;
 
 pub mod golem_version;
 pub mod grpc;
+pub mod json_yaml;
 pub mod metrics;
 pub mod model;
 pub mod newtype;

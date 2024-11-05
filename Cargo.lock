@@ -3580,6 +3580,7 @@ dependencies = [
  "reqwest",
  "serde 1.0.213",
  "serde_json",
+ "serde_yaml",
  "test-r",
  "tracing",
  "uuid",
@@ -3621,6 +3622,7 @@ dependencies = [
  "regex",
  "serde 1.0.213",
  "serde_json",
+ "serde_yaml",
  "test-r",
  "thiserror",
  "tokio",
@@ -3772,9 +3774,9 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.10"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "430154af3448f9b904f0fabd64ea2946100d9fea6fc04ef76533b836b6115321"
+checksum = "b33e98f6cc141902ffcc13d027d0bb9a4d3310e51ff182f67236384e8dfeb3ac"
 dependencies = [
  "clap 4.5.20",
  "convert_case 0.6.0",
