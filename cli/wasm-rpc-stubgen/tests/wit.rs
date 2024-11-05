@@ -19,7 +19,6 @@ use test_r::test;
 use fs_extra::dir::CopyOptions;
 use golem_wasm_rpc_stubgen::commands::generate::generate_stub_wit_dir;
 use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
-use golem_wasm_rpc_stubgen::wit_generate::extract_main_interface_as_wit_dep;
 use golem_wasm_rpc_stubgen::WasmRpcOverride;
 use std::path::Path;
 use tempfile::{tempdir, TempDir};
@@ -38,6 +37,7 @@ fn all_wit_types() {
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
+        extract_source_interface_package: true,
     })
     .unwrap();
     let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
@@ -104,7 +104,12 @@ fn all_wit_types() {
     assert_defines_record(&resolve, "test:main-interface", "iface1", "point");
     assert_defines_record(&resolve, "test:main-interface", "iface1", "product-item");
     assert_defines_record(&resolve, "test:main-interface", "iface1", "order");
-    assert_defines_record(&resolve, "test:main-interface", "iface1", "order-confirmation");
+    assert_defines_record(
+        &resolve,
+        "test:main-interface",
+        "iface1",
+        "order-confirmation",
+    );
     assert_defines_tuple_alias(&resolve, "test:main-interface", "iface1", "point-tuple");
     assert_defines_variant(&resolve, "test:main-interface", "iface1", "checkout-result");
 
@@ -122,6 +127,7 @@ fn many_ways_to_export() {
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
+        extract_source_interface_package: true,
     })
     .unwrap();
     let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
@@ -317,17 +323,6 @@ fn init_source(name: &str) -> TempDir {
         &CopyOptions::new().content_only(true).overwrite(true),
     )
     .unwrap();
-
-    let wit_dir = {
-        let wit_dir = temp_dir.path().join("wit");
-        if wit_dir.exists() {
-            wit_dir
-        } else {
-            temp_dir.path().to_path_buf()
-        }
-    };
-
-    extract_main_interface_as_wit_dep(&wit_dir).unwrap();
 
     temp_dir
 }

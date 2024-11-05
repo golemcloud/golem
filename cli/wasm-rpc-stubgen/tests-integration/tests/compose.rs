@@ -24,7 +24,7 @@ use golem_wasm_ast::{DefaultAst, IgnoreAllButMetadata};
 use golem_wasm_rpc_stubgen::commands::composition::compose;
 use golem_wasm_rpc_stubgen::commands::dependencies::{add_stub_dependency, UpdateCargoToml};
 use golem_wasm_rpc_stubgen::commands::generate::generate_and_build_stub;
-use golem_wasm_rpc_stubgen::stub::StubDefinition;
+use golem_wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use wasm_rpc_stubgen_tests_integration::{test_data_path, wasm_rpc_override};
@@ -39,7 +39,6 @@ async fn compose_with_single_stub() {
     add_stub_dependency(
         &stub_dir.path().join("wit"),
         &caller_dir.path().join("wit"),
-        true,
         UpdateCargoToml::Update,
     )
     .unwrap();
@@ -77,7 +76,6 @@ async fn compose_with_single_stub_not_importing_stub() {
     add_stub_dependency(
         &stub_dir.path().join("wit"),
         &caller_dir.path().join("wit"),
-        false,
         UpdateCargoToml::NoUpdate,
     )
     .unwrap();
@@ -108,14 +106,14 @@ async fn init_stub(name: &str) -> (TempDir, PathBuf) {
     let source_wit_root = test_data_path().join(name);
     let canonical_target_root = tempdir.path().canonicalize().unwrap();
 
-    let def = StubDefinition::new(
-        &source_wit_root,
-        &canonical_target_root,
-        &None,
-        "1.0.0",
-        &wasm_rpc_override(),
-        false,
-    )
+    let def = StubDefinition::new(StubConfig {
+        source_wit_root,
+        target_root: canonical_target_root,
+        selected_world: None,
+        stub_crate_version: "1.0.0".to_string(),
+        wasm_rpc_override: wasm_rpc_override(),
+        extract_source_interface_package: true,
+    })
     .unwrap();
     let wasm_path = generate_and_build_stub(&def).await.unwrap();
     (tempdir, wasm_path)
