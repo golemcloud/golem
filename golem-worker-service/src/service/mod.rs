@@ -22,7 +22,7 @@ use golem_worker_service_base::service::worker_gateway::api_definition_lookup::{
 };
 use golem_worker_service_base::service::worker_gateway::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::component::RemoteComponentService;
-use golem_worker_service_base::service::http::http_api_definition_validator::{
+use golem_worker_service_base::service::worker_gateway::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
 use golem_worker_service_base::service::worker::WorkerServiceDefault;

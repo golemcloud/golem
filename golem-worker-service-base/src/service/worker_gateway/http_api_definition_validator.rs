@@ -104,7 +104,7 @@ mod tests {
     use test_r::test;
 
     use crate::api_definition::http::{MethodPattern, Route};
-    use crate::service::http::http_api_definition_validator::unique_routes;
+    use crate::service::worker_gateway::http_api_definition_validator::unique_routes;
     use crate::worker_binding::ResponseMapping;
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;

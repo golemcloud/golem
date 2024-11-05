@@ -24,7 +24,7 @@ use golem_worker_service_base::service::worker_gateway::api_deployment::{
     ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
 };
 use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
-use golem_worker_service_base::service::http::http_api_definition_validator::{
+use golem_worker_service_base::service::worker_gateway::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
 

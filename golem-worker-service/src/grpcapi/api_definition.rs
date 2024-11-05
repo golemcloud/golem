@@ -27,10 +27,8 @@ use golem_common::grpc::{
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
-use golem_worker_service_base::{
-    api_definition::{http::get_api_definition, ApiDefinitionId, ApiVersion},
-    service::http::http_api_definition_validator::RouteValidationError,
-};
+use golem_worker_service_base::api_definition::{http::get_api_definition, ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::service::worker_gateway::http_api_definition_validator::RouteValidationError;
 
 #[derive(Clone)]
 pub struct GrpcApiDefinitionService {

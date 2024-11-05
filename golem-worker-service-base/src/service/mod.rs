@@ -16,8 +16,6 @@ pub mod component;
 pub mod worker;
 pub mod worker_gateway;
 
-pub mod http;
-
 pub fn with_metadata<T, I, K, V>(request: T, metadata: I) -> tonic::Request<T>
 where
     I: IntoIterator<Item = (K, V)>,
