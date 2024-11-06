@@ -56,18 +56,21 @@ impl RdbmsPoolKey {
 pub mod postgres {
     use crate::services::rdbms::types::{
         DbColumnType, DbColumnTypeMeta, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
-        DbValuePrimitive, SimpleDbResultSet,
+        DbValuePrimitive, EmptyDbResultSet, SimpleDbResultSet,
     };
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
     use chrono::DateTime;
-    use deadpool_postgres::{Pool, PoolError};
+    use deadpool_postgres::Pool;
+    use futures::Stream;
+    use futures_util::StreamExt;
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::model::OwnedWorkerId;
     use std::collections::HashSet;
     use std::ops::Deref;
+    use std::pin::Pin;
     use std::sync::Arc;
-    use tokio_postgres::{Connection, Error, NoTls};
+    use tokio_postgres::{Error, Row, RowStream};
     use tracing::{error, info};
     use uuid::Uuid;
 
@@ -133,7 +136,7 @@ pub mod postgres {
             _params: Vec<DbValue>,
         ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
             info!("query - address: {}, statement: {}", address, statement);
-            Ok(Arc::new(SimpleDbResultSet::empty()))
+            Ok(Arc::new(EmptyDbResultSet::default()))
         }
     }
 
@@ -239,7 +242,7 @@ pub mod postgres {
             info!("query - address: {}, statement: {} - 0", address, statement);
             let pool = self.get_or_create(worker_id, address).await?;
             info!("query - address: {}, statement: {} - 1", address, statement);
-            let result = query(statement, params, pool.deref()).await;
+            let result = query_stream(statement, params, pool.deref()).await;
             info!("query - address: {}, statement: {} - 2", address, statement);
             result
         }
@@ -265,7 +268,7 @@ pub mod postgres {
             .map_err(|e| e.to_string())?;
 
         if result.is_empty() {
-            Ok(Arc::new(SimpleDbResultSet::empty()))
+            Ok(Arc::new(EmptyDbResultSet::default()))
         } else {
             let first = &result[0];
             let columns = first
@@ -278,6 +281,115 @@ pub mod postgres {
                 .map(|r| r.try_into())
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(Arc::new(SimpleDbResultSet::new(columns, Some(values))))
+        }
+    }
+
+    #[derive(Clone)]
+    pub struct StreamDbResultSet {
+        column_metadata: Vec<DbColumnTypeMeta>,
+        first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow>>>>,
+        row_stream: Arc<
+            async_mutex::Mutex<Pin<Box<dyn Stream<Item = Vec<Result<Row, Error>>> + Send + Sync>>>,
+        >,
+    }
+
+    impl StreamDbResultSet {
+        fn new(
+            column_metadata: Vec<DbColumnTypeMeta>,
+            first_rows: Vec<DbRow>,
+            row_stream: Pin<Box<dyn Stream<Item = Vec<Result<Row, Error>>> + Send + Sync>>,
+        ) -> Self {
+            Self {
+                column_metadata,
+                first_rows: Arc::new(async_mutex::Mutex::new(Some(first_rows))),
+                row_stream: Arc::new(async_mutex::Mutex::new(row_stream)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl DbResultSet for StreamDbResultSet {
+        async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String> {
+            info!("get_column_metadata");
+            Ok(self.column_metadata.clone())
+        }
+
+        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
+            let mut rows = self.first_rows.lock().await;
+            if rows.is_some() {
+                info!("get_next - initial");
+                let result = rows.clone();
+                *rows = None;
+                Ok(result)
+            } else {
+                info!("get_next");
+                let mut stream = self.row_stream.lock().await;
+                let next = stream.next().await;
+
+                if let Some(rows) = next {
+                    let values = rows
+                        .into_iter()
+                        .map(|r| {
+                            r.map_err(|e| e.to_string())
+                                .and_then(|r: Row| (&r).try_into())
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    Ok(Some(values))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    async fn query_stream(
+        statement: &str,
+        params: Vec<DbValue>,
+        pool: &Pool,
+    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+        let query_params = to_sql_params(params)?;
+
+        let query_params = query_params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect::<Vec<_>>();
+
+        let client = pool.get().await.map_err(|e| e.to_string())?;
+
+        let stream: RowStream = client
+            .query_raw(statement, query_params)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut row_stream: Pin<Box<dyn Stream<Item = Vec<Result<Row, Error>>> + Send + Sync>> =
+            Box::pin(stream.chunks(20));
+
+        let first = row_stream.next().await;
+
+        if let Some(rows) = first {
+            let rows = rows
+                .into_iter()
+                .map(|r| r.map_err(|e| e.to_string()))
+                .collect::<Result<Vec<_>, String>>()?;
+
+            let columns = rows[0]
+                .columns()
+                .into_iter()
+                .map(|c| c.try_into())
+                .collect::<Result<Vec<_>, String>>()?;
+
+            let first_rows = rows
+                .iter()
+                .map(|r| r.try_into())
+                .collect::<Result<Vec<_>, String>>()?;
+
+            Ok(Arc::new(StreamDbResultSet::new(
+                columns,
+                first_rows,
+                row_stream,
+            )))
+        } else {
+            Ok(Arc::new(EmptyDbResultSet::default()))
         }
     }
 
@@ -582,7 +694,6 @@ pub mod postgres {
 
 pub mod types {
     use async_trait::async_trait;
-    use golem_common::tracing::directive::default::info;
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
     use tracing::{error, info};
@@ -608,10 +719,6 @@ pub mod types {
                 rows: Arc::new(Mutex::new(rows)),
             }
         }
-
-        pub fn empty() -> Self {
-            Self::new(vec![], None)
-        }
     }
 
     #[async_trait]
@@ -628,6 +735,22 @@ pub mod types {
                 *self.rows.lock().unwrap() = None;
             }
             Ok(rows)
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    pub struct EmptyDbResultSet {}
+
+    #[async_trait]
+    impl DbResultSet for EmptyDbResultSet {
+        async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String> {
+            info!("get_column_metadata");
+            Ok(vec![])
+        }
+
+        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
+            info!("get_next");
+            Ok(None)
         }
     }
 
@@ -711,11 +834,10 @@ pub mod types {
 
 #[cfg(test)]
 mod tests {
-    use crate::services::rdbms::types::{DbValue, DbValuePrimitive};
+    use crate::services::rdbms::types::{DbRow, DbValue, DbValuePrimitive};
     use crate::services::rdbms::RdbmsService;
     use crate::services::rdbms::{RdbmsPoolKey, RdbmsServiceDefault};
     use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
-    use golem_wasm_ast::analysis::analysed_type::result;
     use std::hash::Hash;
     use test_r::{test, timeout};
     use uuid::Uuid;
@@ -762,7 +884,7 @@ mod tests {
         assert!(result.is_ok());
 
         let columns = result.unwrap().get_column_metadata().await.unwrap();
-        println!("columns: {columns:?}");
+        // println!("columns: {columns:?}");
         assert!(columns.len() > 0);
 
         let create_table_statement = r#"
@@ -788,18 +910,20 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let params: Vec<DbValue> = vec![
-            DbValue::Primitive(DbValuePrimitive::Uuid(Uuid::new_v4())),
-            DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
-            DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
-        ];
+        for _ in 0..100 {
+            let params: Vec<DbValue> = vec![
+                DbValue::Primitive(DbValuePrimitive::Uuid(Uuid::new_v4())),
+                DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
+                DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
+            ];
 
-        let result = rdbms_service
-            .postgres()
-            .execute(&worker_id, &address, insert_statement, params)
-            .await;
+            let result = rdbms_service
+                .postgres()
+                .execute(&worker_id, &address, insert_statement, params)
+                .await;
 
-        assert!(result.is_ok_and(|v| v == 1));
+            assert!(result.is_ok_and(|v| v == 1));
+        }
 
         let result = rdbms_service
             .postgres()
@@ -814,9 +938,16 @@ mod tests {
         println!("columns: {columns:?}");
         assert!(columns.len() > 0);
 
-        let rows = result.get_next().await.unwrap();
-        println!("rows: {rows:?}");
-        assert!(rows.is_some());
+        let mut rows: Vec<DbRow> = vec![];
+
+        loop {
+            match result.get_next().await.unwrap() {
+                Some(vs) => rows.extend(vs),
+                None => break,
+            }
+        }
+        // println!("rows: {rows:?}");
+        assert!(rows.len() >= 100);
 
         let result = rdbms_service.postgres().remove(&worker_id, &address).await;
 
