@@ -15,13 +15,11 @@
 use anyhow::anyhow;
 use async_lock::Mutex;
 use golem_common::model::InitialComponentFileKey;
-use serde::de;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Weak;
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
-use tokio::io::AsyncWriteExt;
 use tracing::debug;
 
 use crate::error::GolemError;
@@ -147,67 +145,61 @@ impl FileLoader {
         &self,
         key: &InitialComponentFileKey,
     ) -> Result<(FileUseToken, PathBuf), anyhow::Error> {
-        let (cache_entry, maybe_prelocked_entry) = {
-            let mut cache_guard = self.cache.lock().await;
-            let result =
-                if let Some(cache_entry) = cache_guard.get(key).and_then(|weak| weak.upgrade()) {
+        let path = self.cache_dir.path().join(key.to_string());
+        let cache_entry;
+        {
+            let maybe_prelocked_entry;
+            {
+                let mut cache_guard = self.cache.lock().await;
+                if let Some(existing_cache_entry) =
+                    cache_guard.get(key).and_then(|weak| weak.upgrade())
+                {
                     // we have a file, we can just return it
-                    (cache_entry, None)
+                    maybe_prelocked_entry = None;
+                    cache_entry = existing_cache_entry;
                 } else {
                     // insert an entry so no one else tries to download the file
-                    let cache_entry = Arc::new(Mutex::new(Err(anyhow!("File not downloaded yet"))));
+                    cache_entry = Arc::new(Mutex::new(Err(anyhow!("File not downloaded yet"))));
 
                     // immediately lock the entry so no one accesses the file while we are downloading it
-                    let prelocked_entry = cache_entry.clone().lock_arc().await;
+                    maybe_prelocked_entry = Some(cache_entry.lock().await);
 
                     // we don't want to keep a copy if we are the only ones holding it, so we use a weak reference
                     cache_guard.insert(key.clone(), Arc::downgrade(&cache_entry));
-                    (cache_entry, Some(prelocked_entry))
                 };
-            drop(cache_guard);
-            result
+                drop(cache_guard);
+            };
+
+            // we may need to initialize the file in case we are the first ones to access it
+            if let Some(mut prelocked_entry) = maybe_prelocked_entry {
+                debug!("Adding {} to cache", key);
+                match self.download_file_to_path(&path, key).await {
+                    Ok(()) => {
+                        let mut perms = tokio::fs::metadata(&path).await?.permissions();
+                        perms.set_readonly(true);
+                        tokio::fs::set_permissions(&path, perms).await?;
+
+                        // we successfully downloaded the file, set the cache entry to the file
+                        *prelocked_entry = Ok(PathHandle { path: path.clone() });
+                    }
+                    Err(e) => {
+                        // we failed to download the file, we need to fail the cache entry, remove it from the cache and return the error
+                        *prelocked_entry = Err(anyhow!("Other thread failed to download: {}", e));
+
+                        self.cache.lock().await.remove(key);
+
+                        return Err(e);
+                    }
+                }
+                drop(prelocked_entry);
+            };
         };
-
-        let path = self.cache_dir.path().join(key.to_string());
-        // we may need to initialize the file in case we are the first ones to access it
-        if let Some(mut prelocked_entry) = maybe_prelocked_entry {
-            debug!("Adding {} to cache", key);
-            match self.download_file_to_path(&path, key).await {
-                Ok(()) => {
-                    let mut perms = tokio::fs::metadata(&path).await?.permissions();
-                    perms.set_readonly(true);
-                    tokio::fs::set_permissions(&path, perms).await?;
-
-                    // we successfully downloaded the file, set the cache entry to the file
-                    *prelocked_entry = Ok(PathHandle { path: path.clone() });
-
-                    Ok((
-                        FileUseToken {
-                            _handle: cache_entry,
-                        },
-                        path,
-                    ))
-                }
-                Err(e) => {
-                    // we failed to download the file, we need to fail the cache entry, remove it from the cache and return the error
-                    *prelocked_entry = Err(anyhow!("Other thread failed to download: {}", e));
-
-                    let mut cache_guard = self.cache.lock().await;
-                    cache_guard.remove(key);
-                    drop(cache_guard);
-
-                    Err(e)
-                }
-            }
-        } else {
-            // we already have the file, just return it
-            Ok((
-                FileUseToken {
-                    _handle: cache_entry,
-                },
-                path,
-            ))
-        }
+        Ok((
+            FileUseToken {
+                _handle: cache_entry,
+            },
+            path,
+        ))
     }
 
     async fn download_file_to_path(
