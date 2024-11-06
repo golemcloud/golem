@@ -180,7 +180,7 @@ fn component_add_from_project_file(
     let cfg = &cli.config;
     let component: ComponentView = cli.run_trimmed(&[
         "component",
-        "add-with-manifest",
+        "add",
         &cfg.arg('a', "app"),
         golem_yaml.to_str().unwrap(),
         &cfg.arg('c', "component-name"),
@@ -207,7 +207,7 @@ fn component_update_from_project_file(
     let cfg = &cli.config;
     let component: ComponentView = cli.run_trimmed(&[
         "component",
-        "add-with-manifest",
+        "add",
         &cfg.arg('a', "app"),
         golem_yaml.to_str().unwrap(),
         &cfg.arg('c', "component-name"),
@@ -215,7 +215,7 @@ fn component_update_from_project_file(
     ])?;
     let _: ComponentView = cli.run_trimmed(&[
         "component",
-        "update-with-manifest",
+        "update",
         &cfg.arg('a', "app"),
         golem_yaml.to_str().unwrap(),
         &cfg.arg('c', "component-name"),

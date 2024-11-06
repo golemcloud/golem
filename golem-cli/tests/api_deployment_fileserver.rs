@@ -87,7 +87,7 @@ fn api_deployment_fileserver_simple(
     let cfg = &cli.config;
     let component: ComponentView = cli.run_trimmed(&[
         "component",
-        "add-with-manifest",
+        "add",
         &cfg.arg('a', "app"),
         golem_yaml.to_str().unwrap(),
         &cfg.arg('c', "component-name"),
@@ -149,7 +149,7 @@ fn api_deployment_fileserver_complex(
     let cfg = &cli.config;
     let component: ComponentView = cli.run_trimmed(&[
         "component",
-        "add-with-manifest",
+        "add",
         &cfg.arg('a', "app"),
         golem_yaml.to_str().unwrap(),
         &cfg.arg('c', "component-name"),
@@ -209,7 +209,7 @@ fn api_deployment_fileserver_stateful_worker(
     let cfg = &cli.config;
     let component: ComponentView = cli.run_trimmed(&[
         "component",
-        "add-with-manifest",
+        "add",
         &cfg.arg('a', "app"),
         golem_yaml.to_str().unwrap(),
         &cfg.arg('c', "component-name"),

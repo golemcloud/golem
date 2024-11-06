@@ -29,102 +29,93 @@ use std::sync::Arc;
 #[derive(Subcommand, Debug)]
 #[command()]
 pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
-    /// Creates a new component with a given name by uploading the component WASM
-    #[command(alias = "create")]
+    /// Creates a new component by uploading the component WASM.
+    ///
+    /// If neither `component-file` nor `app` is specified, the command will look for the manifest in the current directory and all parent directories.
+    /// It will then look for the component in the manifest and use the settings there.
+    #[command(alias = "create", verbatim_doc_comment)]
     Add {
+        /// The WASM file to be used as a Golem component
+        ///
+        /// Conflics with `app` flag.
+        #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
+        component_file: Option<PathBufOrStdin>, // TODO: validate exists
+
         /// The newly created component's owner project
         #[command(flatten)]
         project_ref: ProjectRef,
 
         /// Name of the newly created component
-        #[arg(short, long)]
+        ///
+        /// If 'component-file' is specified, this flag controls the name of the component.
+        /// If 'component-file' is not specified, or 'app' is specified, this flag is used to resolve the component from the app manifest.
+        #[arg(short, long, verbatim_doc_comment)]
         component_name: ComponentName,
-
-        /// The WASM file to be used as a Golem component
-        #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
-        component_file: PathBufOrStdin, // TODO: validate exists
 
         /// The component type. If none specified, the command creates a Durable component.
-        #[command(flatten)]
+        ///
+        /// Conflicts with `app` flag.
+        #[command(flatten, verbatim_doc_comment)]
         component_type: ComponentTypeArg,
 
-        /// Do not ask for confirmation for performing an update in case the component already exists
-        #[arg(short = 'y', long)]
-        non_interactive: bool,
-    },
-
-    /// Create a new component, taking all parameters from the app manifest
-    AddWithManifest {
-        /// The newly created component's owner project
-        #[command(flatten)]
-        project_ref: ProjectRef,
-
-        /// Name of the newly created component. Will be used to resolve configuration from the app manifest.
-        #[arg(short, long)]
-        component_name: ComponentName,
-
-        /// Do not ask for confirmation for performing an update in case the component already exists
-        #[arg(short = 'y', long)]
-        non_interactive: bool,
-
-        /// List of application manifests. Can be specified multiple times
-        #[arg(long, short)]
+        /// Application manifest to use. Can be specified multiple times.
+        /// The component-name flag is used to resolve the component from the app manifest.
+        /// Other settings are then taken from the app manifest.
+        ///
+        /// Conflicts with `component_file` flag.
+        /// Conflicts with `ephemeral` flag.
+        /// Conflicts with `durable` flag.
+        #[arg(long, short, conflicts_with_all = vec!["component_file", "component-type-flag"], verbatim_doc_comment)]
         app: Vec<PathBuf>,
-    },
 
+        /// Do not ask for confirmation for performing an update in case the component already exists
+        #[arg(short = 'y', long)]
+        non_interactive: bool,
+    },
     /// Updates an existing component by uploading a new version of its WASM
+    ///
+    /// If neither `component-file` nor `app` is specified, the command will look for the manifest in the current directory and all parent directories.
+    /// It will then look for the component in the manifest and use the settings there.
     #[command()]
     Update {
+        /// The WASM file to be used as a new version of the Golem component
+        ///
+        /// Conflics with `app` flag.
+        #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath, verbatim_doc_comment)]
+        component_file: Option<PathBufOrStdin>, // TODO: validate exists
+
         /// The component to update
         #[command(flatten)]
         component_name_or_uri: ComponentRef,
-
-        /// The WASM file to be used as a new version of the Golem component
-        #[arg(value_name = "component-file", value_hint = clap::ValueHint::FilePath)]
-        component_file: PathBufOrStdin, // TODO: validate exists
 
         /// The updated component's type. If none specified, the previous version's type is used.
-        #[command(flatten)]
+        ///
+        /// Conflicts with `app` flag.
+        #[command(flatten, verbatim_doc_comment)]
         component_type: UpdatedComponentTypeArg,
 
-        /// Try to automatically update all existing workers to the new version
-        #[arg(long, default_value_t = false)]
-        try_update_workers: bool,
-
-        /// Update mode - auto or manual
-        #[arg(long, default_value = "auto", requires = "try_update_workers")]
-        update_mode: WorkerUpdateMode,
-
-        /// Do not ask for confirmation for creating a new component in case it does not exist
-        #[arg(short = 'y', long)]
-        non_interactive: bool,
-    },
-
-    /// Updates an existing component by uploading a new version of its WASM and functions.
-    /// All parameters are taken from the app manifest.
-    #[command()]
-    UpdateWithManifest {
-        /// The component to update
-        #[command(flatten)]
-        component_name_or_uri: ComponentRef,
-
-        /// Try to automatically update all existing workers to the new version
-        #[arg(long, default_value_t = false)]
-        try_update_workers: bool,
-
-        /// Update mode - auto or manual
-        #[arg(long, default_value = "auto", requires = "try_update_workers")]
-        update_mode: WorkerUpdateMode,
-
-        /// Do not ask for confirmation for creating a new component in case it does not exist
-        #[arg(short = 'y', long)]
-        non_interactive: bool,
-
-        /// List of application manifests. Can be specified multiple times
+        /// Application manifest to use. Can be specified multiple times.
+        /// The component-name flag is used to resolve the component from the app manifest.
+        /// Other settings are then taken from the app manifest.
+        ///
+        /// Conflicts with `component-file` flag.
+        /// Conflicts with `ephemeral` flag.
+        /// Conflicts with `durable` flag.
         #[arg(long, short)]
         app: Vec<PathBuf>,
-    },
 
+        /// Try to automatically update all existing workers to the new version
+        #[arg(long, default_value_t = false)]
+        try_update_workers: bool,
+
+        /// Update mode - auto or manual
+        #[arg(long, default_value = "auto", requires = "try_update_workers")]
+        update_mode: WorkerUpdateMode,
+
+        /// Do not ask for confirmation for creating a new component in case it does not exist
+        #[arg(short = 'y', long)]
+        non_interactive: bool,
+    },
     /// Lists the existing components
     #[command()]
     List {
@@ -233,8 +224,9 @@ impl<
             ComponentSubCommand::Add {
                 project_ref,
                 component_name,
-                component_file,
+                component_file: Some(component_file),
                 component_type,
+                app: _,
                 non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
@@ -251,11 +243,13 @@ impl<
                     )
                     .await
             }
-            ComponentSubCommand::AddWithManifest {
+            ComponentSubCommand::Add {
                 project_ref,
                 component_name,
-                non_interactive,
+                component_file: None,
+                component_type: _,
                 app,
+                non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
 
@@ -294,8 +288,9 @@ impl<
             }
             ComponentSubCommand::Update {
                 component_name_or_uri,
-                component_file,
+                component_file: Some(component_file),
                 component_type,
+                app: _,
                 try_update_workers,
                 update_mode,
                 non_interactive,
@@ -322,9 +317,11 @@ impl<
                 }
                 Ok(result)
             }
-            ComponentSubCommand::UpdateWithManifest {
+            ComponentSubCommand::Update {
                 component_name_or_uri,
                 non_interactive,
+                component_file: None,
+                component_type: _,
                 app,
                 try_update_workers,
                 update_mode,
