@@ -35,9 +35,7 @@ impl UriBackConversion for Uri {
 
 pub fn empty_worker_metadata() -> WorkerRequestMetadata {
     WorkerRequestMetadata {
-        account_id: Some(golem_common::model::AccountId {
-            value: "-1".to_string(),
-        }),
+        account_id: Some(golem_common::model::AccountId::placeholder()),
         limits: None,
     }
 }

@@ -167,8 +167,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             owned_worker_id.worker_id, worker_config.deleted_regions
         );
 
-        let (file_use_tokens, read_only_paths) =
-            prepare_filesystem(file_loader, temp_dir.path(), &component_metadata.files).await?;
+        let (file_use_tokens, read_only_paths) = prepare_filesystem(
+            file_loader,
+            &owned_worker_id.account_id,
+            temp_dir.path(),
+            &component_metadata.files,
+        )
+        .await?;
 
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(Stdout);
@@ -2162,6 +2167,7 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
 
 async fn prepare_filesystem(
     file_loader: Arc<FileLoader>,
+    account_id: &AccountId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<(Vec<FileUseToken>, HashSet<PathBuf>), GolemError> {
@@ -2174,12 +2180,16 @@ async fn prepare_filesystem(
             match permissions {
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
-                    let token = file_loader.get_read_only_to(&key, &path).await?;
+                    let token = file_loader
+                        .get_read_only_to(account_id, &key, &path)
+                        .await?;
                     Ok::<_, GolemError>(Some((token, path)))
                 }
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
-                    file_loader.get_read_write_to(&key, &path).await?;
+                    file_loader
+                        .get_read_write_to(account_id, &key, &path)
+                        .await?;
                     Ok(None)
                 }
             }

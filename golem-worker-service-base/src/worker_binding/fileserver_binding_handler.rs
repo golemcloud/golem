@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 use futures_util::TryStreamExt;
-use golem_common::model::{ComponentFilePath, TargetWorkerId};
+use golem_common::model::{ComponentFilePath, HasAccountId, TargetWorkerId};
 use golem_service_base::model::validate_worker_name;
 use golem_service_base::{
     auth::EmptyAuthCtx, service::initial_component_files::InitialComponentFilesService,
@@ -124,9 +124,10 @@ impl FileServerBindingDetails {
 }
 
 #[async_trait]
-pub trait FileServerBindingHandler {
+pub trait FileServerBindingHandler<Namespace> {
     async fn handle_file_server_binding(
         &self,
+        namespace: &Namespace,
         worker_detail: &WorkerDetail,
         original_result: RibResult,
     ) -> FileServerBindingResult;
@@ -153,9 +154,12 @@ impl DefaultFileServerBindingHandler {
 }
 
 #[async_trait]
-impl FileServerBindingHandler for DefaultFileServerBindingHandler {
+impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<Namespace>
+    for DefaultFileServerBindingHandler
+{
     async fn handle_file_server_binding(
         &self,
+        namespace: &Namespace,
         worker_detail: &WorkerDetail,
         original_result: RibResult,
     ) -> FileServerBindingResult {
@@ -181,7 +185,7 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
         if let Some(file) = matching_file {
             let data = self
                 .initial_component_files_service
-                .get(&file.key)
+                .get(&namespace.account_id(), &file.key)
                 .await
                 .map_err(|e| {
                     FileServerBindingError::InternalError(format!(

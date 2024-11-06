@@ -34,13 +34,12 @@ pub struct ApiDefinitionRecord {
 
 impl ApiDefinitionRecord {
     pub fn new<Namespace: Display>(
-        namespace: Namespace,
-        definition: CompiledHttpApiDefinition,
+        definition: CompiledHttpApiDefinition<Namespace>,
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> Result<Self, String> {
         let data = record_data_serde::serialize(&definition.routes)?;
         Ok(Self {
-            namespace: namespace.to_string(),
+            namespace: definition.namespace.to_string(),
             id: definition.id.0,
             version: definition.version.0,
             draft: definition.draft,
@@ -50,10 +49,17 @@ impl ApiDefinitionRecord {
     }
 }
 
-impl TryFrom<ApiDefinitionRecord> for CompiledHttpApiDefinition {
+impl<Namespace> TryFrom<ApiDefinitionRecord> for CompiledHttpApiDefinition<Namespace>
+where
+    Namespace: TryFrom<String>,
+    <Namespace as TryFrom<String>>::Error: Display,
+{
     type Error = String;
     fn try_from(value: ApiDefinitionRecord) -> Result<Self, Self::Error> {
         let routes = record_data_serde::deserialize(&value.data)?;
+
+        let namespace = Namespace::try_from(value.namespace)
+            .map_err(|e| format!("Failed to convert namespace: {e}"))?;
 
         Ok(Self {
             id: value.id.into(),
@@ -61,11 +67,16 @@ impl TryFrom<ApiDefinitionRecord> for CompiledHttpApiDefinition {
             routes,
             draft: value.draft,
             created_at: value.created_at,
+            namespace,
         })
     }
 }
 
-impl TryFrom<ApiDefinitionRecord> for HttpApiDefinition {
+impl<Namespace> TryFrom<ApiDefinitionRecord> for HttpApiDefinition<Namespace>
+where
+    Namespace: TryFrom<String>,
+    <Namespace as TryFrom<String>>::Error: Display,
+{
     type Error = String;
     fn try_from(value: ApiDefinitionRecord) -> Result<Self, Self::Error> {
         let compiled_http_api_definition = CompiledHttpApiDefinition::try_from(value)?;

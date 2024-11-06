@@ -23,11 +23,11 @@ use golem_common::model::WorkerBindingType;
 // to resolve a single worker-binding is then executed with the help of worker_service_rib_interpreter, which internally
 // calls the worker function.
 #[async_trait]
-pub trait RequestToWorkerBindingResolver<ApiDefinition> {
+pub trait RequestToWorkerBindingResolver<Namespace, ApiDefinition> {
     async fn resolve_worker_binding(
         &self,
         api_definitions: Vec<ApiDefinition>,
-    ) -> Result<ResolvedWorkerBindingFromRequest, WorkerBindingResolutionError>;
+    ) -> Result<ResolvedWorkerBindingFromRequest<Namespace>, WorkerBindingResolutionError>;
 }
 
 #[derive(Debug)]
@@ -43,14 +43,6 @@ impl Display for WorkerBindingResolutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Worker binding resolution error: {}", self.0)
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedWorkerBindingFromRequest {
-    pub worker_detail: WorkerDetail,
-    pub request_details: RequestDetails,
-    pub compiled_response_mapping: ResponseMappingCompiled,
-    pub worker_binding_type: WorkerBindingType,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -86,11 +78,20 @@ impl WorkerDetail {
     }
 }
 
-impl ResolvedWorkerBindingFromRequest {
+#[derive(Debug, Clone)]
+pub struct ResolvedWorkerBindingFromRequest<Namespace> {
+    pub worker_detail: WorkerDetail,
+    pub request_details: RequestDetails,
+    pub compiled_response_mapping: ResponseMappingCompiled,
+    pub worker_binding_type: WorkerBindingType,
+    pub namespace: Namespace,
+}
+
+impl<Namespace> ResolvedWorkerBindingFromRequest<Namespace> {
     pub async fn interpret_response_mapping<R>(
         &self,
         evaluator: &Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
-        file_server_binding_handler: &Arc<dyn FileServerBindingHandler + Sync + Send>,
+        file_server_binding_handler: &Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     ) -> R
     where
         RibResult: ToResponse<R>,
@@ -125,7 +126,11 @@ impl ResolvedWorkerBindingFromRequest {
                             worker_response.to_response(&self.request_details)
                         }
                         WorkerBindingType::FileServer => file_server_binding_handler
-                            .handle_file_server_binding(&self.worker_detail, worker_response)
+                            .handle_file_server_binding(
+                                &self.namespace,
+                                &self.worker_detail,
+                                worker_response,
+                            )
                             .await
                             .to_response(&self.request_details),
                     },
@@ -139,18 +144,22 @@ impl ResolvedWorkerBindingFromRequest {
 }
 
 #[async_trait]
-impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
+impl<Namespace: Clone + Send + Sync + 'static>
+    RequestToWorkerBindingResolver<Namespace, CompiledHttpApiDefinition<Namespace>>
+    for InputHttpRequest
+{
     async fn resolve_worker_binding(
         &self,
-        compiled_api_definitions: Vec<CompiledHttpApiDefinition>,
-    ) -> Result<ResolvedWorkerBindingFromRequest, WorkerBindingResolutionError> {
+        compiled_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
+    ) -> Result<ResolvedWorkerBindingFromRequest<Namespace>, WorkerBindingResolutionError> {
         let compiled_routes = compiled_api_definitions
             .iter()
-            .flat_map(|x| x.routes.clone())
+            .flat_map(|x| x.routes.iter().map(|y| (x.namespace.clone(), y.clone())))
             .collect::<Vec<_>>();
 
         let api_request = self;
         let router = router::build(compiled_routes);
+
         let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
         let request_query_variables = self.input_path.query_components().unwrap_or_default();
         let request_body = &self.req_body;
@@ -159,6 +168,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
         let router::RouteEntry {
             path_params,
             query_params,
+            namespace,
             binding,
         } = router
             .check_path(&api_request.req_method, &path)
@@ -250,6 +260,7 @@ impl RequestToWorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequ
             request_details: http_request_details,
             compiled_response_mapping: binding.response_compiled.clone(),
             worker_binding_type: binding.worker_binding_type.clone(),
+            namespace: namespace.clone(),
         };
 
         Ok(resolved_binding)

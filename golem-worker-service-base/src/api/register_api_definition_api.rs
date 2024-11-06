@@ -79,8 +79,8 @@ pub struct HttpApiDefinitionWithTypeInfo {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl From<CompiledHttpApiDefinition> for HttpApiDefinitionWithTypeInfo {
-    fn from(value: CompiledHttpApiDefinition) -> Self {
+impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionWithTypeInfo {
+    fn from(value: CompiledHttpApiDefinition<Namespace>) -> Self {
         let routes = value.routes.into_iter().map(|route| route.into()).collect();
 
         Self {
@@ -198,11 +198,13 @@ impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
     }
 }
 
-impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {
+impl<Namespace> TryFrom<crate::api_definition::http::HttpApiDefinition<Namespace>>
+    for HttpApiDefinition
+{
     type Error = String;
 
     fn try_from(
-        value: crate::api_definition::http::HttpApiDefinition,
+        value: crate::api_definition::http::HttpApiDefinition<Namespace>,
     ) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
@@ -329,11 +331,13 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     }
 }
 
-impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
+impl<Namespace> TryFrom<crate::api_definition::http::HttpApiDefinition<Namespace>>
+    for grpc_apidefinition::ApiDefinition
+{
     type Error = String;
 
     fn try_from(
-        value: crate::api_definition::http::HttpApiDefinition,
+        value: crate::api_definition::http::HttpApiDefinition<Namespace>,
     ) -> Result<Self, Self::Error> {
         let routes = value
             .routes
@@ -355,36 +359,6 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinit
             )),
             draft: value.draft,
             created_at: Some(created_at),
-        };
-
-        Ok(result)
-    }
-}
-
-impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http::HttpApiDefinition {
-    type Error = String;
-
-    fn try_from(value: grpc_apidefinition::ApiDefinition) -> Result<Self, Self::Error> {
-        let routes = match value.definition.ok_or("definition is missing")? {
-            grpc_apidefinition::api_definition::Definition::Http(http) => http
-                .routes
-                .into_iter()
-                .map(crate::api_definition::http::Route::try_from)
-                .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?,
-        };
-
-        let id = value.id.ok_or("Api Definition ID is missing")?;
-        let created_at = value
-            .created_at
-            .ok_or("Created At is missing")
-            .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
-
-        let result = crate::api_definition::http::HttpApiDefinition {
-            id: ApiDefinitionId(id.value),
-            version: ApiVersion(value.version),
-            routes,
-            draft: value.draft,
-            created_at: created_at.into(),
         };
 
         Ok(result)

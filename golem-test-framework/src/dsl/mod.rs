@@ -39,6 +39,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::regions::DeletedRegions;
+use golem_common::model::AccountId;
 use golem_common::model::{
     ComponentFileSystemNode, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord,
     IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ScanCursor,
@@ -81,7 +82,11 @@ pub trait TestDsl {
         name: &str,
         files: &Option<Vec<InitialComponentFile>>,
     ) -> ComponentVersion;
-    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
+    async fn add_initial_component_file(
+        &self,
+        account_id: &AccountId,
+        path: &Path,
+    ) -> InitialComponentFileKey;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str)
         -> crate::Result<WorkerId>;
@@ -284,14 +289,18 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             .expect("Failed to store component with id {component_id}")
     }
 
-    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
+    async fn add_initial_component_file(
+        &self,
+        account_id: &AccountId,
+        path: &Path,
+    ) -> InitialComponentFileKey {
         let source_path = self.component_directory().join(path);
         let data = tokio::fs::read(&source_path)
             .await
             .expect("Failed to read file");
         let bytes = Bytes::from(data);
         self.initial_component_files_service()
-            .put_if_not_exists(&bytes)
+            .put_if_not_exists(account_id, &bytes)
             .await
             .expect("Failed to add initial component file")
     }
@@ -1331,7 +1340,11 @@ pub trait TestDslUnsafe {
         name: &str,
         files: &Option<Vec<InitialComponentFile>>,
     ) -> ComponentVersion;
-    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey;
+    async fn add_initial_component_file(
+        &self,
+        account_id: &AccountId,
+        path: &Path,
+    ) -> InitialComponentFileKey;
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId;
     async fn try_start_worker(
@@ -1489,8 +1502,12 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         <T as TestDsl>::update_component_with_files(self, component_id, name, files).await
     }
 
-    async fn add_initial_component_file(&self, path: &Path) -> InitialComponentFileKey {
-        <T as TestDsl>::add_initial_component_file(self, path).await
+    async fn add_initial_component_file(
+        &self,
+        account_id: &AccountId,
+        path: &Path,
+    ) -> InitialComponentFileKey {
+        <T as TestDsl>::add_initial_component_file(self, account_id, path).await
     }
 
     async fn start_worker(&self, component_id: &ComponentId, name: &str) -> WorkerId {

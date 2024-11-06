@@ -25,7 +25,7 @@ use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
 use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
+    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile,
     WorkerStatus,
 };
@@ -212,11 +212,13 @@ async fn initial_file_read_write(
 
     let file1_key = executor
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;
@@ -278,11 +280,13 @@ async fn initial_file_listing_through_api(
 
     let file1_key = executor
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;
@@ -372,11 +376,13 @@ async fn initial_file_reading_through_api(
 
     let file1_key = executor
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;

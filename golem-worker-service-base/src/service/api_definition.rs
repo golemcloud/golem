@@ -116,14 +116,14 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
         definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError>;
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>, ValidationError>;
 
     async fn update(
         &self,
         definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError>;
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>, ValidationError>;
 
     async fn get(
         &self,
@@ -131,7 +131,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
         version: &ApiVersion,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<CompiledHttpApiDefinition>, ValidationError>;
+    ) -> ApiResult<Option<CompiledHttpApiDefinition<Namespace>>, ValidationError>;
 
     async fn delete(
         &self,
@@ -145,31 +145,38 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
         &self,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError>;
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError>;
 
     async fn get_all_versions(
         &self,
         id: &ApiDefinitionId,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError>;
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError>;
 }
 
-pub struct ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
+pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError> {
     pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
     pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
-    pub api_definition_validator:
-        Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send>,
+    pub api_definition_validator: Arc<
+        dyn ApiDefinitionValidatorService<HttpApiDefinition<Namespace>, ValidationError>
+            + Sync
+            + Send,
+    >,
 }
 
-impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
+impl<AuthCtx, Namespace, ValidationError>
+    ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError>
+{
     pub fn new(
         component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
         deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
         api_definition_validator: Arc<
-            dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send,
+            dyn ApiDefinitionValidatorService<HttpApiDefinition<Namespace>, ValidationError>
+                + Sync
+                + Send,
         >,
     ) -> Self {
         Self {
@@ -182,7 +189,7 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
 
     async fn get_all_components(
         &self,
-        definition: &HttpApiDefinition,
+        definition: &HttpApiDefinition<Namespace>,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<Component>, ApiDefinitionError<ValidationError>> {
         let get_components = definition
@@ -227,17 +234,18 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
 
 #[async_trait]
 impl<AuthCtx, Namespace, ValidationError> ApiDefinitionService<AuthCtx, Namespace, ValidationError>
-    for ApiDefinitionServiceDefault<AuthCtx, ValidationError>
+    for ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError>
 where
     AuthCtx: Send + Sync,
-    Namespace: Display + Clone + Send + Sync,
+    Namespace: Display + Clone + Send + Sync + TryFrom<String>,
+    <Namespace as TryFrom<String>>::Error: Display,
 {
     async fn create(
         &self,
         definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError> {
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>, ValidationError> {
         info!(namespace = %namespace, "Create API definition");
         let created_at = Utc::now();
 
@@ -256,7 +264,7 @@ where
             ));
         }
 
-        let definition = HttpApiDefinition::new(definition.clone(), created_at);
+        let definition = HttpApiDefinition::new(definition.clone(), created_at, namespace.clone());
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
@@ -271,14 +279,10 @@ where
             &component_metadata_dictionary,
         )?;
 
-        let record = ApiDefinitionRecord::new(
-            namespace.clone(),
-            compiled_http_api_definition.clone(),
-            created_at,
-        )
-        .map_err(|e| {
-            ApiDefinitionError::Internal(format!("Failed to create API definition record: {e}"))
-        })?;
+        let record = ApiDefinitionRecord::new(compiled_http_api_definition.clone(), created_at)
+            .map_err(|e| {
+                ApiDefinitionError::Internal(format!("Failed to create API definition record: {e}"))
+            })?;
 
         self.definition_repo.create(&record).await?;
 
@@ -290,7 +294,7 @@ where
         definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<CompiledHttpApiDefinition, ValidationError> {
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>, ValidationError> {
         info!(namespace = %namespace, "Update API definition");
 
         let existing_record = self
@@ -311,7 +315,7 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
-        let definition = HttpApiDefinition::new(definition.clone(), created_at);
+        let definition = HttpApiDefinition::new(definition.clone(), created_at, namespace.clone());
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
@@ -326,14 +330,10 @@ where
             &component_metadata_dictionary,
         )?;
 
-        let record = ApiDefinitionRecord::new(
-            namespace.clone(),
-            compiled_http_api_definition.clone(),
-            created_at,
-        )
-        .map_err(|e| {
-            ApiDefinitionError::Internal(format!("Failed to create API definition record: {e}"))
-        })?;
+        let record = ApiDefinitionRecord::new(compiled_http_api_definition.clone(), created_at)
+            .map_err(|e| {
+                ApiDefinitionError::Internal(format!("Failed to create API definition record: {e}"))
+            })?;
 
         self.definition_repo.update(&record).await?;
 
@@ -346,7 +346,7 @@ where
         version: &ApiVersion,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<CompiledHttpApiDefinition>, ValidationError> {
+    ) -> ApiResult<Option<CompiledHttpApiDefinition<Namespace>>, ValidationError> {
         info!(namespace = %namespace, "Get API definition");
         let value = self
             .definition_repo
@@ -406,14 +406,14 @@ where
         &self,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError> {
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError> {
         info!(namespace = %namespace, "Get all API definitions");
         let records = self.definition_repo.get_all(&namespace.to_string()).await?;
 
-        let values: Vec<CompiledHttpApiDefinition> = records
+        let values: Vec<CompiledHttpApiDefinition<Namespace>> = records
             .iter()
             .map(|d| d.clone().try_into())
-            .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
+            .collect::<Result<Vec<CompiledHttpApiDefinition<Namespace>>, _>>()
             .map_err(|e| {
                 ApiDefinitionError::Internal(format!(
                     "Failed to convert API definition record: {e}"
@@ -428,7 +428,7 @@ where
         id: &ApiDefinitionId,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<CompiledHttpApiDefinition>, ValidationError> {
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError> {
         info!(namespace = %namespace, "Get all API definitions versions");
 
         let records = self
@@ -436,10 +436,10 @@ where
             .get_all_versions(&namespace.to_string(), id.0.as_str())
             .await?;
 
-        let values: Vec<CompiledHttpApiDefinition> = records
+        let values: Vec<CompiledHttpApiDefinition<Namespace>> = records
             .iter()
             .map(|d| d.clone().try_into())
-            .collect::<Result<Vec<CompiledHttpApiDefinition>, _>>()
+            .collect::<Result<Vec<CompiledHttpApiDefinition<Namespace>>, _>>()
             .map_err(|e| {
                 ApiDefinitionError::Internal(format!(
                     "Failed to convert API definition record: {e}"

@@ -34,6 +34,7 @@ use url::Url;
 
 use super::GolemError;
 
+// TODO: This is inlined from wasm-rpc. Refactor to avoid duplication.
 pub fn load_app(
     app_resolve_mode: &ApplicationResolveMode,
 ) -> Result<ApplicationManifest, GolemError> {
@@ -150,7 +151,7 @@ fn find_main_source() -> Option<PathBuf> {
     last_source
 }
 
-// Taken from golem-wasm-rpc-stubgen/src/model/application_manifest.rs. TODO: Refactor to avoid duplication of validation logic.
+// TODO: Taken from wasm-rpc. Refactor to avoid duplication.
 #[derive(Clone, Debug)]
 pub struct ApplicationManifest {
     pub common_wasm_build: Option<WasmBuild>,

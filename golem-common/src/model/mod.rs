@@ -1233,6 +1233,12 @@ pub struct AccountId {
 }
 
 impl AccountId {
+    pub fn placeholder() -> Self {
+        Self {
+            value: "-1".to_string(),
+        }
+    }
+
     pub fn generate() -> Self {
         Self {
             value: Uuid::new_v4().to_string(),
@@ -1313,6 +1319,10 @@ impl Display for AccountId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", &self.value)
     }
+}
+
+pub trait HasAccountId {
+    fn account_id(&self) -> AccountId;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, Object)]

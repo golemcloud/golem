@@ -70,7 +70,7 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
     async fn get_definitions_by_site(
         &self,
         site: &ApiSiteString,
-    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDeploymentError<Namespace>>;
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDeploymentError<Namespace>>;
 
     async fn delete(
         &self,
@@ -133,7 +133,7 @@ pub trait ConflictChecker {
         Self: Sized;
 }
 
-impl ConflictChecker for HttpApiDefinition {
+impl<Namespace> ConflictChecker for HttpApiDefinition<Namespace> {
     type Entity = AllPathPatterns;
     fn find_conflicts(definitions: &[Self]) -> Vec<Self::Entity> {
         let routes = definitions
@@ -215,7 +215,7 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
     }
 
     fn get_worker_functions_in_api_definitions<Namespace>(
-        definitions: Vec<CompiledHttpApiDefinition>,
+        definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
     ) -> Result<HashMap<ComponentId, FunctionConstraintCollection>, ApiDeploymentError<Namespace>>
     {
         let mut worker_functions_in_rib = HashMap::new();
@@ -310,7 +310,7 @@ where
 
         let mut set_not_draft: Vec<ApiDefinitionIdWithVersion> = vec![];
 
-        let mut new_definitions: Vec<CompiledHttpApiDefinition> = vec![];
+        let mut new_definitions: Vec<CompiledHttpApiDefinition<Namespace>> = vec![];
 
         for api_definition_key in deployment.api_definition_keys.clone() {
             // If definition is not present in existing deployment
@@ -362,7 +362,7 @@ where
                 .clone()
                 .into_iter()
                 .map(|x| x.into())
-                .collect::<Vec<HttpApiDefinition>>()
+                .collect::<Vec<HttpApiDefinition<Namespace>>>()
                 .as_slice(),
         );
 
@@ -583,14 +583,14 @@ where
     async fn get_definitions_by_site(
         &self,
         site: &ApiSiteString,
-    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDeploymentError<Namespace>> {
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDeploymentError<Namespace>> {
         info!("Get API definitions");
         let records = self
             .deployment_repo
             .get_definitions_by_site(site.to_string().as_str())
             .await?;
 
-        let mut values: Vec<CompiledHttpApiDefinition> = vec![];
+        let mut values: Vec<CompiledHttpApiDefinition<Namespace>> = vec![];
 
         for record in records {
             values.push(

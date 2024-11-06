@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use tracing::debug;
 
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
-use golem_common::model::InitialComponentFileKey;
+use golem_common::model::{AccountId, InitialComponentFileKey};
 
 const INITIAL_COMPONENT_FILES_LABEL: &str = "initial_component_files";
 
@@ -33,7 +33,11 @@ impl InitialComponentFilesService {
         Self { blob_storage }
     }
 
-    pub async fn exists(&self, key: &InitialComponentFileKey) -> Result<bool, String> {
+    pub async fn exists(
+        &self,
+        account_id: &AccountId,
+        key: &InitialComponentFileKey,
+    ) -> Result<bool, String> {
         let path = PathBuf::from(key.0.clone());
 
         let metadata = self
@@ -41,7 +45,9 @@ impl InitialComponentFilesService {
             .get_metadata(
                 INITIAL_COMPONENT_FILES_LABEL,
                 "exists",
-                BlobStorageNamespace::InitialComponentFiles,
+                BlobStorageNamespace::InitialComponentFiles {
+                    account_id: account_id.clone(),
+                },
                 &path,
             )
             .await
@@ -50,12 +56,18 @@ impl InitialComponentFilesService {
         Ok(metadata.is_some())
     }
 
-    pub async fn get(&self, key: &InitialComponentFileKey) -> Result<Option<Bytes>, String> {
+    pub async fn get(
+        &self,
+        account_id: &AccountId,
+        key: &InitialComponentFileKey,
+    ) -> Result<Option<Bytes>, String> {
         self.blob_storage
             .get_raw(
                 INITIAL_COMPONENT_FILES_LABEL,
                 "get",
-                BlobStorageNamespace::InitialComponentFiles,
+                BlobStorageNamespace::InitialComponentFiles {
+                    account_id: account_id.clone(),
+                },
                 &PathBuf::from(key.0.clone()),
             )
             .await
@@ -63,6 +75,7 @@ impl InitialComponentFilesService {
 
     pub async fn put_if_not_exists(
         &self,
+        account_id: &AccountId,
         bytes: &Bytes,
     ) -> Result<InitialComponentFileKey, String> {
         let mut hasher = Sha256::new();
@@ -76,7 +89,9 @@ impl InitialComponentFilesService {
             .get_metadata(
                 INITIAL_COMPONENT_FILES_LABEL,
                 "put",
-                BlobStorageNamespace::InitialComponentFiles,
+                BlobStorageNamespace::InitialComponentFiles {
+                    account_id: account_id.clone(),
+                },
                 &key,
             )
             .await
@@ -89,7 +104,9 @@ impl InitialComponentFilesService {
                 .put_raw(
                     INITIAL_COMPONENT_FILES_LABEL,
                     "put",
-                    BlobStorageNamespace::InitialComponentFiles,
+                    BlobStorageNamespace::InitialComponentFiles {
+                        account_id: account_id.clone(),
+                    },
                     &key,
                     bytes,
                 )

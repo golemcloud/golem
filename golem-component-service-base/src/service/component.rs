@@ -31,9 +31,10 @@ use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
+use golem_common::model::AccountId;
 use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
-    InitialComponentFileKey,
+    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, HasAccountId,
+    InitialComponentFile, InitialComponentFileKey,
 };
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
@@ -631,7 +632,7 @@ impl ConflictReport {
 #[async_trait]
 impl<Namespace> ComponentService<Namespace> for ComponentServiceDefault
 where
-    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
+    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync + HasAccountId,
     <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
 {
     async fn create(
@@ -650,7 +651,10 @@ where
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
         let uploaded_files = match files {
-            Some(files) => self.upload_component_files(files).await?,
+            Some(files) => {
+                self.upload_component_files(&namespace.account_id(), files)
+                    .await?
+            }
             None => vec![],
         };
 
@@ -683,7 +687,7 @@ where
         for file in &files {
             let exists = self
                 .initial_component_files_service
-                .exists(&file.key)
+                .exists(&namespace.account_id(), &file.key)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(
@@ -721,7 +725,10 @@ where
         info!(namespace = %namespace, "Update component");
 
         let uploaded_files = match files {
-            Some(files) => Some(self.upload_component_files(files).await?),
+            Some(files) => Some(
+                self.upload_component_files(&namespace.account_id(), files)
+                    .await?,
+            ),
             None => None,
         };
 
@@ -748,7 +755,7 @@ where
         for file in files.iter().flatten() {
             let exists = self
                 .initial_component_files_service
-                .exists(&file.key)
+                .exists(&namespace.account_id(), &file.key)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(
@@ -1085,6 +1092,7 @@ impl ComponentServiceDefault {
 
     async fn upload_component_files(
         &self,
+        account_id: &AccountId,
         payload: InitialComponentFilesArchiveAndPermissions,
     ) -> Result<Vec<InitialComponentFile>, ComponentError> {
         let files_file = payload.archive;
@@ -1157,7 +1165,7 @@ impl ComponentServiceDefault {
 
             let key = self
                 .initial_component_files_service
-                .put_if_not_exists(&content)
+                .put_if_not_exists(account_id, &content)
                 .await
                 .map_err(|e| {
                     ComponentError::initial_component_file_upload_error(

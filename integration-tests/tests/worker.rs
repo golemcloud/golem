@@ -27,7 +27,7 @@ use crate::Tracing;
 use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
+    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, FilterComparator, IdempotencyKey,
     InitialComponentFile, ScanCursor, StringFilterComparator, TargetWorkerId, Timestamp,
     WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
@@ -1402,11 +1402,13 @@ async fn worker_recreation(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
 async fn worker_use_initial_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let file1_key = deps
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;
@@ -1459,11 +1461,13 @@ async fn worker_use_initial_files(deps: &EnvBasedTestDependencies, _tracing: &Tr
 async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let file1_key = deps
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;
@@ -1544,11 +1548,13 @@ async fn worker_list_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) 
 async fn worker_read_files(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let file1_key = deps
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;
@@ -1603,11 +1609,13 @@ async fn worker_initial_files_after_automatic_worker_update(
 ) {
     let file1_key = deps
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = deps
         .add_initial_component_file(
+            &AccountId::placeholder(),
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;

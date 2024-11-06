@@ -58,13 +58,19 @@ pub struct Services {
     >,
     pub deployment_service:
         Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
-    pub http_definition_lookup_service:
-        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
+    pub http_definition_lookup_service: Arc<
+        dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<DefaultNamespace>>
+            + Sync
+            + Send,
+    >,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub api_definition_validator_service: Arc<
-        dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
+        dyn ApiDefinitionValidatorService<HttpApiDefinition<DefaultNamespace>, RouteValidationError>
+            + Sync
+            + Send,
     >,
-    pub fileserver_binding_handler: Arc<dyn FileServerBindingHandler + Sync + Send>,
+    pub fileserver_binding_handler:
+        Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send>,
 }
 
 impl Services {
@@ -174,12 +180,13 @@ impl Services {
         let initial_component_files_service: Arc<InitialComponentFilesService> =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
-        let fileserver_binding_handler: Arc<dyn FileServerBindingHandler + Sync + Send> =
-            Arc::new(DefaultFileServerBindingHandler::new(
-                component_service.clone(),
-                initial_component_files_service.clone(),
-                worker_service.clone(),
-            ));
+        let fileserver_binding_handler: Arc<
+            dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send,
+        > = Arc::new(DefaultFileServerBindingHandler::new(
+            component_service.clone(),
+            initial_component_files_service.clone(),
+            worker_service.clone(),
+        ));
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 

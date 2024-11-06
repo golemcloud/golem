@@ -57,17 +57,20 @@ pub mod router {
     };
 
     #[derive(Debug, Clone)]
-    pub struct RouteEntry {
+    pub struct RouteEntry<Namespace> {
         // size is the index of all path patterns.
         pub path_params: Vec<(VarInfo, usize)>,
         pub query_params: Vec<QueryInfo>,
+        pub namespace: Namespace,
         pub binding: CompiledGolemWorkerBinding,
     }
 
-    pub fn build(routes: Vec<CompiledRoute>) -> Router<RouteEntry> {
+    pub fn build<Namespace>(
+        routes: Vec<(Namespace, CompiledRoute)>,
+    ) -> Router<RouteEntry<Namespace>> {
         let mut router = Router::new();
 
-        for route in routes {
+        for (namespace, route) in routes {
             let method = route.method.into();
             let path = route.path;
             let binding = route.binding;
@@ -85,6 +88,7 @@ pub mod router {
             let entry = RouteEntry {
                 path_params,
                 query_params: path.query_params,
+                namespace,
                 binding,
             };
 
@@ -103,6 +107,7 @@ pub mod router {
 
 #[cfg(test)]
 mod tests {
+    use golem_service_base::auth::DefaultNamespace;
     use test_r::test;
 
     use crate::api_definition::http::{
@@ -161,9 +166,10 @@ mod tests {
     struct TestFileServerBindingHandler {}
 
     #[async_trait]
-    impl FileServerBindingHandler for TestFileServerBindingHandler {
+    impl<Namespace> FileServerBindingHandler<Namespace> for TestFileServerBindingHandler {
         async fn handle_file_server_binding(
             &self,
+            _namespace: &Namespace,
             _worker_detail: &WorkerDetail,
             _original_result: RibResult,
         ) -> FileServerBindingResult {
@@ -254,7 +260,8 @@ mod tests {
         ))
     }
 
-    fn get_test_fileserver_binding_handler() -> Arc<dyn FileServerBindingHandler + Sync + Send> {
+    fn get_test_fileserver_binding_handler<Namespace>(
+    ) -> Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send> {
         Arc::new(TestFileServerBindingHandler {})
     }
 
@@ -362,7 +369,7 @@ mod tests {
 
     async fn execute(
         api_request: &InputHttpRequest,
-        api_specification: &HttpApiDefinition,
+        api_specification: &HttpApiDefinition<DefaultNamespace>,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
         let fileserver_binding_handler = get_test_fileserver_binding_handler();
@@ -386,7 +393,7 @@ mod tests {
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
         let expression = r#"let response = golem:it/api.{get-cart-contents}("a", "b"); response"#;
 
-        let api_specification: HttpApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
             "foo/{user-id}",
             "${let id: u64 = request.path.user-id; \"shopping-cart-${id}\"}",
             expression,
@@ -417,7 +424,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
             "foo/{user-id}",
             "${let x: u64 = request.path.user-id; \"shopping-cart-${x}\"}",
             expression,
@@ -453,7 +460,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
             "foo/{user-id}",
             "${let x: u64 = request.path.user-id; \"shopping-cart-${x}\"}",
             expression,
@@ -491,7 +498,7 @@ mod tests {
 
         let expression = r#"let response = golem:it/api.{get-cart-contents}(request.path.token-id, request.path.token-id); response"#;
 
-        let api_specification: HttpApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
             "foo/{user-id}?{token-id}",
             "${let x: u64 = request.path.user-id; \"shopping-cart-${x}\"}",
             expression,
@@ -531,7 +538,7 @@ mod tests {
         );
         let expression = r#"let response = golem:it/api.{get-cart-contents}("a", "b"); response"#;
 
-        let api_specification: HttpApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
             "foo/{user-id}",
             "${let n: u64 = 100; let age: u64 = request.body.age; let zero: u64 = 0; let one: u64 = 1; let res = if age > n then zero else one; \"shopping-cart-${res}\"}",
             expression,
@@ -570,7 +577,7 @@ mod tests {
 
         let expression = r#"let response = golem:it/api.{get-cart-contents}(request.body, request.body); response"#;
 
-        let api_specification: HttpApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
             "foo/{user-id}",
             "${let userid: u64 = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid>max then zero else one; \"shopping-cart-${res}\"}",
             expression,
@@ -615,7 +622,7 @@ mod tests {
            response
         "#;
 
-        let api_specification: HttpApiDefinition =
+        let api_specification: HttpApiDefinition<DefaultNamespace> =
             get_api_spec("foo/{user-id}", "\"shopping-cart\"", expression);
 
         let test_response = execute(&api_request, &api_specification).await;
@@ -667,7 +674,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition =
+        let api_specification: HttpApiDefinition<DefaultNamespace> =
             get_api_spec("foo/{user-id}", "\"shopping-cart\"", expression);
 
         let test_response = execute(&api_request, &api_specification).await;
@@ -719,7 +726,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition =
+        let api_specification: HttpApiDefinition<DefaultNamespace> =
             get_api_spec("foo/{user-id}", "\"shopping-cart\"", expression);
 
         let test_response = execute(&api_request, &api_specification).await;
@@ -772,7 +779,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
             "foo/{user-id}",
             "${let userid: str = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid == \"bar\" then one else zero; \"shopping-cart-${res}\"}",
             expression,
@@ -826,7 +833,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition = get_api_spec(
+        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
             "foo/{user-id}",
             "${let userid: u64 = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid>max then zero else one; \"shopping-cart-${res}\"}",
             expression,
@@ -864,7 +871,7 @@ mod tests {
             response
             "#;
 
-            let api_specification: HttpApiDefinition = get_api_spec(
+            let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
                 definition_path,
                 "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
                 expression,
@@ -905,7 +912,7 @@ mod tests {
             response
             "#;
 
-            let api_specification: HttpApiDefinition = get_api_spec(
+            let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
                 "getcartcontent/{cart-id}",
                 "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
                 expression,
@@ -958,7 +965,7 @@ mod tests {
         path_pattern: &str,
         worker_name: &str,
         rib_expression: &str,
-    ) -> HttpApiDefinition {
+    ) -> HttpApiDefinition<DefaultNamespace> {
         let yaml_string = format!(
             r#"
           id: users-api
@@ -979,7 +986,7 @@ mod tests {
             path_pattern, worker_name, rib_expression
         );
 
-        let http_api_definition: HttpApiDefinition =
+        let http_api_definition: HttpApiDefinition<DefaultNamespace> =
             serde_yaml::from_str(yaml_string.as_str()).unwrap();
         http_api_definition
     }

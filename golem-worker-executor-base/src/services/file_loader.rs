@@ -14,7 +14,7 @@
 
 use anyhow::anyhow;
 use async_lock::Mutex;
-use golem_common::model::InitialComponentFileKey;
+use golem_common::model::{AccountId, InitialComponentFileKey};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Weak;
@@ -38,6 +38,8 @@ pub struct FileUseToken {
 pub struct FileLoader {
     initial_component_files_service: Arc<InitialComponentFilesService>,
     cache_dir: TempDir,
+    // Note: The cache is shared between accounts. One account no accessing data from another account
+    // is implicitly done by the key being a hash of the content.
     cache: Cache,
 }
 
@@ -60,27 +62,40 @@ impl FileLoader {
     /// The file will only be valid until the token is dropped.
     pub async fn get_read_only_to(
         &self,
+        account_id: &AccountId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
     ) -> Result<FileUseToken, GolemError> {
-        self.get_read_only_to_impl(key, target).await.map_err(|e| {
-            GolemError::initial_file_download_failed(target.display().to_string(), e.to_string())
-        })
+        self.get_read_only_to_impl(account_id, key, target)
+            .await
+            .map_err(|e| {
+                GolemError::initial_file_download_failed(
+                    target.display().to_string(),
+                    e.to_string(),
+                )
+            })
     }
 
     /// Read-write files are copied to target.
     pub async fn get_read_write_to(
         &self,
+        account_id: &AccountId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
     ) -> Result<(), GolemError> {
-        self.get_read_write_to_impl(key, target).await.map_err(|e| {
-            GolemError::initial_file_download_failed(target.display().to_string(), e.to_string())
-        })
+        self.get_read_write_to_impl(account_id, key, target)
+            .await
+            .map_err(|e| {
+                GolemError::initial_file_download_failed(
+                    target.display().to_string(),
+                    e.to_string(),
+                )
+            })
     }
 
     async fn get_read_only_to_impl(
         &self,
+        account_id: &AccountId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
     ) -> Result<FileUseToken, anyhow::Error> {
@@ -88,7 +103,7 @@ impl FileLoader {
             tokio::fs::create_dir_all(parent).await?;
         };
 
-        let (token, cache_entry_path) = self.get_or_add_cache_entry(key).await?;
+        let (token, cache_entry_path) = self.get_or_add_cache_entry(account_id, key).await?;
 
         debug!(
             "Hardlinking {} to {}",
@@ -102,6 +117,7 @@ impl FileLoader {
 
     async fn get_read_write_to_impl(
         &self,
+        account_id: &AccountId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
     ) -> Result<(), anyhow::Error> {
@@ -137,12 +153,13 @@ impl FileLoader {
         }
 
         // alternative, download the file directly to the target
-        self.download_file_to_path(target, key).await?;
+        self.download_file_to_path(account_id, target, key).await?;
         Ok(())
     }
 
     async fn get_or_add_cache_entry(
         &self,
+        account_id: &AccountId,
         key: &InitialComponentFileKey,
     ) -> Result<(FileUseToken, PathBuf), anyhow::Error> {
         let path = self.cache_dir.path().join(key.to_string());
@@ -173,7 +190,7 @@ impl FileLoader {
             // we may need to initialize the file in case we are the first ones to access it
             if let Some(mut prelocked_entry) = maybe_prelocked_entry {
                 debug!("Adding {} to cache", key);
-                match self.download_file_to_path(&path, key).await {
+                match self.download_file_to_path(account_id, &path, key).await {
                     Ok(()) => {
                         let mut perms = tokio::fs::metadata(&path).await?.permissions();
                         perms.set_readonly(true);
@@ -204,6 +221,7 @@ impl FileLoader {
 
     async fn download_file_to_path(
         &self,
+        account_id: &AccountId,
         path: &Path,
         key: &InitialComponentFileKey,
     ) -> Result<(), anyhow::Error> {
@@ -211,7 +229,7 @@ impl FileLoader {
 
         let data = self
             .initial_component_files_service
-            .get(key)
+            .get(account_id, key)
             .await
             .map_err(|e| anyhow!(e))?
             .ok_or_else(|| anyhow!("File not found"))?;

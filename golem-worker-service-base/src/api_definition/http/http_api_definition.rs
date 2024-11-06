@@ -28,19 +28,21 @@ pub struct HttpApiDefinitionRequest {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HttpApiDefinition {
+pub struct HttpApiDefinition<Namespace> {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<Route>,
     #[serde(default)]
     pub draft: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub namespace: Namespace,
 }
 
-impl HttpApiDefinition {
+impl<Namespace> HttpApiDefinition<Namespace> {
     pub fn new(
         request: HttpApiDefinitionRequest,
         created_at: chrono::DateTime<chrono::Utc>,
+        namespace: Namespace,
     ) -> Self {
         HttpApiDefinition {
             id: request.id,
@@ -48,12 +50,13 @@ impl HttpApiDefinition {
             routes: request.routes,
             draft: request.draft,
             created_at,
+            namespace,
         }
     }
 }
 
-impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
-    fn from(value: HttpApiDefinition) -> Self {
+impl<Namespace> From<HttpApiDefinition<Namespace>> for HttpApiDefinitionRequest {
+    fn from(value: HttpApiDefinition<Namespace>) -> Self {
         HttpApiDefinitionRequest {
             id: value.id,
             version: value.version,
@@ -63,9 +66,9 @@ impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
     }
 }
 
-impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
-    fn from(compiled_http_api_definition: CompiledHttpApiDefinition) -> Self {
-        HttpApiDefinition {
+impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition<Namespace> {
+    fn from(compiled_http_api_definition: CompiledHttpApiDefinition<Namespace>) -> Self {
+        Self {
             id: compiled_http_api_definition.id,
             version: compiled_http_api_definition.version,
             routes: compiled_http_api_definition
@@ -75,6 +78,7 @@ impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
                 .collect(),
             draft: compiled_http_api_definition.draft,
             created_at: compiled_http_api_definition.created_at,
+            namespace: compiled_http_api_definition.namespace,
         }
     }
 }
@@ -85,17 +89,18 @@ impl From<CompiledHttpApiDefinition> for HttpApiDefinition {
 // and is persisted, so that custom http requests are served by looking up
 // CompiledHttpApiDefinition
 #[derive(Debug, Clone, PartialEq)]
-pub struct CompiledHttpApiDefinition {
+pub struct CompiledHttpApiDefinition<Namespace> {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<CompiledRoute>,
     pub draft: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
+    pub namespace: Namespace,
 }
 
-impl CompiledHttpApiDefinition {
+impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
     pub fn from_http_api_definition(
-        http_api_definition: &HttpApiDefinition,
+        http_api_definition: &HttpApiDefinition<Namespace>,
         metadata_dictionary: &ComponentMetadataDictionary,
     ) -> Result<Self, RouteCompilationErrors> {
         let mut compiled_routes = vec![];
@@ -111,11 +116,12 @@ impl CompiledHttpApiDefinition {
             routes: compiled_routes,
             draft: http_api_definition.draft,
             created_at: http_api_definition.created_at,
+            namespace: http_api_definition.namespace.clone(),
         })
     }
 }
 
-impl HasGolemWorkerBindings for HttpApiDefinition {
+impl<Namespace> HasGolemWorkerBindings for HttpApiDefinition<Namespace> {
     fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding> {
         self.routes
             .iter()
@@ -420,10 +426,10 @@ impl From<CompiledRoute> for Route {
 
 #[cfg(test)]
 mod tests {
+    use golem_service_base::auth::DefaultNamespace;
     use test_r::test;
 
     use super::*;
-    use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -663,53 +669,19 @@ mod tests {
     fn test_serde(path_pattern: &str, worker_id: &str, response_mapping: &str) {
         let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
 
-        let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+        let result: HttpApiDefinition<DefaultNamespace> =
+            serde_yaml::from_value(yaml.clone()).unwrap();
 
         let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
 
-        let result2: HttpApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
+        let result2: HttpApiDefinition<DefaultNamespace> =
+            serde_yaml::from_value(yaml2.clone()).unwrap();
 
         assert_eq!(
             result,
             result2,
             "Assertion failed for test case at {}",
             std::panic::Location::caller()
-        );
-    }
-
-    #[test]
-    fn test_api_spec_proto_conversion() {
-        fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
-            let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
-            let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
-
-            let proto: grpc_apidefinition::ApiDefinition = original.clone().try_into().unwrap();
-            let decoded: HttpApiDefinition = proto.try_into().unwrap();
-            assert_eq!(original, decoded);
-        }
-
-        test_encode_decode(
-            "foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_encode_decode(
-            "foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_encode_decode(
-            "foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_encode_decode(
-            "foo",
-            "let x: str = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
     }
 }
