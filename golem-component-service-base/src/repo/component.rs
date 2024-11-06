@@ -27,7 +27,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Executor, Pool, Row};
+use sqlx::{Database, Pool, Row};
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -404,14 +404,13 @@ pub struct DbComponentRepo<DB: Database, Owner: PluginOwner> {
     >,
 }
 
-impl<DB: Database, Owner: PluginOwner> DbComponentRepo<DB, Owner>
+impl<DB: Database + Sync, Owner: PluginOwner> DbComponentRepo<DB, Owner>
 where
     DbPluginInstallationRepoQueries<DB>:
         PluginInstallationRepoQueries<DB, Owner, ComponentPluginInstallationTarget>,
 {
     pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
-        let plugin_installation_queries =
-            Arc::new(DbPluginInstallationRepoQueries::<DB>::new(db_pool.clone()));
+        let plugin_installation_queries = Arc::new(DbPluginInstallationRepoQueries::<DB>::new());
         Self {
             db_pool,
             plugin_installation_queries,

@@ -332,7 +332,6 @@ impl ComponentApi {
                 &DefaultPluginOwner,
                 &component_id.0,
                 plugin.0,
-                &DefaultNamespace(),
             )
             .await
             .map_err(|e| e.into())
@@ -366,7 +365,6 @@ impl ComponentApi {
                 &installation_id.0,
                 &component_id.0,
                 update.0,
-                &DefaultNamespace(),
             )
             .await
             .map_err(|e| e.into())
@@ -398,7 +396,6 @@ impl ComponentApi {
                 &DefaultPluginOwner,
                 &installation_id.0,
                 &component_id.0,
-                &DefaultNamespace(),
             )
             .await
             .map_err(|e| e.into())

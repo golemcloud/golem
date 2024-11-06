@@ -20,10 +20,10 @@ use conditional_trait_gen::trait_gen;
 use golem_common::model::{ComponentId, PluginInstallationId};
 use poem_openapi::__private::serde_json;
 use sqlx::query_builder::Separated;
-use sqlx::{Database, Encode, Pool, QueryBuilder};
+use sqlx::{Database, Encode, QueryBuilder};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::sync::Arc;
+use std::marker::PhantomData;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -172,12 +172,18 @@ pub trait PluginInstallationRepoQueries<
 }
 
 pub struct DbPluginInstallationRepoQueries<DB: Database> {
-    db_pool: Arc<Pool<DB>>,
+    _db: PhantomData<DB>,
+}
+
+impl<DB: Database> Default for DbPluginInstallationRepoQueries<DB> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<DB: Database> DbPluginInstallationRepoQueries<DB> {
-    pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
-        Self { db_pool }
+    pub fn new() -> Self {
+        Self { _db: PhantomData }
     }
 }
 
