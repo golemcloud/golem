@@ -25,9 +25,7 @@ use golem_component_service_base::repo::component::ComponentRepo;
 use golem_component_service_base::repo::plugin::{
     DefaultPluginOwnerRow, DefaultPluginScopeRow, PluginRepo,
 };
-use golem_component_service_base::repo::plugin_installation::{
-    ComponentPluginInstallationRow, PluginInstallationRepo,
-};
+use golem_component_service_base::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_component_service_base::service::component::{
     ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
 };
@@ -59,7 +57,7 @@ fn get_component_data(name: &str) -> Vec<u8> {
 }
 
 async fn test_component_constraint_incompatible_updates(
-    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
 ) {
     let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
         Arc::new(
@@ -144,7 +142,7 @@ async fn test_component_constraint_incompatible_updates(
     assert_eq!(component_update_error, expected_error)
 }
 
-async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+async fn test_services(component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>) {
     let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
         Arc::new(
             component_object_store::FsComponentObjectStore::new(&ComponentStoreLocalConfig {
@@ -432,7 +430,9 @@ async fn test_services(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
     assert!(component1_result.is_none());
 }
 
-async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+async fn test_repo_component_id_unique(
+    component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
+) {
     let namespace1 = Uuid::new_v4().to_string();
     let namespace2 = Uuid::new_v4().to_string();
 
@@ -471,7 +471,7 @@ async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo + S
 }
 
 async fn test_repo_component_name_unique_in_namespace(
-    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
 ) {
     let namespace1 = Uuid::new_v4().to_string();
     let namespace2 = Uuid::new_v4().to_string();
@@ -531,7 +531,9 @@ async fn test_repo_component_name_unique_in_namespace(
     assert!(result3.is_ok());
 }
 
-async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+async fn test_repo_component_delete(
+    component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
+) {
     let namespace1 = Uuid::new_v4().to_string();
 
     let component_name1 = ComponentName("shopping-cart1-component-delete".to_string());
@@ -578,7 +580,9 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo + Sync
     assert!(result4.unwrap().is_empty());
 }
 
-async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo + Sync + Send>) {
+async fn test_repo_component_constraints(
+    component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
+) {
     let namespace1 = Uuid::new_v4().to_string();
 
     let component_name1 = ComponentName("shopping-cart-component-constraints".to_string());
@@ -614,7 +618,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 
     // Get constraint
     let result_constraint_get = component_repo
-        .get_constraint(&component1.versioned_component_id.component_id)
+        .get_constraint(&component1.versioned_component_id.component_id.0)
         .await
         .unwrap();
 
@@ -635,7 +639,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 
     // Get updated constraint
     let result_constraint_get_updated = component_repo
-        .get_constraint(&component1.versioned_component_id.component_id)
+        .get_constraint(&component1.versioned_component_id.component_id.0)
         .await
         .unwrap();
 
@@ -658,7 +662,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo +
 }
 
 async fn test_default_plugin_repo(
-    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
     plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
 ) -> Result<(), RepoError> {
     let owner: DefaultPluginOwnerRow = DefaultPluginOwner.into();
@@ -788,13 +792,8 @@ async fn test_default_plugin_repo(
 }
 
 async fn test_default_component_plugin_installation(
-    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+    component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
     plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
-    installations_repo: Arc<
-        dyn PluginInstallationRepo<DefaultPluginOwner, ComponentPluginInstallationTarget>
-            + Send
-            + Sync,
-    >,
 ) -> Result<(), RepoError> {
     let owner: DefaultPluginOwnerRow = DefaultPluginOwner.into();
     let component_id = ComponentId::new_v4();
@@ -837,7 +836,9 @@ async fn test_default_component_plugin_installation(
     };
     let target1_row: ComponentPluginInstallationRow = target1.clone().into();
 
-    let installations1 = installations_repo.get_all(&owner, &target1_row).await?;
+    let installations1 = component_repo
+        .get_installed_plugins(&owner, &component_id.0, 0)
+        .await?;
 
     let installation1 = PluginInstallation {
         id: PluginInstallationId::new_v4(),
@@ -851,7 +852,7 @@ async fn test_default_component_plugin_installation(
         .try_into(owner.clone(), target1_row.clone())
         .unwrap();
 
-    installations_repo.create(&installation1_row).await?;
+    component_repo.install_plugin(&installation1_row).await?;
 
     let installation2 = PluginInstallation {
         id: PluginInstallationId::new_v4(),
@@ -865,31 +866,53 @@ async fn test_default_component_plugin_installation(
         .try_into(owner.clone(), target1_row.clone())
         .unwrap();
 
-    installations_repo.create(&installation2_row).await?;
+    component_repo.install_plugin(&installation2_row).await?;
 
+    let installations2 = component_repo
+        .get_installed_plugins(&owner, &component_id.0, 2)
+        .await?;
+
+    println!("{:?}", installations2);
+
+    let latest_installation2_id = installations2
+        .iter()
+        .find(|installation| installation.priority == 800)
+        .unwrap()
+        .installation_id;
     let new_params: HashMap<String, String> =
         HashMap::from_iter(vec![("param2".to_string(), "value2".to_string())]);
-    installations_repo
-        .update(
+    component_repo
+        .update_plugin_installation(
             &owner,
-            &target1_row,
-            &installation2.id.0,
+            &component_id.0,
+            &latest_installation2_id,
             600,
             serde_json::to_vec(&new_params).unwrap(),
         )
         .await?;
 
-    let installations2 = installations_repo.get_all(&owner, &target1_row).await?;
-
-    installations_repo
-        .delete(&owner, &target1_row, &installation1.id.0)
+    let installations3 = component_repo
+        .get_installed_plugins(&owner, &component_id.0, 3)
         .await?;
 
-    let installations3 = installations_repo.get_all(&owner, &target1_row).await?;
+    let latest_installation1_id = installations3
+        .iter()
+        .find(|installation| installation.priority == 1000)
+        .unwrap()
+        .installation_id;
+    component_repo
+        .uninstall_plugin(&owner, &component_id.0, &latest_installation1_id)
+        .await?;
+
+    let installations4 = component_repo
+        .get_installed_plugins(&owner, &component_id.0, 4)
+        .await?;
 
     assert_eq!(installations1.len(), 0);
     assert_eq!(installations2.len(), 2);
-    assert_eq!(installations3.len(), 1);
+    assert_eq!(installations3.len(), 2);
+    assert_eq!(installations4.len(), 1);
+    assert_eq!(installations4[0].priority, 600);
 
     Ok(())
 }

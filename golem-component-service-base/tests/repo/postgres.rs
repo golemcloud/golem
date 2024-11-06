@@ -30,14 +30,11 @@ mod tests {
     use crate::Tracing;
 
     use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
-    use golem_component_service_base::model::ComponentPluginInstallationTarget;
+
     use golem_component_service_base::repo::component::{
         ComponentRepo, DbComponentRepo, LoggedComponentRepo,
     };
     use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
-    use golem_component_service_base::repo::plugin_installation::{
-        DbPluginInstallationRepoQueries, LoggedPluginInstallationRepo, PluginInstallationRepo,
-    };
 
     use golem_service_base::repo::RepoError;
 
@@ -52,7 +49,9 @@ mod tests {
     }
 
     #[test_dep]
-    fn postgres_component_repo(db: &PostgresDb) -> Arc<dyn ComponentRepo + Sync + Send> {
+    fn postgres_component_repo(
+        db: &PostgresDb,
+    ) -> Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send> {
         Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
             db.pool.clone(),
         )))
@@ -65,75 +64,69 @@ mod tests {
         Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db.pool.clone())))
     }
 
-    #[test_dep]
-    fn postgres_component_plugin_installations_repo(
-        db: &PostgresDb,
-    ) -> Arc<
-        dyn PluginInstallationRepo<DefaultPluginOwner, ComponentPluginInstallationTarget>
-            + Send
-            + Sync,
-    > {
-        Arc::new(LoggedPluginInstallationRepo::new(
-            DbPluginInstallationRepoQueries::new(db.pool.clone()),
-        ))
-    }
-
     #[test]
-    async fn repo_component_id_unique(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+    #[tracing::instrument]
+    async fn repo_component_id_unique(
+        component_repo: &Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
+    ) {
         crate::repo::test_repo_component_id_unique(component_repo.clone()).await
     }
 
     #[test]
+    #[tracing::instrument]
     async fn repo_component_name_unique_in_namespace(
-        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
+        component_repo: &Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
     ) {
         crate::repo::test_repo_component_name_unique_in_namespace(component_repo.clone()).await
     }
 
     #[test]
-    async fn repo_component_delete(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+    async fn repo_component_delete(
+        component_repo: &Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
+    ) {
         crate::repo::test_repo_component_delete(component_repo.clone()).await
     }
 
     #[test]
-    async fn repo_component_constraints(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+    #[tracing::instrument]
+    async fn repo_component_constraints(
+        component_repo: &Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
+    ) {
         crate::repo::test_repo_component_constraints(component_repo.clone()).await
     }
 
     #[test]
+    #[tracing::instrument]
     async fn component_constraint_incompatible_updates(
-        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
+        component_repo: &Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
     ) {
         crate::repo::test_component_constraint_incompatible_updates(component_repo.clone()).await
     }
 
     #[test]
-    async fn services(component_repo: &Arc<dyn ComponentRepo + Sync + Send>) {
+    #[tracing::instrument]
+    async fn services(component_repo: &Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>) {
         crate::repo::test_services(component_repo.clone()).await
     }
 
     #[test]
+    #[tracing::instrument]
     async fn default_plugin_repo(
-        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
+        component_repo: &Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
         plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
     ) -> Result<(), RepoError> {
         crate::repo::test_default_plugin_repo(component_repo.clone(), plugin_repo.clone()).await
     }
 
     #[test]
+    #[tracing::instrument]
     async fn default_component_plugin_installation(
-        component_repo: &Arc<dyn ComponentRepo + Sync + Send>,
+        component_repo: &Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
         plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
-        plugin_installation_repo: &Arc<
-            dyn PluginInstallationRepo<DefaultPluginOwner, ComponentPluginInstallationTarget>
-                + Send
-                + Sync,
-        >,
     ) -> Result<(), RepoError> {
         crate::repo::test_default_component_plugin_installation(
             component_repo.clone(),
             plugin_repo.clone(),
-            plugin_installation_repo.clone(),
         )
         .await
     }

@@ -13,19 +13,16 @@
 // limitations under the License.
 
 use crate::model::{
-    ComponentPluginInstallationTarget, PluginDefinition, PluginInstallation,
-    PluginInstallationCreation, PluginInstallationUpdate, PluginOwner, PluginScope,
+    PluginDefinition, PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+    PluginOwner, PluginScope,
 };
 use crate::repo::plugin::{PluginRecord, PluginRepo};
-use crate::repo::plugin_installation::{
-    ComponentPluginInstallationRow, PluginInstallationRecord, PluginInstallationRepoQueries,
-};
+use crate::repo::plugin_installation::PluginInstallationRepoQueries;
 use crate::service::component::{ComponentError, ComponentService};
 use async_trait::async_trait;
 use golem_common::model::{ComponentId, ComponentVersion, PluginInstallationId};
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
-use poem_openapi::__private::serde_json;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]

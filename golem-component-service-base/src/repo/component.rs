@@ -20,14 +20,15 @@ use crate::repo::plugin_installation::{
     PluginInstallationRepoQueries,
 };
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool, Row};
-use std::fmt::Display;
+use sqlx::{Database, Executor, Pool, Row};
+use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::result::Result;
@@ -43,7 +44,7 @@ pub struct ComponentRecord {
     pub size: i32,
     pub version: i64,
     pub metadata: Vec<u8>,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: DateTime<chrono::Utc>,
     pub component_type: i32,
 }
 
@@ -144,7 +145,7 @@ where
 }
 
 #[async_trait]
-pub trait ComponentRepo<Owner: PluginOwner> {
+pub trait ComponentRepo<Owner: PluginOwner>: Debug {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
 
     async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError>;
@@ -195,11 +196,33 @@ pub trait ComponentRepo<Owner: PluginOwner> {
         &self,
         record: &PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>,
     ) -> Result<(), RepoError>;
+
+    async fn uninstall_plugin(
+        &self,
+        owner: &Owner::Row,
+        component_id: &Uuid,
+        plugin_installation_id: &Uuid,
+    ) -> Result<(), RepoError>;
+
+    async fn update_plugin_installation(
+        &self,
+        owner: &Owner::Row,
+        component_id: &Uuid,
+        plugin_installation_id: &Uuid,
+        new_priority: i16,
+        new_parameters: Vec<u8>,
+    ) -> Result<(), RepoError>;
 }
 
 pub struct LoggedComponentRepo<Owner: PluginOwner, Repo: ComponentRepo<Owner>> {
     repo: Repo,
     _owner: PhantomData<Owner>,
+}
+
+impl<Owner: PluginOwner, Repo: ComponentRepo<Owner>> Debug for LoggedComponentRepo<Owner, Repo> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.repo.fmt(f)
+    }
 }
 
 impl<Owner: PluginOwner, Repo: ComponentRepo<Owner>> LoggedComponentRepo<Owner, Repo> {
@@ -336,6 +359,40 @@ impl<Owner: PluginOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentRepo
         let result = self.repo.install_plugin(record).await;
         Self::logged_with_id("install_plugin", &record.target.component_id, result)
     }
+
+    async fn uninstall_plugin(
+        &self,
+        owner: &Owner::Row,
+        component_id: &Uuid,
+        plugin_installation_id: &Uuid,
+    ) -> Result<(), RepoError> {
+        let result = self
+            .repo
+            .uninstall_plugin(owner, component_id, plugin_installation_id)
+            .await;
+        Self::logged_with_id("uninstall_plugin", component_id, result)
+    }
+
+    async fn update_plugin_installation(
+        &self,
+        owner: &Owner::Row,
+        component_id: &Uuid,
+        plugin_installation_id: &Uuid,
+        new_priority: i16,
+        new_parameters: Vec<u8>,
+    ) -> Result<(), RepoError> {
+        let result = self
+            .repo
+            .update_plugin_installation(
+                owner,
+                component_id,
+                plugin_installation_id,
+                new_priority,
+                new_parameters,
+            )
+            .await;
+        Self::logged_with_id("update_plugin_installation", component_id, result)
+    }
 }
 
 pub struct DbComponentRepo<DB: Database, Owner: PluginOwner> {
@@ -362,10 +419,20 @@ where
     }
 }
 
+impl<Owner: PluginOwner, DB: Database> Debug for DbComponentRepo<DB, Owner> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbComponentRepo")
+            .field("db_pool", &self.db_pool)
+            .finish()
+    }
+}
+
 #[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
 impl<Owner: PluginOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres, Owner> {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
+        // TODO: transactionally increase version and copy old plugin installations if any
+
         let mut transaction = self.db_pool.begin().await?;
 
         let result = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")
@@ -716,6 +783,8 @@ impl<Owner: PluginOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres
     }
 
     async fn delete(&self, namespace: &str, component_id: &Uuid) -> Result<(), RepoError> {
+        // TODO: delete plugin installations
+
         let mut transaction = self.db_pool.begin().await?;
         sqlx::query(
             r#"
@@ -852,7 +921,7 @@ impl<Owner: PluginOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres
     ) -> Result<Vec<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>, RepoError>
     {
         let target = ComponentPluginInstallationRow {
-            component_id: component_id.clone(),
+            component_id: *component_id,
             component_version: version as i64,
         };
         let mut query = self.plugin_installation_queries.get_all(owner, &target);
@@ -868,31 +937,31 @@ impl<Owner: PluginOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres
         record: &PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>,
     ) -> Result<(), RepoError> {
         let component_id = record.target.component_id;
-        let version = record.target.component_version;
-        let installation_id = record.installation_id;
 
         let mut transaction = self.db_pool.begin().await?;
 
-        let old_version: i64 = sqlx::query(
+        let new_version = sqlx::query(
             r#"
-              WITH SELECT TOP 1 component_id, version, size, metadata, created_at, component_type
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
+                   LIMIT 1)
               INSERT INTO component_versions
-                (component_id, version, size, metadata, created_at, component_type)
-              VALUES
-                ($1, version + 1, $3, $4, $5, $6)
-              RETURNING version
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type FROM prev
+              RETURNING *
               "#,
         )
-        .bind(component_id)
-        .fetch_one(&mut *transaction)
-        .await?
-        .get("version");
+            .bind(component_id)
+            .bind(Utc::now())
+            .fetch_one(&mut *transaction)
+            .await?
+            .get("version");
+
+        debug!("install_plugin cloned old component version into version {new_version}");
 
         let old_target = ComponentPluginInstallationRow {
-            component_id: component_id.clone(),
-            component_version: old_version,
+            component_id,
+            component_version: new_version - 1,
         };
         let mut query = self
             .plugin_installation_queries
@@ -904,20 +973,191 @@ impl<Owner: PluginOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres
             .await?;
 
         let new_target = ComponentPluginInstallationRow {
-            component_id: component_id.clone(),
-            component_version: old_version + 1,
+            component_id,
+            component_version: new_version,
         };
 
         let mut new_installations = Vec::new();
         for installation in existing_installations {
+            let old_id = installation.installation_id;
+            let new_id = Uuid::new_v4();
             let new_installation = PluginInstallationRecord {
-                installation_id: Uuid::new_v4(),
+                installation_id: new_id,
                 target: new_target.clone(),
                 ..installation
             };
             new_installations.push(new_installation);
+
+            debug!("install_plugin copying installation {old_id} as {new_id}");
         }
-        new_installations.push(record.clone());
+        debug!(
+            "install_plugin adding new installation as {}",
+            record.installation_id
+        );
+        new_installations.push(PluginInstallationRecord {
+            target: new_target.clone(),
+            ..record.clone()
+        });
+
+        for installation in new_installations {
+            let mut query = self.plugin_installation_queries.create(&installation);
+
+            query.build().execute(&mut *transaction).await?;
+        }
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn uninstall_plugin(
+        &self,
+        owner: &Owner::Row,
+        component_id: &Uuid,
+        plugin_installation_id: &Uuid,
+    ) -> Result<(), RepoError> {
+        let mut transaction = self.db_pool.begin().await?;
+
+        let new_version = sqlx::query(
+            r#"
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
+                   FROM component_versions WHERE component_id = $1
+                   ORDER BY version DESC
+                   LIMIT 1)
+              INSERT INTO component_versions
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type FROM prev
+              RETURNING *
+              "#,
+        )
+            .bind(component_id)
+            .bind(Utc::now())
+            .fetch_one(&mut *transaction)
+            .await?
+            .get("version");
+
+        debug!("uninstall_plugin cloned old component version into version {new_version}");
+
+        let old_target = ComponentPluginInstallationRow {
+            component_id: *component_id,
+            component_version: new_version - 1,
+        };
+        let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
+
+        let existing_installations = query
+            .build_query_as::<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>()
+            .fetch_all(&mut *transaction)
+            .await?;
+
+        let new_target = ComponentPluginInstallationRow {
+            component_id: *component_id,
+            component_version: new_version,
+        };
+
+        let mut new_installations = Vec::new();
+        for installation in existing_installations {
+            let old_id = installation.installation_id;
+
+            if &old_id != plugin_installation_id {
+                let new_id = Uuid::new_v4();
+                let new_installation = PluginInstallationRecord {
+                    installation_id: new_id,
+                    target: new_target.clone(),
+                    ..installation
+                };
+                new_installations.push(new_installation);
+
+                debug!("uninstall_plugin copying installation {old_id} as {new_id}");
+            }
+        }
+
+        for installation in new_installations {
+            let mut query = self.plugin_installation_queries.create(&installation);
+
+            query.build().execute(&mut *transaction).await?;
+        }
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn update_plugin_installation(
+        &self,
+        owner: &Owner::Row,
+        component_id: &Uuid,
+        plugin_installation_id: &Uuid,
+        new_priority: i16,
+        new_parameters: Vec<u8>,
+    ) -> Result<(), RepoError> {
+        let mut transaction = self.db_pool.begin().await?;
+
+        let new_version = sqlx::query(
+            r#"
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
+                   FROM component_versions WHERE component_id = $1
+                   ORDER BY version DESC
+                   LIMIT 1)
+              INSERT INTO component_versions
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type FROM prev
+              RETURNING *
+              "#,
+        )
+            .bind(component_id)
+            .bind(Utc::now())
+            .fetch_one(&mut *transaction)
+            .await?
+            .get("version");
+
+        debug!(
+            "update_plugin_installation cloned old component version into version {new_version}"
+        );
+
+        let old_target = ComponentPluginInstallationRow {
+            component_id: *component_id,
+            component_version: new_version - 1,
+        };
+        let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
+
+        let existing_installations = query
+            .build_query_as::<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>()
+            .fetch_all(&mut *transaction)
+            .await?;
+
+        let new_target = ComponentPluginInstallationRow {
+            component_id: *component_id,
+            component_version: new_version,
+        };
+
+        let mut new_installations = Vec::new();
+        for installation in existing_installations {
+            let old_id = installation.installation_id;
+
+            if &old_id != plugin_installation_id {
+                let new_id = Uuid::new_v4();
+                let new_installation = PluginInstallationRecord {
+                    installation_id: new_id,
+                    target: new_target.clone(),
+                    ..installation
+                };
+                new_installations.push(new_installation);
+
+                debug!("update_plugin_installation copying installation {old_id} as {new_id}");
+            } else {
+                let new_id = Uuid::new_v4();
+                let new_installation = PluginInstallationRecord {
+                    installation_id: new_id,
+                    target: new_target.clone(),
+                    priority: new_priority,
+                    parameters: new_parameters.clone(),
+                    ..installation
+                };
+                new_installations.push(new_installation);
+
+                debug!(
+                    "update_plugin_installation copying modified installation {old_id} as {new_id}"
+                );
+            }
+        }
 
         for installation in new_installations {
             let mut query = self.plugin_installation_queries.create(&installation);

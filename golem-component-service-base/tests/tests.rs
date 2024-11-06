@@ -24,7 +24,9 @@ pub struct Tracing;
 
 impl Tracing {
     pub fn init() -> Self {
-        init_tracing_with_default_debug_env_filter(&TracingConfig::test("integration-tests"));
+        init_tracing_with_default_debug_env_filter(&TracingConfig::test_pretty_without_time(
+            "component-service-base-tests",
+        ));
         Self
     }
 }

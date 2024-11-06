@@ -19,9 +19,7 @@ use golem_api_grpc::proto::golem::component::v1::{
     ListPluginsResponse,
 };
 use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
-use golem_component_service_base::service::component;
 use golem_component_service_base::service::plugin::PluginService;
-use golem_service_base::auth::DefaultNamespace;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 

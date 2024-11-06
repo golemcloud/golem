@@ -183,6 +183,7 @@ pub trait PluginOwner:
         + From<Self>
         + TryInto<Self, Error = String>
         + Clone
+        + Display
         + Send
         + Sync
         + Unpin
@@ -267,6 +268,7 @@ pub trait PluginInstallationTarget:
         + From<Self>
         + TryInto<Self, Error = String>
         + Clone
+        + Display
         + Send
         + Sync
         + Unpin

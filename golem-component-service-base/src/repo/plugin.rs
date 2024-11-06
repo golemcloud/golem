@@ -25,7 +25,7 @@ use golem_common::model::Empty;
 use golem_service_base::repo::RepoError;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, Pool, QueryBuilder, Type};
-use std::fmt::Display;
+use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -214,6 +214,12 @@ where
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct DefaultPluginOwnerRow {}
 
+impl Display for DefaultPluginOwnerRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "default")
+    }
+}
+
 impl From<DefaultPluginOwner> for DefaultPluginOwnerRow {
     fn from(_: DefaultPluginOwner) -> Self {
         Self {}
@@ -239,7 +245,7 @@ impl<DB: Database> RowMeta<DB> for DefaultPluginOwnerRow {
 }
 
 #[async_trait]
-pub trait PluginRepo<Owner: PluginOwner, Scope: PluginScope> {
+pub trait PluginRepo<Owner: PluginOwner, Scope: PluginScope>: Debug {
     async fn get_all(
         &self,
         owner: &Owner::Row,
@@ -319,6 +325,14 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>>
     }
 }
 
+impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>> Debug
+    for LoggedPluginRepo<Owner, Scope, Repo>
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.repo.fmt(f)
+    }
+}
+
 #[async_trait]
 impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sync>
     PluginRepo<Owner, Scope> for LoggedPluginRepo<Owner, Scope, Repo>
@@ -377,6 +391,14 @@ pub struct DbPluginRepo<DB: Database> {
 impl<DB: Database> DbPluginRepo<DB> {
     pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
         Self { db_pool }
+    }
+}
+
+impl<DB: Database> Debug for DbPluginRepo<DB> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DbPluginRepo")
+            .field("db_pool", &self.db_pool)
+            .finish()
     }
 }
 

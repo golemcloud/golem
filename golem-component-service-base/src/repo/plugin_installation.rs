@@ -16,19 +16,15 @@ use crate::model::{
     ComponentPluginInstallationTarget, PluginInstallation, PluginInstallationTarget, PluginOwner,
 };
 use crate::repo::RowMeta;
-use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::{ComponentId, PluginInstallationId};
-use golem_service_base::repo::RepoError;
 use poem_openapi::__private::serde_json;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, Pool, QueryBuilder};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
-use std::marker::PhantomData;
-use std::ops::Deref;
 use std::sync::Arc;
-use tracing::{debug, error};
+use tracing::debug;
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -90,6 +86,12 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
 pub struct ComponentPluginInstallationRow {
     pub component_id: Uuid,
     pub component_version: i64,
+}
+
+impl Display for ComponentPluginInstallationRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}@{}", self.component_id, self.component_version)
+    }
 }
 
 impl<DB: Database> RowMeta<DB> for ComponentPluginInstallationRow
@@ -209,7 +211,12 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
         query.push(" AND ");
         owner.add_where_clause(&mut query);
 
-        debug!("Generated query for get_all: {}", query.sql());
+        debug!(
+            plugin_owner = display(owner),
+            plugin_target = display(target),
+            sql = query.sql(),
+            "Generated query for get_all",
+        );
 
         query
     }
@@ -245,7 +252,13 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
         record.owner.push_bind(&mut value_list);
         query.push(")");
 
-        debug!("Generated query for create: {}", query.sql());
+        debug!(
+            plugin_owner = display(&record.owner),
+            plugin_target = display(&record.target),
+            installation_id = display(&record.installation_id),
+            sql = query.sql(),
+            "Generated query for create",
+        );
 
         query
     }
@@ -271,9 +284,13 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
         query.push(" AND ");
         target.add_where_clause(&mut query);
 
-        debug!("Generated query for update: {}", query.sql());
-
-        // query.build().execute(self.db_pool.deref()).await?;
+        debug!(
+            plugin_owner = display(owner),
+            plugin_target = display(target),
+            installation_id = display(id),
+            sql = query.sql(),
+            "Generated query for update"
+        );
 
         query
     }
@@ -293,9 +310,13 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
         query.push(" AND ");
         target.add_where_clause(&mut query);
 
-        debug!("Generated query for delete: {}", query.sql());
-
-        // query.build().execute(self.db_pool.deref()).await?;
+        debug!(
+            plugin_owner = display(owner),
+            plugin_target = display(target),
+            installation_id = display(id),
+            sql = query.sql(),
+            "Generated query for delete"
+        );
 
         query
     }
