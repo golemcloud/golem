@@ -210,15 +210,19 @@ async fn initial_file_read_write(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
+    let account_id = AccountId {
+        value: "test-account".to_string(),
+    };
+
     let file1_key = executor
         .add_initial_component_file(
-            &AccountId::placeholder(),
+            &account_id,
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
-            &AccountId::placeholder(),
+            &account_id,
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;
@@ -278,15 +282,19 @@ async fn initial_file_listing_through_api(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
+    let account_id = AccountId {
+        value: "test-account".to_string(),
+    };
+
     let file1_key = executor
         .add_initial_component_file(
-            &AccountId::placeholder(),
+            &account_id,
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
-            &AccountId::placeholder(),
+            &account_id,
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;
@@ -374,15 +382,19 @@ async fn initial_file_reading_through_api(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
+    let account_id = AccountId {
+        value: "test-account".to_string(),
+    };
+
     let file1_key = executor
         .add_initial_component_file(
-            &AccountId::placeholder(),
+            &account_id,
             PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
         )
         .await;
     let file2_key = executor
         .add_initial_component_file(
-            &AccountId::placeholder(),
+            &account_id,
             PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
         )
         .await;

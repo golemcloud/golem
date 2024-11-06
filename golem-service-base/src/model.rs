@@ -17,6 +17,7 @@ use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::AccountId;
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
     ComponentType, ComponentVersion, InitialComponentFile, PromiseId, ScanCursor, ShardId,
@@ -1269,9 +1270,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     fn from(value: WorkerMetadata) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            account_id: Some(golem_api_grpc::proto::golem::common::AccountId {
-                name: "-1".to_string(),
-            }),
+            account_id: Some(AccountId::placeholder().into()),
             args: value.args,
             env: value.env,
             status: value.status.into(),
