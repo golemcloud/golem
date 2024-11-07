@@ -3,14 +3,12 @@ use serde::{Deserialize, Serialize};
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 pub(crate) use worker_binding_compiled::*;
-use crate::gateway_binding::plugin::Plugin;
 pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
 pub(crate) use crate::gateway_execution::worker_binding_resolver::*;
+use crate::gateway_plugins::Plugin;
 
 mod worker_binding_compiled;
 mod worker_binding;
-mod http;
-mod plugin;
 
 // A gateway binding is more or less the binding to the backend
 // This is similar to gateway-integration in other API gateways.
@@ -24,7 +22,6 @@ pub enum GatewayBinding {
     Default(WorkerBinding),
     Plugin(Plugin)
 }
-
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]

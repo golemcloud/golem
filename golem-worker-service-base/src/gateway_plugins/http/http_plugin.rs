@@ -1,16 +1,15 @@
 use std::collections::HashMap;
 use rib::{Expr, GetLiteralValue, RibInput};
-use crate::getter::{Getter};
 
 pub enum HttpPlugin {
     Cors(Cors)
 }
 
-pub struct CorsPreflight {
+pub struct CorsPreflightResponse {
     pub pre_flight_response: Expr
 }
 
-impl CorsPreflight {
+impl CorsPreflightResponse {
     async fn get_cors_plugin(&self) -> Result<HttpPlugin, String> {
         // Compile and evaluate the expression
         let expr = rib::compile(&self.pre_flight_response, &vec![])

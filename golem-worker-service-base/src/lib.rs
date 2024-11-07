@@ -17,6 +17,7 @@ mod gateway_rib_compiler;
 pub mod gateway_rib_interpreter;
 pub mod gateway_request;
 pub mod gateway_api_deployment;
+mod gateway_plugins;
 
 #[cfg(test)]
 test_r::enable!();
