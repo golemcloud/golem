@@ -43,6 +43,7 @@ use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentCo
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::grpc::proto_component_id_string;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::plugin::DefaultPluginOwner;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
@@ -69,7 +70,7 @@ fn internal_error(error: &str) -> ComponentError {
 }
 
 pub struct ComponentGrpcApi {
-    pub component_service: Arc<dyn component::ComponentService<DefaultNamespace> + Sync + Send>,
+    pub component_service: Arc<dyn component::ComponentService<DefaultPluginOwner> + Sync + Send>,
 }
 
 impl ComponentGrpcApi {
@@ -201,7 +202,7 @@ impl ComponentGrpcApi {
         };
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultNamespace::default())
+            .update(&id, data, component_type, &DefaultPluginOwner, &DefaultNamespace::default())
             .await?;
         Ok(result.into())
     }

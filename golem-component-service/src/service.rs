@@ -26,7 +26,6 @@ use golem_component_service_base::service::component_compilation::{
     ComponentCompilationServiceDisabled,
 };
 use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
-use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::config::ComponentStoreConfig;
 use golem_service_base::db;
 use golem_service_base::service::component_object_store;
@@ -37,7 +36,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Services {
-    pub component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<DefaultPluginOwner> + Sync + Send>,
     pub compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
     pub plugin_service:
         Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
@@ -107,7 +106,7 @@ impl Services {
                 }
             };
 
-        let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
+        let component_service: Arc<dyn ComponentService<DefaultPluginOwner> + Sync + Send> =
             Arc::new(ComponentServiceDefault::new(
                 component_repo.clone(),
                 object_store.clone(),

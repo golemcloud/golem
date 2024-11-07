@@ -36,6 +36,9 @@ use std::sync::Arc;
 use tracing::{debug, error};
 use uuid::Uuid;
 
+// TODO: need 'available' flag to handle race condition when uploading
+// TODO: need to store uploaded WASM paths so we don't need to reupload when creating new immutable versions
+
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord {
     pub namespace: String,
@@ -44,7 +47,7 @@ pub struct ComponentRecord {
     pub size: i32,
     pub version: i64,
     pub metadata: Vec<u8>,
-    pub created_at: DateTime<chrono::Utc>,
+    pub created_at: DateTime<Utc>,
     pub component_type: i32,
 }
 
@@ -147,6 +150,20 @@ where
 #[async_trait]
 pub trait ComponentRepo<Owner: PluginOwner>: Debug {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
+
+    /// Creates a new component version (ignores component.version) and copies the plugin
+    /// installations from the previous latest version.
+    ///
+    /// Returns the updated component.
+    async fn update(
+        &self,
+        owner: &Owner::Row,
+        namespace: &str,
+        component_id: &Uuid,
+        data: Vec<u8>,
+        metadata: Vec<u8>,
+        component_type: Option<i32>,
+    ) -> Result<ComponentRecord, RepoError>;
 
     async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError>;
 
@@ -265,6 +282,29 @@ impl<Owner: PluginOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentRepo
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
         let result = self.repo.create(component).await;
         Self::logged_with_id("create", &component.component_id, result)
+    }
+
+    async fn update(
+        &self,
+        owner: &Owner::Row,
+        namespace: &str,
+        component_id: &Uuid,
+        data: Vec<u8>,
+        metadata: Vec<u8>,
+        component_type: Option<i32>,
+    ) -> Result<ComponentRecord, RepoError> {
+        let result = self
+            .repo
+            .update(
+                owner,
+                namespace,
+                component_id,
+                data,
+                metadata,
+                component_type,
+            )
+            .await;
+        Self::logged_with_id("update", component_id, result)
     }
 
     async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
@@ -430,8 +470,6 @@ impl<Owner: PluginOwner, DB: Database> Debug for DbComponentRepo<DB, Owner> {
 #[async_trait]
 impl<Owner: PluginOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres, Owner> {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
-        // TODO: transactionally increase version and copy old plugin installations if any
-
         let mut transaction = self.db_pool.begin().await?;
 
         let result = sqlx::query("SELECT namespace, name FROM components WHERE component_id = $1")
@@ -474,9 +512,9 @@ impl<Owner: PluginOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata, created_at, component_type)
+                (component_id, version, size, metadata, created_at, component_type, available)
               VALUES
-                ($1, $2, $3, $4, $5, $6)
+                ($1, $2, $3, $4, $5, $6, TRUE)
                "#,
         )
         .bind(component.component_id)
@@ -491,6 +529,127 @@ impl<Owner: PluginOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres
         transaction.commit().await?;
 
         Ok(())
+    }
+
+    async fn update(
+        &self,
+        owner: &Owner::Row,
+        namespace: &str,
+        component_id: &Uuid,
+        data: Vec<u8>,
+        metadata: Vec<u8>,
+        component_type: Option<i32>,
+    ) -> Result<ComponentRecord, RepoError> {
+        let mut transaction = self.db_pool.begin().await?;
+
+        let result = sqlx::query("SELECT namespace FROM components WHERE component_id = $1")
+            .bind(component_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+
+        if let Some(result) = result {
+            let existing_namespace: String = result.get("namespace");
+            if existing_namespace != namespace {
+                transaction.rollback().await?;
+                Err(RepoError::Internal(
+                    "Component namespace invalid".to_string(),
+                ))
+            } else {
+                let now = Utc::now();
+                let new_version = if let Some(component_type) = component_type {
+                    sqlx::query(
+                            r#"
+                              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
+                                   FROM component_versions WHERE component_id = $1
+                                   ORDER BY version DESC
+                                   LIMIT 1)
+                              INSERT INTO component_versions
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5 FROM prev
+                              RETURNING *
+                              "#,
+                        )
+                            .bind(component_id)
+                            .bind(data.len() as i32)
+                            .bind(now)
+                            .bind(metadata)
+                            .bind(component_type)
+                            .fetch_one(&mut *transaction)
+                            .await?
+                            .get("version")
+                } else {
+                    sqlx::query(
+                            r#"
+                              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
+                                   FROM component_versions WHERE component_id = $1
+                                   ORDER BY version DESC
+                                   LIMIT 1)
+                              INSERT INTO component_versions
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type FROM prev
+                              RETURNING *
+                              "#,
+                        )
+                            .bind(component_id)
+                            .bind(data.len() as i32)
+                            .bind(now)
+                            .bind(metadata)
+                            .fetch_one(&mut *transaction)
+                            .await?
+                            .get("version")
+                };
+
+                debug!("update created new component version {new_version}");
+
+                let old_target = ComponentPluginInstallationRow {
+                    component_id: component_id.clone(),
+                    component_version: new_version - 1,
+                };
+                let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
+
+                let existing_installations = query
+                    .build_query_as::<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>()
+                    .fetch_all(&mut *transaction)
+                    .await?;
+
+                let new_target = ComponentPluginInstallationRow {
+                    component_id: component_id.clone(),
+                    component_version: new_version,
+                };
+
+                let mut new_installations = Vec::new();
+                for installation in existing_installations {
+                    let old_id = installation.installation_id;
+                    let new_id = Uuid::new_v4();
+                    let new_installation = PluginInstallationRecord {
+                        installation_id: new_id,
+                        target: new_target.clone(),
+                        ..installation
+                    };
+                    new_installations.push(new_installation);
+
+                    debug!("update copying installation {old_id} as {new_id}");
+                }
+
+                for installation in new_installations {
+                    let mut query = self.plugin_installation_queries.create(&installation);
+
+                    query.build().execute(&mut *transaction).await?;
+                }
+
+                transaction.commit().await?;
+
+                let component = self
+                    .get_by_version(&component_id, new_version as u64)
+                    .await?;
+                component.ok_or(RepoError::Internal(
+                    "Could not re-get newly created component version".to_string(),
+                ))
+            }
+        } else {
+            transaction.rollback().await?;
+            Err(RepoError::Internal(
+                "Component not found for update".to_string(),
+            ))
+        }
     }
 
     #[when(sqlx::Postgres -> get)]

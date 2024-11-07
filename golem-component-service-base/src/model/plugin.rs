@@ -162,6 +162,7 @@ impl PluginScope for DefaultPluginScope {
     }
 }
 
+// TODO: Rename to ComponentOwner
 pub trait PluginOwner:
     Debug
     + Display
@@ -190,7 +191,7 @@ pub trait PluginOwner:
         + 'static;
 
     // Corresponding Namespace type for component services
-    type Namespace: Send + Sync + 'static;
+    type Namespace: Display + TryFrom<String, Error = String> + Send + Sync + 'static;
 }
 
 impl PluginOwner for DefaultPluginOwner {

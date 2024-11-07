@@ -34,7 +34,7 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ComponentApi {
-    pub component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<DefaultPluginOwner> + Sync + Send>,
     pub plugin_service:
         Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
 }
@@ -97,6 +97,7 @@ impl ComponentApi {
                     &component_id.0,
                     data,
                     component_type.0,
+                    &DefaultPluginOwner,
                     &DefaultNamespace::default(),
                 )
                 .instrument(record.span.clone())
