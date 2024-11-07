@@ -32,12 +32,14 @@ impl RdbmsService for RdbmsServiceDefault {
 #[derive(Clone, Copy, Debug)]
 pub struct RdbmsPoolConfig {
     pub max_connections: u32,
+    pub query_batch: u32,
 }
 
 impl Default for RdbmsPoolConfig {
     fn default() -> Self {
         Self {
             max_connections: 20,
+            query_batch: 100,
         }
     }
 }
@@ -61,16 +63,16 @@ pub mod postgres {
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
     use chrono::DateTime;
-    use deadpool_postgres::Pool;
     use futures::Stream;
+    use futures_util::stream::BoxStream;
     use futures_util::StreamExt;
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::model::OwnedWorkerId;
+    use sqlx::{Column, Row, TypeInfo};
     use std::collections::HashSet;
     use std::ops::Deref;
     use std::pin::Pin;
     use std::sync::Arc;
-    use tokio_postgres::{Error, Row, RowStream};
     use tracing::{error, info};
     use uuid::Uuid;
 
@@ -99,51 +101,51 @@ pub mod postgres {
         ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
     }
 
-    #[derive(Clone, Default)]
-    pub struct PostgresNoOp {}
-
-    #[async_trait]
-    impl Postgres for PostgresNoOp {
-        async fn create(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
-            info!("create connection - address: {}", address);
-            Ok(())
-        }
-
-        async fn exists(&self, _worker_id: &OwnedWorkerId, _address: &str) -> bool {
-            false
-        }
-
-        async fn remove(&self, _worker_id: &OwnedWorkerId, _address: &str) -> Result<bool, String> {
-            Ok(false)
-        }
-
-        async fn execute(
-            &self,
-            _worker_id: &OwnedWorkerId,
-            address: &str,
-            statement: &str,
-            _params: Vec<DbValue>,
-        ) -> Result<u64, String> {
-            info!("execute - address: {}, statement: {}", address, statement);
-            Ok(0)
-        }
-
-        async fn query(
-            &self,
-            _worker_id: &OwnedWorkerId,
-            address: &str,
-            statement: &str,
-            _params: Vec<DbValue>,
-        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-            info!("query - address: {}, statement: {}", address, statement);
-            Ok(Arc::new(EmptyDbResultSet::default()))
-        }
-    }
+    // #[derive(Clone, Default)]
+    // pub struct PostgresNoOp {}
+    //
+    // #[async_trait]
+    // impl Postgres for PostgresNoOp {
+    //     async fn create(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
+    //         info!("create connection - address: {}", address);
+    //         Ok(())
+    //     }
+    //
+    //     async fn exists(&self, _worker_id: &OwnedWorkerId, _address: &str) -> bool {
+    //         false
+    //     }
+    //
+    //     async fn remove(&self, _worker_id: &OwnedWorkerId, _address: &str) -> Result<bool, String> {
+    //         Ok(false)
+    //     }
+    //
+    //     async fn execute(
+    //         &self,
+    //         _worker_id: &OwnedWorkerId,
+    //         address: &str,
+    //         statement: &str,
+    //         _params: Vec<DbValue>,
+    //     ) -> Result<u64, String> {
+    //         info!("execute - address: {}, statement: {}", address, statement);
+    //         Ok(0)
+    //     }
+    //
+    //     async fn query(
+    //         &self,
+    //         _worker_id: &OwnedWorkerId,
+    //         address: &str,
+    //         statement: &str,
+    //         _params: Vec<DbValue>,
+    //     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+    //         info!("query - address: {}, statement: {}", address, statement);
+    //         Ok(Arc::new(EmptyDbResultSet::default()))
+    //     }
+    // }
 
     #[derive(Clone)]
     pub struct PostgresDefault {
         pool_config: RdbmsPoolConfig,
-        pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool>, String>,
+        pool_cache: Cache<RdbmsPoolKey, (), Arc<sqlx::Pool<sqlx::Postgres>>, String>,
     }
 
     impl PostgresDefault {
@@ -164,13 +166,13 @@ pub mod postgres {
             &self,
             _worker_id: &OwnedWorkerId,
             address: &str,
-        ) -> Result<Arc<Pool>, String> {
+        ) -> Result<Arc<sqlx::Pool<sqlx::Postgres>>, String> {
             let key = RdbmsPoolKey::new(address.to_string());
             let pool_config = self.pool_config.clone();
 
             self.pool_cache
                 .get_or_insert_simple(&key.clone(), || {
-                    Box::pin(async move { Ok(Arc::new(create_pool(&key, &pool_config).await?)) })
+                    Box::pin(async move { Ok(Arc::new(create_pool2(&key, &pool_config).await?)) })
                 })
                 .await
         }
@@ -196,7 +198,7 @@ pub mod postgres {
             let pool = self.pool_cache.try_get(&key);
             if let Some(pool) = pool {
                 self.pool_cache.remove(&key);
-                pool.close();
+                pool.close().await;
                 Ok(true)
             } else {
                 Ok(false)
@@ -242,62 +244,25 @@ pub mod postgres {
             info!("query - address: {}, statement: {} - 0", address, statement);
             let pool = self.get_or_create(worker_id, address).await?;
             info!("query - address: {}, statement: {} - 1", address, statement);
-            let result = query_stream(statement, params, pool.deref()).await;
+            let result = query_stream(statement, params, 50, pool.deref()).await;
             info!("query - address: {}, statement: {} - 2", address, statement);
             result
         }
     }
 
-    async fn query(
-        statement: &str,
-        params: Vec<DbValue>,
-        pool: &Pool,
-    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-        let query_params = to_sql_params(params)?;
-
-        let query_params = query_params
-            .iter()
-            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect::<Vec<_>>();
-
-        let client = pool.get().await.map_err(|e| e.to_string())?;
-
-        let result = client
-            .query(statement, &query_params)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        if result.is_empty() {
-            Ok(Arc::new(EmptyDbResultSet::default()))
-        } else {
-            let first = &result[0];
-            let columns = first
-                .columns()
-                .into_iter()
-                .map(|c| c.try_into())
-                .collect::<Result<Vec<_>, String>>()?;
-            let values = result
-                .iter()
-                .map(|r| r.try_into())
-                .collect::<Result<Vec<_>, String>>()?;
-            Ok(Arc::new(SimpleDbResultSet::new(columns, Some(values))))
-        }
-    }
-
     #[derive(Clone)]
-    pub struct StreamDbResultSet {
+    pub struct StreamDbResultSet<'q> {
         column_metadata: Vec<DbColumnTypeMeta>,
         first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow>>>>,
-        row_stream: Arc<
-            async_mutex::Mutex<Pin<Box<dyn Stream<Item = Vec<Result<Row, Error>>> + Send + Sync>>>,
-        >,
+        row_stream:
+            Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<sqlx::postgres::PgRow, sqlx::Error>>>>>,
     }
 
-    impl StreamDbResultSet {
+    impl<'q> StreamDbResultSet<'q> {
         fn new(
             column_metadata: Vec<DbColumnTypeMeta>,
             first_rows: Vec<DbRow>,
-            row_stream: Pin<Box<dyn Stream<Item = Vec<Result<Row, Error>>> + Send + Sync>>,
+            row_stream: BoxStream<'q, Vec<Result<sqlx::postgres::PgRow, sqlx::Error>>>,
         ) -> Self {
             Self {
                 column_metadata,
@@ -305,10 +270,43 @@ pub mod postgres {
                 row_stream: Arc::new(async_mutex::Mutex::new(row_stream)),
             }
         }
+
+        async fn create(
+            stream: BoxStream<'q, Result<sqlx::postgres::PgRow, sqlx::Error>>,
+            batch: usize,
+        ) -> Result<StreamDbResultSet<'q>, String> {
+            let mut row_stream: BoxStream<'q, Vec<Result<sqlx::postgres::PgRow, sqlx::Error>>> =
+                Box::pin(stream.chunks(batch));
+
+            let first = row_stream.next().await;
+
+            match first {
+                Some(rows) if !rows.is_empty() => {
+                    let rows = rows
+                        .into_iter()
+                        .map(|r| r.map_err(|e| e.to_string()))
+                        .collect::<Result<Vec<_>, String>>()?;
+
+                    let columns = rows[0]
+                        .columns()
+                        .into_iter()
+                        .map(|c| c.try_into())
+                        .collect::<Result<Vec<_>, String>>()?;
+
+                    let first_rows = rows
+                        .iter()
+                        .map(|r| r.try_into())
+                        .collect::<Result<Vec<_>, String>>()?;
+
+                    Ok(StreamDbResultSet::new(columns, first_rows, row_stream))
+                }
+                _ => Ok(StreamDbResultSet::new(vec![], vec![], row_stream)),
+            }
+        }
     }
 
     #[async_trait]
-    impl DbResultSet for StreamDbResultSet {
+    impl DbResultSet for StreamDbResultSet<'_> {
         async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String> {
             info!("get_column_metadata");
             Ok(self.column_metadata.clone())
@@ -331,7 +329,7 @@ pub mod postgres {
                         .into_iter()
                         .map(|r| {
                             r.map_err(|e| e.to_string())
-                                .and_then(|r: Row| (&r).try_into())
+                                .and_then(|r: sqlx::postgres::PgRow| (&r).try_into())
                         })
                         .collect::<Result<Vec<_>, String>>()?;
                     Ok(Some(values))
@@ -345,96 +343,96 @@ pub mod postgres {
     async fn query_stream(
         statement: &str,
         params: Vec<DbValue>,
-        pool: &Pool,
+        batch: usize,
+        pool: &sqlx::Pool<sqlx::Postgres>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-        let query_params = to_sql_params(params)?;
+        let mut query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+            sqlx::query(statement.to_string().leak());
 
-        let query_params = query_params
-            .iter()
-            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect::<Vec<_>>();
+        for param in params {
+            query = bind_value(query, param)?;
+        }
 
-        let client = pool.get().await.map_err(|e| e.to_string())?;
+        let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(pool);
 
-        let stream: RowStream = client
-            .query_raw(statement, query_params)
-            .await
-            .map_err(|e| e.to_string())?;
+        Ok(Arc::new(StreamDbResultSet::create(stream, batch).await?))
+    }
 
-        let mut row_stream: Pin<Box<dyn Stream<Item = Vec<Result<Row, Error>>> + Send + Sync>> =
-            Box::pin(stream.chunks(20));
+    async fn execute(
+        statement: &str,
+        params: Vec<DbValue>,
+        pool: &sqlx::Pool<sqlx::Postgres>,
+    ) -> Result<u64, String> {
+        let mut query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+            sqlx::query(statement);
 
-        let first = row_stream.next().await;
+        for param in params {
+            query = bind_value(query, param)?;
+        }
 
-        if let Some(rows) = first {
-            let rows = rows
-                .into_iter()
-                .map(|r| r.map_err(|e| e.to_string()))
-                .collect::<Result<Vec<_>, String>>()?;
+        let result = query.execute(pool).await.map_err(|e| e.to_string())?;
+        Ok(result.rows_affected())
+    }
 
-            let columns = rows[0]
-                .columns()
-                .into_iter()
-                .map(|c| c.try_into())
-                .collect::<Result<Vec<_>, String>>()?;
-
-            let first_rows = rows
-                .iter()
-                .map(|r| r.try_into())
-                .collect::<Result<Vec<_>, String>>()?;
-
-            Ok(Arc::new(StreamDbResultSet::new(
-                columns,
-                first_rows,
-                row_stream,
-            )))
-        } else {
-            Ok(Arc::new(EmptyDbResultSet::default()))
+    fn bind_value(
+        query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>,
+        value: DbValue,
+    ) -> Result<sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
+        match value {
+            DbValue::Primitive(v) => bind_value_primitive(query, v),
+            DbValue::Array(_) => Err("Array param not supported".to_string()),
         }
     }
 
-    async fn execute(statement: &str, params: Vec<DbValue>, pool: &Pool) -> Result<u64, String> {
-        let query_params = to_sql_params(params)?;
-
-        let query_params = query_params
-            .iter()
-            .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect::<Vec<_>>();
-
-        let client = pool.get().await.map_err(|e| e.to_string())?;
-
-        let result = client
-            .execute(statement, &query_params)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        Ok(result)
+    fn bind_value_primitive(
+        query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>,
+        value: DbValuePrimitive,
+    ) -> Result<sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
+        match value {
+            DbValuePrimitive::Integer(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Decimal(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Float(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Boolean(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Chars(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Text(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Binary(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Blob(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Json(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Spatial(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Enumeration(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Other(_, v) => Ok(query.bind(v)),
+            DbValuePrimitive::Datetime(v) => {
+                Ok(query.bind(chrono::DateTime::from_timestamp_millis(v as i64)))
+            }
+            DbValuePrimitive::Interval(v) => {
+                Ok(query.bind(chrono::Duration::milliseconds(v as i64)))
+            }
+            DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
+        }
     }
 
-    async fn create_pool(
+    async fn create_pool2(
         key: &RdbmsPoolKey,
         pool_config: &RdbmsPoolConfig,
-    ) -> Result<Pool, String> {
+    ) -> Result<sqlx::Pool<sqlx::Postgres>, String> {
         info!(
             "DB Pool: {}, connections: {}",
             key.address, pool_config.max_connections
         );
-        use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod};
-        use std::env;
-        use std::str::FromStr;
-        use tokio_postgres::Config;
-        use tokio_postgres::NoTls;
 
-        let pg_config = Config::from_str(&key.address).map_err(|e| e.to_string())?;
-        let mgr_config = ManagerConfig {
-            recycling_method: RecyclingMethod::Fast,
-        };
-        let mgr = Manager::from_config(pg_config, NoTls, mgr_config);
-        let pool = Pool::builder(mgr)
-            .max_size(pool_config.max_connections as usize)
-            .build()
-            .map_err(|e| e.to_string())?;
-
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(pool_config.max_connections)
+            .connect(&key.address)
+            .await
+            .map_err(|e| {
+                error!(
+                    "DB Pool: {}, connections: {} -  error {}",
+                    key.address, pool_config.max_connections, e
+                );
+                e.to_string()
+            })?;
         info!(
             "DB Pool: {}, connections: {} - created",
             key.address, pool_config.max_connections
@@ -442,33 +440,10 @@ pub mod postgres {
         Ok(pool)
     }
 
-    fn to_sql_params(
-        params: Vec<DbValue>,
-    ) -> Result<Vec<Box<dyn tokio_postgres::types::ToSql + Send + Sync>>, String> {
-        params
-            .into_iter()
-            .map(|p| p.try_into())
-            .collect::<Result<Vec<_>, String>>()
-    }
-
-    // fn to_sql_params(params: Vec<DbValue>) -> Result<Vec<&(dyn tokio_postgres::types::ToSql + Sync)>, String> {
-    //     let query_params: Vec<Box<dyn tokio_postgres::types::ToSql + Send + Sync>>  = params
-    //         .into_iter()
-    //         .map(|p| p.try_into())
-    //         .collect::<Result<Vec<_>, String>>()?;
-    //
-    //     let query_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = query_params
-    //         .into_iter()
-    //         .map(|p| p.as_ref() as &(dyn tokio_postgres::types::ToSql + Sync))
-    //         .collect();
-    //
-    //     Ok(query_params)
-    // }
-
-    impl TryFrom<&tokio_postgres::Row> for DbRow {
+    impl TryFrom<&sqlx::postgres::PgRow> for DbRow {
         type Error = String;
 
-        fn try_from(value: &tokio_postgres::Row) -> Result<Self, Self::Error> {
+        fn try_from(value: &sqlx::postgres::PgRow) -> Result<Self, Self::Error> {
             let count = value.len();
             let mut values = Vec::with_capacity(count);
             for index in 0..count {
@@ -478,90 +453,88 @@ pub mod postgres {
         }
     }
 
-    fn get_db_value(index: usize, row: &tokio_postgres::Row) -> Result<DbValue, String> {
+    fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, String> {
         let column = &row.columns()[index];
-        let tpe = column.type_();
-        let value = match *tpe {
-            tokio_postgres::types::Type::BOOL => {
+        let type_name = column.type_info().name();
+        let value = match type_name {
+            pg_type_name::BOOL => {
                 let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Boolean(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::INT2 => {
+            pg_type_name::INT2 => {
                 let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Integer(v as i64)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::INT4 => {
+            pg_type_name::INT4 => {
                 let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Integer(v as i64)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::INT8 => {
+            pg_type_name::INT8 => {
                 let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Integer(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::FLOAT4 => {
+            pg_type_name::FLOAT4 => {
                 let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v as f64)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::FLOAT8 => {
+            pg_type_name::FLOAT8 => {
                 let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::VARCHAR => {
+            pg_type_name::VARCHAR => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Chars(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::TEXT => {
+            pg_type_name::TEXT => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::JSON => {
+            pg_type_name::JSON => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::XML => {
+            pg_type_name::XML => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::UUID => {
+            pg_type_name::UUID => {
                 let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Uuid(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            tokio_postgres::types::Type::DATE
-            | tokio_postgres::types::Type::TIMESTAMP
-            | tokio_postgres::types::Type::TIMESTAMPTZ => {
+            pg_type_name::DATE | pg_type_name::TIMESTAMP | pg_type_name::TIMESTAMPTZ => {
                 let v: Option<chrono::DateTime<chrono::Utc>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
@@ -571,16 +544,16 @@ pub mod postgres {
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            _ => Err(format!("Unsupported type: {:?}", tpe))?,
+            _ => Err(format!("Unsupported type: {:?}", type_name))?,
         };
         Ok(value)
     }
 
-    impl TryFrom<&tokio_postgres::Column> for DbColumnTypeMeta {
+    impl TryFrom<&sqlx::postgres::PgColumn> for DbColumnTypeMeta {
         type Error = String;
 
-        fn try_from(value: &tokio_postgres::Column) -> Result<Self, Self::Error> {
-            let db_type: DbColumnType = value.type_().try_into()?;
+        fn try_from(value: &sqlx::postgres::PgColumn) -> Result<Self, Self::Error> {
+            let db_type: DbColumnType = value.type_info().try_into()?;
             let name = value.name().to_string();
             Ok(DbColumnTypeMeta {
                 name,
@@ -591,104 +564,143 @@ pub mod postgres {
         }
     }
 
-    impl TryFrom<&tokio_postgres::types::Type> for DbColumnType {
+    impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
         type Error = String;
 
-        fn try_from(value: &tokio_postgres::types::Type) -> Result<Self, Self::Error> {
-            match *value {
-                tokio_postgres::types::Type::BOOL => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean))
-                }
-                tokio_postgres::types::Type::INT2 => Ok(DbColumnType::Primitive(
-                    DbColumnTypePrimitive::Integer(Some(2)),
-                )),
-                tokio_postgres::types::Type::INT4 => Ok(DbColumnType::Primitive(
-                    DbColumnTypePrimitive::Integer(Some(4)),
-                )),
-                tokio_postgres::types::Type::INT8 => Ok(DbColumnType::Primitive(
-                    DbColumnTypePrimitive::Integer(Some(8)),
-                )),
-                tokio_postgres::types::Type::NUMERIC => Ok(DbColumnType::Primitive(
+        fn try_from(value: &sqlx::postgres::PgTypeInfo) -> Result<Self, Self::Error> {
+            let type_name = value.name();
+
+            match type_name {
+                pg_type_name::BOOL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
+                pg_type_name::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(
+                    Some(2),
+                ))),
+                pg_type_name::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(
+                    Some(4),
+                ))),
+                pg_type_name::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(
+                    Some(8),
+                ))),
+                pg_type_name::NUMERIC => Ok(DbColumnType::Primitive(
                     DbColumnTypePrimitive::Decimal(0, 0),
                 )),
-                tokio_postgres::types::Type::FLOAT4 => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float))
-                }
-                tokio_postgres::types::Type::FLOAT8 => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float))
-                }
-                tokio_postgres::types::Type::UUID => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid))
-                }
-                tokio_postgres::types::Type::TEXT => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text))
-                }
-                tokio_postgres::types::Type::VARCHAR => {
+                pg_type_name::FLOAT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
+                pg_type_name::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
+                pg_type_name::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
+                pg_type_name::TEXT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
+                pg_type_name::VARCHAR => {
                     Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(None)))
                 }
-                tokio_postgres::types::Type::CHAR => Ok(DbColumnType::Primitive(
-                    DbColumnTypePrimitive::Chars(Some(1)),
-                )),
-                tokio_postgres::types::Type::CHAR_ARRAY => Ok(DbColumnType::Primitive(
-                    DbColumnTypePrimitive::Chars(Some(1)),
-                )),
-                tokio_postgres::types::Type::JSON => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json))
+                pg_type_name::BPCHAR => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(None)))
                 }
-                tokio_postgres::types::Type::XML => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml))
-                }
-                tokio_postgres::types::Type::TIMESTAMP => {
+                pg_type_name::CHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(
+                    Some(1),
+                ))),
+                pg_type_name::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
+                pg_type_name::TIMESTAMP => {
                     Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime))
                 }
-                tokio_postgres::types::Type::DATE => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime))
-                }
+                pg_type_name::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime)),
                 _ => Err(format!("Unsupported type: {:?}", value)),
             }
         }
     }
 
-    impl TryFrom<DbValue> for Box<dyn tokio_postgres::types::ToSql + Send + Sync> {
-        type Error = String;
-
-        fn try_from(value: DbValue) -> Result<Self, Self::Error> {
-            match value {
-                DbValue::Primitive(v) => v.try_into(),
-                DbValue::Array(_) => Err("Array param not supported".to_string()),
-            }
-        }
-    }
-
-    impl TryFrom<DbValuePrimitive> for Box<dyn tokio_postgres::types::ToSql + Send + Sync> {
-        type Error = String;
-
-        fn try_from(value: DbValuePrimitive) -> Result<Self, Self::Error> {
-            match value {
-                DbValuePrimitive::Integer(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Decimal(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Float(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Boolean(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Chars(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Text(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Binary(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Blob(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Uuid(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Json(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Xml(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Spatial(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Enumeration(v) => Ok(Box::new(v)),
-                DbValuePrimitive::Other(_, v) => Ok(Box::new(v)),
-                DbValuePrimitive::Datetime(v) => {
-                    Ok(Box::new(chrono::DateTime::from_timestamp_millis(v as i64)))
-                }
-                DbValuePrimitive::Interval(v) => {
-                    // Ok(Box::new(chrono::Duration::milliseconds(v as i64)))
-                    Ok(Box::new(v as i64))
-                }
-                DbValuePrimitive::DbNull => Ok(Box::new(None::<String>)),
-            }
-        }
+    pub(crate) mod pg_type_name {
+        pub(crate) const BOOL: &str = "BOOL";
+        pub(crate) const BYTEA: &str = "BYTEA";
+        pub(crate) const CHAR: &str = "\"CHAR\"";
+        pub(crate) const NAME: &str = "NAME";
+        pub(crate) const INT8: &str = "INT8";
+        pub(crate) const INT2: &str = "INT2";
+        pub(crate) const INT4: &str = "INT4";
+        pub(crate) const TEXT: &str = "TEXT";
+        pub(crate) const OID: &str = "OID";
+        pub(crate) const JSON: &str = "JSON";
+        pub(crate) const JSON_ARRAY: &str = "JSON[]";
+        pub(crate) const POINT: &str = "POINT";
+        pub(crate) const LSEG: &str = "LSEG";
+        pub(crate) const PATH: &str = "PATH";
+        pub(crate) const BOX: &str = "BOX";
+        pub(crate) const POLYGON: &str = "POLYGON";
+        pub(crate) const LINE: &str = "LINE";
+        pub(crate) const LINE_ARRAY: &str = "LINE[]";
+        pub(crate) const CIDR: &str = "CIDR";
+        pub(crate) const CIDR_ARRAY: &str = "CIDR[]";
+        pub(crate) const FLOAT4: &str = "FLOAT4";
+        pub(crate) const FLOAT8: &str = "FLOAT8";
+        pub(crate) const UNKNOWN: &str = "UNKNOWN";
+        pub(crate) const CIRCLE: &str = "CIRCLE";
+        pub(crate) const CIRCLE_ARRAY: &str = "CIRCLE[]";
+        pub(crate) const MACADDR8: &str = "MACADDR8";
+        pub(crate) const MACADDR8_ARRAY: &str = "MACADDR8[]";
+        pub(crate) const MACADDR: &str = "MACADDR";
+        pub(crate) const INET: &str = "INET";
+        pub(crate) const BOOL_ARRAY: &str = "BOOL[]";
+        pub(crate) const BYTEA_ARRAY: &str = "BYTEA[]";
+        pub(crate) const CHAR_ARRAY: &str = "\"CHAR\"[]";
+        pub(crate) const NAME_ARRAY: &str = "NAME[]";
+        pub(crate) const INT2_ARRAY: &str = "INT2[]";
+        pub(crate) const INT4_ARRAY: &str = "INT4[]";
+        pub(crate) const TEXT_ARRAY: &str = "TEXT[]";
+        pub(crate) const BPCHAR_ARRAY: &str = "CHAR[]";
+        pub(crate) const VARCHAR_ARRAY: &str = "VARCHAR[]";
+        pub(crate) const INT8_ARRAY: &str = "INT8[]";
+        pub(crate) const POINT_ARRAY: &str = "POINT[]";
+        pub(crate) const LSEG_ARRAY: &str = "LSEG[]";
+        pub(crate) const PATH_ARRAY: &str = "PATH[]";
+        pub(crate) const BOX_ARRAY: &str = "BOX[]";
+        pub(crate) const FLOAT4_ARRAY: &str = "FLOAT4[]";
+        pub(crate) const FLOAT8_ARRAY: &str = "FLOAT8[]";
+        pub(crate) const Polygon_ARRAY: &str = "POLYGON[]";
+        pub(crate) const OID_ARRAY: &str = "OID[]";
+        pub(crate) const MACADDR_ARRAY: &str = "MACADDR[]";
+        pub(crate) const INET_ARRAY: &str = "INET[]";
+        pub(crate) const BPCHAR: &str = "CHAR";
+        pub(crate) const VARCHAR: &str = "VARCHAR";
+        pub(crate) const DATE: &str = "DATE";
+        pub(crate) const TIME: &str = "TIME";
+        pub(crate) const TIMESTAMP: &str = "TIMESTAMP";
+        pub(crate) const TIMESTAMP_ARRAY: &str = "TIMESTAMP[]";
+        pub(crate) const DATE_ARRAY: &str = "DATE[]";
+        pub(crate) const TIME_ARRAY: &str = "TIME[]";
+        pub(crate) const TIMESTAMPTZ: &str = "TIMESTAMPTZ";
+        pub(crate) const TIMESTAMPTZ_ARRAY: &str = "TIMESTAMPTZ[]";
+        pub(crate) const INTERVAL: &str = "INTERVAL";
+        pub(crate) const INTERVAL_ARRAY: &str = "INTERVAL[]";
+        pub(crate) const NUMERIC_ARRAY: &str = "NUMERIC[]";
+        pub(crate) const TIMETZ: &str = "TIMETZ";
+        pub(crate) const TIMETZ_ARRAY: &str = "TIMETZ[]";
+        pub(crate) const BIT: &str = "BIT";
+        pub(crate) const BIT_ARRAY: &str = "BIT[]";
+        pub(crate) const VARBIT: &str = "VARBIT";
+        pub(crate) const VARBIT_ARRAY: &str = "VARBIT[]";
+        pub(crate) const NUMERIC: &str = "NUMERIC";
+        pub(crate) const RECORD: &str = "RECORD";
+        pub(crate) const RECORD_ARRAY: &str = "RECORD[]";
+        pub(crate) const UUID: &str = "UUID";
+        pub(crate) const UUID_ARRAY: &str = "UUID[]";
+        pub(crate) const JSONB: &str = "JSONB";
+        pub(crate) const JSONB_ARRAY: &str = "JSONB[]";
+        pub(crate) const INT4RANGE: &str = "INT4RANGE";
+        pub(crate) const INT4RANGE_ARRAY: &str = "INT4RANGE[]";
+        pub(crate) const NUMRANGE: &str = "NUMRANGE";
+        pub(crate) const NUMRANGE_ARRAY: &str = "NUMRANGE[]";
+        pub(crate) const TSRANGE: &str = "TSRANGE";
+        pub(crate) const TSRANGE_ARRAY: &str = "TSRANGE[]";
+        pub(crate) const TSTZRANGE: &str = "TSTZRANGE";
+        pub(crate) const TSTZRANGE_ARRAY: &str = "TSTZRANGE[]";
+        pub(crate) const DATERANGE: &str = "DATERANGE";
+        pub(crate) const DATERANGE_ARRAY: &str = "DATERANGE[]";
+        pub(crate) const INT8RANGE: &str = "INT8RANGE";
+        pub(crate) const INT8RANGE_ARRAY: &str = "INT8RANGE[]";
+        pub(crate) const JSONPATH: &str = "JSONPATH";
+        pub(crate) const JSONPATH_ARRAY: &str = "JSONPATH[]";
+        pub(crate) const MONEY: &str = "MONEY";
+        pub(crate) const MONEY_ARRAY: &str = "MONEY[]";
+        pub(crate) const VOID: &str = "VOID";
+        pub(crate) const XML: &str = "XML";
     }
 }
 
@@ -935,7 +947,7 @@ mod tests {
         let result = result.unwrap();
 
         let columns = result.get_column_metadata().await.unwrap();
-        println!("columns: {columns:?}");
+        // println!("columns: {columns:?}");
         assert!(columns.len() > 0);
 
         let mut rows: Vec<DbRow> = vec![];
@@ -948,6 +960,7 @@ mod tests {
         }
         // println!("rows: {rows:?}");
         assert!(rows.len() >= 100);
+        println!("rows: {}", rows.len());
 
         let result = rdbms_service.postgres().remove(&worker_id, &address).await;
 
