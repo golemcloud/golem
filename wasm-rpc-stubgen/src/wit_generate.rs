@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::{log_action, log_action_plan, log_warn_action, LogIndent};
+use crate::commands::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
 use crate::fs::{
     copy, get_file_name, strip_path_prefix, write_str, OverwriteSafeAction, OverwriteSafeActions,
 };
@@ -37,7 +37,10 @@ use wit_parser::PackageId;
 pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
     log_action(
         "Generating",
-        format!("stub WIT to {}", def.target_wit_path().display()),
+        format!(
+            "stub WIT to {}",
+            def.target_wit_path().log_color_highlight()
+        ),
     );
 
     let out = generate_stub_wit_from_stub_def(def)?;
@@ -210,8 +213,8 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
         "Adding",
         format!(
             "WIT dependencies to {} from {}",
-            def.config.target_root.display(),
-            def.config.source_wit_root.display(),
+            def.config.target_root.log_color_highlight(),
+            def.config.source_wit_root.log_color_highlight(),
         ),
     );
 
@@ -224,11 +227,23 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
 
     for (package_id, package, package_sources) in def.packages_with_wit_sources() {
         if !stub_dep_packages.contains(&package_id) || package_id == def.source_package_id {
-            log_warn_action("Skipping", format!("package dependency {}", package.name));
+            log_warn_action(
+                "Skipping",
+                format!(
+                    "package dependency {}",
+                    package.name.to_string().log_color_highlight()
+                ),
+            );
             continue;
         }
 
-        log_action("Copying", format!("package dependency {}", package.name));
+        log_action(
+            "Copying",
+            format!(
+                "package dependency {}",
+                package.name.to_string().log_color_highlight()
+            ),
+        );
 
         let _indent = LogIndent::new();
         for source in &package_sources.files {
@@ -236,7 +251,11 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
             let dest = target_wit_root.join(relative);
             log_action(
                 "Copying",
-                format!("{} to {}", source.display(), dest.display()),
+                format!(
+                    "{} to {}",
+                    source.log_color_highlight(),
+                    dest.log_color_highlight()
+                ),
             );
             copy(source, &dest)?;
         }
@@ -262,7 +281,11 @@ fn write_embedded_source(target_dir: &Path, file_name: &str, content: &str) -> a
 
     log_action(
         "Writing",
-        format!("{} to {}", file_name, target_dir.display()),
+        format!(
+            "{} to {}",
+            file_name.log_color_highlight(),
+            target_dir.log_color_highlight()
+        ),
     );
 
     fs::write(target_dir.join(file_name), content)?;
@@ -288,8 +311,8 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
         "Adding",
         format!(
             "stub dependencies to {} from {}",
-            config.dest_wit_root.display(),
-            config.stub_wit_root.display()
+            config.dest_wit_root.log_color_highlight(),
+            config.stub_wit_root.log_color_highlight()
         ),
     );
 
@@ -642,7 +665,7 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
         "Extracting",
         format!(
             "interface package from main component in wit directory {}",
-            wit_dir.display()
+            wit_dir.log_color_highlight()
         ),
     );
 
@@ -679,14 +702,20 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
         .join(naming::wit::INTERFACE_WIT_FILE_NAME);
     log_action(
         "Writing",
-        format!("interface package to {}", interface_package_path.display()),
+        format!(
+            "interface package to {}",
+            interface_package_path.log_color_highlight()
+        ),
     );
     write_str(&interface_package_path, interface_package.to_string())?;
 
     let main_package_path = &sources.files[0];
     log_action(
         "Writing",
-        format!("main package to {}", main_package_path.display()),
+        format!(
+            "main package to {}",
+            main_package_path.log_color_highlight()
+        ),
     );
     write_str(main_package_path, main_package.to_string())?;
 
@@ -703,7 +732,7 @@ fn extract_main_interface_package(
     let package = encoded_wit_dir.package(main_package_id)?;
 
     let mut interface_package = package.clone();
-    interface_package.set_name(naming::wit::interface_package_name(package.name()));
+    interface_package.set_name(naming::wit::interface_encoder_package_name(package.name()));
 
     let interface_export_prefix = format!(
         "{}:{}/",

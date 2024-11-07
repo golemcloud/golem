@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::cargo::generate_cargo_toml;
-use crate::commands::log::{log_action, LogIndent};
+use crate::commands::log::{log_action, LogColorize, LogIndent};
 use crate::compilation::compile;
 use crate::fs::copy;
 use crate::naming;
@@ -82,7 +82,7 @@ pub fn generate_stub_wit_dir(stub_def: &StubDefinition) -> anyhow::Result<Resolv
         "Generating",
         format!(
             "stub WIT directory to {}",
-            stub_def.config.target_root.display()
+            stub_def.config.target_root.log_color_highlight()
         ),
     );
     let _indent = LogIndent::new();

@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::commands::log::{log_action, log_warn_action};
+use crate::commands::log::{log_action, log_warn_action, LogColorize};
 use crate::fs::get_file_name;
 use crate::naming;
 use crate::stub::StubDefinition;
@@ -205,7 +205,7 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
         "Generating",
         format!(
             "Cargo.toml to {}",
-            def.target_cargo_path().to_string_lossy()
+            def.target_cargo_path().log_color_highlight()
         ),
     );
     fs::write(def.target_cargo_path(), cargo_toml)?;
@@ -251,7 +251,10 @@ pub fn add_workspace_members(path: &Path, members: &[String]) -> anyhow::Result<
 
     let cargo_toml = toml::to_string(&manifest)?;
 
-    log_action("Writing", format!("updated Cargo.toml to {:?}", path));
+    log_action(
+        "Writing",
+        format!("updated Cargo.toml to {:?}", path.log_color_highlight()),
+    );
     fs::write(path, cargo_toml)?;
     Ok(())
 }
@@ -287,7 +290,10 @@ pub fn add_dependencies_to_cargo_toml(
 
                 let cargo_toml = toml::to_string(&manifest)?;
 
-                log_warn_action("Updating", format!("Cargo.toml at {:?}", cargo_path));
+                log_warn_action(
+                    "Updating",
+                    format!("Cargo.toml at {:?}", cargo_path.log_color_highlight()),
+                );
                 fs::write(cargo_path, cargo_toml)?;
             }
         }

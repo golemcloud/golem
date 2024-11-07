@@ -1,4 +1,4 @@
-use crate::commands::log::log_warn_action;
+use crate::commands::log::{log_warn_action, LogColorize};
 use anyhow::Context;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -108,7 +108,7 @@ fn plug(
     };
 
     for plug_name in unused_plugs {
-        log_warn_action("Skipping", format!("{}, not used", plug_name));
+        log_warn_action("Skipping", format!("{}, not used", plug_name.log_color_highlight()));
     }
 
     // Export all exports from the socket component.

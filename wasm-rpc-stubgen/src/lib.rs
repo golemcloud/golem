@@ -300,9 +300,9 @@ fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative
     commands::declarative::Config {
         app_resolve_mode: {
             if args.app.is_empty() {
-                commands::declarative::ApplicationResolveMode::Automatic
+                commands::declarative::ApplicationSourceMode::Automatic
             } else {
-                commands::declarative::ApplicationResolveMode::Explicit(args.app)
+                commands::declarative::ApplicationSourceMode::Explicit(args.app)
             }
         },
         skip_up_to_date_checks: args.force_build,

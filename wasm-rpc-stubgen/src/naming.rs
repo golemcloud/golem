@@ -16,7 +16,17 @@ pub mod wit {
         }
     }
 
-    pub fn interface_package_name(
+    pub fn interface_parser_package_name(
+        package_name: &wit_parser::PackageName,
+    ) -> wit_parser::PackageName {
+        wit_parser::PackageName {
+            namespace: package_name.namespace.clone(),
+            name: format!("{}-interface", package_name.name),
+            version: package_name.version.clone(),
+        }
+    }
+
+    pub fn interface_encoder_package_name(
         package_name: &wit_encoder::PackageName,
     ) -> wit_encoder::PackageName {
         wit_encoder::PackageName::new(
