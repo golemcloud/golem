@@ -237,17 +237,17 @@ x-golem-api-definition-id: "{id}"
 x-golem-api-definition-version: "0.1.0"
 paths:
   "/{{user-id}}/get-cart-contents":
-    x-golem-worker-bridge:
-      worker-name: "\"foo\""
-      component-id: "{component_id}"
-      component-version: {component_version}
-      response: |
-        let x = golem:it/api.{{checkout}}();
-        let status: u64 = 200;
-        {{headers: {{ContentType: "json", userid: "foo"}}, body: "foo", status: status}}
     get:
       summary: "Get Cart Contents"
       description: "Get the contents of a user's cart"
+      x-golem-worker-bridge:
+        worker-name: "\"foo\""
+        component-id: "{component_id}"
+        component-version: {component_version}
+        response: |
+          let x = golem:it/api.{{checkout}}();
+          let status: u64 = 200;
+        {{headers: {{ContentType: "json", userid: "foo"}}, body: "foo", status: status}}
       parameters:
         - name: "user-id"
           in: "path"
@@ -285,13 +285,13 @@ pub fn make_open_api_json_file(
         "x-golem-api-definition-version": "0.1.0",
         "paths": {
             "/{user-id}/get-cart-contents": {
-              "x-golem-worker-bridge": {
-                "worker-name": "\"foo\"",
-                "component-id": component_id,
-                "component-version": component_version,
-                "response" : "let x = golem:it/api.{checkout}();\nlet status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
-              },
               "get": {
+                  "x-golem-worker-bridge": {
+                     "worker-name": "\"foo\"",
+                     "component-id": component_id,
+                     "component-version": component_version,
+                     "response" : "let x = golem:it/api.{checkout}();\nlet status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
+                  },
                 "summary": "Get Cart Contents",
                 "description": "Get the contents of a user's cart",
                 "parameters": [

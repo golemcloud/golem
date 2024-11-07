@@ -8,7 +8,6 @@ use nom::sequence::{delimited, preceded, tuple};
 use nom::IResult;
 
 use crate::gateway_api_definition::http::{place_holder_parser, AllPathPatterns, PathPattern, QueryInfo};
-use crate::parser::*;
 
 pub fn parse_path_pattern(input: &str) -> IResult<&str, AllPathPatterns> {
     let (input, (path, query)) = tuple((

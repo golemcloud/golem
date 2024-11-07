@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use rib::{Expr, GetLiteralValue, RibInput};
 
 pub enum HttpPlugin {
-    Cors(Cors)
+    Cors(CorsPreflight)
 }
 
 pub struct CorsPreflightResponse {
@@ -31,7 +31,7 @@ impl CorsPreflightResponse {
             "Access-Control-Max-Age",
         ];
 
-        let mut cors = Cors::default();
+        let mut cors = CorsPreflight::default();
 
         for name_value in record {
             let key = name_value.name.clone();
@@ -58,7 +58,7 @@ impl CorsPreflightResponse {
     }
 }
 
-pub struct Cors {
+pub struct CorsPreflight {
     pub allow_origin: String,
     pub allow_methods: String,
     pub allow_headers: String,
@@ -66,9 +66,9 @@ pub struct Cors {
     pub max_age: Option<u64>
 }
 
-impl Cors {
-    pub fn default() -> Cors {
-        Cors {
+impl CorsPreflight {
+    fn default() -> CorsPreflight {
+        CorsPreflight {
             allow_origin: "*".to_string(),
             allow_methods: "GET, POST, PUT, DELETE, OPTIONS".to_string(),
             allow_headers: "Content-Type, Authorization".to_string(),
@@ -77,23 +77,23 @@ impl Cors {
         }
     }
 
-    pub fn set_allow_origin(&mut self, allow_origin: &str) {
+     fn set_allow_origin(&mut self, allow_origin: &str) {
         self.allow_origin = allow_origin.to_string();
     }
 
-    pub fn set_allow_methods(&mut self, allow_methods: &str) {
+     fn set_allow_methods(&mut self, allow_methods: &str) {
         self.allow_methods = allow_methods.to_string();
     }
 
-    pub fn set_allow_headers(&mut self, allow_headers: &str) {
+     fn set_allow_headers(&mut self, allow_headers: &str) {
         self.allow_headers = allow_headers.to_string();
     }
 
-    pub fn set_expose_headers(&mut self, expose_headers: &str) {
+     fn set_expose_headers(&mut self, expose_headers: &str) {
         self.expose_headers = Some(expose_headers.to_string());
     }
 
-    pub fn set_max_age(&mut self, max_age: u64)  {
+     fn set_max_age(&mut self, max_age: u64)  {
         self.max_age = Some(max_age);
     }
 

@@ -100,14 +100,14 @@ impl poem_openapi::types::Type for OpenApiDefinitionRequest {
 
 mod internal {
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::gateway_binding::{WorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
-    use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
+    use openapiv3::{OpenAPI, Operation, PathItem, Paths, ReferenceOr};
     use rib::Expr;
     use serde_json::Value;
 
     use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
+    use crate::gateway_binding::{ResponseMapping, WorkerBinding};
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -133,8 +133,8 @@ mod internal {
                 ReferenceOr::Item(item) => {
                     let path_pattern = get_path_pattern(path)?;
 
-                    for (str, _) in item.iter() {
-                        let route = get_route_from_path_item(str, item, &path_pattern)?;
+                    for (method, method_operation) in item.iter() {
+                        let route = get_route_from_path_item(method, method_operation, &path_pattern)?;
                         routes.push(route);
                     }
                 }
@@ -152,7 +152,7 @@ mod internal {
 
     pub(crate) fn get_route_from_path_item(
         method: &str,
-        path_item: &PathItem,
+        method_operation: &Operation,
         path_pattern: &AllPathPatterns,
     ) -> Result<Route, String> {
         let method_res = match method {
@@ -169,7 +169,7 @@ mod internal {
 
         let method = method_res?;
 
-        let worker_bridge_info = path_item
+        let worker_bridge_info = method_operation
             .extensions
             .get(GOLEM_WORKER_BRIDGE_EXTENSION)
             .ok_or(format!(
@@ -271,16 +271,16 @@ mod tests {
 
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::gateway_binding::{WorkerBinding, ResponseMapping};
+    use crate::gateway_binding::{ResponseMapping, WorkerBinding};
     use golem_common::model::ComponentId;
-    use openapiv3::PathItem;
+    use openapiv3::{Operation, PathItem};
     use rib::Expr;
     use serde_json::json;
     use uuid::Uuid;
 
     #[test]
     fn test_get_route_from_path_item() {
-        let path_item = PathItem {
+        let path_item = Operation {
             extensions: vec![("x-golem-worker-bridge".to_string(), json!({
                 "worker-name": "let x: str = request.body.user; \"worker-${x}\"",
                 "component-id": "00000000-0000-0000-0000-000000000000",

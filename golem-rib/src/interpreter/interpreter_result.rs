@@ -56,7 +56,7 @@ impl RibResult {
 
     pub fn get_record(&self) -> Option<Vec<NameValuePair>> {
         self.get_val().and_then(|x| match x {
-            TypeAnnotatedValue::Record(record) => Some(record.value);
+            TypeAnnotatedValue::Record(record) => Some(record.value),
             _ => None
         })
     }
