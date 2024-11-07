@@ -25,7 +25,7 @@ impl Guest for Component {
 
         println!("execute - address: {}, statement: {}, params: {:?}", address, statement, params);
 
-        let params = params.iter().map(|v| DbValue::Primitive(DbValuePrimitive::Chars(v.clone()))).collect::<Vec<DbValue>>();
+        let params = params.iter().map(|v| DbValue::Primitive(DbValuePrimitive::Text(v.clone()))).collect::<Vec<DbValue>>();
 
         let result = connection.execute(&statement, &params).map_err(|e| e.to_string());
 
@@ -41,7 +41,7 @@ impl Guest for Component {
 
         println!("query - address: {}, statement: {}, params: {:?}", address, statement, params);
 
-        let params = params.iter().map(|v| DbValue::Primitive(DbValuePrimitive::Chars(v.clone()))).collect::<Vec<DbValue>>();
+        let params = params.iter().map(|v| DbValue::Primitive(DbValuePrimitive::Text(v.clone()))).collect::<Vec<DbValue>>();
 
         let result_set = connection.query(&statement, &params).map_err(|e| e.to_string())?;
 

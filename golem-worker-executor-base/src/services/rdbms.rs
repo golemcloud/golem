@@ -57,7 +57,7 @@ impl RdbmsPoolKey {
 
 pub mod postgres {
     use crate::services::rdbms::types::{
-        DbColumnType, DbColumnTypeMeta, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
+        DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
         DbValuePrimitive, EmptyDbResultSet, SimpleDbResultSet,
     };
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
@@ -252,7 +252,7 @@ pub mod postgres {
 
     #[derive(Clone)]
     pub struct StreamDbResultSet<'q> {
-        column_metadata: Vec<DbColumnTypeMeta>,
+        columns: Vec<DbColumn>,
         first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow>>>>,
         row_stream:
             Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<sqlx::postgres::PgRow, sqlx::Error>>>>>,
@@ -260,12 +260,12 @@ pub mod postgres {
 
     impl<'q> StreamDbResultSet<'q> {
         fn new(
-            column_metadata: Vec<DbColumnTypeMeta>,
+            columns: Vec<DbColumn>,
             first_rows: Vec<DbRow>,
             row_stream: BoxStream<'q, Vec<Result<sqlx::postgres::PgRow, sqlx::Error>>>,
         ) -> Self {
             Self {
-                column_metadata,
+                columns,
                 first_rows: Arc::new(async_mutex::Mutex::new(Some(first_rows))),
                 row_stream: Arc::new(async_mutex::Mutex::new(row_stream)),
             }
@@ -307,9 +307,9 @@ pub mod postgres {
 
     #[async_trait]
     impl DbResultSet for StreamDbResultSet<'_> {
-        async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String> {
-            info!("get_column_metadata");
-            Ok(self.column_metadata.clone())
+        async fn get_columns(&self) -> Result<Vec<DbColumn>, String> {
+            info!("get_columns");
+            Ok(self.columns.clone())
         }
 
         async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
@@ -389,27 +389,24 @@ pub mod postgres {
         value: DbValuePrimitive,
     ) -> Result<sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments>, String> {
         match value {
-            DbValuePrimitive::Integer(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Int8(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Int16(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Int32(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Int64(v) => Ok(query.bind(v)),
             DbValuePrimitive::Decimal(v) => Ok(query.bind(v)),
             DbValuePrimitive::Float(v) => Ok(query.bind(v)),
             DbValuePrimitive::Boolean(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Chars(v) => Ok(query.bind(v)),
             DbValuePrimitive::Text(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Binary(v) => Ok(query.bind(v)),
             DbValuePrimitive::Blob(v) => Ok(query.bind(v)),
             DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
             DbValuePrimitive::Json(v) => Ok(query.bind(v)),
             DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Spatial(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Enumeration(v) => Ok(query.bind(v)),
-            DbValuePrimitive::Other(_, v) => Ok(query.bind(v)),
-            DbValuePrimitive::Datetime(v) => {
-                Ok(query.bind(chrono::DateTime::from_timestamp_millis(v as i64)))
+            DbValuePrimitive::Timestamp(v) => {
+                Ok(query.bind(chrono::DateTime::from_timestamp_millis(v)))
             }
-            DbValuePrimitive::Interval(v) => {
-                Ok(query.bind(chrono::Duration::milliseconds(v as i64)))
-            }
+            DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
             DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
+            _ => Err(format!("Unsupported value: {:?}", value)),
         }
     }
 
@@ -467,46 +464,39 @@ pub mod postgres {
             pg_type_name::INT2 => {
                 let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Integer(v as i64)),
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int16(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
             pg_type_name::INT4 => {
                 let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Integer(v as i64)),
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int32(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
             pg_type_name::INT8 => {
                 let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Integer(v)),
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int64(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
             pg_type_name::FLOAT4 => {
                 let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v as f64)),
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
             pg_type_name::FLOAT8 => {
                 let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v)),
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Double(v)),
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            pg_type_name::VARCHAR => {
-                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
-                match v {
-                    Some(v) => DbValue::Primitive(DbValuePrimitive::Chars(v)),
-                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
-                }
-            }
-            pg_type_name::TEXT => {
+            pg_type_name::TEXT | pg_type_name::VARCHAR | pg_type_name::BPCHAR => {
                 let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
@@ -527,6 +517,13 @@ pub mod postgres {
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
+            pg_type_name::BYTEA => {
+                let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Blob(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
             pg_type_name::UUID => {
                 let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
@@ -534,12 +531,12 @@ pub mod postgres {
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
             }
-            pg_type_name::DATE | pg_type_name::TIMESTAMP | pg_type_name::TIMESTAMPTZ => {
+            pg_type_name::TIMESTAMP | pg_type_name::TIMESTAMPTZ => {
                 let v: Option<chrono::DateTime<chrono::Utc>> =
                     row.try_get(index).map_err(|e| e.to_string())?;
                 match v {
                     Some(v) => {
-                        DbValue::Primitive(DbValuePrimitive::Datetime(v.timestamp_millis() as u64))
+                        DbValue::Primitive(DbValuePrimitive::Timestamp(v.timestamp_millis()))
                     }
                     None => DbValue::Primitive(DbValuePrimitive::DbNull),
                 }
@@ -549,17 +546,19 @@ pub mod postgres {
         Ok(value)
     }
 
-    impl TryFrom<&sqlx::postgres::PgColumn> for DbColumnTypeMeta {
+    impl TryFrom<&sqlx::postgres::PgColumn> for DbColumn {
         type Error = String;
 
         fn try_from(value: &sqlx::postgres::PgColumn) -> Result<Self, Self::Error> {
+            let ordinal = value.ordinal() as u64;
             let db_type: DbColumnType = value.type_info().try_into()?;
+            let db_type_name = value.type_info().name().to_string();
             let name = value.name().to_string();
-            Ok(DbColumnTypeMeta {
+            Ok(DbColumn {
+                ordinal,
                 name,
                 db_type,
-                db_type_flags: HashSet::new(),
-                foreign_key: None,
+                db_type_name,
             })
         }
     }
@@ -572,36 +571,29 @@ pub mod postgres {
 
             match type_name {
                 pg_type_name::BOOL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
-                pg_type_name::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(
-                    Some(2),
-                ))),
-                pg_type_name::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(
-                    Some(4),
-                ))),
-                pg_type_name::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Integer(
-                    Some(8),
-                ))),
-                pg_type_name::NUMERIC => Ok(DbColumnType::Primitive(
-                    DbColumnTypePrimitive::Decimal(0, 0),
-                )),
+                pg_type_name::INT2 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int16)),
+                pg_type_name::INT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int32)),
+                pg_type_name::INT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int64)),
+                pg_type_name::NUMERIC => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Decimal))
+                }
                 pg_type_name::FLOAT4 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
-                pg_type_name::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
+                pg_type_name::FLOAT8 => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Double)),
                 pg_type_name::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
-                pg_type_name::TEXT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
-                pg_type_name::VARCHAR => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(None)))
+                pg_type_name::TEXT | pg_type_name::VARCHAR | pg_type_name::BPCHAR => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text))
                 }
-                pg_type_name::BPCHAR => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(None)))
-                }
-                pg_type_name::CHAR => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Chars(
-                    Some(1),
-                ))),
                 pg_type_name::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
+                pg_type_name::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
                 pg_type_name::TIMESTAMP => {
-                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime))
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamp))
                 }
-                pg_type_name::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Datetime)),
+                pg_type_name::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Date)),
+                pg_type_name::TIME => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Time)),
+                pg_type_name::INTERVAL => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Interval))
+                }
+                pg_type_name::BYTEA => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Blob)),
                 _ => Err(format!("Unsupported type: {:?}", value)),
             }
         }
@@ -653,7 +645,7 @@ pub mod postgres {
         pub(crate) const BOX_ARRAY: &str = "BOX[]";
         pub(crate) const FLOAT4_ARRAY: &str = "FLOAT4[]";
         pub(crate) const FLOAT8_ARRAY: &str = "FLOAT8[]";
-        pub(crate) const Polygon_ARRAY: &str = "POLYGON[]";
+        pub(crate) const POLYGON_ARRAY: &str = "POLYGON[]";
         pub(crate) const OID_ARRAY: &str = "OID[]";
         pub(crate) const MACADDR_ARRAY: &str = "MACADDR[]";
         pub(crate) const INET_ARRAY: &str = "INET[]";
@@ -713,21 +705,21 @@ pub mod types {
 
     #[async_trait]
     pub trait DbResultSet {
-        async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String>;
+        async fn get_columns(&self) -> Result<Vec<DbColumn>, String>;
 
         async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String>;
     }
 
     #[derive(Clone, Debug)]
     pub struct SimpleDbResultSet {
-        column_metadata: Vec<DbColumnTypeMeta>,
+        columns: Vec<DbColumn>,
         rows: Arc<Mutex<Option<Vec<DbRow>>>>,
     }
 
     impl SimpleDbResultSet {
-        pub fn new(column_metadata: Vec<DbColumnTypeMeta>, rows: Option<Vec<DbRow>>) -> Self {
+        pub fn new(columns: Vec<DbColumn>, rows: Option<Vec<DbRow>>) -> Self {
             Self {
-                column_metadata,
+                columns,
                 rows: Arc::new(Mutex::new(rows)),
             }
         }
@@ -735,9 +727,9 @@ pub mod types {
 
     #[async_trait]
     impl DbResultSet for SimpleDbResultSet {
-        async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String> {
-            info!("get_column_metadata");
-            Ok(self.column_metadata.clone())
+        async fn get_columns(&self) -> Result<Vec<DbColumn>, String> {
+            info!("get_columns");
+            Ok(self.columns.clone())
         }
 
         async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
@@ -755,8 +747,8 @@ pub mod types {
 
     #[async_trait]
     impl DbResultSet for EmptyDbResultSet {
-        async fn get_column_metadata(&self) -> Result<Vec<DbColumnTypeMeta>, String> {
-            info!("get_column_metadata");
+        async fn get_columns(&self) -> Result<Vec<DbColumn>, String> {
+            info!("get_columns");
             Ok(vec![])
         }
 
@@ -768,47 +760,50 @@ pub mod types {
 
     #[derive(Clone, Debug)]
     pub enum DbColumnTypePrimitive {
-        Integer(Option<u8>),
-        Decimal(u8, u8),
+        Int8,
+        Int16,
+        Int32,
+        Int64,
         Float,
+        Double,
+        Decimal,
         Boolean,
-        Datetime,
+        Timestamp,
+        Date,
+        Time,
         Interval,
-        Chars(Option<u32>),
         Text,
-        Binary(Option<u32>),
         Blob,
-        Enumeration(Vec<String>),
         Json,
         Xml,
         Uuid,
-        Spatial,
     }
 
     #[derive(Clone, Debug)]
     pub enum DbColumnType {
         Primitive(DbColumnTypePrimitive),
-        Array(Vec<Option<u32>>, DbColumnTypePrimitive),
+        Array(DbColumnTypePrimitive),
     }
 
     #[derive(Clone, Debug)]
     pub enum DbValuePrimitive {
-        Integer(i64),
+        Int8(i8),
+        Int16(i16),
+        Int32(i32),
+        Int64(i64),
+        Float(f32),
+        Double(f64),
         Decimal(String),
-        Float(f64),
         Boolean(bool),
-        Datetime(u64),
-        Interval(u64),
-        Chars(String),
+        Timestamp(i64),
+        Date(i64),
+        Time(i64),
+        Interval(i64),
         Text(String),
-        Binary(Vec<u8>),
         Blob(Vec<u8>),
-        Enumeration(String),
         Json(String),
         Xml(String),
         Uuid(Uuid),
-        Spatial(Vec<f64>),
-        Other(String, Vec<u8>),
         DbNull,
     }
 
@@ -824,23 +819,40 @@ pub mod types {
     }
 
     #[derive(Clone, Debug)]
-    pub struct DbColumnTypeMeta {
+    pub struct DbColumn {
+        pub ordinal: u64,
         pub name: String,
         pub db_type: DbColumnType,
-        pub db_type_flags: HashSet<DbColumnTypeFlag>,
-        pub foreign_key: Option<String>,
+        pub db_type_name: String,
     }
 
+    // #[derive(Clone, Debug)]
+    // pub struct DbColumnTypeMeta {
+    //     pub name: String,
+    //     pub db_type: DbColumnType,
+    //     pub db_type_flags: HashSet<DbColumnTypeFlag>,
+    //     pub foreign_key: Option<String>,
+    // }
+    //
+    // #[derive(Clone, Debug)]
+    // pub enum DbColumnTypeFlag {
+    //     PrimaryKey,
+    //     ForeignKey,
+    //     Unique,
+    //     Nullable,
+    //     Generated,
+    //     AutoIncrement,
+    //     DefaultValue,
+    //     Indexed,
+    // }
+
     #[derive(Clone, Debug)]
-    pub enum DbColumnTypeFlag {
-        PrimaryKey,
-        ForeignKey,
-        Unique,
-        Nullable,
-        Generated,
-        AutoIncrement,
-        DefaultValue,
-        Indexed,
+    pub enum Error {
+        ConnectionFailure(String),
+        QueryParameterFailure(String),
+        QueryExecutionFailure(String),
+        QueryResponseFailure(String),
+        Other(String),
     }
 }
 
@@ -848,9 +860,8 @@ pub mod types {
 mod tests {
     use crate::services::rdbms::types::{DbRow, DbValue, DbValuePrimitive};
     use crate::services::rdbms::RdbmsService;
-    use crate::services::rdbms::{RdbmsPoolKey, RdbmsServiceDefault};
+    use crate::services::rdbms::RdbmsServiceDefault;
     use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
-    use std::hash::Hash;
     use test_r::{test, timeout};
     use uuid::Uuid;
 
@@ -895,7 +906,7 @@ mod tests {
 
         assert!(result.is_ok());
 
-        let columns = result.unwrap().get_column_metadata().await.unwrap();
+        let columns = result.unwrap().get_columns().await.unwrap();
         // println!("columns: {columns:?}");
         assert!(columns.len() > 0);
 
@@ -946,7 +957,7 @@ mod tests {
 
         let result = result.unwrap();
 
-        let columns = result.get_column_metadata().await.unwrap();
+        let columns = result.get_columns().await.unwrap();
         // println!("columns: {columns:?}");
         assert!(columns.len() > 0);
 

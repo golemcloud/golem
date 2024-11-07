@@ -49,25 +49,6 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "open");
 
-        // let result = Durability::<Ctx, String, String, SerializableError>::wrap(
-        //     self,
-        //     WrappedFunctionType::ReadRemote,
-        //     "golem rdbms::postgres::db-connection::open",
-        //     address.clone(),
-        //     |ctx| ctx.state.rdbms_service.postgres().create(address.clone().as_str()),
-        // )
-        //     .await;
-        // match result {
-        //     Ok(_) => {
-        //         let entry = PostgresDbConnection::new(address);
-        //         let resource = self.as_wasi_view().table().push(entry)?;
-        //
-        //
-        //         Ok(Ok(resource))
-        //     },
-        //     Err(e) => Ok(Err(Error::Error(format!("{:?}", e)))),
-        // }
-
         let worker_id = self.state.owned_worker_id.clone();
         let result = self
             .state
@@ -82,11 +63,8 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 let resource = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(resource))
             }
-            Err(e) => Ok(Err(Error::Error(e))),
+            Err(e) => Ok(Err(Error::ConnectionFailure(e))),
         }
-        // let entry = PostgresDbConnection::new(address);
-        // let resource = self.as_wasi_view().table().push(entry)?;
-        // Ok(Ok(resource))
     }
 
     async fn query(
@@ -123,7 +101,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 let db_result_set = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(db_result_set))
             }
-            Err(e) => Ok(Err(Error::Error(e))),
+            Err(e) => Ok(Err(Error::QueryExecutionFailure(e))),
         }
     }
 
@@ -154,7 +132,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 params.into_iter().map(|v| v.into()).collect(),
             )
             .await
-            .map_err(Error::Error);
+            .map_err(Error::QueryExecutionFailure);
 
         Ok(result)
     }
