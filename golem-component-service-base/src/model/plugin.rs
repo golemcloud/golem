@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::ComponentOwner;
 use crate::repo::plugin_installation::PluginInstallationRecord;
 use crate::repo::RowMeta;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::{ComponentId, ComponentVersion, PluginInstallationId};
-use golem_service_base::auth::DefaultNamespace;
 use http::Uri;
 use poem_openapi::types::{ParseFromJSON, ToJSON, Type};
 use poem_openapi::{Enum, Object, Union};
@@ -30,7 +30,7 @@ use std::fmt::{Debug, Display, Formatter};
 #[derive(Debug, Clone, PartialEq, Serialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
+pub struct PluginDefinition<Owner: ComponentOwner, Scope: PluginScope> {
     pub name: String,
     pub version: String,
     pub description: String,
@@ -55,7 +55,7 @@ pub struct PluginDefinitionWithoutOwner<Scope: PluginScope> {
 }
 
 impl<Scope: PluginScope> PluginDefinitionWithoutOwner<Scope> {
-    pub fn with_owner<Owner: PluginOwner>(self, owner: Owner) -> PluginDefinition<Owner, Scope> {
+    pub fn with_owner<Owner: ComponentOwner>(self, owner: Owner) -> PluginDefinition<Owner, Scope> {
         PluginDefinition {
             name: self.name,
             version: self.version,
@@ -162,43 +162,6 @@ impl PluginScope for DefaultPluginScope {
     }
 }
 
-// TODO: Rename to ComponentOwner
-pub trait PluginOwner:
-    Debug
-    + Display
-    + Clone
-    + PartialEq
-    + Serialize
-    + for<'de> Deserialize<'de>
-    + Type
-    + ParseFromJSON
-    + ToJSON
-    + Send
-    + Sync
-    + 'static
-{
-    type Row: RowMeta<Sqlite>
-        + RowMeta<Postgres>
-        + for<'r> sqlx::FromRow<'r, SqliteRow>
-        + for<'r> sqlx::FromRow<'r, PgRow>
-        + From<Self>
-        + TryInto<Self, Error = String>
-        + Clone
-        + Display
-        + Send
-        + Sync
-        + Unpin
-        + 'static;
-
-    // Corresponding Namespace type for component services
-    type Namespace: Display + TryFrom<String, Error = String> + Send + Sync + 'static;
-}
-
-impl PluginOwner for DefaultPluginOwner {
-    type Row = crate::repo::plugin::DefaultPluginOwnerRow;
-    type Namespace = DefaultNamespace;
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -211,7 +174,7 @@ pub struct PluginInstallation {
 }
 
 impl PluginInstallation {
-    pub fn try_into<Owner: PluginOwner, Target: PluginInstallationTarget>(
+    pub fn try_into<Owner: ComponentOwner, Target: PluginInstallationTarget>(
         self,
         owner: Owner::Row,
         target: Target::Row,

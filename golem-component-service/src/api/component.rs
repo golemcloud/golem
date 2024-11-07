@@ -14,16 +14,15 @@
 
 use crate::api::{ComponentError, Result};
 use futures_util::TryStreamExt;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
-    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+    DefaultComponentOwner, PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
 };
 use golem_component_service_base::service::component::ComponentService;
 use golem_component_service_base::service::plugin::PluginService;
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::model::*;
 use poem::Body;
 use poem_openapi::param::{Path, Query};
@@ -34,9 +33,9 @@ use std::sync::Arc;
 use tracing::Instrument;
 
 pub struct ComponentApi {
-    pub component_service: Arc<dyn ComponentService<DefaultPluginOwner> + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
     pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
+        Arc<dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
@@ -62,7 +61,7 @@ impl ComponentApi {
                     &component_name,
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
-                    &DefaultNamespace::default(),
+                    &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
                 .await
@@ -97,8 +96,7 @@ impl ComponentApi {
                     &component_id.0,
                     data,
                     component_type.0,
-                    &DefaultPluginOwner,
-                    &DefaultNamespace::default(),
+                    &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
                 .await
@@ -128,7 +126,7 @@ impl ComponentApi {
         );
         let response = self
             .component_service
-            .download_stream(&component_id.0, version.0, &DefaultNamespace::default())
+            .download_stream(&component_id.0, version.0, &DefaultComponentOwner)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -167,7 +165,7 @@ impl ComponentApi {
 
         let response = self
             .component_service
-            .get(&component_id.0, &DefaultNamespace::default())
+            .get(&component_id.0, &DefaultComponentOwner)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -204,7 +202,7 @@ impl ComponentApi {
             };
 
             self.component_service
-                .get_by_version(&versioned_component_id, &DefaultNamespace::default())
+                .get_by_version(&versioned_component_id, &DefaultComponentOwner)
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
@@ -238,7 +236,7 @@ impl ComponentApi {
 
         let response = self
             .component_service
-            .get_latest_version(&component_id.0, &DefaultNamespace::default())
+            .get_latest_version(&component_id.0, &DefaultComponentOwner)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -267,7 +265,7 @@ impl ComponentApi {
 
         let response = self
             .component_service
-            .find_by_name(component_name.0, &DefaultNamespace::default())
+            .find_by_name(component_name.0, &DefaultComponentOwner)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -298,7 +296,7 @@ impl ComponentApi {
         let response = self
             .plugin_service
             .get_plugin_installations_for_component(
-                &DefaultPluginOwner,
+                &DefaultComponentOwner,
                 &component_id.0,
                 version_int,
             )
@@ -330,7 +328,7 @@ impl ComponentApi {
         let response = self
             .plugin_service
             .create_plugin_installation_for_component(
-                &DefaultPluginOwner,
+                &DefaultComponentOwner,
                 &component_id.0,
                 plugin.0,
             )
@@ -362,7 +360,7 @@ impl ComponentApi {
         let response = self
             .plugin_service
             .update_plugin_installation_for_component(
-                &DefaultPluginOwner,
+                &DefaultComponentOwner,
                 &installation_id.0,
                 &component_id.0,
                 update.0,
@@ -394,7 +392,7 @@ impl ComponentApi {
         let response = self
             .plugin_service
             .delete_plugin_installation_for_component(
-                &DefaultPluginOwner,
+                &DefaultComponentOwner,
                 &installation_id.0,
                 &component_id.0,
             )

@@ -14,7 +14,7 @@
 
 use crate::model::{
     ComponentPluginInstallationTarget, PluginDefinition, PluginInstallation,
-    PluginInstallationCreation, PluginInstallationUpdate, PluginOwner, PluginScope,
+    PluginInstallationCreation, PluginInstallationUpdate, ComponentOwner, PluginScope,
 };
 use crate::repo::component::ComponentRepo;
 use crate::repo::plugin::{PluginRecord, PluginRepo};
@@ -60,7 +60,7 @@ impl SafeDisplay for PluginError {
 }
 
 #[async_trait]
-pub trait PluginService<Owner: PluginOwner, Scope: PluginScope> {
+pub trait PluginService<Owner: ComponentOwner, Scope: PluginScope> {
     /// Get all the registered plugins owned by `owner`, regardless of their scope
     async fn list_plugins(
         &self,
@@ -129,12 +129,12 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope> {
     ) -> Result<(), PluginError>;
 }
 
-pub struct PluginServiceDefault<Owner: PluginOwner, Scope: PluginScope> {
+pub struct PluginServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
     plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
     component_repo: Arc<dyn ComponentRepo<Owner> + Send + Sync>,
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> {
+impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> {
     pub fn new(
         plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
         component_repo: Arc<dyn ComponentRepo<Owner> + Send + Sync>,
@@ -157,7 +157,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> 
 }
 
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
+impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner, Scope>
     for PluginServiceDefault<Owner, Scope>
 {
     async fn list_plugins(

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::{
-    Component, ComponentConstraints, ComponentPluginInstallationTarget, PluginOwner,
+    Component, ComponentConstraints, ComponentOwner, ComponentPluginInstallationTarget,
 };
 use crate::repo::plugin_installation::{
     ComponentPluginInstallationRow, DbPluginInstallationRepoQueries, PluginInstallationRecord,
@@ -28,7 +28,7 @@ use golem_common::model::{ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, Row};
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::result::Result;
@@ -51,21 +51,19 @@ pub struct ComponentRecord {
     pub component_type: i32,
 }
 
-impl<Namespace> TryFrom<ComponentRecord> for Component<Namespace>
-where
-    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
-    <Namespace as TryFrom<String>>::Error: Display + Send + Sync + 'static,
-{
+impl<Owner: ComponentOwner> TryFrom<ComponentRecord> for Component<Owner> {
     type Error = String;
+
     fn try_from(value: ComponentRecord) -> Result<Self, Self::Error> {
         let metadata: ComponentMetadata = record_metadata_serde::deserialize(&value.metadata)?;
         let versioned_component_id: VersionedComponentId = VersionedComponentId {
             component_id: ComponentId(value.component_id),
             version: value.version as u64,
         };
-        let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
+        let owner: Owner = value.namespace.parse()?;
+
         Ok(Component {
-            namespace,
+            owner,
             component_name: ComponentName(value.name),
             component_size: value.size as u64,
             metadata,
@@ -85,16 +83,13 @@ impl From<ComponentRecord> for VersionedComponentId {
     }
 }
 
-impl<Namespace> TryFrom<Component<Namespace>> for ComponentRecord
-where
-    Namespace: Display,
-{
+impl<Owner: ComponentOwner> TryFrom<Component<Owner>> for ComponentRecord {
     type Error = String;
 
-    fn try_from(value: Component<Namespace>) -> Result<Self, Self::Error> {
+    fn try_from(value: Component<Owner>) -> Result<Self, Self::Error> {
         let metadata = record_metadata_serde::serialize(&value.metadata)?;
         Ok(Self {
-            namespace: value.namespace.to_string(),
+            namespace: value.owner.to_string(),
             component_id: value.versioned_component_id.component_id.0,
             name: value.component_name.0,
             size: value.component_size as i32,
@@ -113,34 +108,28 @@ pub struct ComponentConstraintsRecord {
     pub constraints: Vec<u8>,
 }
 
-impl<Namespace> TryFrom<ComponentConstraints<Namespace>> for ComponentConstraintsRecord
-where
-    Namespace: Display,
-{
+impl<Owner: ComponentOwner> TryFrom<ComponentConstraints<Owner>> for ComponentConstraintsRecord {
     type Error = String;
 
-    fn try_from(value: ComponentConstraints<Namespace>) -> Result<Self, Self::Error> {
+    fn try_from(value: ComponentConstraints<Owner>) -> Result<Self, Self::Error> {
         let metadata = constraint_serde::serialize(&value.constraints)?;
         Ok(Self {
-            namespace: value.namespace.to_string(),
+            namespace: value.owner.to_string(),
             component_id: value.component_id.0,
             constraints: metadata.into(),
         })
     }
 }
 
-impl<Namespace> TryFrom<ComponentConstraintsRecord> for ComponentConstraints<Namespace>
-where
-    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
-    <Namespace as TryFrom<String>>::Error: Display + Send + Sync + 'static,
-{
+impl<Owner: ComponentOwner> TryFrom<ComponentConstraintsRecord> for ComponentConstraints<Owner> {
     type Error = String;
+
     fn try_from(value: ComponentConstraintsRecord) -> Result<Self, Self::Error> {
         let function_constraints: FunctionConstraintCollection =
             constraint_serde::deserialize(&value.constraints)?;
-        let namespace = Namespace::try_from(value.namespace).map_err(|e| e.to_string())?;
+        let owner = value.namespace.parse()?;
         Ok(ComponentConstraints {
-            namespace,
+            owner,
             component_id: ComponentId(value.component_id),
             constraints: function_constraints,
         })
@@ -148,7 +137,7 @@ where
 }
 
 #[async_trait]
-pub trait ComponentRepo<Owner: PluginOwner>: Debug {
+pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError>;
 
     /// Creates a new component version (ignores component.version) and copies the plugin
@@ -231,18 +220,18 @@ pub trait ComponentRepo<Owner: PluginOwner>: Debug {
     ) -> Result<(), RepoError>;
 }
 
-pub struct LoggedComponentRepo<Owner: PluginOwner, Repo: ComponentRepo<Owner>> {
+pub struct LoggedComponentRepo<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> {
     repo: Repo,
     _owner: PhantomData<Owner>,
 }
 
-impl<Owner: PluginOwner, Repo: ComponentRepo<Owner>> Debug for LoggedComponentRepo<Owner, Repo> {
+impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> Debug for LoggedComponentRepo<Owner, Repo> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.repo.fmt(f)
     }
 }
 
-impl<Owner: PluginOwner, Repo: ComponentRepo<Owner>> LoggedComponentRepo<Owner, Repo> {
+impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner>> LoggedComponentRepo<Owner, Repo> {
     pub fn new(repo: Repo) -> Self {
         Self {
             repo,
@@ -276,7 +265,7 @@ impl<Owner: PluginOwner, Repo: ComponentRepo<Owner>> LoggedComponentRepo<Owner, 
 }
 
 #[async_trait]
-impl<Owner: PluginOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentRepo<Owner>
+impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentRepo<Owner>
     for LoggedComponentRepo<Owner, Repo>
 {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
@@ -435,7 +424,7 @@ impl<Owner: PluginOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentRepo
     }
 }
 
-pub struct DbComponentRepo<DB: Database, Owner: PluginOwner> {
+pub struct DbComponentRepo<DB: Database, Owner: ComponentOwner> {
     db_pool: Arc<Pool<DB>>,
     plugin_installation_queries: Arc<
         dyn PluginInstallationRepoQueries<DB, Owner, ComponentPluginInstallationTarget>
@@ -444,7 +433,7 @@ pub struct DbComponentRepo<DB: Database, Owner: PluginOwner> {
     >,
 }
 
-impl<DB: Database + Sync, Owner: PluginOwner> DbComponentRepo<DB, Owner>
+impl<DB: Database + Sync, Owner: ComponentOwner> DbComponentRepo<DB, Owner>
 where
     DbPluginInstallationRepoQueries<DB>:
         PluginInstallationRepoQueries<DB, Owner, ComponentPluginInstallationTarget>,
@@ -458,7 +447,7 @@ where
     }
 }
 
-impl<Owner: PluginOwner, DB: Database> Debug for DbComponentRepo<DB, Owner> {
+impl<Owner: ComponentOwner, DB: Database> Debug for DbComponentRepo<DB, Owner> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DbComponentRepo")
             .field("db_pool", &self.db_pool)
@@ -468,7 +457,7 @@ impl<Owner: PluginOwner, DB: Database> Debug for DbComponentRepo<DB, Owner> {
 
 #[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
-impl<Owner: PluginOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres, Owner> {
+impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postgres, Owner> {
     async fn create(&self, component: &ComponentRecord) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 

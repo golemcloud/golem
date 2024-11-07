@@ -14,7 +14,7 @@
 
 use crate::config::ComponentServiceConfig;
 use golem_common::config::DbConfig;
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_common::model::plugin::DefaultPluginScope;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
@@ -33,13 +33,14 @@ use golem_service_base::service::component_object_store::{
     ComponentObjectStore, LoggedComponentObjectStore,
 };
 use std::sync::Arc;
+use golem_component_service_base::model::DefaultComponentOwner;
 
 #[derive(Clone)]
 pub struct Services {
-    pub component_service: Arc<dyn ComponentService<DefaultPluginOwner> + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
     pub compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
     pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
+        Arc<dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Send + Sync>,
 }
 
 impl Services {
@@ -50,12 +51,12 @@ impl Services {
                     .await
                     .map_err(|e| e.to_string())?;
 
-                let component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send> =
+                let component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send> =
                     Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
                         db_pool.clone().into(),
                     )));
                 let plugin_repo: Arc<
-                    dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+                    dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Sync + Send,
                 > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
                     db_pool.clone().into(),
                 )));
@@ -65,12 +66,12 @@ impl Services {
                 let db_pool = db::create_sqlite_pool(db_config)
                     .await
                     .map_err(|e| e.to_string())?;
-                let component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send> =
+                let component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send> =
                     Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
                         db_pool.clone().into(),
                     )));
                 let plugin_repo: Arc<
-                    dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+                    dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Sync + Send,
                 > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
                     db_pool.clone().into(),
                 )));
@@ -106,7 +107,7 @@ impl Services {
                 }
             };
 
-        let component_service: Arc<dyn ComponentService<DefaultPluginOwner> + Sync + Send> =
+        let component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send> =
             Arc::new(ComponentServiceDefault::new(
                 component_repo.clone(),
                 object_store.clone(),
@@ -114,7 +115,7 @@ impl Services {
             ));
 
         let plugin_service: Arc<
-            dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+            dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send,
         > = Arc::new(PluginServiceDefault::new(plugin_repo, component_repo));
 
         Ok(Services {

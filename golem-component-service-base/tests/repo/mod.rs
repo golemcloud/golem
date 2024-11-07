@@ -23,7 +23,7 @@ use golem_component_service_base::model::{
 };
 use golem_component_service_base::repo::component::ComponentRepo;
 use golem_component_service_base::repo::plugin::{
-    DefaultPluginOwnerRow, DefaultPluginScopeRow, PluginRepo,
+    DefaultComponentOwnerRow, DefaultPluginScopeRow, PluginRepo,
 };
 use golem_component_service_base::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_component_service_base::service::component::{
@@ -665,7 +665,7 @@ async fn test_default_plugin_repo(
     component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
     plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
 ) -> Result<(), RepoError> {
-    let owner: DefaultPluginOwnerRow = DefaultPluginOwner.into();
+    let owner: DefaultComponentOwnerRow = DefaultPluginOwner.into();
     let component_id = ComponentId::new_v4();
     let component_id2 = ComponentId::new_v4();
     let scope1: DefaultPluginScopeRow = DefaultPluginScope::Component(ComponentPluginScope {
@@ -795,7 +795,7 @@ async fn test_default_component_plugin_installation(
     component_repo: Arc<dyn ComponentRepo<DefaultPluginOwner> + Sync + Send>,
     plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
 ) -> Result<(), RepoError> {
-    let owner: DefaultPluginOwnerRow = DefaultPluginOwner.into();
+    let owner: DefaultComponentOwnerRow = DefaultPluginOwner.into();
     let component_id = ComponentId::new_v4();
 
     let namespace = Uuid::new_v4().to_string();

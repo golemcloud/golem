@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use crate::model::{
-    ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition, PluginOwner,
-    PluginScope, PluginTypeSpecificDefinition,
+    ComponentOwner, ComponentTransformerDefinition, DefaultComponentOwner,
+    OplogProcessorDefinition, PluginDefinition, PluginScope, PluginTypeSpecificDefinition,
 };
 use crate::repo::RowMeta;
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginOwner, DefaultPluginScope};
+use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope};
 use golem_common::model::ComponentId;
 use golem_common::model::Empty;
 use golem_service_base::repo::RepoError;
@@ -33,7 +33,7 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
+pub struct PluginRecord<Owner: ComponentOwner, Scope: PluginScope> {
     name: String,
     version: String,
     description: String,
@@ -59,7 +59,7 @@ pub struct PluginRecord<Owner: PluginOwner, Scope: PluginScope> {
     deleted: bool,
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>>
+impl<Owner: ComponentOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>>
     for PluginRecord<Owner, Scope>
 {
     fn from(value: PluginDefinition<Owner, Scope>) -> Self {
@@ -111,7 +111,7 @@ impl<Owner: PluginOwner, Scope: PluginScope> From<PluginDefinition<Owner, Scope>
     }
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
+impl<Owner: ComponentOwner, Scope: PluginScope> TryFrom<PluginRecord<Owner, Scope>>
     for PluginDefinition<Owner, Scope>
 {
     type Error = String;
@@ -212,29 +212,29 @@ where
 }
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct DefaultPluginOwnerRow {}
+pub struct DefaultComponentOwnerRow {}
 
-impl Display for DefaultPluginOwnerRow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for DefaultComponentOwnerRow {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "default")
     }
 }
 
-impl From<DefaultPluginOwner> for DefaultPluginOwnerRow {
-    fn from(_: DefaultPluginOwner) -> Self {
+impl From<DefaultComponentOwner> for DefaultComponentOwnerRow {
+    fn from(_: DefaultComponentOwner) -> Self {
         Self {}
     }
 }
 
-impl TryFrom<DefaultPluginOwnerRow> for DefaultPluginOwner {
+impl TryFrom<DefaultComponentOwnerRow> for DefaultComponentOwner {
     type Error = String;
 
-    fn try_from(_: DefaultPluginOwnerRow) -> Result<Self, Self::Error> {
-        Ok(DefaultPluginOwner {})
+    fn try_from(_: DefaultComponentOwnerRow) -> Result<Self, Self::Error> {
+        Ok(DefaultComponentOwner {})
     }
 }
 
-impl<DB: Database> RowMeta<DB> for DefaultPluginOwnerRow {
+impl<DB: Database> RowMeta<DB> for DefaultComponentOwnerRow {
     fn add_column_list<Sep: Display>(_builder: &mut Separated<DB, Sep>) {}
 
     fn add_where_clause(&self, builder: &mut QueryBuilder<DB>) {
@@ -245,7 +245,7 @@ impl<DB: Database> RowMeta<DB> for DefaultPluginOwnerRow {
 }
 
 #[async_trait]
-pub trait PluginRepo<Owner: PluginOwner, Scope: PluginScope>: Debug {
+pub trait PluginRepo<Owner: ComponentOwner, Scope: PluginScope>: Debug {
     async fn get_all(
         &self,
         owner: &Owner::Row,
@@ -275,14 +275,17 @@ pub trait PluginRepo<Owner: PluginOwner, Scope: PluginScope>: Debug {
     async fn delete(&self, owner: &Owner::Row, name: &str, version: &str) -> Result<(), RepoError>;
 }
 
-pub struct LoggedPluginRepo<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>>
-{
+pub struct LoggedPluginRepo<
+    Owner: ComponentOwner,
+    Scope: PluginScope,
+    Repo: PluginRepo<Owner, Scope>,
+> {
     repo: Repo,
     _owner: PhantomData<Owner>,
     _scope: PhantomData<Scope>,
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>>
+impl<Owner: ComponentOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>>
     LoggedPluginRepo<Owner, Scope, Repo>
 {
     pub fn new(repo: Repo) -> Self {
@@ -325,7 +328,7 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>>
     }
 }
 
-impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>> Debug
+impl<Owner: ComponentOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>> Debug
     for LoggedPluginRepo<Owner, Scope, Repo>
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -334,7 +337,7 @@ impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope>> Deb
 }
 
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sync>
+impl<Owner: ComponentOwner, Scope: PluginScope, Repo: PluginRepo<Owner, Scope> + Sync>
     PluginRepo<Owner, Scope> for LoggedPluginRepo<Owner, Scope, Repo>
 {
     async fn get_all(
@@ -404,7 +407,7 @@ impl<DB: Database> Debug for DbPluginRepo<DB> {
 
 #[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
-impl<Owner: PluginOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
+impl<Owner: ComponentOwner, Scope: PluginScope> PluginRepo<Owner, Scope>
     for DbPluginRepo<sqlx::Postgres>
 {
     async fn get_all(

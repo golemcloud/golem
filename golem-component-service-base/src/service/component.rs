@@ -16,7 +16,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::model::{Component, ComponentConstraints, PluginOwner};
+use crate::model::{Component, ComponentConstraints, ComponentOwner};
 use crate::repo::component::{record_metadata_serde, ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
 use async_trait::async_trait;
@@ -144,15 +144,15 @@ impl From<ComponentError> for golem_api_grpc::proto::golem::component::v1::Compo
 }
 
 #[async_trait]
-pub trait ComponentService<Owner: PluginOwner> {
+pub trait ComponentService<Owner: ComponentOwner> {
     async fn create(
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
         component_type: ComponentType,
         data: Vec<u8>,
-        namespace: &Owner::Namespace,
-    ) -> Result<Component<Owner::Namespace>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError>;
 
     async fn update(
         &self,
@@ -160,21 +160,20 @@ pub trait ComponentService<Owner: PluginOwner> {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         owner: &Owner,
-        namespace: &Owner::Namespace, // TODO: this should be coming from owner
-    ) -> Result<Component<Owner::Namespace>, ComponentError>;
+    ) -> Result<Component<Owner>, ComponentError>;
 
     async fn download(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        namespace: &Owner::Namespace,
+        owner: &Owner,
     ) -> Result<Vec<u8>, ComponentError>;
 
     async fn download_stream(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        namespace: &Owner::Namespace,
+        owner: &Owner,
     ) -> Result<
         Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
         ComponentError,
@@ -184,54 +183,48 @@ pub trait ComponentService<Owner: PluginOwner> {
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        namespace: &Owner::Namespace,
+        owner: &Owner,
     ) -> Result<Option<Vec<u8>>, ComponentError>;
 
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
-        namespace: &Owner::Namespace,
-    ) -> Result<Vec<Component<Owner::Namespace>>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError>;
 
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
-        namespace: &Owner::Namespace,
+        owner: &Owner,
     ) -> Result<Option<ComponentId>, ComponentError>;
 
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
-        namespace: &Owner::Namespace,
-    ) -> Result<Option<Component<Owner::Namespace>>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError>;
 
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        namespace: &Owner::Namespace,
-    ) -> Result<Option<Component<Owner::Namespace>>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError>;
 
     async fn get(
         &self,
         component_id: &ComponentId,
-        namespace: &Owner::Namespace,
-    ) -> Result<Vec<Component<Owner::Namespace>>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError>;
 
-    async fn get_namespace(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<Option<Owner::Namespace>, ComponentError>;
+    async fn get_owner(&self, component_id: &ComponentId) -> Result<Option<Owner>, ComponentError>;
 
-    async fn delete(
-        &self,
-        component_id: &ComponentId,
-        namespace: &Owner::Namespace,
-    ) -> Result<(), ComponentError>;
+    async fn delete(&self, component_id: &ComponentId, owner: &Owner)
+        -> Result<(), ComponentError>;
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint: &ComponentConstraints<Owner::Namespace>,
-    ) -> Result<ComponentConstraints<Owner::Namespace>, ComponentError>;
+        component_constraint: &ComponentConstraints<Owner>,
+    ) -> Result<ComponentConstraints<Owner>, ComponentError>;
 
     async fn get_component_constraint(
         &self,
@@ -239,13 +232,13 @@ pub trait ComponentService<Owner: PluginOwner> {
     ) -> Result<Option<FunctionConstraintCollection>, ComponentError>;
 }
 
-pub struct ComponentServiceDefault<Owner: PluginOwner> {
+pub struct ComponentServiceDefault<Owner: ComponentOwner> {
     component_repo: Arc<dyn ComponentRepo<Owner> + Sync + Send>,
     object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
     component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
 }
 
-impl<Owner: PluginOwner> ComponentServiceDefault<Owner> {
+impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
     pub fn new(
         component_repo: Arc<dyn ComponentRepo<Owner> + Sync + Send>,
         object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
@@ -342,11 +335,11 @@ impl<Owner: PluginOwner> ComponentServiceDefault<Owner> {
             })
     }
 
-    async fn get_versioned_component_id<Namespace: Display + Clone>(
+    async fn get_versioned_component_id(
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        namespace: &Namespace,
+        owner: &Owner,
     ) -> Result<Option<VersionedComponentId>, ComponentError> {
         let stored = self
             .component_repo
@@ -354,7 +347,7 @@ impl<Owner: PluginOwner> ComponentServiceDefault<Owner> {
             .await?;
 
         match stored {
-            Some(stored) if stored.namespace == namespace.to_string() => {
+            Some(stored) if stored.namespace == owner.to_string() => {
                 let stored_version = stored.version as u64;
                 let requested_version = version.unwrap_or(stored_version);
 
@@ -373,34 +366,30 @@ impl<Owner: PluginOwner> ComponentServiceDefault<Owner> {
 }
 
 #[async_trait]
-impl<Owner: PluginOwner> ComponentService<Owner> for ComponentServiceDefault<Owner>
-where
-    Owner::Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
-    <Owner::Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
-{
+impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<Owner> {
     async fn create(
         &self,
         component_id: &ComponentId,
         component_name: &ComponentName,
         component_type: ComponentType,
         data: Vec<u8>,
-        namespace: &Owner::Namespace,
-    ) -> Result<Component<Owner::Namespace>, ComponentError> {
-        info!(namespace = %namespace, "Create component");
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        info!(owner = %owner, "Create component");
 
-        self.find_id_by_name(component_name, namespace)
+        self.find_id_by_name(component_name, owner)
             .await?
             .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
 
         let component = Component::new(
-            component_id,
-            component_name,
+            component_id.clone(),
+            component_name.clone(),
             component_type,
             &data,
-            namespace,
+            owner.clone(),
         )?;
 
-        info!(namespace = %namespace,"Uploaded component - exports {:?}",component.metadata.exports
+        info!(owner = %owner,"Uploaded component - exports {:?}",component.metadata.exports
         );
         tokio::try_join!(
             self.upload_user_component(&component.versioned_component_id, data.clone()),
@@ -430,9 +419,8 @@ where
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         owner: &Owner,
-        namespace: &Owner::Namespace,
-    ) -> Result<Component<Owner::Namespace>, ComponentError> {
-        info!(namespace = %namespace, "Update component");
+    ) -> Result<Component<Owner>, ComponentError> {
+        info!(owner = %owner, "Update component");
 
         let metadata = ComponentMetadata::analyse_component(&data)
             .map_err(ComponentError::ComponentProcessingError)?;
@@ -449,13 +437,14 @@ where
             }
         }
 
-        info!(namespace = %namespace, "Uploaded component - exports {:?}", metadata.exports);
+        info!(owner = %owner, "Uploaded component - exports {:?}", metadata.exports);
 
+        let owner_record: Owner::Row = owner.clone().into();
         let component_record = self
             .component_repo
             .update(
-                &owner.clone().into(),
-                &namespace.to_string(),
+                &owner_record,
+                &owner.to_string(),
                 &component_id.0,
                 data.clone(),
                 record_metadata_serde::serialize(&metadata)
@@ -464,7 +453,7 @@ where
                 component_type.map(|ct| ct as i32),
             )
             .await?;
-        let component: Component<Owner::Namespace> = component_record
+        let component: Component<Owner> = component_record
             .clone()
             .try_into()
             .map_err(|e| ComponentError::conversion_error("record", e))?;
@@ -487,21 +476,19 @@ where
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        namespace: &Owner::Namespace,
+        owner: &Owner,
     ) -> Result<Vec<u8>, ComponentError> {
         let versioned_component_id = self
-            .get_versioned_component_id(component_id, version, namespace)
+            .get_versioned_component_id(component_id, version, owner)
             .await?
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
 
-        info!(namespace = %namespace, "Download component");
+        info!(owner = %owner, "Download component");
 
         self.object_store
             .get(&self.get_protected_object_store_key(&versioned_component_id))
             .await
-            .tap_err(
-                |e| error!(namespace = %namespace, "Error downloading component - error: {}", e),
-            )
+            .tap_err(|e| error!(owner = %owner, "Error downloading component - error: {}", e))
             .map_err(|e| ComponentError::component_store_error("Error downloading component", e))
     }
 
@@ -509,17 +496,17 @@ where
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        namespace: &Owner::Namespace,
+        owner: &Owner,
     ) -> Result<
         Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
         ComponentError,
     > {
         let versioned_component_id = self
-            .get_versioned_component_id(component_id, version, namespace)
+            .get_versioned_component_id(component_id, version, owner)
             .await?
             .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
 
-        info!(namespace = %namespace, "Download component as stream");
+        info!(owner = %owner, "Download component as stream");
 
         let stream = self
             .object_store
@@ -533,12 +520,12 @@ where
         &self,
         component_id: &ComponentId,
         version: Option<u64>,
-        namespace: &Owner::Namespace,
+        owner: &Owner,
     ) -> Result<Option<Vec<u8>>, ComponentError> {
-        info!(namespace = %namespace, "Get component protected data");
+        info!(owner = %owner, "Get component protected data");
 
         let versioned_component_id = self
-            .get_versioned_component_id(component_id, version, namespace)
+            .get_versioned_component_id(component_id, version, owner)
             .await?;
 
         match versioned_component_id {
@@ -547,7 +534,9 @@ where
                     .object_store
                     .get(&self.get_protected_object_store_key(&versioned_component_id))
                     .await
-                    .tap_err(|e| error!(namespace = %namespace, "Error getting component data - error: {}", e))
+                    .tap_err(
+                        |e| error!(owner = %owner, "Error getting component data - error: {}", e),
+                    )
                     .map_err(|e| {
                         ComponentError::component_store_error("Error retrieving component", e)
                     })?;
@@ -560,27 +549,23 @@ where
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
-        namespace: &Owner::Namespace,
-    ) -> Result<Vec<Component<Owner::Namespace>>, ComponentError> {
-        info!(namespace = %namespace, "Find component by name");
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        info!(owner = %owner, "Find component by name");
 
         let records = match component_name {
             Some(name) => {
                 self.component_repo
-                    .get_by_name(namespace.to_string().as_str(), &name.0)
+                    .get_by_name(&owner.to_string(), &name.0)
                     .await?
             }
-            None => {
-                self.component_repo
-                    .get_all(namespace.to_string().as_str())
-                    .await?
-            }
+            None => self.component_repo.get_all(&owner.to_string()).await?,
         };
 
-        let values: Vec<Component<Owner::Namespace>> = records
+        let values: Vec<Component<Owner>> = records
             .iter()
             .map(|c| c.clone().try_into())
-            .collect::<Result<Vec<Component<Owner::Namespace>>, _>>()
+            .collect::<Result<Vec<Component<Owner>>, _>>()
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         Ok(values)
@@ -589,12 +574,12 @@ where
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
-        namespace: &Owner::Namespace,
+        owner: &Owner,
     ) -> Result<Option<ComponentId>, ComponentError> {
-        info!(namespace = %namespace, "Find component id by name");
+        info!(owner = %owner, "Find component id by name");
         let records = self
             .component_repo
-            .get_id_by_name(namespace.to_string().as_str(), &component_name.0)
+            .get_id_by_name(&owner.to_string(), &component_name.0)
             .await?;
         Ok(records.map(ComponentId))
     }
@@ -602,9 +587,9 @@ where
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
-        namespace: &Owner::Namespace,
-    ) -> Result<Option<Component<Owner::Namespace>>, ComponentError> {
-        info!(namespace = %namespace, "Get component by version");
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        info!(owner = %owner, "Get component by version");
 
         let result = self
             .component_repo
@@ -612,7 +597,7 @@ where
             .await?;
 
         match result {
-            Some(c) if c.namespace == namespace.to_string() => {
+            Some(c) if c.namespace == owner.to_string() => {
                 let value = c
                     .try_into()
                     .map_err(|e| ComponentError::conversion_error("record", e))?;
@@ -625,16 +610,16 @@ where
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        namespace: &Owner::Namespace,
-    ) -> Result<Option<Component<Owner::Namespace>>, ComponentError> {
-        info!(namespace = %namespace, "Get latest component");
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        info!(owner = %owner, "Get latest component");
         let result = self
             .component_repo
             .get_latest_version(&component_id.0)
             .await?;
 
         match result {
-            Some(c) if c.namespace == namespace.to_string() => {
+            Some(c) if c.namespace == owner.to_string() => {
                 let value = c
                     .try_into()
                     .map_err(|e| ComponentError::conversion_error("record", e))?;
@@ -647,33 +632,28 @@ where
     async fn get(
         &self,
         component_id: &ComponentId,
-        namespace: &Owner::Namespace,
-    ) -> Result<Vec<Component<Owner::Namespace>>, ComponentError> {
-        info!(namespace = %namespace, "Get component");
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        info!(owner = %owner, "Get component");
         let records = self.component_repo.get(&component_id.0).await?;
 
-        let values: Vec<Component<Owner::Namespace>> = records
+        let values: Vec<Component<Owner>> = records
             .iter()
-            .filter(|d| d.namespace == namespace.to_string())
+            .filter(|d| d.namespace == owner.to_string())
             .map(|c| c.clone().try_into())
-            .collect::<Result<Vec<Component<Owner::Namespace>>, _>>()
+            .collect::<Result<Vec<Component<Owner>>, _>>()
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         Ok(values)
     }
 
-    async fn get_namespace(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<Option<Owner::Namespace>, ComponentError> {
-        info!("Get component namespace");
+    async fn get_owner(&self, component_id: &ComponentId) -> Result<Option<Owner>, ComponentError> {
+        info!(component_id = %component_id, "Get component owner");
         let result = self.component_repo.get_namespace(&component_id.0).await?;
         if let Some(result) = result {
-            let value = result.clone().try_into().map_err(
-                |e: <Owner::Namespace as TryFrom<String>>::Error| {
-                    ComponentError::conversion_error("namespace", e.to_string())
-                },
-            )?;
+            let value = result
+                .parse()
+                .map_err(|e| ComponentError::conversion_error("namespace", e))?;
             Ok(Some(value))
         } else {
             Ok(None)
@@ -683,15 +663,15 @@ where
     async fn delete(
         &self,
         component_id: &ComponentId,
-        namespace: &Owner::Namespace,
+        owner: &Owner,
     ) -> Result<(), ComponentError> {
-        info!(namespace = %namespace, "Delete component");
+        info!(owner = %owner, "Delete component");
 
         let records = self.component_repo.get(&component_id.0).await?;
 
         let versioned_component_ids: Vec<VersionedComponentId> = records
             .into_iter()
-            .filter(|d| d.namespace == namespace.to_string())
+            .filter(|d| d.namespace == owner.to_string())
             .map(|c| c.into())
             .collect();
 
@@ -711,7 +691,7 @@ where
                     })?;
             }
             self.component_repo
-                .delete(namespace.to_string().as_str(), &component_id.0)
+                .delete(&owner.to_string(), &component_id.0)
                 .await?;
             Ok(())
         } else {
@@ -721,9 +701,9 @@ where
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint: &ComponentConstraints<Owner::Namespace>,
-    ) -> Result<ComponentConstraints<Owner::Namespace>, ComponentError> {
-        info!(namespace = %component_constraint.namespace, "Create Component Constraint");
+        component_constraint: &ComponentConstraints<Owner>,
+    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        info!(owner = %component_constraint.owner, "Create or update component constraint");
         let component_id = &component_constraint.component_id;
         let record = ComponentConstraintsRecord::try_from(component_constraint.clone())
             .map_err(|e| ComponentError::conversion_error("record", e))?;
@@ -741,7 +721,7 @@ where
             )))?;
 
         let component_constraints = ComponentConstraints {
-            namespace: component_constraint.namespace.clone(),
+            owner: component_constraint.owner.clone(),
             component_id: component_id.clone(),
             constraints: result,
         };

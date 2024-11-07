@@ -43,11 +43,10 @@ use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentCo
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::grpc::proto_component_id_string;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::plugin::DefaultPluginOwner;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
-use golem_component_service_base::model::ComponentConstraints;
+use golem_component_service_base::model::{ComponentConstraints, DefaultComponentOwner};
 use golem_component_service_base::service::component;
 use golem_service_base::auth::DefaultNamespace;
 use tokio_stream::Stream;
@@ -70,7 +69,7 @@ fn internal_error(error: &str) -> ComponentError {
 }
 
 pub struct ComponentGrpcApi {
-    pub component_service: Arc<dyn component::ComponentService<DefaultPluginOwner> + Sync + Send>,
+    pub component_service: Arc<dyn component::ComponentService<DefaultComponentOwner> + Sync + Send>,
 }
 
 impl ComponentGrpcApi {
@@ -81,7 +80,7 @@ impl ComponentGrpcApi {
             .ok_or_else(|| bad_request_error("Missing component id"))?;
         let result = self
             .component_service
-            .get(&id, &DefaultNamespace::default())
+            .get(&id, &DefaultComponentOwner)
             .await?;
         Ok(result.into_iter().map(Component::from).collect())
     }
@@ -104,7 +103,7 @@ impl ComponentGrpcApi {
 
         let result = self
             .component_service
-            .get_by_version(&versioned_component_id, &DefaultNamespace::default())
+            .get_by_version(&versioned_component_id, &DefaultComponentOwner)
             .await?;
         Ok(result.map(|p| p.into()))
     }
@@ -118,7 +117,7 @@ impl ComponentGrpcApi {
             .map(golem_service_base::model::ComponentName);
         let result = self
             .component_service
-            .find_by_name(name, &DefaultNamespace::default())
+            .find_by_name(name, &DefaultComponentOwner)
             .await?;
         Ok(result.into_iter().map(|p| p.into()).collect())
     }
@@ -133,7 +132,7 @@ impl ComponentGrpcApi {
             .ok_or_else(|| bad_request_error("Missing component id"))?;
         let result = self
             .component_service
-            .get_latest_version(&id, &DefaultNamespace::default())
+            .get_latest_version(&id, &DefaultComponentOwner)
             .await?;
         match result {
             Some(component) => Ok(component.into()),
@@ -159,7 +158,7 @@ impl ComponentGrpcApi {
         let version = request.version;
         let result = self
             .component_service
-            .download_stream(&id, version, &DefaultNamespace::default())
+            .download_stream(&id, version, &DefaultComponentOwner)
             .await?;
         Ok(result)
     }
@@ -178,7 +177,7 @@ impl ComponentGrpcApi {
                 &name,
                 request.component_type().into(),
                 data,
-                &DefaultNamespace::default(),
+                &DefaultComponentOwner,
             )
             .await?;
         Ok(result.into())
@@ -202,14 +201,19 @@ impl ComponentGrpcApi {
         };
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultPluginOwner, &DefaultNamespace::default())
+            .update(
+                &id,
+                data,
+                component_type,
+                &DefaultComponentOwner,
+            )
             .await?;
         Ok(result.into())
     }
 
     async fn create_component_constraints(
         &self,
-        component_constraint: &ComponentConstraints<DefaultNamespace>,
+        component_constraint: &ComponentConstraints<DefaultComponentOwner>,
     ) -> Result<ComponentConstraintsProto, ComponentError> {
         let response = self
             .component_service
@@ -546,7 +550,7 @@ impl ComponentService for ComponentGrpcApi {
                 };
 
                 let component_constraint = ComponentConstraints {
-                    namespace: DefaultNamespace::default(),
+                    owner: DefaultComponentOwner,
                     component_id,
                     constraints,
                 };

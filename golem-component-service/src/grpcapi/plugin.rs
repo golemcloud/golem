@@ -18,14 +18,15 @@ use golem_api_grpc::proto::golem::component::v1::{
     GetPluginRequest, GetPluginResponse, ListPluginVersionsRequest, ListPluginsRequest,
     ListPluginsResponse,
 };
-use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
+use golem_common::model::plugin::DefaultPluginScope;
+use golem_component_service_base::model::DefaultComponentOwner;
 use golem_component_service_base::service::plugin::PluginService;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 
 pub struct PluginGrpcApi {
     pub plugin_service:
-        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
+        Arc<dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 impl PluginGrpcApi {}

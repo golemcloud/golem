@@ -59,14 +59,3 @@ impl ParseFromParameter for DefaultPluginScope {
         }
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct DefaultPluginOwner;
-
-impl Display for DefaultPluginOwner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "")
-    }
-}
