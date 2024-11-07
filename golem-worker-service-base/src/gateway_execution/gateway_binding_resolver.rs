@@ -14,17 +14,20 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Arc;
+use golem_wasm_ast::analysis::analysed_type::record;
+use golem_wasm_rpc::protobuf::{type_annotated_value, NameValuePair, TypeAnnotatedValue, TypedRecord};
+use crate::gateway_plugins::{HttpPlugin, Plugin};
 use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // to resolve a single gateway-binding is then executed with the help of gateway_rib_interpreter, which internally
 // may call the worker function, depending on the binding type
 #[async_trait]
-pub trait WorkerBindingResolver<ApiDefinition> {
-    async fn resolve_worker_binding(
+pub trait GatewayBindingResolver<ApiDefinition> {
+    async fn resolve_gateway_binding(
         &self,
         api_definitions: Vec<ApiDefinition>,
-    ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError>;
+    ) -> Result<ResolvedGatewayBinding, WorkerBindingResolutionError>;
 }
 
 #[derive(Debug)]
@@ -40,6 +43,18 @@ impl Display for WorkerBindingResolutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Worker binding resolution error: {}", self.0)
     }
+}
+
+
+pub enum ResolvedGatewayBinding {
+    Worker(ResolvedWorkerBinding),
+    Plugins(ResolvedPlugin)
+}
+
+// TODO; Gateway request details is common, and threfore use product for ResolvedGatewayBinding
+pub struct ResolvedPlugin {
+    plugin: Plugin,
+    request_details: GatewayRequestDetails
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +97,7 @@ impl WorkerDetail {
     }
 }
 
-impl ResolvedWorkerBinding {
+impl ResolvedGatewayBinding {
     pub async fn interpret_response_mapping<R>(
         &self,
         evaluator: &Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
@@ -92,44 +107,69 @@ impl ResolvedWorkerBinding {
         EvaluationError: ToResponse<R>,
         RibInputTypeMismatch: ToResponse<R>,
     {
-        let request_rib_input = self
-            .request_details
-            .resolve_rib_input_value(&self.compiled_response_mapping.rib_input);
 
-        let worker_rib_input = self
-            .worker_detail
-            .resolve_rib_input_value(&self.compiled_response_mapping.rib_input);
+        match self {
+            ResolvedGatewayBinding::Worker(resolved_worker_binding) => {
+                let request_rib_input = resolved_worker_binding
+                    .request_details
+                    .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input);
 
-        match (request_rib_input, worker_rib_input) {
-            (Ok(request_rib_input), Ok(worker_rib_input)) => {
-                let rib_input = request_rib_input.merge(worker_rib_input);
-                let result = evaluator
-                    .evaluate(
-                        self.worker_detail.worker_name.as_deref(),
-                        &self.worker_detail.component_id.component_id,
-                        &self.worker_detail.idempotency_key,
-                        &self.compiled_response_mapping.compiled_response.clone(),
-                        &rib_input,
-                    )
-                    .await;
+                let worker_rib_input = resolved_worker_binding
+                    .worker_detail
+                    .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input);
 
-                match result {
-                    Ok(worker_response) => worker_response.to_response(&self.request_details),
-                    Err(err) => err.to_response(&self.request_details),
+                match (request_rib_input, worker_rib_input) {
+                    (Ok(request_rib_input), Ok(worker_rib_input)) => {
+                        let rib_input = request_rib_input.merge(worker_rib_input);
+                        let result = evaluator
+                            .evaluate(
+                                resolved_worker_binding.worker_detail.worker_name.as_deref(),
+                                &resolved_worker_binding.worker_detail.component_id.component_id,
+                                &resolved_worker_binding.worker_detail.idempotency_key,
+                                &resolved_worker_binding.compiled_response_mapping.compiled_response.clone(),
+                                &rib_input,
+                            )
+                            .await;
+
+                        match result {
+                            Ok(worker_response) => worker_response.to_response(&resolved_worker_binding.request_details),
+                            Err(err) => err.to_response(&resolved_worker_binding.request_details),
+                        }
+                    }
+                    (Err(err), _) => err.to_response(&resolved_worker_binding.request_details),
+                    (_, Err(err)) => err.to_response(&resolved_worker_binding.request_details),
                 }
             }
-            (Err(err), _) => err.to_response(&self.request_details),
-            (_, Err(err)) => err.to_response(&self.request_details),
+
+            ResolvedGatewayBinding::Plugins(plugin) => {
+                match &plugin.plugin {
+                    Plugin::Http(http_plugin) => {
+                        match http_plugin {
+                            HttpPlugin::Cors(cors_preflight) => {
+
+                                // We already have a ToResponse of a RibResult and therefore directly forming
+                                // RibResult
+                                // TODO unwrap
+                                // TODO needn't use RibResult
+                                 RibResult::Val(cors_preflight.as_type_annotated_value().unwrap())
+                                    .to_response(&plugin.request_details)
+
+                            }
+                        }
+                    }
+                }
+            }
         }
+
     }
 }
 
 #[async_trait]
-impl WorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
-    async fn resolve_worker_binding(
+impl GatewayBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
+    async fn resolve_gateway_binding(
         &self,
         compiled_api_definitions: Vec<CompiledHttpApiDefinition>,
-    ) -> Result<ResolvedWorkerBinding, WorkerBindingResolutionError> {
+    ) -> Result<ResolvedGatewayBinding, WorkerBindingResolutionError> {
         let compiled_routes = compiled_api_definitions
             .iter()
             .flat_map(|x| x.routes.clone())
@@ -237,6 +277,6 @@ impl WorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
             compiled_response_mapping: binding.response_compiled.clone(),
         };
 
-        Ok(resolved_binding)
+        Ok(ResolvedGatewayBinding::Worker(resolved_binding))
     }
 }

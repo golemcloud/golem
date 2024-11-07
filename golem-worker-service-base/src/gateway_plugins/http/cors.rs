@@ -1,6 +1,11 @@
 use std::collections::HashMap;
+use golem_wasm_ast::analysis::analysed_type::{record, str, u64 as tu64};
+use golem_wasm_ast::analysis::{AnalysedType, NameTypePair};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::type_annotated_value_from_str;
 use rib::{Expr, GetLiteralValue, RibInput};
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct CorsPreflight {
     pub allow_origin: String,
     pub allow_methods: String,
@@ -10,19 +15,55 @@ pub struct CorsPreflight {
 }
 
 impl CorsPreflight {
+    // probably not a great idea yet.
+    pub fn as_type_annotated_value(&self) -> Result<TypeAnnotatedValue, String> {
+        type_annotated_value_from_str(&record(
+            vec![
+                NameTypePair {
+                    name: "Access-Control-Allow-Origin".to_string(),
+                    typ: str(),
+                },
+                NameTypePair {
+                    name: "Access-Control-Allow-Methods".to_string(),
+                    typ: str(),
+                },
+                NameTypePair {
+                    name: "Access-Control-Allow-Headers".to_string(),
+                    typ: str(),
+                },
+                NameTypePair {
+                    name: "Access-Control-Expose-Headers".to_string(),
+                    typ: str(),
+                },
+                NameTypePair {
+                    name: "Access-Control-Max-Age".to_string(),
+                    typ: tu64(),
+                }
+            ]
+        ),format!(r#"
+           {{
+            Access-Control-Allow-Origin:{}
+            Access-Control-Allow-Methods:{}
+            Access-Control-Allow-Headers:{}
+            Access-Control-Expose-Headers:{}
+            Access-Control-Max-Age:{}
+           }}
+
+        "#, self.allow_origin, self.allow_methods, self.allow_headers, self.expose_headers, self.max_age).as_str())
+    }
     async fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<CorsPreflight, String> {
         // Compile and evaluate the expression
-        let expr = rib::compile(&expr.0, &vec![])
+        let compiled_expr = rib::compile(&expr.0, &[])
             .map_err(|_| "Compilation failed")?;
-        let evaluated = rib::interpret_pure(&expr.byte_code, &RibInput::default())
+        let evaluated = rib::interpret_pure(&compiled_expr.byte_code, &RibInput::default())
             .await
             .map_err(|_| "Evaluation failed")?;
 
-        // Ensure the result is a record and map fields to a hash map
+        // Ensure the result is a record
         let record = evaluated.get_record().ok_or("Invalid pre-flight CORS response mapping")?;
-        let mut fields: HashMap<String, String> = HashMap::new();
 
-        // Expected field names
+        // Initialize with default values for CorsPreflight
+        let mut cors = CorsPreflight::default();
         let valid_keys = [
             "Access-Control-Allow-Origin",
             "Access-Control-Allow-Methods",
@@ -31,28 +72,34 @@ impl CorsPreflight {
             "Access-Control-Max-Age",
         ];
 
-        let mut cors = CorsPreflight::default();
-
         for name_value in record {
-            let key = name_value.name.clone();
-            let value = name_value.value.ok_or("Internal error. Unable to fetch value in the type_annotated_value record")?;
+            let key = &name_value.name;
+            let value = name_value.value
+                .as_ref()
+                .ok_or("Missing value in type_annotated_value record")?
+                .type_annotated_value
+                .as_ref()
+                .ok_or("Unable to fetch value in type_annotated_value")?
+                .get_literal()
+                .ok_or("Invalid value for key in CORS preflight response")?
+                .as_string();
 
-            // Validate key names and insert valid entries into the map
             if valid_keys.contains(&key.as_str()) {
-                let value = value.type_annotated_value.ok_or("Internal error. Unable to fetch value in type_annotated_value")?;
-                let literal = value.get_literal().ok_or("Invalud value for key {} in cors preflight response")?.as_string();
-
-                fields.insert(key, literal);
+                match key.as_str() {
+                    "Access-Control-Allow-Origin" => cors.set_allow_origin(&value),
+                    "Access-Control-Allow-Methods" => cors.set_allow_methods(&value),
+                    "Access-Control-Allow-Headers" => cors.set_allow_headers(&value),
+                    "Access-Control-Expose-Headers" => cors.set_expose_headers(&value),
+                    "Access-Control-Max-Age" => {
+                        let max_age = value.parse::<u64>().map_err(|_| "Invalid value for max age")?;
+                        cors.set_max_age(max_age);
+                    },
+                    _ => {}
+                }
             } else {
-                return Err("Invalid CORS header in response mapping".to_string());
+                return Err(format!("Invalid CORS header in response mapping: {}", key));
             }
         }
-
-        fields.get("Access-Control-Allow-Origin").map(|x| cors.set_allow_origin(x.as_str()));
-        fields.get("Access-Control-Allow-Methods").map(|x| cors.set_allow_methods(x.as_str()));
-        fields.get("Access-Control-Allow-Headers").map(|x| cors.set_allow_methods(x.as_str()));
-        fields.get("Access-Control-Expose-Headers").map(|x| cors.set_expose_headers(x.as_str()));
-        fields.get("Access-Control-Max-Age").map(|x| x.parse::<u64>().map_err(|err| "Invalid value for max age").map(|x| cors.set_max_age(x))).transpose()?;
 
         Ok(cors)
     }

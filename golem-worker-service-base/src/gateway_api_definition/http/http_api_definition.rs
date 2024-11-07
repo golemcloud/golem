@@ -5,7 +5,7 @@ use Iterator;
 
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
 use crate::gateway_api_definition::http::path_pattern_parser::{parse_path_pattern};
-use crate::gateway_binding::WorkerBindingCompiled;
+use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, WorkerBindingCompiled};
 use crate::gateway_binding::WorkerBinding;
 use bincode::{Decode, Encode};
 use derive_more::Display;
@@ -111,7 +111,7 @@ impl CompiledHttpApiDefinition {
 }
 
 impl HasGolemWorkerBindings for HttpApiDefinition {
-    fn get_golem_worker_bindings(&self) -> Vec<WorkerBinding> {
+    fn get_golem_worker_bindings(&self) -> Vec<GatewayBinding> {
         self.routes
             .iter()
             .map(|route| route.binding.clone())
@@ -345,14 +345,14 @@ impl Display for PathPattern {
 pub struct Route {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
-    pub binding: WorkerBinding,
+    pub binding: GatewayBinding,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompiledRoute {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
-    pub binding: WorkerBindingCompiled,
+    pub binding: GatewayBindingCompiled,
 }
 
 #[derive(Debug)]

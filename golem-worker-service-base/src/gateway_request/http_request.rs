@@ -50,7 +50,7 @@ impl ApiInputPath {
 
 pub mod router {
     use crate::gateway_api_definition::http::CompiledRoute;
-    use crate::gateway_binding::WorkerBindingCompiled;
+    use crate::gateway_binding::{GatewayBindingCompiled, WorkerBindingCompiled};
     use crate::gateway_api_definition::http::{PathPattern, QueryInfo, VarInfo};
     use crate::gateway_execution::router::{Router, RouterPattern};
 
@@ -59,7 +59,7 @@ pub mod router {
         // size is the index of all path patterns.
         pub path_params: Vec<(VarInfo, usize)>,
         pub query_params: Vec<QueryInfo>,
-        pub binding: WorkerBindingCompiled,
+        pub binding: GatewayBindingCompiled,
     }
 
     pub fn build(routes: Vec<CompiledRoute>) -> Router<RouteEntry> {
@@ -110,7 +110,7 @@ mod tests {
     use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
     use crate::path::Path;
     use crate::gateway_binding::{
-        RibInputTypeMismatch, WorkerBindingResolver,
+        RibInputTypeMismatch, GatewayBindingResolver,
     };
     use crate::gateway_execution::to_response::ToResponse;
     use crate::gateway_execution::{
@@ -345,7 +345,7 @@ mod tests {
                 .unwrap();
 
         let resolved_route = api_request
-            .resolve_worker_binding(vec![compiled])
+            .resolve_gateway_binding(vec![compiled])
             .await
             .unwrap();
 
@@ -849,7 +849,7 @@ mod tests {
             .unwrap();
 
             let resolved_route = api_request
-                .resolve_worker_binding(vec![compiled_api_spec])
+                .resolve_gateway_binding(vec![compiled_api_spec])
                 .await;
 
             let result = resolved_route.map(|x| x.worker_detail);
@@ -890,7 +890,7 @@ mod tests {
             .unwrap();
 
             let resolved_route = api_request
-                .resolve_worker_binding(vec![compiled_api_spec])
+                .resolve_gateway_binding(vec![compiled_api_spec])
                 .await
                 .unwrap();
 
