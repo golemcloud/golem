@@ -1,8 +1,8 @@
 use crate::gateway_binding::{WorkerBindingCompiled};
-use crate::gateway_plugins::Plugin;
+use crate::gateway_binding::static_binding::StaticBinding;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBindingCompiled {
     Default(WorkerBindingCompiled),
-    Plugin(Plugin)
+    Static(StaticBinding)
 }

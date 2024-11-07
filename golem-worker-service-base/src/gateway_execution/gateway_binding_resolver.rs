@@ -16,7 +16,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 use golem_wasm_ast::analysis::analysed_type::record;
 use golem_wasm_rpc::protobuf::{type_annotated_value, NameValuePair, TypeAnnotatedValue, TypedRecord};
-use crate::gateway_plugins::{HttpPlugin, Plugin};
+use crate::gateway_middleware::{HttpMiddleware, Middleware};
 use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
@@ -27,19 +27,19 @@ pub trait GatewayBindingResolver<ApiDefinition> {
     async fn resolve_gateway_binding(
         &self,
         api_definitions: Vec<ApiDefinition>,
-    ) -> Result<ResolvedGatewayBinding, WorkerBindingResolutionError>;
+    ) -> Result<ResolvedGatewayBinding, GatewayBindingResolutionError>;
 }
 
 #[derive(Debug)]
-pub struct WorkerBindingResolutionError(pub String);
+pub struct GatewayBindingResolutionError(pub String);
 
-impl<A: AsRef<str>> From<A> for WorkerBindingResolutionError {
+impl<A: AsRef<str>> From<A> for GatewayBindingResolutionError {
     fn from(message: A) -> Self {
-        WorkerBindingResolutionError(message.as_ref().to_string())
+        GatewayBindingResolutionError(message.as_ref().to_string())
     }
 }
 
-impl Display for WorkerBindingResolutionError {
+impl Display for GatewayBindingResolutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Worker binding resolution error: {}", self.0)
     }
@@ -48,12 +48,12 @@ impl Display for WorkerBindingResolutionError {
 
 pub enum ResolvedGatewayBinding {
     Worker(ResolvedWorkerBinding),
-    Plugins(ResolvedPlugin)
+    Static(ResolvedStaticBinding)
 }
 
 // TODO; Gateway request details is common, and threfore use product for ResolvedGatewayBinding
-pub struct ResolvedPlugin {
-    plugin: Plugin,
+pub struct ResolvedStaticBinding {
+    middleware: Middleware,
     request_details: GatewayRequestDetails
 }
 
@@ -141,11 +141,11 @@ impl ResolvedGatewayBinding {
                 }
             }
 
-            ResolvedGatewayBinding::Plugins(plugin) => {
-                match &plugin.plugin {
-                    Plugin::Http(http_plugin) => {
+            ResolvedGatewayBinding::Static(plugin) => {
+                match &plugin.middleware {
+                    Middleware::Http(http_plugin) => {
                         match http_plugin {
-                            HttpPlugin::Cors(cors_preflight) => {
+                            HttpMiddleware::Cors(cors_preflight) => {
 
                                 // We already have a ToResponse of a RibResult and therefore directly forming
                                 // RibResult
@@ -169,7 +169,7 @@ impl GatewayBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
     async fn resolve_gateway_binding(
         &self,
         compiled_api_definitions: Vec<CompiledHttpApiDefinition>,
-    ) -> Result<ResolvedGatewayBinding, WorkerBindingResolutionError> {
+    ) -> Result<ResolvedGatewayBinding, GatewayBindingResolutionError> {
         let compiled_routes = compiled_api_definitions
             .iter()
             .flat_map(|x| x.routes.clone())

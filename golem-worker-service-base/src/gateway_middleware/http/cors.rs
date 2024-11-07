@@ -1,6 +1,5 @@
-use std::collections::HashMap;
 use golem_wasm_ast::analysis::analysed_type::{record, str, u64 as tu64};
-use golem_wasm_ast::analysis::{AnalysedType, NameTypePair};
+use golem_wasm_ast::analysis::{NameTypePair};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::type_annotated_value_from_str;
 use rib::{Expr, GetLiteralValue, RibInput};

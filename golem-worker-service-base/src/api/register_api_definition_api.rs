@@ -10,9 +10,9 @@ use rib::{Expr, RibInputTypeInfo};
 use serde::{Deserialize, Serialize};
 use std::result::Result;
 use std::time::SystemTime;
-use crate::{api, gateway_plugins};
+use crate::{api, gateway_middleware};
 use crate::gateway_api_deployment::http::ApiSite;
-use crate::gateway_plugins::Plugin;
+use crate::gateway_middleware::Middleware;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -320,10 +320,10 @@ impl TryFrom<crate::gateway_binding::GatewayBinding> for GolemWorkerBinding {
                 })
             }
 
-            GatewayBinding::Plugin(plugin) => {
+            GatewayBinding::Static(plugin) => {
                 match plugin {
-                    Plugin::Http(http_plugin) => match http_plugin {
-                        gateway_plugins::HttpPlugin::Cors(cors) => {
+                    Middleware::Http(http_plugin) => match http_plugin {
+                        gateway_middleware::HttpMiddleware::Cors(cors) => {
                             Ok(Self {
                                 binding_type: Some(api::GatewayBindingType::CorsPlugin),
                                 component_id: None,
