@@ -15,8 +15,7 @@ use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
@@ -25,8 +24,7 @@ pub struct HttpApiDefinitionRequest {
     pub draft: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
@@ -248,7 +246,7 @@ impl Display for QueryInfo {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AllPathPatterns {
     pub path_patterns: Vec<PathPattern>,
     pub query_params: Vec<QueryInfo>,
@@ -318,7 +316,7 @@ impl Serialize for AllPathPatterns {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PathPattern {
     Literal(LiteralInfo),
     Var(VarInfo),
@@ -345,7 +343,7 @@ impl Display for PathPattern {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Route {
     pub method: MethodPattern,
     pub path: AllPathPatterns,

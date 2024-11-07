@@ -18,7 +18,7 @@ mod worker_binding;
 // However, there can be other bindings such as file-server, plugin etc.
 // While plugins primarily exist as a collection within other bindings (Example: cors plugin can exist within worker-binding),
 // a plugin can stay standalone as an integration too if serving an incoming request
-// only needs that plugin and nothing else. 
+// only needs that plugin and nothing else.
 // Example: Cors-Preflight request.
 //
 // Internal Detail: For static bindings such as `plugins`, any `Rib` script associated with it can be

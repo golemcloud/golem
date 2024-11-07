@@ -1,12 +1,8 @@
-use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
-
 use crate::gateway_binding::WorkerBindingCompiled;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WorkerBinding {
     pub component_id: VersionedComponentId,
     pub worker_name: Option<Expr>,
@@ -15,7 +11,7 @@ pub struct WorkerBinding {
 }
 
 // ResponseMapping will consist of actual logic such as invoking worker functions
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResponseMapping(pub Expr);
 
 impl From<WorkerBindingCompiled> for WorkerBinding {
