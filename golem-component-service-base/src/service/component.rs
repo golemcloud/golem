@@ -17,7 +17,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use crate::model::{Component, ComponentConstraints, ComponentOwner};
-use crate::repo::component::{record_metadata_serde, ComponentConstraintsRecord, ComponentRepo};
+use crate::repo::component::{
+    record_metadata_serde, ComponentConstraintsRecord, ComponentRecord, ComponentRepo,
+};
 use crate::service::component_compilation::ComponentCompilationService;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
@@ -396,9 +398,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
             self.upload_protected_component(&component.versioned_component_id, data)
         )?;
 
-        let record = component
-            .clone()
-            .try_into()
+        let record = ComponentRecord::try_from_model(component.clone(), true)
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         let result = self.component_repo.create(&record).await;
@@ -467,7 +467,13 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
             .enqueue_compilation(component_id, component.versioned_component_id.version)
             .await;
 
-        // TODO: enable new version
+        self.component_repo
+            .activate(
+                &owner.to_string(),
+                &component_id.0,
+                component.versioned_component_id.version as i64,
+            )
+            .await?;
 
         Ok(component)
     }

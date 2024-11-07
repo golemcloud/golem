@@ -36,7 +36,6 @@ use std::sync::Arc;
 use tracing::{debug, error};
 use uuid::Uuid;
 
-// TODO: need 'available' flag to handle race condition when uploading
 // TODO: need to store uploaded WASM paths so we don't need to reupload when creating new immutable versions
 
 #[derive(sqlx::FromRow, Debug, Clone)]
@@ -49,6 +48,27 @@ pub struct ComponentRecord {
     pub metadata: Vec<u8>,
     pub created_at: DateTime<Utc>,
     pub component_type: i32,
+    pub available: bool,
+}
+
+impl ComponentRecord {
+    pub(crate) fn try_from_model<Owner: ComponentOwner>(
+        value: Component<Owner>,
+        available: bool,
+    ) -> Result<Self, String> {
+        let metadata = record_metadata_serde::serialize(&value.metadata)?;
+        Ok(Self {
+            namespace: value.owner.to_string(),
+            component_id: value.versioned_component_id.component_id.0,
+            name: value.component_name.0,
+            size: value.component_size as i32,
+            version: value.versioned_component_id.version as i64,
+            metadata: metadata.into(),
+            created_at: value.created_at,
+            component_type: value.component_type as i32,
+            available,
+        })
+    }
 }
 
 impl<Owner: ComponentOwner> TryFrom<ComponentRecord> for Component<Owner> {
@@ -80,24 +100,6 @@ impl From<ComponentRecord> for VersionedComponentId {
             component_id: ComponentId(value.component_id),
             version: value.version as u64,
         }
-    }
-}
-
-impl<Owner: ComponentOwner> TryFrom<Component<Owner>> for ComponentRecord {
-    type Error = String;
-
-    fn try_from(value: Component<Owner>) -> Result<Self, Self::Error> {
-        let metadata = record_metadata_serde::serialize(&value.metadata)?;
-        Ok(Self {
-            namespace: value.owner.to_string(),
-            component_id: value.versioned_component_id.component_id.0,
-            name: value.component_name.0,
-            size: value.component_size as i32,
-            version: value.versioned_component_id.version as i64,
-            metadata: metadata.into(),
-            created_at: value.created_at,
-            component_type: value.component_type as i32,
-        })
     }
 }
 
@@ -153,6 +155,17 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
         metadata: Vec<u8>,
         component_type: Option<i32>,
     ) -> Result<ComponentRecord, RepoError>;
+
+    /// Activates a component version previously created with `update`.
+    ///
+    /// Once the version is marked as active, `get_latest_version` will take it into account when
+    /// looking for the latest component version.
+    async fn activate(
+        &self,
+        namespace: &str,
+        component_id: &Uuid,
+        component_version: i64,
+    ) -> Result<(), RepoError>;
 
     async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError>;
 
@@ -294,6 +307,19 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
             )
             .await;
         Self::logged_with_id("update", component_id, result)
+    }
+
+    async fn activate(
+        &self,
+        namespace: &str,
+        component_id: &Uuid,
+        component_version: i64,
+    ) -> Result<(), RepoError> {
+        let result = self
+            .repo
+            .activate(namespace, component_id, component_version)
+            .await;
+        Self::logged_with_id("activate", component_id, result)
     }
 
     async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
@@ -503,7 +529,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
               INSERT INTO component_versions
                 (component_id, version, size, metadata, created_at, component_type, available)
               VALUES
-                ($1, $2, $3, $4, $5, $6, TRUE)
+                ($1, $2, $3, $4, $5, $6, $7)
                "#,
         )
         .bind(component.component_id)
@@ -512,6 +538,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         .bind(component.metadata.clone())
         .bind(component.created_at)
         .bind(component.component_type)
+        .bind(component.available)
         .execute(&mut *transaction)
         .await?;
 
@@ -547,43 +574,43 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 let now = Utc::now();
                 let new_version = if let Some(component_type) = component_type {
                     sqlx::query(
-                            r#"
+                        r#"
                               WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
                                    FROM component_versions WHERE component_id = $1
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5 FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5, FALSE FROM prev
                               RETURNING *
                               "#,
-                        )
-                            .bind(component_id)
-                            .bind(data.len() as i32)
-                            .bind(now)
-                            .bind(metadata)
-                            .bind(component_type)
-                            .fetch_one(&mut *transaction)
-                            .await?
-                            .get("version")
+                    )
+                        .bind(component_id)
+                        .bind(data.len() as i32)
+                        .bind(now)
+                        .bind(metadata)
+                        .bind(component_type)
+                        .fetch_one(&mut *transaction)
+                        .await?
+                        .get("version")
                 } else {
                     sqlx::query(
-                            r#"
+                        r#"
                               WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
                                    FROM component_versions WHERE component_id = $1
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type, FALSE FROM prev
                               RETURNING *
                               "#,
-                        )
-                            .bind(component_id)
-                            .bind(data.len() as i32)
-                            .bind(now)
-                            .bind(metadata)
-                            .fetch_one(&mut *transaction)
-                            .await?
-                            .get("version")
+                    )
+                        .bind(component_id)
+                        .bind(data.len() as i32)
+                        .bind(now)
+                        .bind(metadata)
+                        .fetch_one(&mut *transaction)
+                        .await?
+                        .get("version")
                 };
 
                 debug!("update created new component version {new_version}");
@@ -639,6 +666,28 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 "Component not found for update".to_string(),
             ))
         }
+    }
+
+    async fn activate(
+        &self,
+        namespace: &str,
+        component_id: &Uuid,
+        component_version: i64,
+    ) -> Result<(), RepoError> {
+        sqlx::query(
+            r#"
+              UPDATE component_versions
+              SET available = TRUE
+              WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
+                    AND version = $2
+            "#,
+        ).bind(namespace)
+            .bind(component_id)
+            .bind(component_version)
+            .execute(self.db_pool.deref())
+            .await?;
+
+        Ok(())
     }
 
     #[when(sqlx::Postgres -> get)]
@@ -755,8 +804,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.component_id = $1
-                ORDER BY cv.version DESC LIMIT 1
+                WHERE c.component_id = $1 AND cv.available = TRUE
+                ORDER BY cv.version DESC
+                LIMIT 1
                 "#,
         )
         .bind(component_id)
