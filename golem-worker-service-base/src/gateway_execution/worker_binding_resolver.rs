@@ -1,8 +1,7 @@
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
-use crate::gateway_request::http_request::router;
+use crate::gateway_request::http_request::{router, InputHttpRequest};
 use crate::gateway_execution::router::RouterPattern;
-use crate::http::InputHttpRequest;
-use crate::gateway_binding::rib_input_value_resolver::RibInputValueResolver;
+use crate::gateway_execution::rib_input_value_resolver::RibInputValueResolver;
 use crate::gateway_binding::{ResponseMappingCompiled, RibInputTypeMismatch};
 use crate::gateway_execution::to_response::ToResponse;
 use crate::gateway_rib_interpreter::EvaluationError;
@@ -18,10 +17,10 @@ use std::sync::Arc;
 use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
-// to resolve a single worker-binding is then executed with the help of gateway_rib_interpreter, which internally
-// calls the worker function.
+// to resolve a single gateway-binding is then executed with the help of gateway_rib_interpreter, which internally
+// may call the worker function, depending on the binding type
 #[async_trait]
-pub trait WorkerGatewayBindingResolver<ApiDefinition> {
+pub trait WorkerBindingResolver<ApiDefinition> {
     async fn resolve_worker_binding(
         &self,
         api_definitions: Vec<ApiDefinition>,
@@ -126,7 +125,7 @@ impl ResolvedWorkerBinding {
 }
 
 #[async_trait]
-impl WorkerGatewayBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
+impl WorkerBindingResolver<CompiledHttpApiDefinition> for InputHttpRequest {
     async fn resolve_worker_binding(
         &self,
         compiled_api_definitions: Vec<CompiledHttpApiDefinition>,

@@ -9,11 +9,11 @@ use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
-use crate::http::{ApiInputPath, InputHttpRequest};
 use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
-
-use crate::gateway_binding::WorkerGatewayBindingResolver;
+use crate::gateway_binding::WorkerBindingResolver;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
+use crate::gateway_execution::to_response::ToResponse;
+use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service

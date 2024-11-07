@@ -27,7 +27,8 @@ use golem_common::grpc::{
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiDefinitionTraceErrorKind;
-use golem_worker_service_base::gateway_api_definition::{http::get_api_definition, ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::gateway_api_definition::http::OpenApiDefinitionRequest;
 use golem_worker_service_base::service::gateway::http_api_definition_validator::RouteValidationError;
 
 #[derive(Clone)]
@@ -252,9 +253,9 @@ impl GrpcApiDefinitionService {
             }
             create_api_definition_request::ApiDefinition::Openapi(definition) => {
                 let value =
-                    serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?;
+                    OpenApiDefinitionRequest(serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?);
 
-                get_api_definition(value).map_err(bad_request)?
+                value.to_http_api_definition().map_err(bad_request)?
             }
         };
 
@@ -289,9 +290,9 @@ impl GrpcApiDefinitionService {
             }
             update_api_definition_request::ApiDefinition::Openapi(definition) => {
                 let value =
-                    serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?;
+                    OpenApiDefinitionRequest(serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?);
 
-                get_api_definition(value).map_err(bad_request)?
+                value.to_http_api_definition().map_err(bad_request)?
             }
         };
 

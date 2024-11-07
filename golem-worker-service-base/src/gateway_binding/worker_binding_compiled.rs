@@ -14,7 +14,7 @@ pub struct WorkerBindingCompiled {
 }
 
 impl WorkerBindingCompiled {
-    pub fn from_gateway_worker_binding(
+    pub fn from_raw_worker_binding(
         gateway_worker_binding: &WorkerBinding,
         export_metadata: &[AnalysedExport],
     ) -> Result<Self, String> {

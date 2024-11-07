@@ -6,6 +6,8 @@ pub mod to_response;
 mod gateway_worker_request_executor;
 pub mod router;
 pub mod api_definition_lookup;
+pub mod rib_input_value_resolver;
+pub mod worker_binding_resolver;
 
 pub use gateway_worker_request_executor::*;
 

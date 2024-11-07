@@ -7,9 +7,7 @@ use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionWithTypeInfo;
 use golem_worker_service_base::gateway_api_definition::http::CompiledHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::gateway_api_definition::http::{
-    get_api_definition, OpenApiDefinitionRequest,
-};
+use golem_worker_service_base::gateway_api_definition::http::OpenApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
 use golem_worker_service_base::service::gateway::http_api_definition_validator::RouteValidationError;

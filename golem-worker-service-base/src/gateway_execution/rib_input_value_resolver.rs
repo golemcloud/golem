@@ -1,9 +1,10 @@
-use crate::gateway_binding::{WorkerGatewayRequestDetails, WorkerDetail};
+use crate::gateway_binding::WorkerDetail;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::{RibInput, RibInputTypeInfo};
 use std::collections::HashMap;
 use std::fmt::Display;
+use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
 // `RibInputValueResolver` is responsible
 // for extracting `RibInputValue` from any input, given the requirements as `RibInputTypeInfo`.
@@ -25,7 +26,7 @@ impl Display for RibInputTypeMismatch {
     }
 }
 
-impl RibInputValueResolver for WorkerGatewayRequestDetails {
+impl RibInputValueResolver for GatewayRequestDetails {
     fn resolve_rib_input_value(
         &self,
         required_types: &RibInputTypeInfo,

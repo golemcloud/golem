@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "proto/golem/shardmanager/shard_id.proto",
                 "proto/golem/shardmanager/v1/shard_manager_error.proto",
                 "proto/golem/shardmanager/v1/shard_manager_service.proto",
-                "proto/golem/apidefinition/gateway_api_definition.proto",
+                "proto/golem/apidefinition/api_definition.proto",
                 "proto/golem/apidefinition/v1/api_definition_service.proto",
                 "proto/golem/apidefinition/v1/api_definition_error.proto",
                 "proto/grpc/health/v1/health.proto",

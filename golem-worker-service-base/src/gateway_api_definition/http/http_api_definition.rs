@@ -397,7 +397,7 @@ impl CompiledRoute {
             ))?;
 
         let binding =
-            WorkerBindingCompiled::from_gateway_worker_binding(&route.binding, metadata)
+            WorkerBindingCompiled::from_raw_worker_binding(&route.binding, metadata)
                 .map_err(RouteCompilationErrors::RibCompilationError)?;
 
         Ok(CompiledRoute {

@@ -7,26 +7,30 @@ use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult}
 use serde_json::Value;
 use std::borrow::Cow;
 
-pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinitionRequest, String> {
-    let api_definition_id = ApiDefinitionId(get_root_extension(
-        &openapi,
-        GOLEM_API_DEFINITION_ID_EXTENSION,
-    )?);
-
-    let api_definition_version =
-        ApiVersion(get_root_extension(&openapi, GOLEM_API_DEFINITION_VERSION)?);
-
-    let routes = get_routes(openapi.paths)?;
-
-    Ok(HttpApiDefinitionRequest {
-        id: api_definition_id,
-        version: api_definition_version,
-        routes,
-        draft: true,
-    })
-}
 
 pub struct OpenApiDefinitionRequest(pub OpenAPI);
+
+impl OpenApiDefinitionRequest {
+    pub fn to_http_api_definition(&self) -> Result<HttpApiDefinitionRequest, String> {
+        let open_api = &self.0;
+        let api_definition_id = ApiDefinitionId(get_root_extension(
+            open_api,
+            GOLEM_API_DEFINITION_ID_EXTENSION,
+        )?);
+
+        let api_definition_version =
+            ApiVersion(get_root_extension(open_api, GOLEM_API_DEFINITION_VERSION)?);
+
+        let routes = get_routes(&open_api.paths)?;
+
+        Ok(HttpApiDefinitionRequest {
+            id: api_definition_id,
+            version: api_definition_version,
+            routes,
+            draft: true,
+        })
+    }
+}
 
 impl ParseFromJSON for OpenApiDefinitionRequest {
     fn parse_from_json(value: Option<serde_json::Value>) -> ParseResult<Self> {
@@ -121,7 +125,7 @@ mod internal {
             .map(|x| x.to_string())
     }
 
-    pub(crate) fn get_routes(paths: Paths) -> Result<Vec<Route>, String> {
+    pub(crate) fn get_routes(paths: &Paths) -> Result<Vec<Route>, String> {
         let mut routes: Vec<Route> = vec![];
 
         for (path, path_item) in paths.iter() {

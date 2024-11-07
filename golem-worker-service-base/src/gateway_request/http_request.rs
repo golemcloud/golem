@@ -110,7 +110,7 @@ mod tests {
     use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
     use crate::path::Path;
     use crate::gateway_binding::{
-        RibInputTypeMismatch, WorkerGatewayBindingResolver,
+        RibInputTypeMismatch, WorkerBindingResolver,
     };
     use crate::gateway_execution::to_response::ToResponse;
     use crate::gateway_execution::{
