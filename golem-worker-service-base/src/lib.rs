@@ -14,7 +14,7 @@ pub mod service;
 mod gateway_binding;
 pub mod gateway_execution;
 mod gateway_rib_compiler;
-pub mod worker_gateway_rib_interpreter;
+pub mod gateway_rib_interpreter;
 pub mod gateway_request;
 pub mod gateway_api_deployment;
 

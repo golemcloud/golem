@@ -23,7 +23,7 @@ use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, HttpApiDefinition, Route,
 };
 
-use crate::http::router::{Router, RouterPattern};
+use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
@@ -36,7 +36,7 @@ use golem_service_base::repo::RepoError;
 use rib::WorkerFunctionsInRib;
 use std::fmt::{Debug, Display};
 use crate::gateway_api_definition::ApiDefinitionId;
-use crate::gateway_api_deployment::{ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString};
+use crate::gateway_api_deployment::http::{ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString};
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 
 #[async_trait]
@@ -62,7 +62,7 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
 
     async fn get_by_site(
         &self,
-        site: &ApiSiteString,
+        site: & ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
     async fn get_definitions_by_site(

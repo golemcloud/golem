@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
-use crate::worker_gateway_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
+use crate::gateway_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
 use futures_util::FutureExt;
 use hyper::header::HOST;
 use poem::http::StatusCode;
@@ -10,7 +10,7 @@ use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
 use crate::http::{ApiInputPath, InputHttpRequest};
-use crate::service::gateway::api_definition_lookup::ApiDefinitionsLookup;
+use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 
 use crate::gateway_binding::WorkerGatewayBindingResolver;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;

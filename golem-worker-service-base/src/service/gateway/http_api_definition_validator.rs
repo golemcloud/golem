@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern, Route};
 
-use crate::http::router::{Router, RouterPattern};
+use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::service::gateway::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
 
 // Http Api Definition Validator

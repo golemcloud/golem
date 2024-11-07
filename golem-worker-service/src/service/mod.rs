@@ -17,7 +17,7 @@ use golem_worker_service_base::repo::api_deployment;
 use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceDefault,
 };
-use golem_worker_service_base::service::gateway::api_definition_lookup::{
+use golem_worker_service_base::gateway_execution::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
 };
 use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;

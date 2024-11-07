@@ -4,6 +4,9 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 mod http_content_type_mapper;
 pub mod to_response;
 mod gateway_worker_request_executor;
+pub mod router;
+pub mod api_definition_lookup;
+
 pub use gateway_worker_request_executor::*;
 
 #[derive(PartialEq, Debug, Clone)]

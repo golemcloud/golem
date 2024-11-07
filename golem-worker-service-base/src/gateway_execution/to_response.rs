@@ -1,5 +1,5 @@
 use crate::gateway_binding::{RibInputTypeMismatch};
-use crate::worker_gateway_rib_interpreter::EvaluationError;
+use crate::gateway_rib_interpreter::EvaluationError;
 
 use http::StatusCode;
 use poem::Body;
@@ -58,11 +58,10 @@ impl ToResponse<poem::Response> for String {
 }
 
 mod internal {
-    use crate::gateway_binding::{HttpRequestDetails, WorkerGatewayRequestDetails};
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
-    use crate::worker_gateway_rib_interpreter::EvaluationError;
+    use crate::gateway_rib_interpreter::EvaluationError;
     use http::{HeaderMap, StatusCode};
     use std::str::FromStr;
 
@@ -261,12 +260,12 @@ mod test {
     use golem_wasm_rpc::protobuf::Type;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
 
-    use crate::gateway_binding::{HttpRequestDetails, WorkerGatewayRequestDetails};
     use crate::gateway_execution::to_response::ToResponse;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;
     use std::collections::HashMap;
+    use crate::gateway_request::gateway_request_details::{GatewayRequestDetails, HttpRequestDetails};
 
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];
@@ -313,7 +312,7 @@ mod test {
         let evaluation_result: RibResult = RibResult::Val(record);
 
         let http_response: poem::Response =
-            evaluation_result.to_response(&WorkerGatewayRequestDetails::Http(HttpRequestDetails::empty()));
+            evaluation_result.to_response(&GatewayRequestDetails::Http(HttpRequestDetails::empty()));
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();
@@ -339,7 +338,7 @@ mod test {
             RibResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
         let http_response: poem::Response =
-            evaluation_result.to_response(&WorkerGatewayRequestDetails::Http(HttpRequestDetails::empty()));
+            evaluation_result.to_response(&GatewayRequestDetails::Http(HttpRequestDetails::empty()));
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();

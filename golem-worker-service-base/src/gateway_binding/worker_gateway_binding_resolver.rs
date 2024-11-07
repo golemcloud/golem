@@ -1,12 +1,12 @@
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
-use crate::http::http_request::router;
-use crate::http::router::RouterPattern;
+use crate::gateway_request::http_request::router;
+use crate::gateway_execution::router::RouterPattern;
 use crate::http::InputHttpRequest;
 use crate::gateway_binding::rib_input_value_resolver::RibInputValueResolver;
 use crate::gateway_binding::{ResponseMappingCompiled, RibInputTypeMismatch};
 use crate::gateway_execution::to_response::ToResponse;
-use crate::worker_gateway_rib_interpreter::EvaluationError;
-use crate::worker_gateway_rib_interpreter::WorkerServiceRibInterpreter;
+use crate::gateway_rib_interpreter::EvaluationError;
+use crate::gateway_rib_interpreter::WorkerServiceRibInterpreter;
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
 use golem_service_base::model::VersionedComponentId;
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
-// to resolve a single worker-binding is then executed with the help of worker_gateway_rib_interpreter, which internally
+// to resolve a single worker-binding is then executed with the help of gateway_rib_interpreter, which internally
 // calls the worker function.
 #[async_trait]
 pub trait WorkerGatewayBindingResolver<ApiDefinition> {

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
-use crate::gateway_api_deployment::ApiSiteString;
+use crate::gateway_api_deployment::http::ApiSiteString;
 
 #[derive(Clone)]
 pub struct InputHttpRequest {
@@ -51,10 +51,8 @@ impl ApiInputPath {
 pub mod router {
     use crate::gateway_api_definition::http::CompiledRoute;
     use crate::gateway_binding::WorkerBindingCompiled;
-    use crate::{
-        gateway_api_definition::http::{PathPattern, QueryInfo, VarInfo},
-        http::router::{Router, RouterPattern},
-    };
+    use crate::gateway_api_definition::http::{PathPattern, QueryInfo, VarInfo};
+    use crate::gateway_execution::router::{Router, RouterPattern};
 
     #[derive(Debug, Clone)]
     pub struct RouteEntry {
@@ -109,16 +107,16 @@ mod tests {
         CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     };
     use crate::getter::Getter;
-    use crate::http::http_request::{ApiInputPath, InputHttpRequest};
+    use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
     use crate::path::Path;
     use crate::gateway_binding::{
-         WorkerGatewayBindingResolver, RibInputTypeMismatch,
+        RibInputTypeMismatch, WorkerGatewayBindingResolver,
     };
     use crate::gateway_execution::to_response::ToResponse;
     use crate::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, GatewayWorkerRequestExecutorError, WorkerResponse,
     };
-    use crate::worker_gateway_rib_interpreter::{
+    use crate::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
     use async_trait::async_trait;
