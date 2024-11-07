@@ -66,7 +66,7 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
     log_action("Executing", "pre-component-build steps");
     let _indent = LogIndent::new();
 
-    let changed_any = extract_interface_packages(&ctx)?;
+    let changed_any = extract_interface_packages(ctx)?;
     if changed_any {
         update_wit_context(ctx)?;
     }
@@ -179,7 +179,7 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
 
 fn extract_interface_packages(ctx: &ApplicationContext) -> Result<bool, Error> {
     let mut changed_any = false;
-    for (component_name, _component) in &ctx.application.wasm_components_by_name {
+    for component_name in ctx.application.wasm_components_by_name.keys() {
         let component_input_wit = ctx.application.component_input_wit(component_name);
         let component_output_wit = ctx.application.component_output_wit(component_name);
 

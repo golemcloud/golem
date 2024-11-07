@@ -443,7 +443,10 @@ pub fn initialize_workspace(
             let makefile = makefile.to_string()?;
             log_warn_action(
                 "Overwriting",
-                format!("cargo-make Makefile {:?}", makefile_path.log_color_highlight()),
+                format!(
+                    "cargo-make Makefile {:?}",
+                    makefile_path.log_color_highlight()
+                ),
             );
             fs::write(makefile_path, makefile)?;
         } else if has_cargo_make() {
@@ -459,7 +462,10 @@ pub fn initialize_workspace(
             let makefile = makefile.to_string()?;
             log_action(
                 "Writing",
-                format!("cargo-make Makefile to {:?}", makefile_path.log_color_highlight()),
+                format!(
+                    "cargo-make Makefile to {:?}",
+                    makefile_path.log_color_highlight()
+                ),
             );
             fs::write(makefile_path, makefile)?;
         } else {
@@ -470,7 +476,10 @@ pub fn initialize_workspace(
 
         let mut new_members = Vec::new();
         for target in targets {
-            log_action("Generating", format!("initial stub for {}", target.log_color_highlight()));
+            log_action(
+                "Generating",
+                format!("initial stub for {}", target.log_color_highlight()),
+            );
 
             let stub_name = format!("{target}-stub");
             crate::generate(GenerateArgs {

@@ -108,7 +108,10 @@ fn plug(
     };
 
     for plug_name in unused_plugs {
-        log_warn_action("Skipping", format!("{}, not used", plug_name.log_color_highlight()));
+        log_warn_action(
+            "Skipping",
+            format!("{}, not used", plug_name.log_color_highlight()),
+        );
     }
 
     // Export all exports from the socket component.
