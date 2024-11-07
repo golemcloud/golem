@@ -2,7 +2,7 @@ use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-use crate::gateway_binding::WorkerBindingCompiled;
+use crate::gateway_binding::{GatewayBinding, WorkerBindingCompiled};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::VersionedComponentId;
 use poem_openapi::*;
@@ -10,7 +10,9 @@ use rib::{Expr, RibInputTypeInfo};
 use serde::{Deserialize, Serialize};
 use std::result::Result;
 use std::time::SystemTime;
+use crate::{api, gateway_plugins};
 use crate::gateway_api_deployment::http::ApiSite;
+use crate::gateway_plugins::Plugin;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -124,10 +126,28 @@ impl From<CompiledRoute> for RouteWithTypeInfo {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GolemWorkerBinding {
-    pub component_id: VersionedComponentId,
+    pub binding_type: Option<GatewayBindingType>, // descriminator to keep backward compatibility
+    pub component_id: Option<VersionedComponentId>, // Optional only to keep backward compatibility
     pub worker_name: Option<String>,
     pub idempotency_key: Option<String>,
-    pub response: String,
+    pub response: Option<String>, // Optional only to keep backward compatibility
+    // CORS: if binding_type is corsPlugin, then following parameters required
+    pub allow_origin: Option<String>, // Optional only to keep backward compatibility
+    pub allow_methods: Option<String>,// Optional only to keep backward compatibility
+    pub allow_headers: Option<String>, // Optional only to keep backward compatibility
+    pub expose_headers: Option<String>,
+    pub max_age: Option<u64>
+
+}
+
+// To keep backward compatibility we introduce an optional discriminator
+// and it's absence will result in default binding which GolemWorkerBinding
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub enum GatewayBindingType {
+    CorsPlugin,
+    Default
 }
 
 // GolemWorkerBindingWithTypeInfo is a subset of CompiledGolemWorkerBinding
@@ -267,29 +287,60 @@ impl TryInto<crate::gateway_api_definition::http::Route> for Route {
     }
 }
 
-impl TryFrom<crate::gateway_binding::WorkerBinding> for GolemWorkerBinding {
+impl TryFrom<crate::gateway_binding::GatewayBinding> for GolemWorkerBinding {
     type Error = String;
 
-    fn try_from(value: crate::gateway_binding::WorkerBinding) -> Result<Self, Self::Error> {
-        let response: String = rib::to_string(&value.response.0).map_err(|e| e.to_string())?;
+    fn try_from(value: crate::gateway_binding::GatewayBinding) -> Result<Self, Self::Error> {
+        match value {
+            GatewayBinding::Default(worker_binding) =>  {
+                let response: String = rib::to_string(&worker_binding.response.0).map_err(|e| e.to_string())?;
 
-        let worker_id = value
-            .worker_name
-            .map(|expr| rib::to_string(&expr).map_err(|e| e.to_string()))
-            .transpose()?;
+                let worker_id = worker_binding
+                    .worker_name
+                    .map(|expr| rib::to_string(&expr).map_err(|e| e.to_string()))
+                    .transpose()?;
 
-        let idempotency_key = if let Some(key) = &value.idempotency_key {
-            Some(rib::to_string(key).map_err(|e| e.to_string())?)
-        } else {
-            None
-        };
+                let idempotency_key = if let Some(key) = &worker_binding.idempotency_key {
+                    Some(rib::to_string(key).map_err(|e| e.to_string())?)
+                } else {
+                    None
+                };
 
-        Ok(Self {
-            component_id: value.component_id,
-            worker_name: worker_id,
-            idempotency_key,
-            response,
-        })
+                Ok(Self {
+                    binding_type: Some(api::GatewayBindingType::Default),
+                    component_id: Some(worker_binding.component_id),
+                    worker_name: worker_id,
+                    idempotency_key,
+                    response: Some(response),
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    max_age: None,
+                })
+            }
+
+            GatewayBinding::Plugin(plugin) => {
+                match plugin {
+                    Plugin::Http(http_plugin) => match http_plugin {
+                        gateway_plugins::HttpPlugin::Cors(cors) => {
+                            Ok(Self {
+                                binding_type: Some(api::GatewayBindingType::CorsPlugin),
+                                component_id: None,
+                                worker_name: None,
+                                idempotency_key,
+                                response: None,
+                                allow_origin: Some(cors.allow_origin),
+                                allow_methods: Some(cors.allow_methods),
+                                allow_headers: Some(cors.allow_headers),
+                                expose_headers: cors.expose_headers,
+                                max_age: cors.max_age,
+                            })
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

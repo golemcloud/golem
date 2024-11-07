@@ -1,4 +1,4 @@
-use crate::gateway_plugins::http::HttpPlugin;
+pub use http::*;
 
 mod http;
 
