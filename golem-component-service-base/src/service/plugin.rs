@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::model::{
-    ComponentPluginInstallationTarget, PluginDefinition, PluginInstallation,
-    PluginInstallationCreation, PluginInstallationUpdate, ComponentOwner, PluginScope,
+    ComponentOwner, ComponentPluginInstallationTarget, PluginDefinition, PluginInstallation,
+    PluginInstallationCreation, PluginInstallationUpdate, PluginScope,
 };
 use crate::repo::component::ComponentRepo;
 use crate::repo::plugin::{PluginRecord, PluginRepo};
@@ -262,7 +262,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner, Scope>
 
         let latest = self
             .component_repo
-            .get_latest_version(&component_id.0)
+            .get_latest_version(&owner.to_string(), &component_id.0)
             .await?;
 
         if let Some(latest) = latest {
@@ -300,17 +300,17 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner, Scope>
         component_id: &ComponentId,
         update: PluginInstallationUpdate,
     ) -> Result<(), PluginError> {
-        let owner = owner.clone().into();
+        let owner_record = owner.clone().into();
 
         let latest = self
             .component_repo
-            .get_latest_version(&component_id.0)
+            .get_latest_version(&owner.to_string(), &component_id.0)
             .await?;
 
         if latest.is_some() {
             self.component_repo
                 .update_plugin_installation(
-                    &owner,
+                    &owner_record,
                     &component_id.0,
                     &installation_id.0,
                     update.priority,
@@ -337,15 +337,15 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner, Scope>
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError> {
-        let owner = owner.clone().into();
+        let owner_record = owner.clone().into();
         let latest = self
             .component_repo
-            .get_latest_version(&component_id.0)
+            .get_latest_version(&owner.to_string(), &component_id.0)
             .await?;
 
         if latest.is_some() {
             self.component_repo
-                .uninstall_plugin(&owner, &component_id.0, &installation_id.0)
+                .uninstall_plugin(&owner_record, &component_id.0, &installation_id.0)
                 .await?;
 
             Ok(())

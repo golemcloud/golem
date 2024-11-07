@@ -52,8 +52,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
             (
-                "DefaultPluginOwner",
-                "golem_common::model::plugin::DefaultPluginOwner",
+                "DefaultComponentOwner",
+                "golem_common::model::DefaultComponentOwner",
             ),
             (
                 "DefaultPluginScope",

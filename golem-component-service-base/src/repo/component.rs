@@ -167,17 +167,23 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
         component_version: i64,
     ) -> Result<(), RepoError>;
 
-    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError>;
+    async fn get(
+        &self,
+        namespace: &str,
+        component_id: &Uuid,
+    ) -> Result<Vec<ComponentRecord>, RepoError>;
 
     async fn get_all(&self, namespace: &str) -> Result<Vec<ComponentRecord>, RepoError>;
 
     async fn get_latest_version(
         &self,
+        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord>, RepoError>;
 
     async fn get_by_version(
         &self,
+        namespace: &str,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord>, RepoError>;
@@ -201,6 +207,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
 
     async fn get_constraint(
         &self,
+        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<FunctionConstraintCollection>, RepoError>;
 
@@ -322,8 +329,12 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         Self::logged_with_id("activate", component_id, result)
     }
 
-    async fn get(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
-        let result = self.repo.get(component_id).await;
+    async fn get(
+        &self,
+        namespace: &str,
+        component_id: &Uuid,
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
+        let result = self.repo.get(namespace, component_id).await;
         Self::logged_with_id("get", component_id, result)
     }
 
@@ -334,18 +345,23 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 
     async fn get_latest_version(
         &self,
+        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord>, RepoError> {
-        let result = self.repo.get_latest_version(component_id).await;
+        let result = self.repo.get_latest_version(namespace, component_id).await;
         Self::logged_with_id("get_latest_version", component_id, result)
     }
 
     async fn get_by_version(
         &self,
+        namespace: &str,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord>, RepoError> {
-        let result = self.repo.get_by_version(component_id, version).await;
+        let result = self
+            .repo
+            .get_by_version(namespace, component_id, version)
+            .await;
         Self::logged_with_id("get_by_version", component_id, result)
     }
 
@@ -386,10 +402,10 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 
     async fn get_constraint(
         &self,
+        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<FunctionConstraintCollection>, RepoError> {
-        let result = self.repo.get_constraint(component_id).await;
-
+        let result = self.repo.get_constraint(namespace, component_id).await;
         Self::logged("get_component_constraint", result)
     }
 
@@ -616,7 +632,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 debug!("update created new component version {new_version}");
 
                 let old_target = ComponentPluginInstallationRow {
-                    component_id: component_id.clone(),
+                    component_id: *component_id,
                     component_version: new_version - 1,
                 };
                 let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
@@ -627,7 +643,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     .await?;
 
                 let new_target = ComponentPluginInstallationRow {
-                    component_id: component_id.clone(),
+                    component_id: *component_id,
                     component_version: new_version,
                 };
 
@@ -654,7 +670,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 transaction.commit().await?;
 
                 let component = self
-                    .get_by_version(&component_id, new_version as u64)
+                    .get_by_version(namespace, component_id, new_version as u64)
                     .await?;
                 component.ok_or(RepoError::Internal(
                     "Could not re-get newly created component version".to_string(),
@@ -691,7 +707,11 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
     }
 
     #[when(sqlx::Postgres -> get)]
-    async fn get_postgres(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
+    async fn get_postgres(
+        &self,
+        namespace: &str,
+        component_id: &Uuid,
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
@@ -705,17 +725,22 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.component_id = $1
+                WHERE c.component_id = $1 AND c.namespace = $2
                 "#,
         )
         .bind(component_id)
+        .bind(namespace)
         .fetch_all(self.db_pool.deref())
         .await
         .map_err(|e| e.into())
     }
 
     #[when(sqlx::Sqlite -> get)]
-    async fn get_sqlite(&self, component_id: &Uuid) -> Result<Vec<ComponentRecord>, RepoError> {
+    async fn get_sqlite(
+        &self,
+        namespace: &str,
+        component_id: &Uuid,
+    ) -> Result<Vec<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
             r#"
                 SELECT
@@ -729,10 +754,11 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.component_id = $1
+                WHERE c.component_id = $1 AND c.namespace = $2
                 "#,
         )
         .bind(component_id)
+        .bind(namespace)
         .fetch_all(self.db_pool.deref())
         .await
         .map_err(|e| e.into())
@@ -789,6 +815,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
     #[when(sqlx::Postgres -> get_latest_version)]
     async fn get_latest_version_postgres(
         &self,
+        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
@@ -804,12 +831,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.component_id = $1 AND cv.available = TRUE
+                WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
                 ORDER BY cv.version DESC
                 LIMIT 1
                 "#,
         )
         .bind(component_id)
+        .bind(namespace)
         .fetch_optional(self.db_pool.deref())
         .await
         .map_err(|e| e.into())
@@ -818,6 +846,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
     #[when(sqlx::Sqlite -> get_latest_version)]
     async fn get_latest_version_sqlite(
         &self,
+        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<ComponentRecord>, RepoError> {
         sqlx::query_as::<_, ComponentRecord>(
@@ -833,11 +862,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.component_id = $1
-                ORDER BY cv.version DESC LIMIT 1
+                WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
+                ORDER BY cv.version
+                DESC LIMIT 1
                 "#,
         )
         .bind(component_id)
+        .bind(namespace)
         .fetch_optional(self.db_pool.deref())
         .await
         .map_err(|e| e.into())
@@ -846,6 +877,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
     #[when(sqlx::Postgres -> get_by_version)]
     async fn get_by_version_postgres(
         &self,
+        namespace: &str,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord>, RepoError> {
@@ -862,11 +894,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.component_id = $1 AND cv.version = $2
+                WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
                 "#,
         )
         .bind(component_id)
         .bind(version as i64)
+        .bind(namespace)
         .fetch_optional(self.db_pool.deref())
         .await
         .map_err(|e| e.into())
@@ -875,6 +908,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
     #[when(sqlx::Sqlite -> get_by_version)]
     async fn get_by_version_sqlite(
         &self,
+        namespace: &str,
         component_id: &Uuid,
         version: u64,
     ) -> Result<Option<ComponentRecord>, RepoError> {
@@ -891,11 +925,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.component_type AS component_type
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
-                WHERE c.component_id = $1 AND cv.version = $2
+                WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
                 "#,
         )
         .bind(component_id)
         .bind(version as i64)
+        .bind(namespace)
         .fetch_optional(self.db_pool.deref())
         .await
         .map_err(|e| e.into())
@@ -1084,6 +1119,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
     async fn get_constraint(
         &self,
+        namespace: &str,
         component_id: &Uuid,
     ) -> Result<Option<FunctionConstraintCollection>, RepoError> {
         let existing_record = sqlx::query_as::<_, ComponentConstraintsRecord>(
@@ -1092,10 +1128,11 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     namespace,
                     component_id,
                     constraints
-                FROM component_constraints WHERE component_id = $1
+                FROM component_constraints WHERE component_id = $1 AND namespace = $2
                 "#,
         )
         .bind(component_id)
+        .bind(namespace)
         .fetch_optional(self.db_pool.deref())
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;

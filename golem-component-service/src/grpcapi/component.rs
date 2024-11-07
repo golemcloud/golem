@@ -48,7 +48,6 @@ use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
 use golem_component_service_base::model::{ComponentConstraints, DefaultComponentOwner};
 use golem_component_service_base::service::component;
-use golem_service_base::auth::DefaultNamespace;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
