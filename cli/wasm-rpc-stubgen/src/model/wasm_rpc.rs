@@ -856,7 +856,8 @@ mod tests {
 
         assert!(component_name == "component-one");
         assert!(component.name == "component-one");
-        assert!(component.wit.to_string_lossy() == "wit");
+        assert!(component.input_wit.to_string_lossy() == "input_wit");
+        assert!(component.output_wit.to_string_lossy() == "output_wit");
         assert!(component.input_wasm.to_string_lossy() == "out/in.wasm");
         assert!(component.output_wasm.to_string_lossy() == "out/out.wasm");
         assert!(component.wasm_rpc_dependencies.len() == 2);
@@ -897,7 +898,8 @@ spec:
     - name: component-one
       type: wasm
       properties:
-        wit: wit
+        inputWit: input_wit
+        outputWit: output_wit
         inputWasm: out/in.wasm
         outputWasm: out/out.wasm
         testUnknownProp: test
@@ -943,7 +945,8 @@ spec:
     - name: component-one
       type: wasm
       properties:
-        wit: wit
+        inputWit: input-wit
+        outputWit: input-wit
         inputWasm: out/in.wasm
         outputWasm: out/out.wasm
         testUnknownProp: test
