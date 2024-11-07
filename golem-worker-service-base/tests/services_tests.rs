@@ -11,9 +11,8 @@ use golem_wasm_ast::analysis::{
     AnalysedInstance,
 };
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
-use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::{
-    ApiDefinitionId, ApiDeploymentRequest, ApiSite, ApiSiteString, ApiVersion,
+    ApiDefinitionId, ApiVersion,
 };
 use golem_worker_service_base::repo::{api_definition, api_deployment};
 use golem_worker_service_base::service::gateway::api_definition::{
@@ -36,6 +35,8 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
+use golem_worker_service_base::{api, gateway_api_definition};
+use golem_worker_service_base::gateway_api_deployment::http::{ApiDeploymentRequest, ApiSite, ApiSiteString};
 
 test_r::enable!();
 
@@ -259,7 +260,7 @@ async fn test_deployment(
             "${ let not_found: u64 = 401; let success: u64 = 200; let result = golem:it/api.{get-cart-contents}(\"foo\"); let status = if result == \"admin\" then not_found else success; {status: status } }",
             true,
         );
-    let def2 = HttpApiDefinitionRequest {
+    let def2 = gateway_api_definition::http::HttpApiDefinitionRequest {
         draft: false,
         ..def2draft.clone()
     };
@@ -766,7 +767,7 @@ fn get_api_definition(
     worker_id: &str,
     response_mapping: &str,
     draft: bool,
-) -> HttpApiDefinitionRequest {
+) -> gateway_api_definition::http::HttpApiDefinitionRequest {
     let yaml_string = format!(
         r#"
           id: {}
@@ -785,14 +786,15 @@ fn get_api_definition(
         id, version, draft, path_pattern, worker_id, response_mapping
     );
 
-    serde_yaml::from_str(yaml_string.as_str()).unwrap()
+     let api: api::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string.as_str()).unwrap();
+     api.try_into().unwrap()
 }
 
 fn contains_definitions(
     result: Vec<HttpApiDefinition>,
-    expected: Vec<HttpApiDefinitionRequest>,
+    expected: Vec<gateway_api_definition::http::HttpApiDefinitionRequest>,
 ) -> bool {
-    let requests: Vec<HttpApiDefinitionRequest> =
+    let requests: Vec<gateway_api_definition::http::HttpApiDefinitionRequest> =
         result.into_iter().map(|x| x.into()).collect::<Vec<_>>();
 
     for value in expected.into_iter() {

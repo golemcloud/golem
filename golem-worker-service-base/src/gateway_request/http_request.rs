@@ -135,6 +135,9 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use chrono::{DateTime, Utc};
+    use crate::{api, gateway_api_definition};
+    use crate::api::HttpApiDefinitionRequest;
     use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
     struct TestWorkerRequestExecutor {}
@@ -948,8 +951,15 @@ mod tests {
             path_pattern, worker_name, rib_expression
         );
 
-        let http_api_definition: HttpApiDefinition =
+        // Serde is available only for user facing HttpApiDefinition
+        let http_api_definition_request: api::HttpApiDefinitionRequest =
             serde_yaml::from_str(yaml_string.as_str()).unwrap();
+
+        let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+            http_api_definition_request.try_into().unwrap();
+
+        let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+        let http_api_definition = HttpApiDefinition::new(core_request, create_at);
         http_api_definition
     }
 }

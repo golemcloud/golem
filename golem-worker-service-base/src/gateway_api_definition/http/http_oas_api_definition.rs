@@ -273,7 +273,7 @@ mod tests {
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_binding::{ResponseMapping, WorkerBinding};
     use golem_common::model::ComponentId;
-    use openapiv3::{Operation, PathItem};
+    use openapiv3::{Operation};
     use rib::Expr;
     use serde_json::json;
     use uuid::Uuid;

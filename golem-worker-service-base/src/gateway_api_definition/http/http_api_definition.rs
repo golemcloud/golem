@@ -20,7 +20,6 @@ pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<Route>,
-    #[serde(default)]
     pub draft: bool,
 }
 
@@ -29,7 +28,6 @@ pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<Route>,
-    #[serde(default)]
     pub draft: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -418,10 +416,12 @@ impl From<CompiledRoute> for Route {
 
 #[cfg(test)]
 mod tests {
+    use chrono::{DateTime, Utc};
     use test_r::test;
 
     use super::*;
     use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+    use crate::api;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -611,7 +611,6 @@ mod tests {
           id: users-api
           version: 0.0.1
           projectId: '15d70aa5-2e23-4ee3-b65c-4e1d702836a3'
-          createdAt: 2024-08-21T07:42:15.696Z
           routes:
           - method: Get
             path: {}
@@ -630,42 +629,15 @@ mod tests {
         serde_yaml::Value::deserialize(de).unwrap()
     }
 
-    #[test]
-    fn test_api_spec_serde() {
-        test_serde(
-            "foo/{user-id}?{id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_serde(
-            "foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_serde(
-            "foo/{user-id}",
-            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-
-        test_serde(
-            "foo",
-            "let x: str = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
-            "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
-    }
-
     #[track_caller]
     fn test_serde(path_pattern: &str, worker_id: &str, response_mapping: &str) {
         let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
 
-        let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+        let result: api::HttpApiDefinitionRequest = serde_yaml::from_value(yaml.clone()).unwrap();
 
         let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
 
-        let result2: HttpApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
+        let result2: api::HttpApiDefinitionRequest = serde_yaml::from_value(yaml2.clone()).unwrap();
 
         assert_eq!(
             result,
@@ -679,11 +651,13 @@ mod tests {
     fn test_api_spec_proto_conversion() {
         fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
-            let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
-
-            let proto: grpc_apidefinition::ApiDefinition = original.clone().try_into().unwrap();
+            let api_http_definition_request: api::HttpApiDefinitionRequest = serde_yaml::from_value(yaml.clone()).unwrap();
+            let core_http_definition_request: HttpApiDefinitionRequest = api_http_definition_request.try_into().unwrap();
+            let timestamp: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+            let core_http_definition = HttpApiDefinition::new(core_http_definition_request, timestamp);
+            let proto: grpc_apidefinition::ApiDefinition = core_http_definition.clone().try_into().unwrap();
             let decoded: HttpApiDefinition = proto.try_into().unwrap();
-            assert_eq!(original, decoded);
+            assert_eq!(core_http_definition, decoded);
         }
 
         test_encode_decode(

@@ -418,7 +418,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
+            golem_worker_service_base::api::HttpApiDefinitionRequest {
                 id: ApiDefinitionId("test".to_string()),
                 version: ApiVersion("1.0".to_string()),
                 routes: vec![],
@@ -448,7 +448,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
+            HttpApiDefinitionRequest {
                 id: ApiDefinitionId("sample".to_string()),
                 version: ApiVersion("42.0".to_string()),
                 routes: vec![],
@@ -470,7 +470,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
+            HttpApiDefinitionRequest {
                 id: ApiDefinitionId("sample".to_string()),
                 version: ApiVersion("42.0".to_string()),
                 routes: vec![],
@@ -492,7 +492,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
+            HttpApiDefinitionRequest {
                 id: ApiDefinitionId("test".to_string()),
                 version: ApiVersion("42.0".to_string()),
                 routes: vec![],
@@ -517,7 +517,7 @@ mod test {
         let client = TestClient::new(api);
 
         let definition =
-            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
+            HttpApiDefinitionRequest {
                 id: ApiDefinitionId("test".to_string()),
                 version: ApiVersion("1.0".to_string()),
                 routes: vec![],
@@ -531,7 +531,7 @@ mod test {
         response.assert_status_is_ok();
 
         let definition =
-            golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest {
+            HttpApiDefinitionRequest {
                 id: ApiDefinitionId("test".to_string()),
                 version: ApiVersion("2.0".to_string()),
                 routes: vec![],
