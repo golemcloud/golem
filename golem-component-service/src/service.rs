@@ -16,6 +16,8 @@ use crate::config::ComponentServiceConfig;
 use golem_common::config::DbConfig;
 use golem_common::model::plugin::DefaultPluginScope;
 use golem_component_service_base::config::ComponentCompilationConfig;
+use golem_component_service_base::config::ComponentStoreConfig;
+use golem_component_service_base::model::DefaultComponentOwner;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
@@ -25,15 +27,13 @@ use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
-use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
-use golem_service_base::config::ComponentStoreConfig;
-use golem_service_base::db;
-use golem_service_base::service::component_object_store;
-use golem_service_base::service::component_object_store::{
+use golem_component_service_base::service::component_object_store;
+use golem_component_service_base::service::component_object_store::{
     ComponentObjectStore, LoggedComponentObjectStore,
 };
+use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
+use golem_service_base::db;
 use std::sync::Arc;
-use golem_component_service_base::model::DefaultComponentOwner;
 
 #[derive(Clone)]
 pub struct Services {

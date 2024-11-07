@@ -13,15 +13,14 @@
 // limitations under the License.
 
 use crate::config::{ComponentStoreLocalConfig, ComponentStoreS3Config};
-use crate::stream::{ByteStream, LoggedByteStream};
 use anyhow::Error;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use futures::Stream;
+use golem_service_base::stream::{ByteStream, LoggedByteStream};
 use std::fs;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::task::{Context, Poll};
 use tracing::{debug, debug_span, error, info};
 use tracing_futures::Instrument;
 
@@ -99,24 +98,6 @@ impl<Store: ComponentObjectStore + Sync> ComponentObjectStore
             object_key,
             self.store.delete(object_key).await,
         )
-    }
-}
-
-pub struct AwsByteStream(aws_sdk_s3::primitives::ByteStream);
-
-impl Stream for AwsByteStream {
-    type Item = Result<Vec<u8>, Error>;
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        Pin::new(&mut self.0)
-            .poll_next(cx)
-            .map_ok(|b| b.to_vec())
-            .map_err(|e| e.into())
-    }
-}
-
-impl From<aws_sdk_s3::primitives::ByteStream> for ByteStream {
-    fn from(stream: aws_sdk_s3::primitives::ByteStream) -> Self {
-        Self::new(AwsByteStream(stream))
     }
 }
 

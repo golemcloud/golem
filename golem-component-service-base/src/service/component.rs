@@ -21,6 +21,7 @@ use crate::repo::component::{
     record_metadata_serde, ComponentConstraintsRecord, ComponentRecord, ComponentRepo,
 };
 use crate::service::component_compilation::ComponentCompilationService;
+use crate::service::component_object_store::ComponentObjectStore;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
@@ -30,7 +31,6 @@ use golem_common::model::{ComponentId, ComponentType, ComponentVersion};
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
-use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use tap::TapFallible;
@@ -167,14 +167,14 @@ pub trait ComponentService<Owner: ComponentOwner> {
     async fn download(
         &self,
         component_id: &ComponentId,
-        version: Option<u64>,
+        version: Option<ComponentVersion>,
         owner: &Owner,
     ) -> Result<Vec<u8>, ComponentError>;
 
     async fn download_stream(
         &self,
         component_id: &ComponentId,
-        version: Option<u64>,
+        version: Option<ComponentVersion>,
         owner: &Owner,
     ) -> Result<
         Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
@@ -294,21 +294,13 @@ impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
         }
     }
 
-    fn get_user_object_store_key(&self, id: &VersionedComponentId) -> String {
-        format!("{id}:user")
-    }
-
-    fn get_protected_object_store_key(&self, id: &VersionedComponentId) -> String {
-        format!("{id}:protected")
-    }
-
     async fn upload_user_component(
         &self,
-        user_component_id: &VersionedComponentId,
+        component: &Component<Owner>,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         self.object_store
-            .put(&self.get_user_object_store_key(user_component_id), data)
+            .put(&component.user_object_store_key(), data)
             .await
             .map_err(|e| {
                 ComponentError::component_store_error("Failed to upload user component", e)
@@ -317,41 +309,15 @@ impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
 
     async fn upload_protected_component(
         &self,
-        protected_component_id: &VersionedComponentId,
+        component: &Component<Owner>,
         data: Vec<u8>,
     ) -> Result<(), ComponentError> {
         self.object_store
-            .put(
-                &self.get_protected_object_store_key(protected_component_id),
-                data,
-            )
+            .put(&component.protected_object_store_key(), data)
             .await
             .map_err(|e| {
                 ComponentError::component_store_error("Failed to upload protected component", e)
             })
-    }
-
-    /// Gets the latest available component version if the given version is `None`
-    async fn resolve_optional_version(
-        &self,
-        component_id: &ComponentId,
-        version: Option<ComponentVersion>,
-        owner: &Owner,
-    ) -> Result<ComponentVersion, ComponentError> {
-        match version {
-            Some(version) => Ok(version),
-            None => {
-                let stored = self
-                    .component_repo
-                    .get_latest_version(&owner.to_string(), &component_id.0)
-                    .await?;
-
-                match stored {
-                    Some(stored) => Ok(stored.version as u64),
-                    None => Err(ComponentError::UnknownComponentId(component_id.clone())),
-                }
-            }
-        }
     }
 }
 
@@ -382,8 +348,8 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         info!(owner = %owner,"Uploaded component - exports {:?}",component.metadata.exports
         );
         tokio::try_join!(
-            self.upload_user_component(&component.versioned_component_id, data.clone()),
-            self.upload_protected_component(&component.versioned_component_id, data)
+            self.upload_user_component(&component, data.clone()),
+            self.upload_protected_component(&component, data)
         )?;
 
         let record = ComponentRecord::try_from_model(component.clone(), true)
@@ -450,8 +416,8 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
             .map_err(|e| ComponentError::conversion_error("record", e))?;
 
         tokio::try_join!(
-            self.upload_user_component(&component.versioned_component_id, data.clone()),
-            self.upload_protected_component(&component.versioned_component_id, data)
+            self.upload_user_component(&component, data.clone()),
+            self.upload_protected_component(&component, data)
         )?;
 
         self.component_compilation
@@ -472,52 +438,73 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
     async fn download(
         &self,
         component_id: &ComponentId,
-        version: Option<u64>,
+        version: Option<ComponentVersion>,
         owner: &Owner,
     ) -> Result<Vec<u8>, ComponentError> {
-        let version = self
-            .resolve_optional_version(component_id, version, owner)
-            .await?;
-        let versioned_component_id = VersionedComponentId {
-            component_id: component_id.clone(),
-            version,
+        let component = match version {
+            None => self.get_latest_version(component_id, owner).await?,
+            Some(version) => {
+                self.get_by_version(
+                    &VersionedComponentId {
+                        component_id: component_id.clone(),
+                        version,
+                    },
+                    owner,
+                )
+                .await?
+            }
         };
 
-        info!(owner = %owner, component_id = %versioned_component_id, "Download component");
+        if let Some(component) = component {
+            info!(owner = %owner, component_id = %component.versioned_component_id, "Download component");
 
-        self.object_store
-            .get(&self.get_protected_object_store_key(&versioned_component_id))
-            .await
-            .tap_err(|e| error!(owner = %owner, "Error downloading component - error: {}", e))
-            .map_err(|e| ComponentError::component_store_error("Error downloading component", e))
+            self.object_store
+                .get(&component.protected_object_store_key())
+                .await
+                .tap_err(|e| error!(owner = %owner, "Error downloading component - error: {}", e))
+                .map_err(|e| {
+                    ComponentError::component_store_error("Error downloading component", e)
+                })
+        } else {
+            Err(ComponentError::UnknownComponentId(component_id.clone()))
+        }
     }
 
     async fn download_stream(
         &self,
         component_id: &ComponentId,
-        version: Option<u64>,
+        version: Option<ComponentVersion>,
         owner: &Owner,
     ) -> Result<
         Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
         ComponentError,
     > {
-        let version = self
-            .resolve_optional_version(component_id, version, owner)
-            .await?;
-
-        let versioned_component_id = VersionedComponentId {
-            component_id: component_id.clone(),
-            version,
+        let component = match version {
+            None => self.get_latest_version(component_id, owner).await?,
+            Some(version) => {
+                self.get_by_version(
+                    &VersionedComponentId {
+                        component_id: component_id.clone(),
+                        version,
+                    },
+                    owner,
+                )
+                .await?
+            }
         };
 
-        info!(owner = %owner, component_id = %versioned_component_id, "Download component as stream");
+        if let Some(component) = component {
+            info!(owner = %owner, component_id = %component.versioned_component_id, "Download component as stream");
 
-        let stream = self
-            .object_store
-            .get_stream(&self.get_protected_object_store_key(&versioned_component_id))
-            .await;
+            let stream = self
+                .object_store
+                .get_stream(&component.protected_object_store_key())
+                .await;
 
-        Ok(stream)
+            Ok(stream)
+        } else {
+            Err(ComponentError::UnknownComponentId(component_id.clone()))
+        }
     }
 
     async fn find_by_name(
@@ -651,24 +638,26 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
             .component_repo
             .get(&owner.to_string(), &component_id.0)
             .await?;
+        let components = records
+            .iter()
+            .map(|c| c.clone().try_into())
+            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
 
-        let versioned_component_ids: Vec<VersionedComponentId> =
-            records.into_iter().map(|c| c.into()).collect();
+        let mut object_store_keys = Vec::new();
 
-        if !versioned_component_ids.is_empty() {
-            for versioned_component_id in versioned_component_ids {
-                self.object_store
-                    .delete(&self.get_protected_object_store_key(&versioned_component_id))
-                    .await
-                    .map_err(|e| {
-                        ComponentError::component_store_error("Failed to delete component", e)
-                    })?;
-                self.object_store
-                    .delete(&self.get_user_object_store_key(&versioned_component_id))
-                    .await
-                    .map_err(|e| {
-                        ComponentError::component_store_error("Failed to delete component", e)
-                    })?;
+        for component in components {
+            if component.owns_stored_object() {
+                object_store_keys.push(component.protected_object_store_key());
+                object_store_keys.push(component.user_object_store_key());
+            }
+        }
+
+        if !object_store_keys.is_empty() {
+            for key in object_store_keys {
+                self.object_store.delete(&key).await.map_err(|e| {
+                    ComponentError::component_store_error("Failed to delete component data", e)
+                })?;
             }
             self.component_repo
                 .delete(&owner.to_string(), &component_id.0)

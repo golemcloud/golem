@@ -21,7 +21,7 @@ use golem_common::config::{
 use golem_common::model::Empty;
 use golem_common::tracing::TracingConfig;
 use golem_component_service_base::config::ComponentCompilationConfig;
-use golem_service_base::config::{
+use golem_component_service_base::config::{
     ComponentStoreConfig, ComponentStoreLocalConfig, ComponentStoreS3Config,
 };
 

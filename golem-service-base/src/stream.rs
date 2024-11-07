@@ -85,6 +85,24 @@ impl<S: Stream<Item = Result<Vec<u8>, anyhow::Error>>> Stream for LoggedByteStre
     }
 }
 
+pub struct AwsByteStream(aws_sdk_s3::primitives::ByteStream);
+
+impl Stream for AwsByteStream {
+    type Item = Result<Vec<u8>, anyhow::Error>;
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.0)
+            .poll_next(cx)
+            .map_ok(|b| b.to_vec())
+            .map_err(|e| e.into())
+    }
+}
+
+impl From<aws_sdk_s3::primitives::ByteStream> for ByteStream {
+    fn from(stream: aws_sdk_s3::primitives::ByteStream) -> Self {
+        Self::new(AwsByteStream(stream))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use test_r::test;

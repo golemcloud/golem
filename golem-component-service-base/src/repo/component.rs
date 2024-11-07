@@ -36,8 +36,6 @@ use std::sync::Arc;
 use tracing::{debug, error};
 use uuid::Uuid;
 
-// TODO: need to store uploaded WASM paths so we don't need to reupload when creating new immutable versions
-
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ComponentRecord {
     pub namespace: String,
@@ -49,6 +47,7 @@ pub struct ComponentRecord {
     pub created_at: DateTime<Utc>,
     pub component_type: i32,
     pub available: bool,
+    pub object_store_key: String,
 }
 
 impl ComponentRecord {
@@ -67,6 +66,7 @@ impl ComponentRecord {
             created_at: value.created_at,
             component_type: value.component_type as i32,
             available,
+            object_store_key: value.object_store_key,
         })
     }
 }
@@ -90,16 +90,8 @@ impl<Owner: ComponentOwner> TryFrom<ComponentRecord> for Component<Owner> {
             versioned_component_id,
             created_at: value.created_at,
             component_type: ComponentType::try_from(value.component_type)?,
+            object_store_key: value.object_store_key,
         })
-    }
-}
-
-impl From<ComponentRecord> for VersionedComponentId {
-    fn from(value: ComponentRecord) -> Self {
-        VersionedComponentId {
-            component_id: ComponentId(value.component_id),
-            version: value.version as u64,
-        }
     }
 }
 

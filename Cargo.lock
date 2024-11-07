@@ -3682,11 +3682,14 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
  "bincode",
  "bytes 1.8.0",
  "chrono",
  "conditional-trait-gen",
  "fastrand 2.1.1",
+ "futures",
  "golem-api-grpc",
  "golem-common",
  "golem-rib",
@@ -3710,6 +3713,7 @@ dependencies = [
  "tokio-util",
  "tonic",
  "tracing",
+ "tracing-futures",
  "uuid",
 ]
 
