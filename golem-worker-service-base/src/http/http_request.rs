@@ -369,13 +369,16 @@ mod tests {
 
     async fn execute(
         api_request: &InputHttpRequest,
-        api_specification: &HttpApiDefinition<DefaultNamespace>,
+        api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
         let fileserver_binding_handler = get_test_fileserver_binding_handler();
-        let compiled =
-            CompiledHttpApiDefinition::from_http_api_definition(api_specification, &get_metadata())
-                .unwrap();
+        let compiled = CompiledHttpApiDefinition::from_http_api_definition(
+            api_specification,
+            &get_metadata(),
+            &DefaultNamespace::default(),
+        )
+        .unwrap();
 
         let resolved_route = api_request
             .resolve_worker_binding(vec![compiled])
@@ -393,7 +396,7 @@ mod tests {
         let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
         let expression = r#"let response = golem:it/api.{get-cart-contents}("a", "b"); response"#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "${let id: u64 = request.path.user-id; \"shopping-cart-${id}\"}",
             expression,
@@ -424,7 +427,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "${let x: u64 = request.path.user-id; \"shopping-cart-${x}\"}",
             expression,
@@ -460,7 +463,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "${let x: u64 = request.path.user-id; \"shopping-cart-${x}\"}",
             expression,
@@ -498,7 +501,7 @@ mod tests {
 
         let expression = r#"let response = golem:it/api.{get-cart-contents}(request.path.token-id, request.path.token-id); response"#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}?{token-id}",
             "${let x: u64 = request.path.user-id; \"shopping-cart-${x}\"}",
             expression,
@@ -538,7 +541,7 @@ mod tests {
         );
         let expression = r#"let response = golem:it/api.{get-cart-contents}("a", "b"); response"#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "${let n: u64 = 100; let age: u64 = request.body.age; let zero: u64 = 0; let one: u64 = 1; let res = if age > n then zero else one; \"shopping-cart-${res}\"}",
             expression,
@@ -577,7 +580,7 @@ mod tests {
 
         let expression = r#"let response = golem:it/api.{get-cart-contents}(request.body, request.body); response"#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "${let userid: u64 = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid>max then zero else one; \"shopping-cart-${res}\"}",
             expression,
@@ -622,7 +625,7 @@ mod tests {
            response
         "#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> =
+        let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "\"shopping-cart\"", expression);
 
         let test_response = execute(&api_request, &api_specification).await;
@@ -674,7 +677,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> =
+        let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "\"shopping-cart\"", expression);
 
         let test_response = execute(&api_request, &api_specification).await;
@@ -726,7 +729,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> =
+        let api_specification: HttpApiDefinition =
             get_api_spec("foo/{user-id}", "\"shopping-cart\"", expression);
 
         let test_response = execute(&api_request, &api_specification).await;
@@ -779,7 +782,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "${let userid: str = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid == \"bar\" then one else zero; \"shopping-cart-${res}\"}",
             expression,
@@ -833,7 +836,7 @@ mod tests {
           response
         "#;
 
-        let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+        let api_specification: HttpApiDefinition = get_api_spec(
             "foo/{user-id}",
             "${let userid: u64 = request.path.user-id; let max: u64 = 100; let zero: u64 = 0; let one: u64 = 1;  let res = if userid>max then zero else one; \"shopping-cart-${res}\"}",
             expression,
@@ -871,7 +874,7 @@ mod tests {
             response
             "#;
 
-            let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+            let api_specification: HttpApiDefinition = get_api_spec(
                 definition_path,
                 "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
                 expression,
@@ -880,6 +883,7 @@ mod tests {
             let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
                 &api_specification,
                 &get_metadata(),
+                &DefaultNamespace::default(),
             )
             .unwrap();
 
@@ -912,7 +916,7 @@ mod tests {
             response
             "#;
 
-            let api_specification: HttpApiDefinition<DefaultNamespace> = get_api_spec(
+            let api_specification: HttpApiDefinition = get_api_spec(
                 "getcartcontent/{cart-id}",
                 "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
                 expression,
@@ -921,6 +925,7 @@ mod tests {
             let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
                 &api_specification,
                 &get_metadata(),
+                &DefaultNamespace::default(),
             )
             .unwrap();
 
@@ -965,7 +970,7 @@ mod tests {
         path_pattern: &str,
         worker_name: &str,
         rib_expression: &str,
-    ) -> HttpApiDefinition<DefaultNamespace> {
+    ) -> HttpApiDefinition {
         let yaml_string = format!(
             r#"
           id: users-api
@@ -986,7 +991,7 @@ mod tests {
             path_pattern, worker_name, rib_expression
         );
 
-        let http_api_definition: HttpApiDefinition<DefaultNamespace> =
+        let http_api_definition: HttpApiDefinition =
             serde_yaml::from_str(yaml_string.as_str()).unwrap();
         http_api_definition
     }

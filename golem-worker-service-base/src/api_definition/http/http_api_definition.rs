@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
+use std::time::SystemTime;
 use Iterator;
 
 use crate::api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
@@ -10,6 +11,7 @@ use crate::worker_binding::CompiledGolemWorkerBinding;
 use crate::worker_binding::GolemWorkerBinding;
 use bincode::{Decode, Encode};
 use derive_more::Display;
+use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
@@ -28,21 +30,19 @@ pub struct HttpApiDefinitionRequest {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct HttpApiDefinition<Namespace> {
+pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub routes: Vec<Route>,
     #[serde(default)]
     pub draft: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub namespace: Namespace,
 }
 
-impl<Namespace> HttpApiDefinition<Namespace> {
+impl HttpApiDefinition {
     pub fn new(
         request: HttpApiDefinitionRequest,
         created_at: chrono::DateTime<chrono::Utc>,
-        namespace: Namespace,
     ) -> Self {
         HttpApiDefinition {
             id: request.id,
@@ -50,14 +50,22 @@ impl<Namespace> HttpApiDefinition<Namespace> {
             routes: request.routes,
             draft: request.draft,
             created_at,
-            namespace,
         }
     }
 }
 
-impl<Namespace> From<HttpApiDefinition<Namespace>> for HttpApiDefinitionRequest {
-    fn from(value: HttpApiDefinition<Namespace>) -> Self {
-        HttpApiDefinitionRequest {
+impl HasGolemWorkerBindings for HttpApiDefinition {
+    fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding> {
+        self.routes
+            .iter()
+            .map(|route| route.binding.clone())
+            .collect()
+    }
+}
+
+impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
+    fn from(value: HttpApiDefinition) -> Self {
+        Self {
             id: value.id,
             version: value.version,
             routes: value.routes,
@@ -66,7 +74,7 @@ impl<Namespace> From<HttpApiDefinition<Namespace>> for HttpApiDefinitionRequest 
     }
 }
 
-impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition<Namespace> {
+impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition {
     fn from(compiled_http_api_definition: CompiledHttpApiDefinition<Namespace>) -> Self {
         Self {
             id: compiled_http_api_definition.id,
@@ -78,8 +86,33 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
                 .collect(),
             draft: compiled_http_api_definition.draft,
             created_at: compiled_http_api_definition.created_at,
-            namespace: compiled_http_api_definition.namespace,
         }
+    }
+}
+
+impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http::HttpApiDefinition {
+    type Error = String;
+    fn try_from(value: grpc_apidefinition::ApiDefinition) -> Result<Self, Self::Error> {
+        let routes = match value.definition.ok_or("definition is missing")? {
+            grpc_apidefinition::api_definition::Definition::Http(http) => http
+                .routes
+                .into_iter()
+                .map(crate::api_definition::http::Route::try_from)
+                .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?,
+        };
+        let id = value.id.ok_or("Api Definition ID is missing")?;
+        let created_at = value
+            .created_at
+            .ok_or("Created At is missing")
+            .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
+        let result = crate::api_definition::http::HttpApiDefinition {
+            id: ApiDefinitionId(id.value),
+            version: ApiVersion(value.version),
+            routes,
+            draft: value.draft,
+            created_at: created_at.into(),
+        };
+        Ok(result)
     }
 }
 
@@ -100,8 +133,9 @@ pub struct CompiledHttpApiDefinition<Namespace> {
 
 impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
     pub fn from_http_api_definition(
-        http_api_definition: &HttpApiDefinition<Namespace>,
+        http_api_definition: &HttpApiDefinition,
         metadata_dictionary: &ComponentMetadataDictionary,
+        namespace: &Namespace,
     ) -> Result<Self, RouteCompilationErrors> {
         let mut compiled_routes = vec![];
 
@@ -116,17 +150,8 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
             routes: compiled_routes,
             draft: http_api_definition.draft,
             created_at: http_api_definition.created_at,
-            namespace: http_api_definition.namespace.clone(),
+            namespace: namespace.clone(),
         })
-    }
-}
-
-impl<Namespace> HasGolemWorkerBindings for HttpApiDefinition<Namespace> {
-    fn get_golem_worker_bindings(&self) -> Vec<GolemWorkerBinding> {
-        self.routes
-            .iter()
-            .map(|route| route.binding.clone())
-            .collect()
     }
 }
 
@@ -426,7 +451,7 @@ impl From<CompiledRoute> for Route {
 
 #[cfg(test)]
 mod tests {
-    use golem_service_base::auth::DefaultNamespace;
+
     use test_r::test;
 
     use super::*;
@@ -669,19 +694,48 @@ mod tests {
     fn test_serde(path_pattern: &str, worker_id: &str, response_mapping: &str) {
         let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
 
-        let result: HttpApiDefinition<DefaultNamespace> =
-            serde_yaml::from_value(yaml.clone()).unwrap();
+        let result: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
 
         let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
 
-        let result2: HttpApiDefinition<DefaultNamespace> =
-            serde_yaml::from_value(yaml2.clone()).unwrap();
+        let result2: HttpApiDefinition = serde_yaml::from_value(yaml2.clone()).unwrap();
 
         assert_eq!(
             result,
             result2,
             "Assertion failed for test case at {}",
             std::panic::Location::caller()
+        );
+    }
+
+    #[test]
+    fn test_api_spec_proto_conversion() {
+        fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
+            let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
+            let original: HttpApiDefinition = serde_yaml::from_value(yaml.clone()).unwrap();
+            let proto: grpc_apidefinition::ApiDefinition = original.clone().try_into().unwrap();
+            let decoded: HttpApiDefinition = proto.try_into().unwrap();
+            assert_eq!(original, decoded);
+        }
+        test_encode_decode(
+            "foo/{user-id}",
+            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
+        );
+        test_encode_decode(
+            "foo/{user-id}",
+            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
+        );
+        test_encode_decode(
+            "foo/{user-id}",
+            "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
+        );
+        test_encode_decode(
+            "foo",
+            "let x: str = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
+            "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
     }
 }

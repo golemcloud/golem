@@ -72,16 +72,23 @@ where
     }
 }
 
-impl<Namespace> TryFrom<ApiDefinitionRecord> for HttpApiDefinition<Namespace>
-where
-    Namespace: TryFrom<String>,
-    <Namespace as TryFrom<String>>::Error: Display,
-{
+impl TryFrom<ApiDefinitionRecord> for HttpApiDefinition {
     type Error = String;
     fn try_from(value: ApiDefinitionRecord) -> Result<Self, Self::Error> {
-        let compiled_http_api_definition = CompiledHttpApiDefinition::try_from(value)?;
-        let http_api_definition = HttpApiDefinition::from(compiled_http_api_definition);
-        Ok(http_api_definition)
+        let routes = record_data_serde::deserialize(&value.data)?;
+
+        let routes = routes
+            .into_iter()
+            .map(crate::api_definition::http::Route::from)
+            .collect();
+
+        Ok(Self {
+            id: value.id.into(),
+            version: value.version.into(),
+            routes,
+            draft: value.draft,
+            created_at: value.created_at,
+        })
     }
 }
 

@@ -314,7 +314,7 @@ async fn test_deployment(
         .await
         .unwrap();
 
-    let definitions: Vec<HttpApiDefinition<DefaultNamespace>> = definition_service
+    let definitions: Vec<HttpApiDefinition> = definition_service
         .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
         .await
         .unwrap()
@@ -333,7 +333,7 @@ async fn test_deployment(
         .await
         .unwrap();
 
-    let definitions: Vec<HttpApiDefinition<DefaultNamespace>> = definition_service
+    let definitions: Vec<HttpApiDefinition> = definition_service
         .get_all(&DefaultNamespace::default(), &EmptyAuthCtx::default())
         .await
         .unwrap()
@@ -346,7 +346,7 @@ async fn test_deployment(
         vec![def1.clone(), def2.clone(), def3.clone(), def4.clone()]
     ));
 
-    let definitions: Vec<HttpApiDefinition<DefaultNamespace>> = deployment_service
+    let definitions: Vec<HttpApiDefinition> = deployment_service
         .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
         .await
         .unwrap()
@@ -366,7 +366,7 @@ async fn test_deployment(
         .await
         .unwrap();
 
-    let definitions: Vec<HttpApiDefinition<DefaultNamespace>> = deployment_service
+    let definitions: Vec<HttpApiDefinition> = deployment_service
         .get_definitions_by_site(&ApiSiteString("my.test.com".to_string()))
         .await
         .unwrap()
@@ -395,7 +395,7 @@ async fn test_deployment(
         .unwrap();
     assert!(!deployments.is_empty());
 
-    let definitions: Vec<HttpApiDefinition<DefaultNamespace>> = deployment_service
+    let definitions: Vec<HttpApiDefinition> = deployment_service
         .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
         .await
         .unwrap()
@@ -412,7 +412,7 @@ async fn test_deployment(
     let deployment = get_api_deployment("test.com", None, vec![&def3.id.0]);
     deployment_service.undeploy(&deployment).await.unwrap();
 
-    let definitions: Vec<HttpApiDefinition<DefaultNamespace>> = deployment_service
+    let definitions: Vec<HttpApiDefinition> = deployment_service
         .get_definitions_by_site(&ApiSiteString("test.com".to_string()))
         .await
         .unwrap()
@@ -624,7 +624,7 @@ async fn test_definition_crud(
         .await
         .unwrap();
 
-    let definitions: Vec<HttpApiDefinition<DefaultNamespace>> = definition_service
+    let definitions: Vec<HttpApiDefinition> = definition_service
         .get_all_versions(
             &def1v1.id,
             &DefaultNamespace::default(),
@@ -665,7 +665,7 @@ async fn test_definition_crud(
         .await;
     assert!(update_result.is_ok());
 
-    let definitions: Vec<HttpApiDefinition<DefaultNamespace>> = definition_service
+    let definitions: Vec<HttpApiDefinition> = definition_service
         .get_all_versions(
             &def1v1.id,
             &DefaultNamespace::default(),
@@ -790,7 +790,7 @@ fn get_api_definition(
 }
 
 fn contains_definitions(
-    result: Vec<HttpApiDefinition<DefaultNamespace>>,
+    result: Vec<HttpApiDefinition>,
     expected: Vec<HttpApiDefinitionRequest>,
 ) -> bool {
     let requests: Vec<HttpApiDefinitionRequest> =

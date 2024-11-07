@@ -155,28 +155,21 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
     ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError>;
 }
 
-pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError> {
+pub struct ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
     pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
     pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
-    pub api_definition_validator: Arc<
-        dyn ApiDefinitionValidatorService<HttpApiDefinition<Namespace>, ValidationError>
-            + Sync
-            + Send,
-    >,
+    pub api_definition_validator:
+        Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send>,
 }
 
-impl<AuthCtx, Namespace, ValidationError>
-    ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError>
-{
+impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
     pub fn new(
         component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
         deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
         api_definition_validator: Arc<
-            dyn ApiDefinitionValidatorService<HttpApiDefinition<Namespace>, ValidationError>
-                + Sync
-                + Send,
+            dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send,
         >,
     ) -> Self {
         Self {
@@ -189,7 +182,7 @@ impl<AuthCtx, Namespace, ValidationError>
 
     async fn get_all_components(
         &self,
-        definition: &HttpApiDefinition<Namespace>,
+        definition: &HttpApiDefinition,
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<Component>, ApiDefinitionError<ValidationError>> {
         let get_components = definition
@@ -234,7 +227,7 @@ impl<AuthCtx, Namespace, ValidationError>
 
 #[async_trait]
 impl<AuthCtx, Namespace, ValidationError> ApiDefinitionService<AuthCtx, Namespace, ValidationError>
-    for ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError>
+    for ApiDefinitionServiceDefault<AuthCtx, ValidationError>
 where
     AuthCtx: Send + Sync,
     Namespace: Display + Clone + Send + Sync + TryFrom<String>,
@@ -264,7 +257,7 @@ where
             ));
         }
 
-        let definition = HttpApiDefinition::new(definition.clone(), created_at, namespace.clone());
+        let definition = HttpApiDefinition::new(definition.clone(), created_at);
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
@@ -277,6 +270,7 @@ where
         let compiled_http_api_definition = CompiledHttpApiDefinition::from_http_api_definition(
             &definition,
             &component_metadata_dictionary,
+            namespace,
         )?;
 
         let record = ApiDefinitionRecord::new(compiled_http_api_definition.clone(), created_at)
@@ -315,7 +309,7 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
-        let definition = HttpApiDefinition::new(definition.clone(), created_at, namespace.clone());
+        let definition = HttpApiDefinition::new(definition.clone(), created_at);
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
@@ -328,6 +322,7 @@ where
         let compiled_http_api_definition = CompiledHttpApiDefinition::from_http_api_definition(
             &definition,
             &component_metadata_dictionary,
+            namespace,
         )?;
 
         let record = ApiDefinitionRecord::new(compiled_http_api_definition.clone(), created_at)

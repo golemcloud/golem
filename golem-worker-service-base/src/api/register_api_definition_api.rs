@@ -198,13 +198,11 @@ impl<N> From<crate::api_definition::ApiDeployment<N>> for ApiDeployment {
     }
 }
 
-impl<Namespace> TryFrom<crate::api_definition::http::HttpApiDefinition<Namespace>>
-    for HttpApiDefinition
-{
+impl TryFrom<crate::api_definition::http::HttpApiDefinition> for HttpApiDefinition {
     type Error = String;
 
     fn try_from(
-        value: crate::api_definition::http::HttpApiDefinition<Namespace>,
+        value: crate::api_definition::http::HttpApiDefinition,
     ) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
@@ -331,13 +329,11 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
     }
 }
 
-impl<Namespace> TryFrom<crate::api_definition::http::HttpApiDefinition<Namespace>>
-    for grpc_apidefinition::ApiDefinition
-{
+impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
     type Error = String;
 
     fn try_from(
-        value: crate::api_definition::http::HttpApiDefinition<Namespace>,
+        value: crate::api_definition::http::HttpApiDefinition,
     ) -> Result<Self, Self::Error> {
         let routes = value
             .routes

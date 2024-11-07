@@ -49,12 +49,12 @@ impl SafeDisplay for RouteValidationError {
 #[derive(Clone)]
 pub struct HttpApiDefinitionValidator {}
 
-impl<Namespace> ApiDefinitionValidatorService<HttpApiDefinition<Namespace>, RouteValidationError>
+impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
     for HttpApiDefinitionValidator
 {
     fn validate(
         &self,
-        api: &HttpApiDefinition<Namespace>,
+        api: &HttpApiDefinition,
         _components: &[Component],
     ) -> Result<(), ValidationErrors<RouteValidationError>> {
         let errors = unique_routes(api.routes.as_slice());

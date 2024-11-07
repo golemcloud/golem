@@ -133,7 +133,7 @@ pub trait ConflictChecker {
         Self: Sized;
 }
 
-impl<Namespace> ConflictChecker for HttpApiDefinition<Namespace> {
+impl ConflictChecker for HttpApiDefinition {
     type Entity = AllPathPatterns;
     fn find_conflicts(definitions: &[Self]) -> Vec<Self::Entity> {
         let routes = definitions
@@ -362,7 +362,7 @@ where
                 .clone()
                 .into_iter()
                 .map(|x| x.into())
-                .collect::<Vec<HttpApiDefinition<Namespace>>>()
+                .collect::<Vec<HttpApiDefinition>>()
                 .as_slice(),
         );
 

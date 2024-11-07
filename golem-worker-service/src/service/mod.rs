@@ -65,9 +65,7 @@ pub struct Services {
     >,
     pub worker_to_http_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
     pub api_definition_validator_service: Arc<
-        dyn ApiDefinitionValidatorService<HttpApiDefinition<DefaultNamespace>, RouteValidationError>
-            + Sync
-            + Send,
+        dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
     pub fileserver_binding_handler:
         Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send>,
