@@ -1,7 +1,11 @@
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
 use crate::model::validation::ValidatedResult;
-use colored::Colorize;
+use colored::{ColoredString, Colorize};
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
+use std::thread::JoinHandle;
+
+// TODO: move package under lib
 
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
 
@@ -64,7 +68,7 @@ pub fn log_action<T: AsRef<str>>(action: &str, subject: T) {
     println!(
         "{}{} {}",
         LOG_STATE.read().unwrap().indent_prefix,
-        action.green(),
+        action.log_color_action(),
         subject.as_ref()
     )
 }
@@ -73,7 +77,7 @@ pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
     println!(
         "{}{} {}",
         LOG_STATE.read().unwrap().indent_prefix,
-        action.yellow(),
+        action.log_color_warn(),
         subject.as_ref(),
     )
 }
@@ -100,34 +104,50 @@ pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPl
             OverwriteSafeAction::CopyFile { source, target } => {
                 log_action(
                     "Copying",
-                    format!("{} to {}", source.display(), target.display()),
+                    format!(
+                        "{} to {}",
+                        source.log_color_highlight(),
+                        target.log_color_highlight()
+                    ),
                 );
             }
             OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
                 log_action(
                     "Copying",
-                    format!("{} to {} transformed", source.display(), target.display()),
+                    format!(
+                        "{} to {} transformed",
+                        source.log_color_highlight(),
+                        target.log_color_highlight()
+                    ),
                 );
             }
             OverwriteSafeAction::WriteFile { target, .. } => {
-                log_action("Creating", format!("{}", target.display()));
+                log_action("Creating", format!("{}", target.log_color_highlight()));
             }
         },
         OverwriteSafeActionPlan::Overwrite => match action {
             OverwriteSafeAction::CopyFile { source, target } => {
                 log_warn_action(
                     "Overwriting",
-                    format!("{} with {}", target.display(), source.display()),
+                    format!(
+                        "{} with {}",
+                        target.log_color_highlight(),
+                        source.log_color_highlight()
+                    ),
                 );
             }
             OverwriteSafeAction::CopyFileTransformed { source, target, .. } => {
                 log_warn_action(
                     "Overwriting",
-                    format!("{} with {} transformed", target.display(), source.display()),
+                    format!(
+                        "{} with {} transformed",
+                        target.log_color_highlight(),
+                        source.log_color_highlight()
+                    ),
                 );
             }
             OverwriteSafeAction::WriteFile { content: _, target } => {
-                log_warn_action("Overwriting", format!("{}", target.display()));
+                log_warn_action("Overwriting", format!("{}", target.log_color_highlight()));
             }
         },
         OverwriteSafeActionPlan::SkipSameContent => match action {
@@ -136,8 +156,8 @@ pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPl
                     "Skipping",
                     format!(
                         "copying {} to {}, content already up-to-date",
-                        source.display(),
-                        target.display(),
+                        source.log_color_highlight(),
+                        target.log_color_highlight(),
                     ),
                 );
             }
@@ -146,8 +166,8 @@ pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPl
                     "Skipping",
                     format!(
                         "copying {} to {} transformed, content already up-to-date",
-                        source.display(),
-                        target.display()
+                        source.log_color_highlight(),
+                        target.log_color_highlight()
                     ),
                 );
             }
@@ -156,10 +176,69 @@ pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPl
                     "Skipping",
                     format!(
                         "generating {}, content already up-to-date",
-                        target.display()
+                        target.log_color_highlight()
                     ),
                 );
             }
         },
     }
+}
+
+pub trait LogColorize {
+    type Colorize: Colorize;
+
+    fn to_colorize(&self) -> Self::Colorize;
+
+    fn log_color_action(&self) -> ColoredString {
+        self.to_colorize().green()
+    }
+
+    fn log_color_warn(&self) -> ColoredString {
+        self.to_colorize().yellow()
+    }
+
+    fn log_color_error(&self) -> ColoredString {
+        self.to_colorize().red()
+    }
+
+    fn log_color_highlight(&self) -> ColoredString {
+        self.to_colorize().bold()
+    }
+}
+
+impl<'a> LogColorize for &'a str {
+    type Colorize = &'a str;
+
+    fn to_colorize(&self) -> Self::Colorize {
+        self
+    }
+}
+
+impl LogColorize for String {
+    type Colorize = ColoredString;
+
+    fn to_colorize(&self) -> Self::Colorize {
+        self.clone().into()
+    }
+}
+
+impl LogColorize for PathBuf {
+    type Colorize = ColoredString;
+
+    fn to_colorize(&self) -> Self::Colorize {
+        self.display().to_string().into()
+    }
+}
+
+impl<'a> LogColorize for &'a Path {
+    type Colorize = ColoredString;
+
+    fn to_colorize(&self) -> Self::Colorize {
+        self.display().to_string().into()
+    }
+}
+
+pub struct ChildProcessLogger {
+    _out_handle: JoinHandle<()>,
+    _err_handle: JoinHandle<()>,
 }

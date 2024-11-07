@@ -1,5 +1,6 @@
 use crate::commands::log::{
-    log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action,
+    log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action, LogColorize,
+    LogIndent,
 };
 use crate::fs::copy;
 use crate::model::oam;
@@ -8,7 +9,11 @@ use crate::model::wasm_rpc::{
     include_glob_patter_from_yaml_file, init_oam_app, Application, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::stub::{StubConfig, StubDefinition};
-use crate::wit_generate::{add_stub_as_dependency_to_wit_dir, AddStubAsDepConfig, UpdateCargoToml};
+use crate::wit_generate::{
+    add_stub_as_dependency_to_wit_dir, extract_main_interface_as_wit_dep, AddStubAsDepConfig,
+    UpdateCargoToml,
+};
+use crate::wit_resolve::ResolvedWitApplication;
 use crate::{commands, WasmRpcOverride};
 use anyhow::{anyhow, Context, Error};
 use colored::Colorize;
@@ -23,14 +28,20 @@ use tempfile::TempDir;
 use walkdir::WalkDir;
 
 pub struct Config {
-    pub app_resolve_mode: ApplicationResolveMode,
+    pub app_resolve_mode: ApplicationSourceMode,
     pub skip_up_to_date_checks: bool,
 }
 
 #[derive(Debug, Clone)]
-pub enum ApplicationResolveMode {
+pub enum ApplicationSourceMode {
     Automatic,
     Explicit(Vec<PathBuf>),
+}
+
+struct ApplicationContext {
+    config: Config,
+    application: Application,
+    wit: ResolvedWitApplication,
 }
 
 pub fn init(component_name: String) -> anyhow::Result<()> {
@@ -47,75 +58,100 @@ pub fn init(component_name: String) -> anyhow::Result<()> {
 }
 
 pub async fn pre_component_build(config: Config) -> anyhow::Result<()> {
-    let app = load_app(&config)?;
-    pre_component_build_app(&config, &app).await
+    let mut ctx = create_context(config)?;
+    pre_component_build_ctx(&mut ctx).await
 }
 
-async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
-    if app.all_wasm_rpc_dependencies().is_empty() {
+async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
+    log_action("Executing", "pre-component-build steps");
+    let _indent = LogIndent::new();
+
+    let changed_any = extract_interface_packages(&ctx)?;
+    if changed_any {
+        update_wit_context(ctx)?;
+    }
+
+    if ctx.application.all_wasm_rpc_dependencies().is_empty() {
         log_warn_action("Skipping", "building wasm rpc stubs, no dependency found");
     } else {
         log_action("Building", "wasm rpc stubs");
-        for component_name in app.all_wasm_rpc_dependencies() {
+        let _indent = LogIndent::new();
+
+        for component_name in ctx.application.all_wasm_rpc_dependencies() {
             if is_up_to_date(
-                config.skip_up_to_date_checks,
-                || [app.component_wit(&component_name)],
+                ctx.config.skip_up_to_date_checks,
+                || [ctx.application.component_output_wit(&component_name)],
                 || {
                     [
-                        app.stub_wasm(&component_name),
-                        app.stub_wit(&component_name),
+                        ctx.application.stub_wasm(&component_name),
+                        ctx.application.stub_wit(&component_name),
                     ]
                 },
             ) {
-                log_skipping_up_to_date(format!("building wasm rpc stub: {}", component_name));
+                log_skipping_up_to_date(format!(
+                    "building wasm rpc stub for {}",
+                    component_name.log_color_highlight()
+                ));
                 continue;
             }
 
-            log_action("Building", format!("wasm rpc stub: {}", component_name));
+            log_action(
+                "Building",
+                format!("wasm rpc stub: {}", component_name.log_color_highlight()),
+            );
+            let _indent = LogIndent::new();
 
             let target_root = TempDir::new()?;
             let canonical_target_root = target_root.path().canonicalize()?;
 
             let stub_def = StubDefinition::new(StubConfig {
-                source_wit_root: app.component_wit(&component_name),
+                source_wit_root: ctx.application.component_output_wit(&component_name),
                 target_root: canonical_target_root,
-                selected_world: app.stub_world(&component_name),
-                stub_crate_version: app.stub_crate_version(&component_name),
+                selected_world: ctx.application.stub_world(&component_name),
+                stub_crate_version: ctx.application.stub_crate_version(&component_name),
                 wasm_rpc_override: WasmRpcOverride {
-                    wasm_rpc_path_override: app.stub_wasm_rpc_path(&component_name),
-                    wasm_rpc_version_override: app.stub_wasm_rpc_version(&component_name),
+                    wasm_rpc_path_override: ctx.application.stub_wasm_rpc_path(&component_name),
+                    wasm_rpc_version_override: ctx
+                        .application
+                        .stub_wasm_rpc_version(&component_name),
                 },
-                extract_source_interface_package: true, // TODO: use input output dirs
+                extract_source_interface_package: false,
             })
             .context("Failed to gather information for the stub generator")?;
 
             commands::generate::build(
                 &stub_def,
-                &app.stub_wasm(&component_name),
-                &app.stub_wit(&component_name),
+                &ctx.application.stub_wasm(&component_name),
+                &ctx.application.stub_wit(&component_name),
             )
             .await?
         }
     }
 
-    for (component_name, component) in &app.wasm_components_by_name {
+    for (component_name, component) in &ctx.application.wasm_components_by_name {
         if !component.wasm_rpc_dependencies.is_empty() {
             log_action(
                 "Adding",
-                format!("stub wit dependencies to {}", component_name),
+                format!(
+                    "stub wit dependencies to {}",
+                    component_name.log_color_highlight()
+                ),
             )
         }
+        let _indent = LogIndent::new();
 
         for dep_component_name in &component.wasm_rpc_dependencies {
             // TODO: this should check into the wit deps for the specific stubs or do folder diffs
             if is_up_to_date(
-                config.skip_up_to_date_checks,
-                || [app.stub_wit(dep_component_name)],
-                || [app.component_wit(component_name)],
+                ctx.config.skip_up_to_date_checks
+                    || !ctx.wit.has_as_wit_dep(component_name, dep_component_name),
+                || [ctx.application.stub_wit(dep_component_name)],
+                || [ctx.application.component_output_wit(component_name)],
             ) {
                 log_skipping_up_to_date(format!(
                     "adding {} stub wit dependency to {}",
-                    dep_component_name, component_name
+                    dep_component_name.log_color_highlight(),
+                    component_name.log_color_highlight()
                 ));
                 continue;
             }
@@ -124,14 +160,16 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
                 "Adding",
                 format!(
                     "{} stub wit dependency to {}",
-                    dep_component_name, component_name
+                    dep_component_name.log_color_highlight(),
+                    component_name.log_color_highlight()
                 ),
             );
+            let _indent = LogIndent::new();
 
             add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
-                stub_wit_root: app.stub_wit(dep_component_name),
-                dest_wit_root: app.component_wit(component_name),
-                update_cargo_toml: UpdateCargoToml::Update,
+                stub_wit_root: ctx.application.stub_wit(dep_component_name),
+                dest_wit_root: ctx.application.component_output_wit(component_name),
+                update_cargo_toml: UpdateCargoToml::UpdateIfExists,
             })?
         }
     }
@@ -139,13 +177,97 @@ async fn pre_component_build_app(config: &Config, app: &Application) -> anyhow::
     Ok(())
 }
 
-pub fn component_build(config: Config) -> anyhow::Result<()> {
-    let app = load_app(&config)?;
-    component_build_app(&config, &app)
+fn extract_interface_packages(ctx: &ApplicationContext) -> Result<bool, Error> {
+    let mut changed_any = false;
+    for (component_name, _component) in &ctx.application.wasm_components_by_name {
+        let component_input_wit = ctx.application.component_input_wit(component_name);
+        let component_output_wit = ctx.application.component_output_wit(component_name);
+
+        if is_up_to_date(
+            ctx.config.skip_up_to_date_checks || !ctx.wit.is_dep_graph_up_to_date(component_name),
+            || [component_input_wit.clone()],
+            || [component_output_wit.clone()],
+        ) {
+            log_skipping_up_to_date(format!(
+                "extracting main interface package from {}",
+                component_name.log_color_highlight()
+            ));
+        } else {
+            log_action(
+                "Extracting",
+                format!(
+                    "main interface package from {} to {}",
+                    component_input_wit.log_color_highlight(),
+                    component_output_wit.log_color_highlight()
+                ),
+            );
+            let _indent = LogIndent::new();
+
+            changed_any = true;
+
+            if component_output_wit.exists() {
+                log_warn_action(
+                    "Deleting",
+                    format!(
+                        "output wit directory {}",
+                        component_output_wit.log_color_highlight()
+                    ),
+                );
+                std::fs::remove_dir_all(&component_output_wit)?;
+            }
+
+            {
+                log_action(
+                    "Copying",
+                    format!(
+                        "wit sources from {} to {}",
+                        component_input_wit.log_color_highlight(),
+                        component_output_wit.log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
+
+                let dir_content = fs_extra::dir::get_dir_content(&component_input_wit)
+                    .with_context(|| {
+                        anyhow!(
+                            "Failed to read component input directory entries for {}",
+                            component_input_wit.display()
+                        )
+                    })?;
+
+                for file in dir_content.files {
+                    let from = PathBuf::from(&file);
+                    let to = component_output_wit.join(
+                        from.strip_prefix(&component_input_wit).with_context(|| {
+                            anyhow!("Failed to strip prefix for source {}", &file)
+                        })?,
+                    );
+
+                    log_action(
+                        "Copying",
+                        format!("wit source {} to {}", from.display(), to.display()),
+                    );
+                    copy(from, to)?;
+                }
+            }
+
+            extract_main_interface_as_wit_dep(&component_output_wit)?;
+        }
+    }
+    Ok(changed_any)
 }
 
-pub fn component_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
-    let components_with_build_steps = app
+pub fn component_build(config: Config) -> anyhow::Result<()> {
+    let ctx = create_context(config)?;
+    component_build_ctx(&ctx)
+}
+
+fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
+    log_action("Executing", "component-build steps");
+    let _indent = LogIndent::new();
+
+    let components_with_build_steps = ctx
+        .application
         .wasm_components_by_name
         .values()
         .filter(|component| !component.build_steps.is_empty())
@@ -160,9 +282,19 @@ pub fn component_build_app(config: &Config, app: &Application) -> anyhow::Result
     }
 
     log_action("Building", "components");
+    let _indent = LogIndent::new();
 
     for component in components_with_build_steps {
-        log_action("Building", format!("component: {}", component.name));
+        log_action(
+            "Building",
+            format!(
+                "component {} in directory {}",
+                component.name.log_color_highlight(),
+                component.source_dir().log_color_highlight(),
+            ),
+        );
+        let _indent = LogIndent::new();
+
         for build_step in &component.build_steps {
             let build_dir = build_step
                 .dir
@@ -174,13 +306,19 @@ pub fn component_build_app(config: &Config, app: &Application) -> anyhow::Result
                 let inputs = compile_and_collect_globs(&build_dir, &build_step.inputs)?;
                 let outputs = compile_and_collect_globs(&build_dir, &build_step.outputs)?;
 
-                if is_up_to_date(config.skip_up_to_date_checks, || inputs, || outputs) {
-                    log_skipping_up_to_date(format!("executing command: {}", build_step.command));
+                if is_up_to_date(ctx.config.skip_up_to_date_checks, || inputs, || outputs) {
+                    log_skipping_up_to_date(format!(
+                        "executing command: {}",
+                        build_step.command.log_color_highlight()
+                    ));
                     continue;
                 }
             }
 
-            log_action("Executing", format!("command: {}", build_step.command));
+            log_action(
+                "Executing",
+                format!("command: {}", build_step.command.log_color_highlight()),
+            );
 
             let command_tokens = build_step.command.split(' ').collect::<Vec<_>>();
             if command_tokens.is_empty() {
@@ -209,17 +347,20 @@ pub fn component_build_app(config: &Config, app: &Application) -> anyhow::Result
 }
 
 pub async fn post_component_build(config: Config) -> anyhow::Result<()> {
-    let app = load_app(&config)?;
-    post_component_build_app(&config, &app).await
+    let ctx = create_context(config)?;
+    post_component_build_ctx(&ctx).await
 }
 
-pub async fn post_component_build_app(config: &Config, app: &Application) -> anyhow::Result<()> {
-    for (component_name, component) in &app.wasm_components_by_name {
-        let input_wasm = app.component_input_wasm(component_name);
-        let output_wasm = app.component_output_wasm(component_name);
+async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
+    log_action("Executing", "post-component-build steps");
+    let _indent = LogIndent::new();
+
+    for (component_name, component) in &ctx.application.wasm_components_by_name {
+        let input_wasm = ctx.application.component_input_wasm(component_name);
+        let output_wasm = ctx.application.component_output_wasm(component_name);
 
         if is_up_to_date(
-            config.skip_up_to_date_checks,
+            ctx.config.skip_up_to_date_checks,
             // We also include the component specification source,
             // so it triggers build in case deps are changed
             || [component.source.clone(), input_wasm.clone()],
@@ -227,8 +368,12 @@ pub async fn post_component_build_app(config: &Config, app: &Application) -> any
         ) {
             log_skipping_up_to_date(format!(
                 "composing wasm rpc dependencies ({}) into {}",
-                component.wasm_rpc_dependencies.iter().join(", "),
-                component_name,
+                component
+                    .wasm_rpc_dependencies
+                    .iter()
+                    .map(|s| s.log_color_highlight())
+                    .join(", "),
+                component_name.log_color_highlight(),
             ));
             continue;
         }
@@ -238,8 +383,8 @@ pub async fn post_component_build_app(config: &Config, app: &Application) -> any
                 "Copying",
                 format!(
                     "(without composing) {} to {}, no wasm rpc dependencies defined",
-                    input_wasm.display(),
-                    output_wasm.display()
+                    input_wasm.log_color_highlight(),
+                    output_wasm.log_color_highlight(),
                 ),
             );
             copy(&input_wasm, &output_wasm)?;
@@ -248,21 +393,29 @@ pub async fn post_component_build_app(config: &Config, app: &Application) -> any
                 "Composing",
                 format!(
                     "wasm rpc dependencies ({}) into {}",
-                    component.wasm_rpc_dependencies.iter().join(", "),
-                    component_name,
+                    component
+                        .wasm_rpc_dependencies
+                        .iter()
+                        .map(|s| s.log_color_highlight())
+                        .join(", "),
+                    component_name.log_color_highlight(),
                 ),
             );
 
             let stub_wasms = component
                 .wasm_rpc_dependencies
                 .iter()
-                .map(|dep| app.stub_wasm(dep))
+                .map(|dep| ctx.application.stub_wasm(dep))
                 .collect::<Vec<_>>();
 
             commands::composition::compose(
-                app.component_input_wasm(component_name).as_path(),
+                ctx.application
+                    .component_input_wasm(component_name)
+                    .as_path(),
                 &stub_wasms,
-                app.component_output_wasm(component_name).as_path(),
+                ctx.application
+                    .component_output_wasm(component_name)
+                    .as_path(),
             )
             .await?;
         }
@@ -272,19 +425,34 @@ pub async fn post_component_build_app(config: &Config, app: &Application) -> any
 }
 
 pub async fn build(config: Config) -> anyhow::Result<()> {
-    let app = load_app(&config)?;
+    let mut ctx = create_context(config)?;
 
-    pre_component_build_app(&config, &app).await?;
-    component_build_app(&config, &app)?;
-    post_component_build_app(&config, &app).await?;
+    pre_component_build_ctx(&mut ctx).await?;
+    component_build_ctx(&ctx)?;
+    post_component_build_ctx(&ctx).await?;
 
     Ok(())
 }
 
-fn load_app(config: &Config) -> anyhow::Result<Application> {
+fn create_context(config: Config) -> anyhow::Result<ApplicationContext> {
     to_anyhow(
-        "Failed to load application manifest(s), see problems above".to_string(),
-        load_app_validated(config),
+        "Failed to create application context, see problems above",
+        load_app_validated(&config).and_then(|application| {
+            ResolvedWitApplication::new(&application).map(|wit| ApplicationContext {
+                config,
+                application,
+                wit,
+            })
+        }),
+    )
+}
+
+fn update_wit_context(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
+    to_anyhow(
+        "Failed to update application wit context, see problems above",
+        ResolvedWitApplication::new(&ctx.application).map(|wit| {
+            ctx.wit = wit;
+        }),
     )
 }
 
@@ -301,6 +469,7 @@ fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
     });
 
     log_action("Collecting", "components");
+    let _indent = LogIndent::new();
 
     let app = oam_apps.and_then(Application::from_oam_apps);
 
@@ -318,11 +487,12 @@ fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
     app
 }
 
-fn collect_sources(mode: &ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf>> {
+fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<Vec<PathBuf>> {
     log_action("Collecting", "sources");
+    let _indent = LogIndent::new();
 
     let sources = match mode {
-        ApplicationResolveMode::Automatic => match find_main_source() {
+        ApplicationSourceMode::Automatic => match find_main_source() {
             Some(source) => {
                 std::env::set_current_dir(source.parent().expect("Failed ot get config parent"))
                     .expect("Failed to set current dir for config parent");
@@ -358,7 +528,7 @@ fn collect_sources(mode: &ApplicationResolveMode) -> ValidatedResult<Vec<PathBuf
             }
             None => ValidatedResult::from_error("No config file found!".to_string()),
         },
-        ApplicationResolveMode::Explicit(sources) => {
+        ApplicationSourceMode::Explicit(sources) => {
             let non_unique_source_warns: Vec<_> = sources
                 .iter()
                 .counts()
@@ -411,7 +581,7 @@ fn find_main_source() -> Option<PathBuf> {
     last_source
 }
 
-fn to_anyhow<T>(message: String, result: ValidatedResult<T>) -> anyhow::Result<T> {
+fn to_anyhow<T>(message: &str, result: ValidatedResult<T>) -> anyhow::Result<T> {
     fn print_warns(warns: Vec<String>) {
         let label = "Warning".yellow();
         for warn in warns {
@@ -438,7 +608,7 @@ fn to_anyhow<T>(message: String, result: ValidatedResult<T>) -> anyhow::Result<T
             print_errors(errors);
             println!();
 
-            Err(anyhow!(message))
+            Err(anyhow!(message.to_string()))
         }
     }
 }

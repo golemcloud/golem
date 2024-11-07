@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::log_action;
+use crate::commands::log::{log_action, LogColorize};
 use crate::stub::{FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition};
 use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
@@ -286,7 +286,10 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
 
     log_action(
         "Generating",
-        format!("stub source to {}", def.target_rust_path().display()),
+        format!(
+            "stub source to {}",
+            def.target_rust_path().log_color_highlight()
+        ),
     );
     fs::create_dir_all(def.target_rust_path().parent().unwrap())?;
     fs::write(def.target_rust_path(), src)?;

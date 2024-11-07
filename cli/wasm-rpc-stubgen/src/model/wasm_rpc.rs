@@ -18,6 +18,8 @@ pub const OAM_COMPONENT_TYPE_WASM: &str = "wasm";
 pub const OAM_COMPONENT_TYPE_WASM_BUILD: &str = "wasm-build";
 pub const OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD: &str = "wasm-rpc-stub-build";
 
+// TODO: ComponentName new type
+
 pub fn init_oam_app(_component_name: String) -> oam::Application {
     // TODO: let's do it as part of https://github.com/golemcloud/wasm-rpc/issues/89
     todo!()
@@ -271,7 +273,8 @@ impl Application {
                     name: component.name,
                     source: source.to_path_buf(),
                     build_steps: properties.build,
-                    wit: properties.wit.into(),
+                    input_wit: properties.input_wit.into(),
+                    output_wit: properties.output_wit.into(),
                     input_wasm: properties.input_wasm.into(),
                     output_wasm: properties.output_wasm.into(),
                     wasm_rpc_dependencies,
@@ -334,7 +337,6 @@ impl Application {
                     wasm: properties.wasm.map(|s| s.into()),
                     wit: properties.wit.map(|s| s.into()),
                     world: properties.world,
-                    always_inline_types: properties.always_inline_types,
                     crate_version: properties.crate_version,
                     wasm_rpc_path: properties.wasm_rpc_path,
                     wasm_rpc_version: properties.wasm_rpc_version,
@@ -575,9 +577,14 @@ impl Application {
             .unwrap_or_else(|| panic!("Component not found: {}", component_name))
     }
 
-    pub fn component_wit(&self, component_name: &str) -> PathBuf {
+    pub fn component_input_wit(&self, component_name: &str) -> PathBuf {
         let component = self.component(component_name);
-        component.source_dir().join(component.wit.clone())
+        component.source_dir().join(component.input_wit.clone())
+    }
+
+    pub fn component_output_wit(&self, component_name: &str) -> PathBuf {
+        let component = self.component(component_name);
+        component.source_dir().join(component.output_wit.clone())
     }
 
     pub fn component_input_wasm(&self, component_name: &str) -> PathBuf {
@@ -599,12 +606,6 @@ impl Application {
         self.stub_gen_property(component_name, |build| build.crate_version.clone())
             .flatten()
             .unwrap_or_else(|| WASM_RPC_VERSION.to_string())
-    }
-
-    pub fn stub_always_inline_types(&self, component_name: &str) -> bool {
-        self.stub_gen_property(component_name, |build| build.always_inline_types)
-            .flatten()
-            .unwrap_or(false)
     }
 
     pub fn stub_wasm_rpc_path(&self, component_name: &str) -> Option<String> {
@@ -672,7 +673,8 @@ pub struct WasmComponent {
     pub name: String,
     pub source: PathBuf,
     pub build_steps: Vec<BuildStep>,
-    pub wit: PathBuf,
+    pub input_wit: PathBuf,
+    pub output_wit: PathBuf,
     pub input_wasm: PathBuf,
     pub output_wasm: PathBuf,
     pub wasm_rpc_dependencies: Vec<String>,
@@ -702,13 +704,13 @@ pub struct BuildStep {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WasmComponentProperties {
-    pub wit: String,
+    pub input_wit: String,
+    pub output_wit: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub build: Vec<BuildStep>,
-    #[serde(rename = "inputWasm")]
     pub input_wasm: String,
-    #[serde(rename = "outputWasm")]
     pub output_wasm: String,
     #[serde(flatten)]
     pub unknown_properties: UnknownProperties,
@@ -782,7 +784,6 @@ pub struct ComponentStubBuildProperties {
     wasm: Option<String>,
     wit: Option<String>,
     world: Option<String>,
-    always_inline_types: Option<bool>,
     crate_version: Option<String>,
     wasm_rpc_path: Option<String>,
     wasm_rpc_version: Option<String>,
@@ -811,7 +812,6 @@ pub struct WasmRpcStubBuild {
     wasm: Option<PathBuf>,
     wit: Option<PathBuf>,
     world: Option<String>,
-    always_inline_types: Option<bool>,
     crate_version: Option<String>,
     wasm_rpc_path: Option<String>,
     wasm_rpc_version: Option<String>,
