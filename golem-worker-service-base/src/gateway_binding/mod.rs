@@ -1,6 +1,5 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
-use crate::gateway_middleware::Middleware;
 
 pub(crate) use worker_binding_compiled::*;
 pub(crate) use crate::gateway_binding::worker_binding::WorkerBinding;
@@ -9,7 +8,7 @@ pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 
 pub(crate) use worker_binding::*;
 pub(crate) use gateway_binding_compiled::*;
-use crate::gateway_binding::static_binding::StaticBinding;
+pub(crate) use static_binding::*;
 
 mod worker_binding_compiled;
 mod worker_binding;

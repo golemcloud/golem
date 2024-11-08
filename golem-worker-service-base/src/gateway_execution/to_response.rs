@@ -4,10 +4,55 @@ use crate::gateway_rib_interpreter::EvaluationError;
 use http::StatusCode;
 use poem::Body;
 use rib::RibResult;
+use crate::gateway_middleware::HttpMiddleware;
 use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
+use poem::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE};
+
 
 pub trait ToResponse<A> {
     fn to_response(&self, request_details: &GatewayRequestDetails) -> A;
+}
+
+impl ToResponse<poem::Response> for HttpMiddleware {
+    fn to_response(&self, _request_details: &GatewayRequestDetails) -> poem::Response {
+        match self {
+            HttpMiddleware::Cors(preflight) => {
+                let mut response = poem::Response::builder()
+                    .status(StatusCode::OK)
+                    .finish();
+
+                response.headers_mut().insert(
+                    ACCESS_CONTROL_ALLOW_ORIGIN,
+                    preflight.allow_origin.clone().parse().unwrap(),
+                );
+                response.headers_mut().insert(
+                    ACCESS_CONTROL_ALLOW_METHODS,
+                    preflight.allow_methods.clone().parse().unwrap(),
+                );
+                response.headers_mut().insert(
+                    ACCESS_CONTROL_ALLOW_HEADERS,
+                    preflight.allow_headers.clone().parse().unwrap(),
+                );
+
+                if let Some(expose_headers) = &preflight.expose_headers {
+                    response.headers_mut().insert(
+                        ACCESS_CONTROL_EXPOSE_HEADERS,
+                        expose_headers.clone().parse().unwrap(),
+                    );
+                }
+
+                if let Some(max_age) = preflight.max_age {
+                    response.headers_mut().insert(
+                        ACCESS_CONTROL_MAX_AGE,
+                        max_age.to_string().parse().unwrap(),
+                    );
+                }
+
+                response
+            }
+        }
+    }
+
 }
 
 impl ToResponse<poem::Response> for RibResult {
