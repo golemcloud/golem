@@ -1,42 +1,72 @@
-use crate::gateway_api_definition::http::{MethodPattern, Route};
+use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
 use crate::gateway_binding::GatewayBinding;
-use crate::gateway_middleware::{HttpMiddleware, Middleware};
+use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
 
 // For those resources with cors preflight enabled,
 // update the middlewares of all the endpoints accessing that resource with cors middleware
 pub fn update_routes_with_cors_middleware(routes: Vec<Route>) -> Result<Vec<Route>, String> {
     let mut updated_routes = routes.clone();
 
-    for route in routes.iter() {
-        // check if preflight cors is enabled for the route
-        if let Some(cors) = route.cors_preflight() {
-            // Attempt to retrieve CORS middleware
-            let preflight_path = &route.path;
-            let method = &route.method;
-
-            if method != &MethodPattern::Options {
-                return Err(format!("Invalid binding for resource {} with method {}. Cors binding is only supported for OPTIONS method", preflight_path, method));
-            } else {
-                for route in updated_routes.iter_mut() {
-                    if &route.path == preflight_path {
-                        if let Some(worker_binding) = &mut route.binding.get_worker_binding() {
-                            if let Some(_) = &worker_binding.get_cors_middleware() {
-                                return Err(format!(
-                                    "Conflicting cors middleware configuration for path {} at method {}. CORS preflight is already configured for the same path", preflight_path, method
-                                ));
-                            } else {
-                                worker_binding.add_middleware(Middleware::Http(
-                                    HttpMiddleware::Cors(cors.clone()),
-                                ));
-                            }
-                        };
-                    }
-                }
-            }
+    for route in &routes {
+        // If Route has a preflight binding,
+        // enforce OPTIONS method
+        // and apply CORS middleware to all the other routes with the same path / resource
+        if let Some(cors) = route.cors_preflight_binding() {
+            internal::enforce_options_method(&route.path, &route.method)?;
+            internal::apply_cors_middleware_to_routes(&mut updated_routes, &route.path, cors)?;
         }
     }
 
     Ok(updated_routes)
+}
+
+mod internal {
+    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
+    use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
+
+    pub(crate) fn enforce_options_method(
+        path: &AllPathPatterns,
+        method: &MethodPattern,
+    ) -> Result<(), String> {
+        if *method != MethodPattern::Options {
+            Err(format!(
+                "Invalid binding for resource '{}' with method '{}'. CORS binding is only supported for the OPTIONS method.",
+                path, method
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn apply_cors_middleware_to_routes(
+        routes: &mut Vec<Route>,
+        target_path: &AllPathPatterns,
+        cors: CorsPreflight,
+    ) -> Result<(), String> {
+        for route in routes.iter_mut() {
+            if route.path == *target_path && route.method != MethodPattern::Options {
+                add_cors_middleware_to_route(route, cors.clone())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn add_cors_middleware_to_route(route: &mut Route, cors: CorsPreflight) -> Result<(), String> {
+        if let Some(worker_binding) = route.binding.get_worker_binding_mut() {
+            if worker_binding.get_cors_middleware().is_some() {
+                Err(format!(
+                    "Conflicting CORS middleware configuration for path '{}' at method '{}'. \
+                CORS preflight is already configured for the same path.",
+                    route.path, route.method
+                ))
+            } else {
+                worker_binding.add_middleware(Middleware::Http(HttpMiddleware::Cors(cors)));
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -166,7 +196,7 @@ mod tests {
         let result = update_routes_with_cors_middleware(routes);
 
         assert!(result.is_err());
-        assert_eq!(result.err().unwrap(), "Invalid binding for resource /test with method Get. Cors binding is only supported for OPTIONS method");
+        assert_eq!(result.err().unwrap(), "Invalid binding for resource '/test' with method 'Get'. CORS binding is only supported for the OPTIONS method.");
     }
 
     #[test]

@@ -350,7 +350,7 @@ pub struct Route {
 }
 
 impl Route {
-    pub fn cors_preflight(&self) -> Option<CorsPreflight> {
+    pub fn cors_preflight_binding(&self) -> Option<CorsPreflight> {
         match &self.binding {
             GatewayBinding::Static(static_binding) => static_binding.get_cors_preflight(),
             _ => None,

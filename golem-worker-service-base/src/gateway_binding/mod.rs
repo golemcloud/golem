@@ -43,6 +43,13 @@ impl GatewayBinding {
         }
     }
 
+    pub fn get_worker_binding_mut(&mut self) -> Option<&mut WorkerBinding> {
+        match self {
+            Self::Worker(worker_binding) => Some(worker_binding),
+            Self::Static(_) => None,
+        }
+    }
+
     pub fn get_http_cors(&self) -> Option<HttpMiddleware> {
         match self {
             Self::Worker(_) => None,
