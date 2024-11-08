@@ -104,10 +104,11 @@ mod internal {
     use rib::Expr;
     use serde_json::Value;
 
-    use crate::gateway_binding::{GatewayBinding, ResponseMapping, WorkerBinding};
+    use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
-    use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
+    use crate::api::GatewayBindingType;
+    use crate::gateway_middleware::{CorsPreflight, CorsPreflightExpr, HttpMiddleware, Middleware};
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -170,7 +171,7 @@ mod internal {
 
         let method = method_res?;
 
-        let     worker_bridge_info = method_operation
+        let worker_bridge_info = method_operation
             .extensions
             .get(GOLEM_WORKER_BRIDGE_EXTENSION)
             .ok_or(format!(
@@ -178,6 +179,35 @@ mod internal {
                 GOLEM_WORKER_BRIDGE_EXTENSION
             ))?;
 
+        let binding_type = get_binding_type(worker_bridge_info)?;
+
+        match (binding_type, &method) {
+            (GatewayBindingType::Cors, MethodPattern::Options) => {
+                Err("CORS binding type is not supported for OPTIONS method".to_string());
+            }
+            (GatewayBindingType::Default, _) => {
+                let binding = get_worker_binding(worker_bridge_info)?;
+
+                Ok(Route {
+                    path: path_pattern.clone(),
+                    method,
+                    binding: GatewayBinding::Worker(binding),
+                })
+            }
+
+            (GatewayBindingType::Cors, _) => {
+                let binding = get_cors_binding(worker_bridge_info)?;
+
+                Ok(Route {
+                    method,
+                    path: path_pattern.clone(),
+                    binding: GatewayBinding::Static(binding),
+                })
+            }
+        }
+    }
+
+    pub(crate) fn get_worker_binding(worker_bridge_info: &Value) -> Result<WorkerBinding, String> {
         let http_middlewares = get_middleware(worker_bridge_info)?;
         let middlewares = http_middlewares.iter().map(Middleware::http).collect();
 
@@ -189,11 +219,29 @@ mod internal {
             middlewares: middlewares,
         };
 
-        Ok(Route {
-            path: path_pattern.clone(),
-            method,
-            binding: GatewayBinding::Worker(binding),
-        })
+        Ok(binding)
+    }
+
+    pub(crate) fn get_cors_binding(worker_bridge_info: &Value) -> Result<StaticBinding, String> {
+        match worker_bridge_info {
+            Value::Object(map) => match map.get("response") {
+                Some(value) => {
+                    let rib_expr_text =
+                        value.as_str().ok_or("response is not a Rib expression string")?;
+
+                    let rib = rib::from_string(rib_expr_text).map_err(|err| err.to_string())?;
+
+                    let cors_preflight = CorsPreflight::from_cors_preflight_expr(&CorsPreflightExpr(rib))?;
+
+                    Ok(StaticBinding::from_http_middleware(HttpMiddleware::cors(cors_preflight)))
+                }
+
+                None => {
+                    Ok(StaticBinding::from_http_middleware(HttpMiddleware::cors(CorsPreflight::default())))
+                }
+            }
+            _ => Err("Invalid schema for cors binding".to_string()),
+        }
     }
 
     pub(crate) fn get_component_id(
@@ -218,6 +266,17 @@ mod internal {
             component_id,
             version,
         })
+    }
+
+    pub(crate) fn get_binding_type(
+        worker_bridge_info: &Value,
+    ) -> Result<GatewayBindingType, String> {
+        let binding_type_optional: Option<GatewayBindingType> = worker_bridge_info
+            .get("binding-type")
+            .map(|value|  serde_json::from_value(value.clone()))
+            .transpose().map_err(|err| "Invalid schema for binding-type")?;
+
+        Ok(binding_type_optional.unwrap_or(GatewayBindingType::Default))
     }
 
     pub(crate) fn get_middleware(

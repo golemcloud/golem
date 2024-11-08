@@ -347,7 +347,7 @@ impl TryInto<crate::gateway_api_definition::http::Route> for RouteData {
     }
 }
 
-impl TryFrom<crate::gateway_binding::GatewayBinding> for GatewayBindingData {
+impl TryFrom<GatewayBinding> for GatewayBindingData {
     type Error = String;
 
     fn try_from(value: crate::gateway_binding::GatewayBinding) -> Result<Self, Self::Error> {
@@ -367,6 +367,8 @@ impl TryFrom<crate::gateway_binding::GatewayBinding> for GatewayBindingData {
                     None
                 };
 
+                let middlewares = worker_binding.middlewares.into_iter().map(|m| m.into()).collect();
+
                 Ok(Self {
                     binding_type: Some(api::GatewayBindingType::Default),
                     component_id: Some(worker_binding.component_id),
@@ -378,6 +380,7 @@ impl TryFrom<crate::gateway_binding::GatewayBinding> for GatewayBindingData {
                     allow_headers: None,
                     expose_headers: None,
                     max_age: None,
+                    middlewares: Some(middlewares),
                 })
             }
 
@@ -432,11 +435,19 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                     None
                 };
 
+                let middlewares = gateway_binding_data
+                    .middlewares
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|m| m.into())
+                    .collect();
+
                 let worker_binding = crate::gateway_binding::WorkerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
                     response,
+                    middlewares
                 };
 
                 Ok(GatewayBinding::Worker(worker_binding))

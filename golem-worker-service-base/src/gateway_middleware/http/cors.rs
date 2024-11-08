@@ -46,15 +46,16 @@ impl CorsPreflight {
     }
 
     // https://github.com/afsalthaj/golem-timeline/issues/70
-    async fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<CorsPreflight, String> {
+    pub fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<CorsPreflight, String> {
         // Compile and evaluate the expression
         let compiled_expr = rib::compile(&expr.0, &vec![]).map_err(|_| "Compilation failed")?;
-        let evaluated = rib::interpret_pure(&compiled_expr.byte_code, &RibInput::default())
-            .await
-            .map_err(|_| "Evaluation failed")?;
+        let evaluate_rib = rib::interpret_pure(&compiled_expr.byte_code, &RibInput::default());
+
+        let result =
+            futures::executor::block_on(evaluate_rib).map_err(|_| "Evaluation failed")?;
 
         // Ensure the result is a record
-        let record = evaluated
+        let record = result
             .get_record()
             .ok_or("Invalid pre-flight CORS response mapping")?;
 
