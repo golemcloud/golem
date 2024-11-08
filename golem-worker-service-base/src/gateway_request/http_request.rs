@@ -51,7 +51,7 @@ impl ApiInputPath {
 pub mod router {
     use crate::gateway_api_definition::http::CompiledRoute;
     use crate::gateway_api_definition::http::{PathPattern, QueryInfo, VarInfo};
-    use crate::gateway_binding::{GatewayBindingCompiled, WorkerBindingCompiled};
+    use crate::gateway_binding::GatewayBindingCompiled;
     use crate::gateway_execution::router::{Router, RouterPattern};
 
     #[derive(Debug, Clone)]

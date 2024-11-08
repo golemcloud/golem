@@ -1,4 +1,3 @@
-use golem_wasm_ast::analysis::analysed_type::str;
 use poem_openapi::Object;
 use rib::{Expr, GetLiteralValue, RibInput};
 use serde::{Deserialize, Serialize};

@@ -5,7 +5,6 @@ use Iterator;
 
 use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
-use crate::gateway_binding::WorkerBinding;
 use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, WorkerBindingCompiled};
 use bincode::{Decode, Encode};
 use derive_more::Display;

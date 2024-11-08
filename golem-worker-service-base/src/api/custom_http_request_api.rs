@@ -11,7 +11,6 @@ use tracing::{error, info};
 
 use crate::gateway_binding::GatewayBindingResolver;
 use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
-use crate::gateway_execution::to_response::ToResponse;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
 

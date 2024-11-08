@@ -2,7 +2,6 @@ use crate::path::{Path, PathComponent};
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::{TypedList, TypedRecord, TypedTuple};
-use std::fmt::Display;
 
 pub trait Getter<T> {
     fn get(&self, key: &Path) -> Result<T, GetError>;

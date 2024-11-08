@@ -1,7 +1,6 @@
 use crate::gateway_api_deployment::http::ApiSite;
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use std::fmt::Debug;
-use std::fmt::Display;
 
 #[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize)]
 pub struct ApiDeploymentRequest<Namespace> {

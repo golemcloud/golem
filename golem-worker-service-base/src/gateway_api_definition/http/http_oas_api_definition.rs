@@ -100,7 +100,7 @@ impl poem_openapi::types::Type for OpenApiDefinitionRequest {
 mod internal {
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use golem_common::model::ComponentId;
-    use openapiv3::{OpenAPI, Operation, PathItem, Paths, ReferenceOr};
+    use openapiv3::{OpenAPI, Operation, Paths, ReferenceOr};
     use rib::Expr;
     use serde_json::Value;
 

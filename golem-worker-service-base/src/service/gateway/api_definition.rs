@@ -21,7 +21,6 @@ use crate::gateway_api_definition::http::{
     HttpApiDefinitionRequest, RouteCompilationErrors,
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
-use crate::gateway_binding::GatewayBinding;
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRepo;

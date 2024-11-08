@@ -3,7 +3,6 @@ use crate::gateway_binding::{
     GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_middleware::Middleware::Http;
 use crate::gateway_middleware::{CorsPreflight, HttpMiddleware};
 
 #[derive(Debug, Clone, PartialEq)]

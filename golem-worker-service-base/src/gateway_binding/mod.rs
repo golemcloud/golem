@@ -1,5 +1,3 @@
-use bincode::{Decode, Encode};
-use serde::{Deserialize, Serialize};
 
 pub(crate) use crate::gateway_binding::worker_binding::WorkerBinding;
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
