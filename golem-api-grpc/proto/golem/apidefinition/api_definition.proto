@@ -91,11 +91,11 @@ message Middleware {
 }
 
 message CorsPreflight {
-  optional string allow_origin = 6;
-  optional string allow_methods = 7;
-  optional string allow_headers = 8;
-  optional string expose_headers = 9;
-  optional uint64 max_age = 10;
+  optional string allow_origin = 1;
+  optional string allow_methods = 2;
+  optional string allow_headers = 3;
+  optional string expose_headers = 4;
+  optional uint64 max_age = 5;
 }
 
 message CompiledGatewayBinding {
