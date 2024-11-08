@@ -1,13 +1,13 @@
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
-mod http_content_type_mapper;
-pub mod to_response;
-mod gateway_worker_request_executor;
-pub mod router;
 pub mod api_definition_lookup;
-pub mod rib_input_value_resolver;
 pub mod gateway_binding_resolver;
+mod gateway_worker_request_executor;
+mod http_content_type_mapper;
+pub mod rib_input_value_resolver;
+pub mod router;
+pub mod to_response;
 
 pub use gateway_worker_request_executor::*;
 

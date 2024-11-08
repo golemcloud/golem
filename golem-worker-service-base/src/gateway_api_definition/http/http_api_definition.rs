@@ -3,10 +3,10 @@ use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use Iterator;
 
-use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
-use crate::gateway_api_definition::http::path_pattern_parser::{parse_path_pattern};
-use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, WorkerBindingCompiled};
+use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_binding::WorkerBinding;
+use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, WorkerBindingCompiled};
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use golem_service_base::model::{Component, VersionedComponentId};
@@ -110,8 +110,8 @@ impl CompiledHttpApiDefinition {
     }
 }
 
-impl HasGolemWorkerBindings for HttpApiDefinition {
-    fn get_golem_worker_bindings(&self) -> Vec<GatewayBinding> {
+impl HasGolemBindings for HttpApiDefinition {
+    fn get_bindings(&self) -> Vec<GatewayBinding> {
         self.routes
             .iter()
             .map(|route| route.binding.clone())
@@ -281,7 +281,8 @@ impl FromStr for AllPathPatterns {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        parse_path_pattern(s).map(|(_, result)| result)
+        parse_path_pattern(s)
+            .map(|(_, result)| result)
             .map_err(|err| err.to_string())
     }
 }
@@ -384,23 +385,33 @@ impl CompiledRoute {
     pub fn from_route(
         route: &Route,
         metadata_dictionary: &ComponentMetadataDictionary,
-    ) -> Result<Self, RouteCompilationErrors> {
-        let metadata = metadata_dictionary
-            .metadata
-            .get(&route.binding.component_id)
-            .ok_or(RouteCompilationErrors::MetadataNotFoundError(
-                route.binding.component_id.clone(),
-            ))?;
+    ) -> Result<CompiledRoute, RouteCompilationErrors> {
+        match &route.binding {
+            GatewayBinding::Worker(worker_binding) => {
+                let metadata = metadata_dictionary
+                    .metadata
+                    .get(&worker_binding.component_id)
+                    .ok_or(RouteCompilationErrors::MetadataNotFoundError(
+                        worker_binding.component_id.clone(),
+                    ))?;
 
-        let binding =
-            WorkerBindingCompiled::from_raw_worker_binding(&route.binding, metadata)
-                .map_err(RouteCompilationErrors::RibCompilationError)?;
+                let binding =
+                    WorkerBindingCompiled::from_raw_worker_binding(&worker_binding, metadata)
+                        .map_err(RouteCompilationErrors::RibCompilationError)?;
 
-        Ok(CompiledRoute {
-            method: route.method.clone(),
-            path: route.path.clone(),
-            binding,
-        })
+                Ok(CompiledRoute {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    binding: GatewayBindingCompiled::Worker(binding),
+                })
+            }
+
+            GatewayBinding::Static(static_binding) => Ok(CompiledRoute {
+                method: route.method.clone(),
+                path: route.path.clone(),
+                binding: GatewayBindingCompiled::Static(static_binding.clone()),
+            }),
+        }
     }
 }
 
@@ -420,8 +431,8 @@ mod tests {
     use test_r::test;
 
     use super::*;
-    use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
     use crate::api;
+    use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -651,11 +662,15 @@ mod tests {
     fn test_api_spec_proto_conversion() {
         fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
-            let api_http_definition_request: api::HttpApiDefinitionRequest = serde_yaml::from_value(yaml.clone()).unwrap();
-            let core_http_definition_request: HttpApiDefinitionRequest = api_http_definition_request.try_into().unwrap();
+            let api_http_definition_request: api::HttpApiDefinitionRequest =
+                serde_yaml::from_value(yaml.clone()).unwrap();
+            let core_http_definition_request: HttpApiDefinitionRequest =
+                api_http_definition_request.try_into().unwrap();
             let timestamp: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-            let core_http_definition = HttpApiDefinition::new(core_http_definition_request, timestamp);
-            let proto: grpc_apidefinition::ApiDefinition = core_http_definition.clone().try_into().unwrap();
+            let core_http_definition =
+                HttpApiDefinition::new(core_http_definition_request, timestamp);
+            let proto: grpc_apidefinition::ApiDefinition =
+                core_http_definition.clone().try_into().unwrap();
             let decoded: HttpApiDefinition = proto.try_into().unwrap();
             assert_eq!(core_http_definition, decoded);
         }

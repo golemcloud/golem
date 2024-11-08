@@ -23,11 +23,16 @@ use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, HttpApiDefinition, Route,
 };
 
+use crate::gateway_api_definition::ApiDefinitionId;
+use crate::gateway_api_deployment::http::{
+    ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString,
+};
 use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
 use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::component::ComponentService;
+use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
@@ -35,9 +40,6 @@ use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
 use rib::WorkerFunctionsInRib;
 use std::fmt::{Debug, Display};
-use crate::gateway_api_definition::ApiDefinitionId;
-use crate::gateway_api_deployment::http::{ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString};
-use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 
 #[async_trait]
 pub trait ApiDeploymentService<AuthCtx, Namespace> {
@@ -62,7 +64,7 @@ pub trait ApiDeploymentService<AuthCtx, Namespace> {
 
     async fn get_by_site(
         &self,
-        site: & ApiSiteString,
+        site: &ApiSiteString,
     ) -> Result<Option<ApiDeployment<Namespace>>, ApiDeploymentError<Namespace>>;
 
     async fn get_definitions_by_site(

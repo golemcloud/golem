@@ -2,7 +2,10 @@ use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-use crate::gateway_binding::{GatewayBinding, WorkerBindingCompiled};
+use crate::gateway_api_deployment::http::ApiSite;
+use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, StaticBinding};
+use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
+use crate::{api, gateway_middleware};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::VersionedComponentId;
 use poem_openapi::*;
@@ -10,9 +13,6 @@ use rib::{Expr, RibInputTypeInfo};
 use serde::{Deserialize, Serialize};
 use std::result::Result;
 use std::time::SystemTime;
-use crate::{api, gateway_middleware};
-use crate::gateway_api_deployment::http::ApiSite;
-use crate::gateway_middleware::Middleware;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -48,7 +48,7 @@ pub struct ApiDefinitionInfo {
 pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub routes: Vec<Route>,
+    pub routes: Vec<RouteData>,
     #[serde(default)]
     pub draft: bool,
 }
@@ -62,7 +62,7 @@ pub struct HttpApiDefinitionRequest {
 pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub routes: Vec<Route>,
+    pub routes: Vec<RouteData>,
     #[serde(default)]
     pub draft: bool,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -96,17 +96,17 @@ impl From<CompiledHttpApiDefinition> for HttpApiDefinitionWithTypeInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct Route {
+pub struct RouteData {
     pub method: MethodPattern,
     pub path: String,
-    pub binding: GolemWorkerBinding,
+    pub binding: GatewayBindingData,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct RouteWithTypeInfo {
     pub method: MethodPattern,
     pub path: String,
-    pub binding: GolemWorkerBindingWithTypeInfo,
+    pub binding: GatewayBindingWithTypeInfo,
 }
 
 impl From<CompiledRoute> for RouteWithTypeInfo {
@@ -125,7 +125,7 @@ impl From<CompiledRoute> for RouteWithTypeInfo {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct GolemWorkerBinding {
+pub struct GatewayBindingData {
     pub binding_type: Option<GatewayBindingType>, // descriminator to keep backward compatibility
     pub component_id: Option<VersionedComponentId>, // Optional only to keep backward compatibility
     pub worker_name: Option<String>,
@@ -133,63 +133,95 @@ pub struct GolemWorkerBinding {
     pub response: Option<String>, // Optional only to keep backward compatibility
     // CORS: if binding_type is corsPlugin, then following parameters required
     pub allow_origin: Option<String>, // Optional only to keep backward compatibility
-    pub allow_methods: Option<String>,// Optional only to keep backward compatibility
+    pub allow_methods: Option<String>, // Optional only to keep backward compatibility
     pub allow_headers: Option<String>, // Optional only to keep backward compatibility
     pub expose_headers: Option<String>,
-    pub max_age: Option<u64>
-
+    pub max_age: Option<u64>,
 }
 
-// To keep backward compatibility we introduce an optional discriminator
+// This is only to keep backward compatibility we introduce an optional discriminator
 // and it's absence will result in default binding which GolemWorkerBinding
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub enum GatewayBindingType {
-    CorsPlugin,
-    Default
+    Cors,
+    Default,
 }
 
-// GolemWorkerBindingWithTypeInfo is a subset of CompiledGolemWorkerBinding
-// that it doesn't expose internal details such as byte code to be exposed
-// to the user.
+impl From<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType> for GatewayBindingType {
+    fn from(value: grpc_apidefinition::GatewayBindingType) -> Self {
+        match value {
+            grpc_apidefinition::GatewayBindingType::Cors => GatewayBindingType::Cors,
+            grpc_apidefinition::GatewayBindingType::Default => GatewayBindingType::Default,
+        }
+    }
+}
+
+impl From<GatewayBindingType> for golem_api_grpc::proto::golem::apidefinition::GatewayBindingType {
+    fn from(value: GatewayBindingType) -> Self {
+        match value {
+            GatewayBindingType::Cors => grpc_apidefinition::GatewayBindingType::Cors,
+            GatewayBindingType::Default => grpc_apidefinition::GatewayBindingType::Default,
+        }
+    }
+}
+
+// GatewayBindingWithTypeInfo is a subset of GatewayBindingCompiled
+// that it doesn't expose internal details such as rib byte code.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct GolemWorkerBindingWithTypeInfo {
-    pub component_id: VersionedComponentId,
+pub struct GatewayBindingWithTypeInfo {
+    pub component_id: Option<VersionedComponentId>, // Optional to keep it backward compatible
     pub worker_name: Option<String>,
     pub idempotency_key: Option<String>,
-    pub response: String,
+    pub response: Option<String>, // Optional to keep it backward compatible
     pub response_mapping_input: Option<RibInputTypeInfo>,
     pub worker_name_input: Option<RibInputTypeInfo>,
     pub idempotency_key_input: Option<RibInputTypeInfo>,
+    pub cors_preflight: Option<CorsPreflight>,
 }
 
-impl From<WorkerBindingCompiled> for GolemWorkerBindingWithTypeInfo {
-    fn from(value: WorkerBindingCompiled) -> Self {
-        let worker_binding = value.clone();
+impl From<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
+    fn from(value: GatewayBindingCompiled) -> Self {
+        let gateway_binding = value.clone();
 
-        GolemWorkerBindingWithTypeInfo {
-            component_id: worker_binding.component_id,
-            worker_name: worker_binding
-                .worker_name_compiled
-                .clone()
-                .map(|compiled| compiled.worker_name.to_string()),
-            idempotency_key: worker_binding.idempotency_key_compiled.map(
-                |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
-            ),
-            response: worker_binding
-                .response_compiled
-                .response_rib_expr
-                .to_string(),
-            response_mapping_input: Some(worker_binding.response_compiled.rib_input),
-            worker_name_input: worker_binding
-                .worker_name_compiled
-                .map(|compiled| compiled.rib_input_type_info),
-            idempotency_key_input: value
-                .idempotency_key_compiled
-                .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
+        match gateway_binding {
+            GatewayBindingCompiled::Worker(worker_binding) => GatewayBindingWithTypeInfo {
+                component_id: Some(worker_binding.component_id),
+                worker_name: worker_binding
+                    .worker_name_compiled
+                    .clone()
+                    .map(|compiled| compiled.worker_name.to_string()),
+                idempotency_key: worker_binding.idempotency_key_compiled.clone().map(
+                    |idempotency_key_compiled| idempotency_key_compiled.idempotency_key.to_string(),
+                ),
+                response: Some(
+                    worker_binding
+                        .response_compiled
+                        .response_rib_expr
+                        .to_string(),
+                ),
+                response_mapping_input: Some(worker_binding.response_compiled.rib_input),
+                worker_name_input: worker_binding
+                    .worker_name_compiled
+                    .map(|compiled| compiled.rib_input_type_info),
+                idempotency_key_input: worker_binding
+                    .idempotency_key_compiled
+                    .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
+                cors_preflight: None,
+            },
+            GatewayBindingCompiled::Static(static_binding) => GatewayBindingWithTypeInfo {
+                component_id: None,
+                worker_name: None,
+                idempotency_key: None,
+                response: None,
+                response_mapping_input: None,
+                worker_name_input: None,
+                idempotency_key_input: None,
+                cors_preflight: static_binding.get_cors_preflight(),
+            },
         }
     }
 }
@@ -221,7 +253,7 @@ impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition> for HttpApi
     ) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
-            let v = Route::try_from(route)?;
+            let v = RouteData::try_from(route)?;
             routes.push(v);
         }
 
@@ -235,7 +267,9 @@ impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition> for HttpApi
     }
 }
 
-impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest> for HttpApiDefinitionRequest {
+impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
+    for HttpApiDefinitionRequest
+{
     type Error = String;
 
     fn try_into(
@@ -248,21 +282,23 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest> for 
             routes.push(v);
         }
 
-        Ok(crate::gateway_api_definition::http::HttpApiDefinitionRequest {
-            id: self.id,
-            version: self.version,
-            routes,
-            draft: self.draft,
-        })
+        Ok(
+            crate::gateway_api_definition::http::HttpApiDefinitionRequest {
+                id: self.id,
+                version: self.version,
+                routes,
+                draft: self.draft,
+            },
+        )
     }
 }
 
-impl TryFrom<crate::gateway_api_definition::http::Route> for Route {
+impl TryFrom<crate::gateway_api_definition::http::Route> for RouteData {
     type Error = String;
 
     fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
-        let binding = GolemWorkerBinding::try_from(value.binding)?;
+        let binding = GatewayBindingData::try_from(value.binding)?;
 
         Ok(Self {
             method: value.method,
@@ -272,7 +308,7 @@ impl TryFrom<crate::gateway_api_definition::http::Route> for Route {
     }
 }
 
-impl TryInto<crate::gateway_api_definition::http::Route> for Route {
+impl TryInto<crate::gateway_api_definition::http::Route> for RouteData {
     type Error = String;
 
     fn try_into(self) -> Result<crate::gateway_api_definition::http::Route, Self::Error> {
@@ -287,13 +323,14 @@ impl TryInto<crate::gateway_api_definition::http::Route> for Route {
     }
 }
 
-impl TryFrom<crate::gateway_binding::GatewayBinding> for GolemWorkerBinding {
+impl TryFrom<crate::gateway_binding::GatewayBinding> for GatewayBindingData {
     type Error = String;
 
     fn try_from(value: crate::gateway_binding::GatewayBinding) -> Result<Self, Self::Error> {
         match value {
-            GatewayBinding::Default(worker_binding) =>  {
-                let response: String = rib::to_string(&worker_binding.response.0).map_err(|e| e.to_string())?;
+            GatewayBinding::Worker(worker_binding) => {
+                let response: String =
+                    rib::to_string(&worker_binding.response.0).map_err(|e| e.to_string())?;
 
                 let worker_id = worker_binding
                     .worker_name
@@ -320,60 +357,87 @@ impl TryFrom<crate::gateway_binding::GatewayBinding> for GolemWorkerBinding {
                 })
             }
 
-            GatewayBinding::Static(plugin) => {
-                match plugin {
-                    Middleware::Http(http_plugin) => match http_plugin {
-                        gateway_middleware::HttpMiddleware::Cors(cors) => {
-                            Ok(Self {
-                                binding_type: Some(api::GatewayBindingType::CorsPlugin),
-                                component_id: None,
-                                worker_name: None,
-                                idempotency_key,
-                                response: None,
-                                allow_origin: Some(cors.allow_origin),
-                                allow_methods: Some(cors.allow_methods),
-                                allow_headers: Some(cors.allow_headers),
-                                expose_headers: cors.expose_headers,
-                                max_age: cors.max_age,
-                            })
-                        }
-                    }
+            GatewayBinding::Static(plugin) => match plugin {
+                StaticBinding::Middleware(Middleware::Http(HttpMiddleware::Cors(cors))) => {
+                    Ok(Self {
+                        binding_type: Some(api::GatewayBindingType::Cors),
+                        component_id: None,
+                        worker_name: None,
+                        idempotency_key,
+                        response: None,
+                        allow_origin: Some(cors.allow_origin),
+                        allow_methods: Some(cors.allow_methods),
+                        allow_headers: Some(cors.allow_headers),
+                        expose_headers: cors.expose_headers,
+                        max_age: cors.max_age,
+                    })
                 }
+            },
+        }
+    }
+}
+
+impl TryFrom<GatewayBindingData> for GatewayBinding {
+    type Error = String;
+
+    fn try_from(gateway_binding_data: GatewayBindingData) -> Result<Self, Self::Error> {
+        let v = gateway_binding_data.binding_type;
+
+        match v {
+            Some(GatewayBindingType::Default) | None => {
+                let response = gateway_binding_data
+                    .response
+                    .ok_or("Missing response field in binding")?;
+                let component_id = gateway_binding_data
+                    .component_id
+                    .ok_or("Missing componentId field in binding")?;
+
+                let response: crate::gateway_binding::ResponseMapping = {
+                    let r = rib::from_string(response.as_str()).map_err(|e| e.to_string())?;
+                    crate::gateway_binding::ResponseMapping(r)
+                };
+
+                let worker_name = gateway_binding_data
+                    .worker_name
+                    .map(|name| rib::from_string(name.as_str()).map_err(|e| e.to_string()))
+                    .transpose()?;
+
+                let idempotency_key = if let Some(key) = &gateway_binding_data.idempotency_key {
+                    Some(rib::from_string(key).map_err(|e| e.to_string())?)
+                } else {
+                    None
+                };
+
+                let worker_binding = crate::gateway_binding::WorkerBinding {
+                    component_id,
+                    worker_name,
+                    idempotency_key,
+                    response,
+                };
+
+                Ok(GatewayBinding::Worker(worker_binding))
+            }
+
+            Some(GatewayBindingType::Cors) => {
+                let cors_preflight = CorsPreflight::from_parameters(
+                    gateway_binding_data.allow_origin,
+                    gateway_binding_data.allow_methods,
+                    gateway_binding_data.allow_headers,
+                    gateway_binding_data.expose_headers,
+                    gateway_binding_data.max_age,
+                );
+
+                Ok(GatewayBinding::Static(StaticBinding::from_http_middleware(
+                    HttpMiddleware::cors(cors_preflight),
+                )))
             }
         }
     }
 }
 
-impl TryInto<crate::gateway_binding::WorkerBinding> for GolemWorkerBinding {
-    type Error = String;
-
-    fn try_into(self) -> Result<crate::gateway_binding::WorkerBinding, Self::Error> {
-        let response: crate::gateway_binding::ResponseMapping = {
-            let r = rib::from_string(self.response.as_str()).map_err(|e| e.to_string())?;
-            crate::gateway_binding::ResponseMapping(r)
-        };
-
-        let worker_name = self
-            .worker_name
-            .map(|name| rib::from_string(name.as_str()).map_err(|e| e.to_string()))
-            .transpose()?;
-
-        let idempotency_key = if let Some(key) = &self.idempotency_key {
-            Some(rib::from_string(key).map_err(|e| e.to_string())?)
-        } else {
-            None
-        };
-
-        Ok(crate::gateway_binding::WorkerBinding {
-            component_id: self.component_id,
-            worker_name,
-            idempotency_key,
-            response,
-        })
-    }
-}
-
-impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition> for grpc_apidefinition::ApiDefinition {
+impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition>
+    for grpc_apidefinition::ApiDefinition
+{
     type Error = String;
 
     fn try_from(
@@ -405,7 +469,9 @@ impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition> for grpc_ap
     }
 }
 
-impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::gateway_api_definition::http::HttpApiDefinition {
+impl TryFrom<grpc_apidefinition::ApiDefinition>
+    for crate::gateway_api_definition::http::HttpApiDefinition
+{
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::ApiDefinition) -> Result<Self, Self::Error> {
@@ -467,7 +533,7 @@ impl TryFrom<crate::gateway_api_definition::http::Route> for grpc_apidefinition:
 
     fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
-        let binding = grpc_apidefinition::WorkerBinding::try_from(value.binding)?;
+        let binding = value.binding.into();
         let method: grpc_apidefinition::HttpMethod = value.method.into();
 
         let result = grpc_apidefinition::HttpRoute {
@@ -486,7 +552,9 @@ impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Com
     fn try_from(value: CompiledRoute) -> Result<Self, Self::Error> {
         let method = value.method as i32;
         let path = value.path.to_string();
-        let binding = value.binding.try_into()?;
+        let binding = golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding::from(
+            value.binding,
+        );
         Ok(Self {
             method,
             path,
@@ -503,7 +571,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
     ) -> Result<Self, Self::Error> {
         let method = MethodPattern::try_from(value.method)?;
         let path = AllPathPatterns::parse(value.path.as_str())?;
-        let binding = value.binding.ok_or("binding is missing")?.try_into()?;
+        let binding = value.binding.ok_or("binding is missing")?.into();
         Ok(CompiledRoute {
             method,
             path,
@@ -533,7 +601,9 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::h
 
     fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
         let path = AllPathPatterns::parse(value.path.as_str())?;
-        let binding = value.binding.ok_or("binding is missing")?.try_into()?;
+        let binding_proto: golem_api_grpc::proto::golem::apidefinition::GatewayBinding =
+            value.binding.ok_or("Missing binding type")?;
+        let binding = GatewayBinding::try_from(binding_proto)?;
 
         let method: MethodPattern = value.method.try_into()?;
 
@@ -541,57 +611,6 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::h
             method,
             path,
             binding,
-        };
-
-        Ok(result)
-    }
-}
-
-impl TryFrom<crate::gateway_binding::WorkerBinding> for grpc_apidefinition::WorkerBinding {
-    type Error = String;
-
-    fn try_from(value: crate::gateway_binding::WorkerBinding) -> Result<Self, Self::Error> {
-        let response = Some(value.response.0.into());
-
-        let worker_name = value.worker_name.map(|w| w.into());
-
-        let idempotency_key = value.idempotency_key.map(|key| key.into());
-
-        let result = grpc_apidefinition::WorkerBinding {
-            component: Some(value.component_id.into()),
-            worker_name,
-            idempotency_key,
-            response,
-        };
-
-        Ok(result)
-    }
-}
-
-impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::gateway_binding::WorkerBinding {
-    type Error = String;
-
-    fn try_from(value: grpc_apidefinition::WorkerBinding) -> Result<Self, Self::Error> {
-        let response: crate::gateway_binding::ResponseMapping = {
-            let r: Expr = value.response.ok_or("response is missing")?.try_into()?;
-            crate::gateway_binding::ResponseMapping(r)
-        };
-
-        let worker_name = value.worker_name.map(|expr| expr.try_into()).transpose()?;
-
-        let component_id = value.component.ok_or("component is missing")?.try_into()?;
-
-        let idempotency_key = if let Some(key) = value.idempotency_key {
-            Some(key.try_into()?)
-        } else {
-            None
-        };
-
-        let result = crate::gateway_binding::WorkerBinding {
-            component_id,
-            worker_name,
-            idempotency_key,
-            response,
         };
 
         Ok(result)

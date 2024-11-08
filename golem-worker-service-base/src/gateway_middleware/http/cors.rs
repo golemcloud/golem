@@ -1,65 +1,62 @@
-use golem_wasm_ast::analysis::analysed_type::{record, str, u64 as tu64};
-use golem_wasm_ast::analysis::{NameTypePair};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::type_annotated_value_from_str;
+use golem_wasm_ast::analysis::analysed_type::str;
+use poem_openapi::Object;
 use rib::{Expr, GetLiteralValue, RibInput};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct CorsPreflight {
     pub allow_origin: String,
     pub allow_methods: String,
     pub allow_headers: String,
     pub expose_headers: Option<String>,
-    pub max_age: Option<u64>
+    pub max_age: Option<u64>,
 }
 
 impl CorsPreflight {
-    // probably not a great idea yet.
-    pub fn as_type_annotated_value(&self) -> Result<TypeAnnotatedValue, String> {
-        type_annotated_value_from_str(&record(
-            vec![
-                NameTypePair {
-                    name: "Access-Control-Allow-Origin".to_string(),
-                    typ: str(),
-                },
-                NameTypePair {
-                    name: "Access-Control-Allow-Methods".to_string(),
-                    typ: str(),
-                },
-                NameTypePair {
-                    name: "Access-Control-Allow-Headers".to_string(),
-                    typ: str(),
-                },
-                NameTypePair {
-                    name: "Access-Control-Expose-Headers".to_string(),
-                    typ: str(),
-                },
-                NameTypePair {
-                    name: "Access-Control-Max-Age".to_string(),
-                    typ: tu64(),
-                }
-            ]
-        ),format!(r#"
-           {{
-            Access-Control-Allow-Origin:{}
-            Access-Control-Allow-Methods:{}
-            Access-Control-Allow-Headers:{}
-            Access-Control-Expose-Headers:{}
-            Access-Control-Max-Age:{}
-           }}
+    pub fn from_parameters(
+        allow_origin: Option<String>,
+        allow_methods: Option<String>,
+        allow_headers: Option<String>,
+        expose_headers: Option<String>,
+        max_age: Option<u64>,
+    ) -> CorsPreflight {
+        let mut cors_preflight = CorsPreflight::default();
 
-        "#, self.allow_origin, self.allow_methods, self.allow_headers, self.expose_headers, self.max_age).as_str())
+        if let Some(allow_origin) = allow_origin {
+            cors_preflight.set_allow_origin(allow_origin.as_str())
+        }
+
+        if let Some(allow_methods) = allow_methods {
+            cors_preflight.set_allow_methods(allow_methods.as_str())
+        }
+
+        if let Some(allow_headers) = allow_headers {
+            cors_preflight.set_allow_headers(allow_headers.as_str())
+        }
+        if let Some(expose_headers) = expose_headers {
+            cors_preflight.set_expose_headers(expose_headers.as_str())
+        }
+
+        if let Some(max_age) = max_age {
+            cors_preflight.set_max_age(max_age)
+        }
+
+        cors_preflight
     }
+
     async fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<CorsPreflight, String> {
         // Compile and evaluate the expression
-        let compiled_expr = rib::compile(&expr.0, &[])
-            .map_err(|_| "Compilation failed")?;
+        let compiled_expr = rib::compile(&expr.0, &vec![]).map_err(|_| "Compilation failed")?;
         let evaluated = rib::interpret_pure(&compiled_expr.byte_code, &RibInput::default())
             .await
             .map_err(|_| "Evaluation failed")?;
 
         // Ensure the result is a record
-        let record = evaluated.get_record().ok_or("Invalid pre-flight CORS response mapping")?;
+        let record = evaluated
+            .get_record()
+            .ok_or("Invalid pre-flight CORS response mapping")?;
 
         // Initialize with default values for CorsPreflight
         let mut cors = CorsPreflight::default();
@@ -73,7 +70,8 @@ impl CorsPreflight {
 
         for name_value in record {
             let key = &name_value.name;
-            let value = name_value.value
+            let value = name_value
+                .value
                 .as_ref()
                 .ok_or("Missing value in type_annotated_value record")?
                 .type_annotated_value
@@ -90,9 +88,11 @@ impl CorsPreflight {
                     "Access-Control-Allow-Headers" => cors.set_allow_headers(&value),
                     "Access-Control-Expose-Headers" => cors.set_expose_headers(&value),
                     "Access-Control-Max-Age" => {
-                        let max_age = value.parse::<u64>().map_err(|_| "Invalid value for max age")?;
+                        let max_age = value
+                            .parse::<u64>()
+                            .map_err(|_| "Invalid value for max age")?;
                         cors.set_max_age(max_age);
-                    },
+                    }
                     _ => {}
                 }
             } else {
@@ -102,7 +102,7 @@ impl CorsPreflight {
 
         Ok(cors)
     }
-    fn default() -> CorsPreflight {
+    pub fn default() -> CorsPreflight {
         CorsPreflight {
             allow_origin: "*".to_string(),
             allow_methods: "GET, POST, PUT, DELETE, OPTIONS".to_string(),
@@ -112,27 +112,25 @@ impl CorsPreflight {
         }
     }
 
-    fn set_allow_origin(&mut self, allow_origin: &str) {
+    pub fn set_allow_origin(&mut self, allow_origin: &str) {
         self.allow_origin = allow_origin.to_string();
     }
 
-    fn set_allow_methods(&mut self, allow_methods: &str) {
+    pub fn set_allow_methods(&mut self, allow_methods: &str) {
         self.allow_methods = allow_methods.to_string();
     }
 
-    fn set_allow_headers(&mut self, allow_headers: &str) {
+    pub fn set_allow_headers(&mut self, allow_headers: &str) {
         self.allow_headers = allow_headers.to_string();
     }
 
-    fn set_expose_headers(&mut self, expose_headers: &str) {
+    pub fn set_expose_headers(&mut self, expose_headers: &str) {
         self.expose_headers = Some(expose_headers.to_string());
     }
 
-    fn set_max_age(&mut self, max_age: u64)  {
+    pub fn set_max_age(&mut self, max_age: u64) {
         self.max_age = Some(max_age);
     }
-
 }
 
 pub struct CorsPreflightExpr(pub Expr);
-

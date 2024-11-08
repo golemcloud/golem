@@ -20,18 +20,21 @@ use crate::gateway_api_definition::http::{
     CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     HttpApiDefinitionRequest, RouteCompilationErrors,
 };
-use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemWorkerBindings};
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
+use crate::gateway_binding::GatewayBinding;
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRepo;
+use crate::service::component::ComponentService;
+use crate::service::gateway::api_definition_validator::{
+    ApiDefinitionValidatorService, ValidationErrors,
+};
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use tracing::{error, info};
-use crate::service::gateway::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
-use crate::service::component::ComponentService;
 
 pub type ApiResult<T, E> = Result<T, ApiDefinitionError<E>>;
 
@@ -185,9 +188,10 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
         auth_ctx: &AuthCtx,
     ) -> Result<Vec<Component>, ApiDefinitionError<ValidationError>> {
         let get_components = definition
-            .get_golem_worker_bindings()
+            .get_bindings()
             .iter()
             .cloned()
+            .filter_map(|binding| binding.get_worker_binding())
             .map(|binding| async move {
                 let id = &binding.component_id;
                 self.component_service
@@ -453,9 +457,9 @@ where
 mod tests {
     use test_r::test;
 
+    use crate::service::gateway::api_definition::ApiDefinitionError;
     use golem_common::{SafeDisplay, SafeString};
     use golem_service_base::repo::RepoError;
-    use crate::service::gateway::api_definition::ApiDefinitionError;
 
     #[test]
     pub fn test_repo_error_to_service_error() {

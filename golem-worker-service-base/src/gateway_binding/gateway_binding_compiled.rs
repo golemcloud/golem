@@ -1,8 +1,225 @@
-use crate::gateway_binding::{WorkerBindingCompiled};
 use crate::gateway_binding::static_binding::StaticBinding;
+use crate::gateway_binding::{
+    GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
+    WorkerBindingCompiled, WorkerNameCompiled,
+};
+use crate::gateway_middleware::CorsPreflight;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
-    Static(StaticBinding)
+    Static(StaticBinding),
+}
+
+impl From<GatewayBindingCompiled> for GatewayBinding {
+    fn from(value: GatewayBindingCompiled) -> Self {
+        match value {
+            GatewayBindingCompiled::Static(static_binding) => {
+                GatewayBinding::Static(static_binding)
+            }
+            GatewayBindingCompiled::Worker(value) => {
+                let worker_binding = value.clone();
+
+                let worker_binding = WorkerBinding::from(worker_binding);
+
+                GatewayBinding::Worker(worker_binding)
+            }
+        }
+    }
+}
+
+impl From<GatewayBindingCompiled>
+    for golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
+{
+    fn from(value: GatewayBindingCompiled) -> Self {
+        match value {
+            GatewayBindingCompiled::Worker(worker_binding) => {
+                let component = Some(worker_binding.component_id.into());
+                let worker_name = worker_binding
+                    .worker_name_compiled
+                    .clone()
+                    .map(|w| w.worker_name.into());
+                let compiled_worker_name_expr = worker_binding
+                    .worker_name_compiled
+                    .clone()
+                    .map(|w| w.compiled_worker_name.into());
+                let worker_name_rib_input = worker_binding
+                    .worker_name_compiled
+                    .map(|w| w.rib_input_type_info.into());
+                let (idempotency_key, compiled_idempotency_key_expr, idempotency_key_rib_input) =
+                    match worker_binding.idempotency_key_compiled {
+                        Some(x) => (
+                            Some(x.idempotency_key.into()),
+                            Some(x.compiled_idempotency_key.into()),
+                            Some(x.rib_input.into()),
+                        ),
+                        None => (None, None, None),
+                    };
+
+                let response = Some(worker_binding.response_compiled.response_rib_expr.into());
+                let compiled_response_expr =
+                    Some(worker_binding.response_compiled.compiled_response.into());
+                let response_rib_input = Some(worker_binding.response_compiled.rib_input.into());
+                let worker_functions_in_response = worker_binding
+                    .response_compiled
+                    .worker_calls
+                    .map(|x| x.into());
+
+                golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+                    component,
+                    worker_name,
+                    compiled_worker_name_expr,
+                    worker_name_rib_input,
+                    idempotency_key,
+                    compiled_idempotency_key_expr,
+                    idempotency_key_rib_input,
+                    response,
+                    compiled_response_expr,
+                    response_rib_input,
+                    worker_functions_in_response,
+                    binding_type: Some(0),
+                    allow_methods: None,
+                    allow_headers: None,
+                    allow_origin: None,
+                    expose_headers: None,
+                    max_age: None,
+                }
+            }
+            GatewayBindingCompiled::Static(static_binding) => {
+                if let Some(cors_preflight) = static_binding.get_cors_preflight() {
+                    golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+                        component: None,
+                        worker_name: None,
+                        compiled_worker_name_expr: None,
+                        worker_name_rib_input: None,
+                        idempotency_key: None,
+                        compiled_idempotency_key_expr: None,
+                        idempotency_key_rib_input: None,
+                        response: None,
+                        compiled_response_expr: None,
+                        response_rib_input: None,
+                        worker_functions_in_response: None,
+                        binding_type: Some(1),
+                        allow_methods: Some(cors_preflight.allow_methods),
+                        allow_headers: Some(cors_preflight.allow_headers),
+                        allow_origin: Some(cors_preflight.allow_origin),
+                        expose_headers: cors_preflight.expose_headers,
+                        max_age: cors_preflight.max_age,
+                    }
+                } else {
+                    golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+                        component: None,
+                        worker_name: None,
+                        compiled_worker_name_expr: None,
+                        worker_name_rib_input: None,
+                        idempotency_key: None,
+                        compiled_idempotency_key_expr: None,
+                        idempotency_key_rib_input: None,
+                        response: None,
+                        compiled_response_expr: None,
+                        response_rib_input: None,
+                        worker_functions_in_response: None,
+                        binding_type: None,
+                        allow_methods: None,
+                        allow_headers: None,
+                        allow_origin: None,
+                        expose_headers: None,
+                        max_age: None,
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding>
+    for GatewayBindingCompiled
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding,
+    ) -> Result<Self, Self::Error> {
+        match value.binding_type {
+            Some(0) => {
+                // Convert fields for the Worker variant
+                let component_id = value
+                    .component
+                    .ok_or("Missing component_id for Worker")?
+                    .try_into()?;
+
+                let worker_name_compiled = match (
+                    value.worker_name,
+                    value.compiled_worker_name_expr,
+                    value.worker_name_rib_input,
+                ) {
+                    (Some(worker_name), Some(compiled_worker_name), Some(rib_input_type_info)) => {
+                        Some(WorkerNameCompiled {
+                            worker_name: worker_name.into(),
+                            compiled_worker_name: compiled_worker_name.into(),
+                            rib_input_type_info: rib_input_type_info.into(),
+                        })
+                    }
+                    _ => None,
+                };
+
+                let idempotency_key_compiled = match (
+                    value.idempotency_key,
+                    value.compiled_idempotency_key_expr,
+                    value.idempotency_key_rib_input,
+                ) {
+                    (Some(idempotency_key), Some(compiled_idempotency_key), Some(rib_input)) => {
+                        Some(IdempotencyKeyCompiled {
+                            idempotency_key: idempotency_key.into(),
+                            compiled_idempotency_key: compiled_idempotency_key.into(),
+                            rib_input: rib_input.into(),
+                        })
+                    }
+                    _ => None,
+                };
+
+                let response_compiled = ResponseMappingCompiled {
+                    response_rib_expr: value.response.ok_or("Missing response for Worker")?.into(),
+                    compiled_response: value
+                        .compiled_response_expr
+                        .ok_or("Missing compiled_response for Worker")?
+                        .into(),
+                    rib_input: value
+                        .response_rib_input
+                        .ok_or("Missing response_rib_input for Worker")?
+                        .into(),
+                    worker_calls: value.worker_functions_in_response.map(|x| x.into()),
+                };
+
+                Ok(GatewayBindingCompiled::Worker(WorkerBindingCompiled {
+                    component_id,
+                    worker_name_compiled,
+                    idempotency_key_compiled,
+                    response_compiled,
+                }))
+            }
+            Some(1) => {
+                // Convert fields for the Static (CORS) variant
+                let cors_preflight =
+                    if let (Some(allow_methods), Some(allow_headers), Some(allow_origin)) =
+                        (value.allow_methods, value.allow_headers, value.allow_origin)
+                    {
+                        Some(CorsPreflight {
+                            allow_methods,
+                            allow_headers,
+                            allow_origin,
+                            expose_headers: value.expose_headers,
+                            max_age: value.max_age,
+                        })
+                    } else {
+                        None
+                    };
+
+                Ok(GatewayBindingCompiled::Static(StaticBinding {
+                    cors_preflight,
+                }))
+            }
+            _ => Err("Unknown binding type".to_string()),
+        }
+    }
 }

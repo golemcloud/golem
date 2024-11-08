@@ -7,7 +7,9 @@ use nom::multi::{separated_list0, separated_list1};
 use nom::sequence::{delimited, preceded, tuple};
 use nom::IResult;
 
-use crate::gateway_api_definition::http::{place_holder_parser, AllPathPatterns, PathPattern, QueryInfo};
+use crate::gateway_api_definition::http::{
+    place_holder_parser, AllPathPatterns, PathPattern, QueryInfo,
+};
 
 pub fn parse_path_pattern(input: &str) -> IResult<&str, AllPathPatterns> {
     let (input, (path, query)) = tuple((
@@ -73,8 +75,8 @@ fn literal_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use crate::gateway_api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
     use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
+    use crate::gateway_api_definition::http::{AllPathPatterns, PathPattern, QueryInfo};
     use test_r::test;
 
     #[test]

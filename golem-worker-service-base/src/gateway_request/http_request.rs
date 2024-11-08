@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use crate::gateway_api_deployment::http::ApiSiteString;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
-use crate::gateway_api_deployment::http::ApiSiteString;
 
 #[derive(Clone)]
 pub struct InputHttpRequest {
@@ -50,8 +50,8 @@ impl ApiInputPath {
 
 pub mod router {
     use crate::gateway_api_definition::http::CompiledRoute;
-    use crate::gateway_binding::{GatewayBindingCompiled, WorkerBindingCompiled};
     use crate::gateway_api_definition::http::{PathPattern, QueryInfo, VarInfo};
+    use crate::gateway_binding::{GatewayBindingCompiled, WorkerBindingCompiled};
     use crate::gateway_execution::router::{Router, RouterPattern};
 
     #[derive(Debug, Clone)]
@@ -103,23 +103,26 @@ pub mod router {
 mod tests {
     use test_r::test;
 
+    use crate::api::HttpApiDefinitionRequest;
     use crate::gateway_api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     };
-    use crate::getter::Getter;
-    use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
-    use crate::path::Path;
-    use crate::gateway_binding::{
-        RibInputTypeMismatch, GatewayBindingResolver,
-    };
+    use crate::gateway_binding::{GatewayBindingResolver, RibInputTypeMismatch};
     use crate::gateway_execution::to_response::ToResponse;
     use crate::gateway_execution::{
-        GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, GatewayWorkerRequestExecutorError, WorkerResponse,
+        GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor,
+        GatewayWorkerRequestExecutorError, WorkerResponse,
     };
+    use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
+    use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
     use crate::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
+    use crate::getter::Getter;
+    use crate::path::Path;
+    use crate::{api, gateway_api_definition};
     use async_trait::async_trait;
+    use chrono::{DateTime, Utc};
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_service_base::model::VersionedComponentId;
     use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
@@ -135,10 +138,6 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use chrono::{DateTime, Utc};
-    use crate::{api, gateway_api_definition};
-    use crate::api::HttpApiDefinitionRequest;
-    use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
 
     struct TestWorkerRequestExecutor {}
 
@@ -203,7 +202,9 @@ mod tests {
         }))
     }
 
-    fn convert_to_worker_response(worker_request: &GatewayResolvedWorkerRequest) -> TypeAnnotatedValue {
+    fn convert_to_worker_response(
+        worker_request: &GatewayResolvedWorkerRequest,
+    ) -> TypeAnnotatedValue {
         let mut record_elems = vec![
             (
                 "component_id".to_string(),
@@ -349,7 +350,7 @@ mod tests {
             .await
             .unwrap();
 
-        resolved_route.interpret_response_mapping(&evaluator).await
+        resolved_route.execute_binding(&evaluator).await
     }
 
     #[test]

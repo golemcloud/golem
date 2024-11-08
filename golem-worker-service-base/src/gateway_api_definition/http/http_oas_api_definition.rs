@@ -7,7 +7,6 @@ use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult}
 use serde_json::Value;
 use std::borrow::Cow;
 
-
 pub struct OpenApiDefinitionRequest(pub OpenAPI);
 
 impl OpenApiDefinitionRequest {
@@ -105,9 +104,9 @@ mod internal {
     use rib::Expr;
     use serde_json::Value;
 
+    use crate::gateway_binding::{ResponseMapping, WorkerBinding};
     use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
-    use crate::gateway_binding::{ResponseMapping, WorkerBinding};
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -134,7 +133,8 @@ mod internal {
                     let path_pattern = get_path_pattern(path)?;
 
                     for (method, method_operation) in item.iter() {
-                        let route = get_route_from_path_item(method, method_operation, &path_pattern)?;
+                        let route =
+                            get_route_from_path_item(method, method_operation, &path_pattern)?;
                         routes.push(route);
                     }
                 }
@@ -273,7 +273,7 @@ mod tests {
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_binding::{ResponseMapping, WorkerBinding};
     use golem_common::model::ComponentId;
-    use openapiv3::{Operation};
+    use openapiv3::Operation;
     use rib::Expr;
     use serde_json::json;
     use uuid::Uuid;

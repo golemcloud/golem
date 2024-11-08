@@ -1,7 +1,7 @@
-use std::fmt::Debug;
-use std::fmt::Display;
 use crate::gateway_api_deployment::http::ApiSite;
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
+use std::fmt::Debug;
+use std::fmt::Display;
 
 #[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize)]
 pub struct ApiDeploymentRequest<Namespace> {
@@ -17,4 +17,3 @@ pub struct ApiDeployment<Namespace> {
     pub site: ApiSite,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
-

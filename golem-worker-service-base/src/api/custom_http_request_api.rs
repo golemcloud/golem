@@ -9,10 +9,10 @@ use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
-use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 use crate::gateway_binding::GatewayBindingResolver;
-use crate::gateway_execution::GatewayWorkerRequestExecutor;
+use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 use crate::gateway_execution::to_response::ToResponse;
+use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
 
 // Executes custom request with the help of worker_request_executor and definition_service
@@ -104,7 +104,7 @@ impl CustomHttpRequestApi {
         {
             Ok(resolved_worker_binding) => {
                 resolved_worker_binding
-                    .interpret_response_mapping(&self.worker_service_rib_interpreter)
+                    .execute_binding(&self.worker_service_rib_interpreter)
                     .await
             }
 

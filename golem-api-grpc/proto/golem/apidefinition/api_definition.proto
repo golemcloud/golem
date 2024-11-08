@@ -39,13 +39,13 @@ message ApiDefinitionId {
 message HttpRoute {
   HttpMethod method = 1;
   string path = 2;
-  WorkerBinding binding = 3;
+  GatewayBinding binding = 3;
 }
 
 message CompiledHttpRoute {
     HttpMethod method = 1;
     string path = 2;
-    CompiledWorkerBinding binding = 3;
+    CompiledGatewayBinding binding = 3;
 }
 
 enum HttpMethod {
@@ -60,23 +60,47 @@ enum HttpMethod {
   HEAD = 8;
 }
 
-message WorkerBinding {
-  golem.component.VersionedComponentId component = 1;
+message GatewayBinding {
+  // Optional field to keep backward compatibility
+  optional golem.component.VersionedComponentId component = 1;
   optional golem.rib.Expr worker_name = 2;
-  golem.rib.Expr response = 3;
+  // Optional field to keep backward compatibility
+  optional golem.rib.Expr response = 3;
   optional golem.rib.Expr idempotency_key = 4;
+
+  // type discriminator to keep backward compatibility
+  optional GatewayBindingType binding_type = 5;
+  optional string allow_origin = 6;
+  optional string allow_methods = 7;
+  optional string allow_headers = 8;
+  optional string expose_headers = 9;
+  optional uint64 max_age = 10;
 }
 
-message CompiledWorkerBinding {
-  golem.component.VersionedComponentId component = 1;
+
+enum GatewayBindingType {
+  DEFAULT = 0;
+  CORS = 1;
+}
+
+message CompiledGatewayBinding {
+  // Optional field to keep backward compatibility
+  optional golem.component.VersionedComponentId component = 1;
   optional golem.rib.Expr worker_name = 2;
   optional golem.rib.RibByteCode compiled_worker_name_expr = 3;
   optional golem.rib.RibInputType worker_name_rib_input = 4;
-  golem.rib.Expr response = 5;
-  golem.rib.RibByteCode compiled_response_expr = 6;
-  golem.rib.RibInputType response_rib_input = 7;
+  optional golem.rib.Expr response = 5;
+  optional golem.rib.RibByteCode compiled_response_expr = 6;
+  optional golem.rib.RibInputType response_rib_input = 7;
   optional golem.rib.Expr idempotency_key = 8;
   optional golem.rib.RibByteCode compiled_idempotency_key_expr = 9;
   optional golem.rib.RibInputType idempotency_key_rib_input = 10;
   optional golem.rib.WorkerFunctionsInRib worker_functions_in_response = 11;
+  // type discriminator to keep backward compatibility
+  optional GatewayBindingType binding_type = 12;
+  optional string allow_origin = 13;
+  optional string allow_methods = 14;
+  optional string allow_headers = 15;
+  optional string expose_headers = 16;
+  optional uint64 max_age = 17;
 }

@@ -4,7 +4,7 @@ mod http;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Middleware {
-    Http(HttpMiddleware)
+    Http(HttpMiddleware),
 }
 
 impl Middleware {

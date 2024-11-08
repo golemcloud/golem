@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_api_deployment::http::ApiSite;
 use crate::repo::api_definition::ApiDefinitionRecord;
+use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_service_base::repo::RepoError;
@@ -21,8 +23,6 @@ use std::fmt::Display;
 use std::ops::Deref;
 use std::sync::Arc;
 use tracing::{debug, error};
-use crate::gateway_api_deployment::http::ApiSite;
-use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ApiDeploymentRecord {

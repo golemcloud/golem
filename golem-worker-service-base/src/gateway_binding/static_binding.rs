@@ -1,4 +1,4 @@
-use crate::gateway_middleware::{HttpMiddleware, Middleware};
+use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
 // as it may introduce unnecessary latency
@@ -9,7 +9,7 @@ use crate::gateway_middleware::{HttpMiddleware, Middleware};
 // Example: browser requests for preflight requests need only what's contained in a middleware.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticBinding {
-    Middleware(Middleware)
+    Middleware(Middleware),
 }
 
 impl StaticBinding {
@@ -17,4 +17,11 @@ impl StaticBinding {
         StaticBinding::Middleware(Middleware::http(http_middleware))
     }
 
+    pub fn get_cors_preflight(&self) -> Option<CorsPreflight> {
+        match self {
+            StaticBinding::Middleware(Middleware::Http(HttpMiddleware::Cors(preflight))) => {
+                Some(preflight.clone())
+            }
+        }
+    }
 }

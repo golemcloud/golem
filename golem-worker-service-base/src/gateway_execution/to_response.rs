@@ -1,13 +1,15 @@
-use crate::gateway_binding::{RibInputTypeMismatch};
+use crate::gateway_binding::RibInputTypeMismatch;
 use crate::gateway_rib_interpreter::EvaluationError;
 
-use http::StatusCode;
-use poem::Body;
-use rib::RibResult;
 use crate::gateway_middleware::HttpMiddleware;
 use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
-use poem::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE};
-
+use http::StatusCode;
+use poem::http::header::{
+    ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
+    ACCESS_CONTROL_EXPOSE_HEADERS, ACCESS_CONTROL_MAX_AGE,
+};
+use poem::Body;
+use rib::RibResult;
 
 pub trait ToResponse<A> {
     fn to_response(&self, request_details: &GatewayRequestDetails) -> A;
@@ -17,9 +19,7 @@ impl ToResponse<poem::Response> for HttpMiddleware {
     fn to_response(&self, _request_details: &GatewayRequestDetails) -> poem::Response {
         match self {
             HttpMiddleware::Cors(preflight) => {
-                let mut response = poem::Response::builder()
-                    .status(StatusCode::OK)
-                    .finish();
+                let mut response = poem::Response::builder().status(StatusCode::OK).finish();
 
                 response.headers_mut().insert(
                     ACCESS_CONTROL_ALLOW_ORIGIN,
@@ -42,17 +42,15 @@ impl ToResponse<poem::Response> for HttpMiddleware {
                 }
 
                 if let Some(max_age) = preflight.max_age {
-                    response.headers_mut().insert(
-                        ACCESS_CONTROL_MAX_AGE,
-                        max_age.to_string().parse().unwrap(),
-                    );
+                    response
+                        .headers_mut()
+                        .insert(ACCESS_CONTROL_MAX_AGE, max_age.to_string().parse().unwrap());
                 }
 
                 response
             }
         }
     }
-
 }
 
 impl ToResponse<poem::Response> for RibResult {
@@ -72,7 +70,6 @@ impl ToResponse<poem::Response> for RibResult {
                             e
                         ))),
                 }
-
             }
         }
     }
@@ -110,6 +107,7 @@ mod internal {
     use http::{HeaderMap, StatusCode};
     use std::str::FromStr;
 
+    use crate::gateway_request::gateway_request_details::HttpRequestDetails;
     use crate::getter::GetterExt;
     use crate::path::Path;
     use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
@@ -119,7 +117,6 @@ mod internal {
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::{GetLiteralValue, LiteralValue, RibResult};
     use std::collections::HashMap;
-    use crate::gateway_request::gateway_request_details::HttpRequestDetails;
 
     pub(crate) struct IntermediateHttpResponse {
         body: Option<TypeAnnotatedValue>,
@@ -161,7 +158,10 @@ mod internal {
             }
         }
 
-        pub(crate) fn to_http_response(&self, request_details: &HttpRequestDetails) -> poem::Response {
+        pub(crate) fn to_http_response(
+            &self,
+            request_details: &HttpRequestDetails,
+        ) -> poem::Response {
             let headers: Result<HeaderMap, String> = (&self.headers.headers)
                 .try_into()
                 .map_err(|e: hyper::http::Error| e.to_string());
@@ -306,11 +306,13 @@ mod test {
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, TypedRecord};
 
     use crate::gateway_execution::to_response::ToResponse;
+    use crate::gateway_request::gateway_request_details::{
+        GatewayRequestDetails, HttpRequestDetails,
+    };
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;
     use std::collections::HashMap;
-    use crate::gateway_request::gateway_request_details::{GatewayRequestDetails, HttpRequestDetails};
 
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];
@@ -356,8 +358,8 @@ mod test {
 
         let evaluation_result: RibResult = RibResult::Val(record);
 
-        let http_response: poem::Response =
-            evaluation_result.to_response(&GatewayRequestDetails::Http(HttpRequestDetails::empty()));
+        let http_response: poem::Response = evaluation_result
+            .to_response(&GatewayRequestDetails::Http(HttpRequestDetails::empty()));
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();
@@ -382,8 +384,8 @@ mod test {
         let evaluation_result: RibResult =
             RibResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
-        let http_response: poem::Response =
-            evaluation_result.to_response(&GatewayRequestDetails::Http(HttpRequestDetails::empty()));
+        let http_response: poem::Response = evaluation_result
+            .to_response(&GatewayRequestDetails::Http(HttpRequestDetails::empty()));
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();

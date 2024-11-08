@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern, Route};
 
 use crate::gateway_execution::router::{Router, RouterPattern};
-use crate::service::gateway::api_definition_validator::{ApiDefinitionValidatorService, ValidationErrors};
+use crate::service::gateway::api_definition_validator::{
+    ApiDefinitionValidatorService, ValidationErrors,
+};
 
 // Http Api Definition Validator
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -104,8 +106,8 @@ mod tests {
     use test_r::test;
 
     use crate::gateway_api_definition::http::{MethodPattern, Route};
-    use crate::service::gateway::http_api_definition_validator::unique_routes;
     use crate::gateway_binding::ResponseMapping;
+    use crate::service::gateway::http_api_definition_validator::unique_routes;
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;

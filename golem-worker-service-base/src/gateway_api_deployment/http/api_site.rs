@@ -1,6 +1,6 @@
-use std::fmt::Display;
 use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 
 #[derive(Debug, Eq, Clone, Hash, PartialEq, Serialize, Deserialize, Object)]
 pub struct ApiSite {

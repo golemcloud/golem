@@ -147,9 +147,10 @@ impl<'a> TraceErrorKind for ApiDefinitionTraceErrorKind<'a> {
 
 mod conversion {
     use super::{ApiEndpointError, ValidationErrorsBody, WorkerServiceErrorsBody};
-    use crate::service::gateway::http_api_definition_validator::RouteValidationError;
     use crate::service::gateway::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
+    use crate::service::gateway::api_definition_validator::ValidationErrors;
     use crate::service::gateway::api_deployment::ApiDeploymentError as ApiDeploymentServiceError;
+    use crate::service::gateway::http_api_definition_validator::RouteValidationError;
     use golem_api_grpc::proto::golem::common::ErrorsBody;
     use golem_api_grpc::proto::golem::{
         apidefinition,
@@ -159,7 +160,6 @@ mod conversion {
     use golem_common::SafeDisplay;
     use poem_openapi::payload::Json;
     use std::fmt::Display;
-    use crate::service::gateway::api_definition_validator::ValidationErrors;
 
     impl From<ApiDefinitionServiceError<RouteValidationError>> for ApiEndpointError {
         fn from(error: ApiDefinitionServiceError<RouteValidationError>) -> Self {
@@ -206,7 +206,9 @@ mod conversion {
                 ApiDeploymentServiceError::ApiDefinitionsConflict(_) => {
                     ApiEndpointError::bad_request(error)
                 }
-                ApiDeploymentServiceError::InternalRepoError(_) => ApiEndpointError::internal(error),
+                ApiDeploymentServiceError::InternalRepoError(_) => {
+                    ApiEndpointError::internal(error)
+                }
                 ApiDeploymentServiceError::InternalConversionError { .. } => {
                     ApiEndpointError::internal(error)
                 }

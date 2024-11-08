@@ -11,10 +11,9 @@ use golem_wasm_ast::analysis::{
     AnalysedInstance,
 };
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
-use golem_worker_service_base::gateway_api_definition::{
-    ApiDefinitionId, ApiVersion,
-};
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::repo::{api_definition, api_deployment};
+use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
 use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,
     ApiDefinitionServiceDefault,
@@ -22,7 +21,6 @@ use golem_worker_service_base::service::gateway::api_definition::{
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
 };
-use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
 use golem_worker_service_base::service::gateway::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
@@ -30,13 +28,15 @@ use golem_worker_service_base::service::gateway::http_api_definition_validator::
 use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_wasm_ast::analysis::analysed_type::str;
+use golem_worker_service_base::gateway_api_deployment::http::{
+    ApiDeploymentRequest, ApiSite, ApiSiteString,
+};
+use golem_worker_service_base::{api, gateway_api_definition};
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use uuid::Uuid;
-use golem_worker_service_base::{api, gateway_api_definition};
-use golem_worker_service_base::gateway_api_deployment::http::{ApiDeploymentRequest, ApiSite, ApiSiteString};
 
 test_r::enable!();
 
@@ -786,8 +786,8 @@ fn get_api_definition(
         id, version, draft, path_pattern, worker_id, response_mapping
     );
 
-     let api: api::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string.as_str()).unwrap();
-     api.try_into().unwrap()
+    let api: api::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string.as_str()).unwrap();
+    api.try_into().unwrap()
 }
 
 fn contains_definitions(
