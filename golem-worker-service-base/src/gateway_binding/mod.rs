@@ -41,6 +41,15 @@ impl GatewayBinding {
             Self::Static(_) => None,
         }
     }
+
+    pub fn get_http_cors(&self) -> Option<HttpMiddleware> {
+        match self {
+            Self::Worker(_) => None,
+            Self::Static(static_binding) => {
+                static_binding.get_cors_preflight().map(HttpMiddleware::cors)
+            }
+        }
+    }
 }
 
 impl From<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::GatewayBinding {

@@ -1,4 +1,4 @@
-use crate::gateway_api_definition::http::HttpApiDefinitionRequest;
+use crate::gateway_api_definition::http::{route_transformations, HttpApiDefinitionRequest};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 use openapiv3::OpenAPI;
@@ -21,11 +21,13 @@ impl OpenApiDefinitionRequest {
             ApiVersion(get_root_extension(open_api, GOLEM_API_DEFINITION_VERSION)?);
 
         let routes = get_routes(&open_api.paths)?;
+        let updated_routes =
+            route_transformations::update_routes_with_cors_middleware(routes)?;
 
         Ok(HttpApiDefinitionRequest {
             id: api_definition_id,
             version: api_definition_version,
-            routes,
+            routes: updated_routes,
             draft: true,
         })
     }
@@ -369,36 +371,6 @@ mod internal {
 
     pub(crate) fn get_path_pattern(path: &str) -> Result<AllPathPatterns, String> {
         AllPathPatterns::parse(path)
-    }
-
-
-    // For those endpoints, which is configured with a middleware `cors` make
-    // sure a corresponding OPTIONS method is enabled
-    pub(crate) fn update_routes_with_cors_middleware(routes: Vec<Route>) -> Result<Vec<Route>, String> {
-        let mut updated_routes = routes.clone();
-
-        for route in routes.iter() {
-            // Check if the route binding contains CORS middleware
-            if let GatewayBinding::Static(StaticBinding::Middleware(HttpMiddleware::Cors(preflight))) = &route.binding {
-                // Attempt to retrieve CORS middleware
-                let path = route.path.clone();
-                let method = route.method.clone();
-
-                if method != MethodPattern::Options {
-                    return Err(format!("Invalid route for {}. CORS binding is only supported for OPTIONS method", path));
-                } else {
-                    updated_routes.iter_mut().for_each(|r| {
-                        if r.path == path && r.method != MethodPattern::Options {
-                            if let GatewayBinding::Worker(worker_binding) = &mut r.binding {
-                                worker_binding.add_middleware(Middleware::Http(HttpMiddleware::Cors(preflight.clone())));
-                            };
-                        }
-                    });
-                }
-            }
-        }
-
-        Ok(updated_routes)
     }
 }
 

@@ -15,9 +15,9 @@ pub struct WorkerBinding {
 impl WorkerBinding {
     pub fn add_middleware(&mut self, middleware: Middleware) {
         if let Some(middlewares) = &mut self.middleware {
-            middlewares.push(middleware);
+            middlewares.add(middleware);
         } else {
-            self.middleware = Some(vec![middleware]);
+            self.middleware = Some(Middlewares(vec![middleware]));
         }
     }
 }

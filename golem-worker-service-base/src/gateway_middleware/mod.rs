@@ -16,6 +16,10 @@ mod http;
 pub struct Middlewares(pub Vec<Middleware>);
 
 impl Middlewares {
+    pub fn add(&mut self, middleware: Middleware) {
+        self.0.push(middleware);
+    }
+
     pub fn get_cors(&self) -> Option<CorsPreflight> {
         self.0.iter().find_map(|m| m.get_cors())
     }

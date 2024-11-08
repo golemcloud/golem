@@ -4,21 +4,21 @@ use crate::gateway_middleware::{HttpMiddleware, Middleware};
 
 // For those resources, with CORS enabled through OPTIONS method,
 // update the middlewares of all the endpoints accessing that resource
-pub fn update_routes_with_cors_middleware(routes: Vec<Route>) -> Result<Vec<Route>, String> {
+pub fn  update_routes_with_cors_middleware(routes: Vec<Route>) -> Result<Vec<Route>, String> {
     let mut updated_routes = routes.clone();
 
     for route in routes.iter() {
         // Check if the route binding contains CORS middleware
-        if let GatewayBinding::Static(StaticBinding::Middleware(HttpMiddleware::Cors(preflight))) = &route.binding {
+        if let Some(HttpMiddleware::Cors(preflight)) = &route.binding.get_http_cors() {
             // Attempt to retrieve CORS middleware
-            let path = route.path.clone();
-            let method = route.method.clone();
+            let path = &route.path;
+            let method = &route.method;
 
-            if method != MethodPattern::Options {
+            if method != &MethodPattern::Options {
                 return Err(format!("Invalid route for {}. CORS binding is only supported for OPTIONS method", path));
             } else {
                 updated_routes.iter_mut().for_each(|r| {
-                    if r.path == path && r.method != MethodPattern::Options {
+                    if &r.path == path && method != &MethodPattern::Options {
                         if let GatewayBinding::Worker(worker_binding) = &mut r.binding {
                             worker_binding.add_middleware(Middleware::Http(HttpMiddleware::Cors(preflight.clone())));
                         };
