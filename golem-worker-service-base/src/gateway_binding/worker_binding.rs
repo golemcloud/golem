@@ -1,5 +1,5 @@
 use crate::gateway_binding::WorkerBindingCompiled;
-use crate::gateway_middleware::Middlewares;
+use crate::gateway_middleware::{Middleware, Middlewares};
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 
@@ -10,6 +10,16 @@ pub struct WorkerBinding {
     pub idempotency_key: Option<Expr>,
     pub response: ResponseMapping,
     pub middleware: Option<Middlewares>,
+}
+
+impl WorkerBinding {
+    pub fn add_middleware(&mut self, middleware: Middleware) {
+        if let Some(middlewares) = &mut self.middleware {
+            middlewares.push(middleware);
+        } else {
+            self.middleware = Some(vec![middleware]);
+        }
+    }
 }
 
 // ResponseMapping will consist of actual logic such as invoking worker functions

@@ -1,5 +1,5 @@
 use poem_openapi::Object;
-use rib::{Expr, GetLiteralValue, RibInput};
+use rib::{Expr, GetLiteralValue, RibInput, TypeName};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -172,3 +172,40 @@ impl From<CorsPreflight> for golem_api_grpc::proto::golem::apidefinition::CorsPr
 }
 
 pub struct CorsPreflightExpr(pub Expr);
+
+impl CorsPreflightExpr {
+    pub fn default(middleware: &CorsPreflight) -> CorsPreflightExpr {
+        let mut cors_parameters =  vec![
+            (
+                "Access-Control-Allow-Origin".to_string(),
+                Expr::literal(middleware.allow_origin.as_str()),
+            ),
+            (
+                "Access-Control-Allow-Methods".to_string(),
+                Expr::literal(middleware.allow_methods.as_str()),
+            ),
+            (
+                "Access-Control-Allow-Headers".to_string(),
+                Expr::literal(middleware.allow_headers.as_str()),
+            ),
+        ];
+
+        if let Some(expose_headers) = &middleware.expose_headers {
+            cors_parameters.push((
+                "Access-Control-Expose-Headers".to_string(),
+                Expr::literal(expose_headers.as_str()),
+            ));
+        }
+
+        if let Some(max_age) = &middleware.max_age {
+            cors_parameters.push((
+                "Access-Control-Max-Age".to_string(),
+                Expr::untyped_number_with_type_name(*max_age as f64, TypeName::U64),
+            ));
+        }
+
+        let expr = Expr::record(cors_parameters);
+
+        CorsPreflightExpr(expr)
+    }
+}

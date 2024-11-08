@@ -3,7 +3,7 @@ pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
 pub(crate) use worker_binding_compiled::*;
 
-use crate::gateway_middleware::Middlewares;
+use crate::gateway_middleware::{HttpMiddleware, Middleware, Middlewares};
 pub(crate) use gateway_binding_compiled::*;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
@@ -28,6 +28,13 @@ pub enum GatewayBinding {
 }
 
 impl GatewayBinding {
+
+    pub fn is_http_cors_binding(&self) -> bool {
+        match self {
+            Self::Worker(_) => false,
+            Self::Static(StaticBinding::Middleware(Middleware::Http(HttpMiddleware::Cors(_)))) => true
+        }
+    }
     pub fn get_worker_binding(&self) -> Option<WorkerBinding> {
         match self {
             Self::Worker(worker_binding) => Some(worker_binding.clone()),
