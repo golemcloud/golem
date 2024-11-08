@@ -16,8 +16,8 @@ use crate::durable_host::rdbms::types::DbResultSetEntry;
 use crate::durable_host::rdbms::RdbmsType;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
-use crate::preview2::wasi::rdbms::postgres::Host;
-use crate::preview2::wasi::rdbms::postgres::HostDbConnection;
+use crate::preview2::wasi::rdbms::mysql::Host;
+use crate::preview2::wasi::rdbms::mysql::HostDbConnection;
 use crate::preview2::wasi::rdbms::types::{DbValue, Error};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -30,11 +30,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 #[async_trait]
 impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
-pub struct PostgresDbConnection {
+pub struct MysqlDbConnection {
     pub address: String,
 }
 
-impl PostgresDbConnection {
+impl MysqlDbConnection {
     pub fn new(address: String) -> Self {
         Self { address }
     }
@@ -45,21 +45,21 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     async fn open(
         &mut self,
         address: String,
-    ) -> anyhow::Result<Result<Resource<PostgresDbConnection>, Error>> {
+    ) -> anyhow::Result<Result<Resource<MysqlDbConnection>, Error>> {
         let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("rdbms::postgres::db-connection", "open");
+        record_host_function_call("rdbms::mysql::db-connection", "open");
 
         let worker_id = self.state.owned_worker_id.clone();
         let result = self
             .state
             .rdbms_service
-            .postgres()
+            .mysql()
             .create(&worker_id, &address)
             .await;
 
         match result {
             Ok(_) => {
-                let entry = PostgresDbConnection::new(address);
+                let entry = MysqlDbConnection::new(address);
                 let resource = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(resource))
             }
@@ -69,24 +69,24 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
     async fn query(
         &mut self,
-        self_: Resource<PostgresDbConnection>,
+        self_: Resource<MysqlDbConnection>,
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
         let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("rdbms::postgres::db-connection", "query");
+        record_host_function_call("rdbms::mysql::db-connection", "query");
         let worker_id = self.state.owned_worker_id.clone();
         let address = self
             .as_wasi_view()
             .table()
-            .get::<PostgresDbConnection>(&self_)?
+            .get::<MysqlDbConnection>(&self_)?
             .address
             .clone();
 
         let result = self
             .state
             .rdbms_service
-            .postgres()
+            .mysql()
             .query(
                 &worker_id,
                 &address,
@@ -97,7 +97,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(result) => {
-                let entry = DbResultSetEntry::new(RdbmsType::Postgres, result);
+                let entry = DbResultSetEntry::new(RdbmsType::Mysql, result);
                 let db_result_set = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(db_result_set))
             }
@@ -107,24 +107,24 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
     async fn execute(
         &mut self,
-        self_: Resource<PostgresDbConnection>,
+        self_: Resource<MysqlDbConnection>,
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
         let _permit = self.begin_async_host_function().await?;
-        record_host_function_call("rdbms::postgres::db-connection", "execute");
+        record_host_function_call("rdbms::mysql::db-connection", "execute");
         let worker_id = self.state.owned_worker_id.clone();
         let address = self
             .as_wasi_view()
             .table()
-            .get::<PostgresDbConnection>(&self_)?
+            .get::<MysqlDbConnection>(&self_)?
             .address
             .clone();
 
         let result = self
             .state
             .rdbms_service
-            .postgres()
+            .mysql()
             .execute(
                 &worker_id,
                 &address,
@@ -137,25 +137,25 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         Ok(result)
     }
 
-    fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
-        record_host_function_call("rdbms::postgres::db-connection", "drop");
+    fn drop(&mut self, rep: Resource<MysqlDbConnection>) -> anyhow::Result<()> {
+        record_host_function_call("rdbms::mysql::db-connection", "drop");
 
         // let worker_id = self.state.owned_worker_id.clone();
         // let address = self
         //     .as_wasi_view()
         //     .table()
-        //     .get::<PostgresDbConnection>(&rep)?
+        //     .get::<MysqlDbConnection>(&rep)?
         //     .address
         //     .clone();
         //
         // let _ = self.state
         //     .rdbms_service
-        //     .postgres()
+        //     .mysql()
         //     .drop(&worker_id, &address).await.map_err(Error::Error)?;
 
         self.as_wasi_view()
             .table()
-            .delete::<PostgresDbConnection>(rep)?;
+            .delete::<MysqlDbConnection>(rep)?;
         Ok(())
     }
 }
@@ -165,13 +165,13 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
     async fn open(
         &mut self,
         address: String,
-    ) -> anyhow::Result<Result<Resource<PostgresDbConnection>, Error>> {
+    ) -> anyhow::Result<Result<Resource<MysqlDbConnection>, Error>> {
         (*self).open(address).await
     }
 
     async fn query(
         &mut self,
-        self_: Resource<PostgresDbConnection>,
+        self_: Resource<MysqlDbConnection>,
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
@@ -180,14 +180,14 @@ impl<Ctx: WorkerCtx> HostDbConnection for &mut DurableWorkerCtx<Ctx> {
 
     async fn execute(
         &mut self,
-        self_: Resource<PostgresDbConnection>,
+        self_: Resource<MysqlDbConnection>,
         statement: String,
         params: Vec<DbValue>,
     ) -> anyhow::Result<Result<u64, Error>> {
         (*self).execute(self_, statement, params).await
     }
 
-    fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
+    fn drop(&mut self, rep: Resource<MysqlDbConnection>) -> anyhow::Result<()> {
         (*self).drop(rep)
     }
 }

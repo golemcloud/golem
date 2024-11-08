@@ -77,6 +77,7 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
               import wasi:keyvalue/types@0.1.0;
               import wasi:keyvalue/wasi-keyvalue-error@0.1.0;
               import wasi:logging/logging;
+              import wasi:rdbms/mysql@0.0.1;
               import wasi:rdbms/postgres@0.0.1;
               import wasi:rdbms/types@0.0.1;
           }}
@@ -100,6 +101,7 @@ fn preview2_mod_gen(golem_wit_path: &str) -> String {
             "golem:api/host/get-workers": super::durable_host::golem::GetWorkersEntry,
             "golem:api/oplog/get-oplog": super::durable_host::golem::v11::GetOplogEntry,
             "golem:api/oplog/search-oplog": super::durable_host::golem::v11::SearchOplogEntry,
+            "wasi:rdbms/mysql/db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
             "wasi:rdbms/postgres/db-connection": super::durable_host::rdbms::postgres::PostgresDbConnection,
             "wasi:rdbms/types/db-result-set": super::durable_host::rdbms::types::DbResultSetEntry,
         }},

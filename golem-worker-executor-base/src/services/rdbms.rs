@@ -1,29 +1,42 @@
+use crate::services::rdbms::mysql::{Mysql, MysqlNoOp};
 use crate::services::rdbms::postgres::{Postgres, PostgresDefault};
 use std::error::Error;
 use std::sync::Arc;
 
 pub trait RdbmsService {
+    fn mysql(&self) -> Arc<dyn Mysql + Send + Sync>;
     fn postgres(&self) -> Arc<dyn Postgres + Send + Sync>;
 }
 
 #[derive(Clone)]
 pub struct RdbmsServiceDefault {
+    mysql: Arc<dyn Mysql + Send + Sync>,
     postgres: Arc<dyn Postgres + Send + Sync>,
 }
 
 impl RdbmsServiceDefault {
-    pub fn new(postgres: Arc<dyn Postgres + Send + Sync>) -> Self {
-        Self { postgres }
+    pub fn new(
+        mysql: Arc<dyn Mysql + Send + Sync>,
+        postgres: Arc<dyn Postgres + Send + Sync>,
+    ) -> Self {
+        Self { mysql, postgres }
     }
 }
 
 impl Default for RdbmsServiceDefault {
     fn default() -> Self {
-        Self::new(Arc::new(PostgresDefault::default()))
+        Self::new(
+            Arc::new(MysqlNoOp::default()),
+            Arc::new(PostgresDefault::default()),
+        )
     }
 }
 
 impl RdbmsService for RdbmsServiceDefault {
+    fn mysql(&self) -> Arc<dyn Mysql + Send + Sync> {
+        self.mysql.clone()
+    }
+
     fn postgres(&self) -> Arc<dyn Postgres + Send + Sync> {
         self.postgres.clone()
     }
@@ -52,6 +65,80 @@ pub struct RdbmsPoolKey {
 impl RdbmsPoolKey {
     pub fn new(address: String) -> Self {
         Self { address }
+    }
+}
+
+pub mod mysql {
+    use crate::services::rdbms::types::{DbResultSet, DbValue, EmptyDbResultSet};
+    use async_trait::async_trait;
+    use golem_common::model::OwnedWorkerId;
+    use std::sync::Arc;
+    use tracing::{error, info};
+
+    #[async_trait]
+    pub trait Mysql {
+        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String>;
+
+        async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
+
+        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String>;
+
+        async fn execute(
+            &self,
+            worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            params: Vec<DbValue>,
+        ) -> Result<u64, String>;
+
+        async fn query(
+            &self,
+            worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            params: Vec<DbValue>,
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
+    }
+
+    #[derive(Clone, Default)]
+    pub struct MysqlNoOp {}
+
+    #[async_trait]
+    impl Mysql for MysqlNoOp {
+        async fn create(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
+            info!("create connection - address: {}", address);
+            Ok(())
+        }
+
+        async fn exists(&self, _worker_id: &OwnedWorkerId, _address: &str) -> bool {
+            false
+        }
+
+        async fn remove(&self, _worker_id: &OwnedWorkerId, _address: &str) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        async fn execute(
+            &self,
+            _worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            _params: Vec<DbValue>,
+        ) -> Result<u64, String> {
+            info!("execute - address: {}, statement: {}", address, statement);
+            Ok(0)
+        }
+
+        async fn query(
+            &self,
+            _worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            _params: Vec<DbValue>,
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+            info!("query - address: {}, statement: {}", address, statement);
+            Ok(Arc::new(EmptyDbResultSet::default()))
+        }
     }
 }
 
