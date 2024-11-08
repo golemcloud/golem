@@ -202,18 +202,19 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             worker_calls,
         };
 
-        let worker_binding_type: golem_api_grpc::proto::golem::apidefinition::WorkerBindingType =
-            value
-                .r#type
-                .try_into()
-                .map_err(|_| "Invalid worker binding type".to_string())?;
+        let worker_binding_type = value
+            .r#type
+            .map(golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::try_from)
+            .transpose()
+            .map_err(|_| "Invalid worker binding type".to_string())?
+            .map_or(WorkerBindingType::default(), WorkerBindingType::from);
 
         Ok(CompiledGolemWorkerBinding {
             component_id,
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
-            worker_binding_type: worker_binding_type.into(),
+            worker_binding_type,
         })
     }
 }
@@ -267,7 +268,7 @@ impl TryFrom<CompiledGolemWorkerBinding>
                 compiled_response_expr,
                 response_rib_input,
                 worker_functions_in_response,
-                r#type: r#type.into(),
+                r#type: Some(r#type.into()),
             },
         )
     }

@@ -65,7 +65,7 @@ message WorkerBinding {
   optional golem.rib.Expr worker_name = 2;
   golem.rib.Expr response = 3;
   optional golem.rib.Expr idempotency_key = 4;
-  WorkerBindingType type = 5;
+  optional WorkerBindingType type = 5;
 }
 
 message CompiledWorkerBinding {
@@ -80,7 +80,7 @@ message CompiledWorkerBinding {
   optional golem.rib.RibByteCode compiled_idempotency_key_expr = 9;
   optional golem.rib.RibInputType idempotency_key_rib_input = 10;
   optional golem.rib.WorkerFunctionsInRib worker_functions_in_response = 11;
-  WorkerBindingType type = 12;
+  optional WorkerBindingType type = 12;
 }
 
 enum WorkerBindingType {
