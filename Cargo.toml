@@ -167,9 +167,12 @@ sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "sqlite",
     "postgres",
+    "mysql",
     "uuid",
     "migrate",
     "chrono",
+    "json",
+    "bigdecimal"
 ] }
 strum = "0.26.3"
 strum_macros = "0.26.4"

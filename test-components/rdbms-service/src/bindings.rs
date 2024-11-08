@@ -2026,6 +2026,1030 @@ pub mod wasi {
                 }
             }
         }
+
+        #[allow(dead_code, clippy::all)]
+        pub mod mysql {
+            #[used]
+            #[doc(hidden)]
+            #[cfg(target_arch = "wasm32")]
+            static __FORCE_SECTION_REF: fn() =
+                super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type DbResultSet = super::super::super::wasi::rdbms::types::DbResultSet;
+            pub type DbValue = super::super::super::wasi::rdbms::types::DbValue;
+            pub type Error = super::super::super::wasi::rdbms::types::Error;
+
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct DbConnection {
+                handle: _rt::Resource<DbConnection>,
+            }
+
+            impl DbConnection {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: _rt::Resource::from_handle(handle),
+                    }
+                }
+
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+
+            unsafe impl _rt::WasmResource for DbConnection {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        extern "C" {
+                            #[link_name = "[resource-drop]db-connection"]
+                            fn drop(_: u32);
+                        }
+
+                        drop(_handle);
+                    }
+                }
+            }
+
+            impl DbConnection {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn open(address: &str) -> Result<DbConnection, Error> {
+                    unsafe {
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                        let vec0 = address;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        extern "C" {
+                            #[link_name = "[static]db-connection.open"]
+                            fn wit_import(_: *mut u8, _: usize, _: *mut u8);
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(_: *mut u8, _: usize, _: *mut u8) {
+                            unreachable!()
+                        }
+                        wit_import(ptr0.cast_mut(), len0, ptr1);
+                        let l2 = i32::from(*ptr1.add(0).cast::<u8>());
+                        match l2 {
+                            0 => {
+                                let e = {
+                                    let l3 = *ptr1.add(4).cast::<i32>();
+
+                                    DbConnection::from_handle(l3 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l4 = i32::from(*ptr1.add(4).cast::<u8>());
+                                    use super::super::super::wasi::rdbms::types::Error as V20;
+                                    let v20 = match l4 {
+                                        0 => {
+                                            let e20 = {
+                                                let l5 = *ptr1.add(8).cast::<*mut u8>();
+                                                let l6 = *ptr1.add(12).cast::<usize>();
+                                                let len7 = l6;
+                                                let bytes7 =
+                                                    _rt::Vec::from_raw_parts(l5.cast(), len7, len7);
+
+                                                _rt::string_lift(bytes7)
+                                            };
+                                            V20::ConnectionFailure(e20)
+                                        }
+                                        1 => {
+                                            let e20 = {
+                                                let l8 = *ptr1.add(8).cast::<*mut u8>();
+                                                let l9 = *ptr1.add(12).cast::<usize>();
+                                                let len10 = l9;
+                                                let bytes10 = _rt::Vec::from_raw_parts(
+                                                    l8.cast(),
+                                                    len10,
+                                                    len10,
+                                                );
+
+                                                _rt::string_lift(bytes10)
+                                            };
+                                            V20::QueryParameterFailure(e20)
+                                        }
+                                        2 => {
+                                            let e20 = {
+                                                let l11 = *ptr1.add(8).cast::<*mut u8>();
+                                                let l12 = *ptr1.add(12).cast::<usize>();
+                                                let len13 = l12;
+                                                let bytes13 = _rt::Vec::from_raw_parts(
+                                                    l11.cast(),
+                                                    len13,
+                                                    len13,
+                                                );
+
+                                                _rt::string_lift(bytes13)
+                                            };
+                                            V20::QueryExecutionFailure(e20)
+                                        }
+                                        3 => {
+                                            let e20 = {
+                                                let l14 = *ptr1.add(8).cast::<*mut u8>();
+                                                let l15 = *ptr1.add(12).cast::<usize>();
+                                                let len16 = l15;
+                                                let bytes16 = _rt::Vec::from_raw_parts(
+                                                    l14.cast(),
+                                                    len16,
+                                                    len16,
+                                                );
+
+                                                _rt::string_lift(bytes16)
+                                            };
+                                            V20::QueryResponseFailure(e20)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                            let e20 = {
+                                                let l17 = *ptr1.add(8).cast::<*mut u8>();
+                                                let l18 = *ptr1.add(12).cast::<usize>();
+                                                let len19 = l18;
+                                                let bytes19 = _rt::Vec::from_raw_parts(
+                                                    l17.cast(),
+                                                    len19,
+                                                    len19,
+                                                );
+
+                                                _rt::string_lift(bytes19)
+                                            };
+                                            V20::Other(e20)
+                                        }
+                                    };
+
+                                    v20
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl DbConnection {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn query(
+                    &self,
+                    statement: &str,
+                    params: &[DbValue],
+                ) -> Result<DbResultSet, Error> {
+                    unsafe {
+                        let mut cleanup_list = _rt::Vec::new();
+                        #[repr(align(4))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 16]);
+                        let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                        let vec0 = statement;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let vec17 = params;
+                        let len17 = vec17.len();
+                        let layout17 =
+                            _rt::alloc::Layout::from_size_align_unchecked(vec17.len() * 32, 8);
+                        let result17 = if layout17.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout17).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout17);
+                            }
+                            ptr
+                        } else {
+                            {
+                                ::core::ptr::null_mut()
+                            }
+                        };
+                        for (i, e) in vec17.into_iter().enumerate() {
+                            let base = result17.add(i * 32);
+                            {
+                                use super::super::super::wasi::rdbms::types::DbValue as V16;
+                                match e {
+                                    V16::Primitive(e) => {
+                                        *base.add(0).cast::<u8>() = (0i32) as u8;
+                                        use super::super::super::wasi::rdbms::types::DbValuePrimitive as V7;
+                                        match e {
+                                            V7::Int8(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                *base.add(16).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            V7::Int16(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                *base.add(16).cast::<u16>() =
+                                                    (_rt::as_i32(e)) as u16;
+                                            }
+                                            V7::Int32(e) => {
+                                                *base.add(8).cast::<u8>() = (2i32) as u8;
+                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            V7::Int64(e) => {
+                                                *base.add(8).cast::<u8>() = (3i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Float(e) => {
+                                                *base.add(8).cast::<u8>() = (4i32) as u8;
+                                                *base.add(16).cast::<f32>() = _rt::as_f32(e);
+                                            }
+                                            V7::Double(e) => {
+                                                *base.add(8).cast::<u8>() = (5i32) as u8;
+                                                *base.add(16).cast::<f64>() = _rt::as_f64(e);
+                                            }
+                                            V7::Decimal(e) => {
+                                                *base.add(8).cast::<u8>() = (6i32) as u8;
+                                                let vec1 = e;
+                                                let ptr1 = vec1.as_ptr().cast::<u8>();
+                                                let len1 = vec1.len();
+                                                *base.add(20).cast::<usize>() = len1;
+                                                *base.add(16).cast::<*mut u8>() = ptr1.cast_mut();
+                                            }
+                                            V7::Boolean(e) => {
+                                                *base.add(8).cast::<u8>() = (7i32) as u8;
+                                                *base.add(16).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                })
+                                                    as u8;
+                                            }
+                                            V7::Timestamp(e) => {
+                                                *base.add(8).cast::<u8>() = (8i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Date(e) => {
+                                                *base.add(8).cast::<u8>() = (9i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Time(e) => {
+                                                *base.add(8).cast::<u8>() = (10i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Interval(e) => {
+                                                *base.add(8).cast::<u8>() = (11i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Text(e) => {
+                                                *base.add(8).cast::<u8>() = (12i32) as u8;
+                                                let vec2 = e;
+                                                let ptr2 = vec2.as_ptr().cast::<u8>();
+                                                let len2 = vec2.len();
+                                                *base.add(20).cast::<usize>() = len2;
+                                                *base.add(16).cast::<*mut u8>() = ptr2.cast_mut();
+                                            }
+                                            V7::Blob(e) => {
+                                                *base.add(8).cast::<u8>() = (13i32) as u8;
+                                                let vec3 = e;
+                                                let ptr3 = vec3.as_ptr().cast::<u8>();
+                                                let len3 = vec3.len();
+                                                *base.add(20).cast::<usize>() = len3;
+                                                *base.add(16).cast::<*mut u8>() = ptr3.cast_mut();
+                                            }
+                                            V7::Json(e) => {
+                                                *base.add(8).cast::<u8>() = (14i32) as u8;
+                                                let vec4 = e;
+                                                let ptr4 = vec4.as_ptr().cast::<u8>();
+                                                let len4 = vec4.len();
+                                                *base.add(20).cast::<usize>() = len4;
+                                                *base.add(16).cast::<*mut u8>() = ptr4.cast_mut();
+                                            }
+                                            V7::Xml(e) => {
+                                                *base.add(8).cast::<u8>() = (15i32) as u8;
+                                                let vec5 = e;
+                                                let ptr5 = vec5.as_ptr().cast::<u8>();
+                                                let len5 = vec5.len();
+                                                *base.add(20).cast::<usize>() = len5;
+                                                *base.add(16).cast::<*mut u8>() = ptr5.cast_mut();
+                                            }
+                                            V7::Uuid(e) => {
+                                                *base.add(8).cast::<u8>() = (16i32) as u8;
+                                                let (t6_0, t6_1) = e;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(t6_0);
+                                                *base.add(24).cast::<i64>() = _rt::as_i64(t6_1);
+                                            }
+                                            V7::DbNull => {
+                                                *base.add(8).cast::<u8>() = (17i32) as u8;
+                                            }
+                                        }
+                                    }
+                                    V16::Array(e) => {
+                                        *base.add(0).cast::<u8>() = (1i32) as u8;
+                                        let vec15 = e;
+                                        let len15 = vec15.len();
+                                        let layout15 =
+                                            _rt::alloc::Layout::from_size_align_unchecked(
+                                                vec15.len() * 24,
+                                                8,
+                                            );
+                                        let result15 = if layout15.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout15).cast::<u8>();
+                                            if ptr.is_null() {
+                                                _rt::alloc::handle_alloc_error(layout15);
+                                            }
+                                            ptr
+                                        } else {
+                                            {
+                                                ::core::ptr::null_mut()
+                                            }
+                                        };
+                                        for (i, e) in vec15.into_iter().enumerate() {
+                                            let base = result15.add(i * 24);
+                                            {
+                                                use super::super::super::wasi::rdbms::types::DbValuePrimitive as V14;
+                                                match e {
+                                                    V14::Int8(e) => {
+                                                        *base.add(0).cast::<u8>() = (0i32) as u8;
+                                                        *base.add(8).cast::<u8>() =
+                                                            (_rt::as_i32(e)) as u8;
+                                                    }
+                                                    V14::Int16(e) => {
+                                                        *base.add(0).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(8).cast::<u16>() =
+                                                            (_rt::as_i32(e)) as u16;
+                                                    }
+                                                    V14::Int32(e) => {
+                                                        *base.add(0).cast::<u8>() = (2i32) as u8;
+                                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    V14::Int64(e) => {
+                                                        *base.add(0).cast::<u8>() = (3i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Float(e) => {
+                                                        *base.add(0).cast::<u8>() = (4i32) as u8;
+                                                        *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                                    }
+                                                    V14::Double(e) => {
+                                                        *base.add(0).cast::<u8>() = (5i32) as u8;
+                                                        *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                                    }
+                                                    V14::Decimal(e) => {
+                                                        *base.add(0).cast::<u8>() = (6i32) as u8;
+                                                        let vec8 = e;
+                                                        let ptr8 = vec8.as_ptr().cast::<u8>();
+                                                        let len8 = vec8.len();
+                                                        *base.add(12).cast::<usize>() = len8;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr8.cast_mut();
+                                                    }
+                                                    V14::Boolean(e) => {
+                                                        *base.add(0).cast::<u8>() = (7i32) as u8;
+                                                        *base.add(8).cast::<u8>() = (match e {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    V14::Timestamp(e) => {
+                                                        *base.add(0).cast::<u8>() = (8i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Date(e) => {
+                                                        *base.add(0).cast::<u8>() = (9i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Time(e) => {
+                                                        *base.add(0).cast::<u8>() = (10i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Interval(e) => {
+                                                        *base.add(0).cast::<u8>() = (11i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Text(e) => {
+                                                        *base.add(0).cast::<u8>() = (12i32) as u8;
+                                                        let vec9 = e;
+                                                        let ptr9 = vec9.as_ptr().cast::<u8>();
+                                                        let len9 = vec9.len();
+                                                        *base.add(12).cast::<usize>() = len9;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr9.cast_mut();
+                                                    }
+                                                    V14::Blob(e) => {
+                                                        *base.add(0).cast::<u8>() = (13i32) as u8;
+                                                        let vec10 = e;
+                                                        let ptr10 = vec10.as_ptr().cast::<u8>();
+                                                        let len10 = vec10.len();
+                                                        *base.add(12).cast::<usize>() = len10;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr10.cast_mut();
+                                                    }
+                                                    V14::Json(e) => {
+                                                        *base.add(0).cast::<u8>() = (14i32) as u8;
+                                                        let vec11 = e;
+                                                        let ptr11 = vec11.as_ptr().cast::<u8>();
+                                                        let len11 = vec11.len();
+                                                        *base.add(12).cast::<usize>() = len11;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr11.cast_mut();
+                                                    }
+                                                    V14::Xml(e) => {
+                                                        *base.add(0).cast::<u8>() = (15i32) as u8;
+                                                        let vec12 = e;
+                                                        let ptr12 = vec12.as_ptr().cast::<u8>();
+                                                        let len12 = vec12.len();
+                                                        *base.add(12).cast::<usize>() = len12;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr12.cast_mut();
+                                                    }
+                                                    V14::Uuid(e) => {
+                                                        *base.add(0).cast::<u8>() = (16i32) as u8;
+                                                        let (t13_0, t13_1) = e;
+                                                        *base.add(8).cast::<i64>() =
+                                                            _rt::as_i64(t13_0);
+                                                        *base.add(16).cast::<i64>() =
+                                                            _rt::as_i64(t13_1);
+                                                    }
+                                                    V14::DbNull => {
+                                                        *base.add(0).cast::<u8>() = (17i32) as u8;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        *base.add(12).cast::<usize>() = len15;
+                                        *base.add(8).cast::<*mut u8>() = result15;
+                                        cleanup_list.extend_from_slice(&[(result15, layout15)]);
+                                    }
+                                }
+                            }
+                        }
+                        let ptr18 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        extern "C" {
+                            #[link_name = "[method]db-connection.query"]
+                            fn wit_import(
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                            );
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                            result17,
+                            len17,
+                            ptr18,
+                        );
+                        let l19 = i32::from(*ptr18.add(0).cast::<u8>());
+                        if layout17.size() != 0 {
+                            _rt::alloc::dealloc(result17.cast(), layout17);
+                        }
+                        for (ptr, layout) in cleanup_list {
+                            if layout.size() != 0 {
+                                _rt::alloc::dealloc(ptr.cast(), layout);
+                            }
+                        }
+                        match l19 {
+                            0 => {
+                                let e = {
+                                    let l20 = *ptr18.add(4).cast::<i32>();
+
+                                    super::super::super::wasi::rdbms::types::DbResultSet::from_handle(l20 as u32)
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l21 = i32::from(*ptr18.add(4).cast::<u8>());
+                                    use super::super::super::wasi::rdbms::types::Error as V37;
+                                    let v37 = match l21 {
+                                        0 => {
+                                            let e37 = {
+                                                let l22 = *ptr18.add(8).cast::<*mut u8>();
+                                                let l23 = *ptr18.add(12).cast::<usize>();
+                                                let len24 = l23;
+                                                let bytes24 = _rt::Vec::from_raw_parts(
+                                                    l22.cast(),
+                                                    len24,
+                                                    len24,
+                                                );
+
+                                                _rt::string_lift(bytes24)
+                                            };
+                                            V37::ConnectionFailure(e37)
+                                        }
+                                        1 => {
+                                            let e37 = {
+                                                let l25 = *ptr18.add(8).cast::<*mut u8>();
+                                                let l26 = *ptr18.add(12).cast::<usize>();
+                                                let len27 = l26;
+                                                let bytes27 = _rt::Vec::from_raw_parts(
+                                                    l25.cast(),
+                                                    len27,
+                                                    len27,
+                                                );
+
+                                                _rt::string_lift(bytes27)
+                                            };
+                                            V37::QueryParameterFailure(e37)
+                                        }
+                                        2 => {
+                                            let e37 = {
+                                                let l28 = *ptr18.add(8).cast::<*mut u8>();
+                                                let l29 = *ptr18.add(12).cast::<usize>();
+                                                let len30 = l29;
+                                                let bytes30 = _rt::Vec::from_raw_parts(
+                                                    l28.cast(),
+                                                    len30,
+                                                    len30,
+                                                );
+
+                                                _rt::string_lift(bytes30)
+                                            };
+                                            V37::QueryExecutionFailure(e37)
+                                        }
+                                        3 => {
+                                            let e37 = {
+                                                let l31 = *ptr18.add(8).cast::<*mut u8>();
+                                                let l32 = *ptr18.add(12).cast::<usize>();
+                                                let len33 = l32;
+                                                let bytes33 = _rt::Vec::from_raw_parts(
+                                                    l31.cast(),
+                                                    len33,
+                                                    len33,
+                                                );
+
+                                                _rt::string_lift(bytes33)
+                                            };
+                                            V37::QueryResponseFailure(e37)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                            let e37 = {
+                                                let l34 = *ptr18.add(8).cast::<*mut u8>();
+                                                let l35 = *ptr18.add(12).cast::<usize>();
+                                                let len36 = l35;
+                                                let bytes36 = _rt::Vec::from_raw_parts(
+                                                    l34.cast(),
+                                                    len36,
+                                                    len36,
+                                                );
+
+                                                _rt::string_lift(bytes36)
+                                            };
+                                            V37::Other(e37)
+                                        }
+                                    };
+
+                                    v37
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+            impl DbConnection {
+                #[allow(unused_unsafe, clippy::all)]
+                pub fn execute(&self, statement: &str, params: &[DbValue]) -> Result<u64, Error> {
+                    unsafe {
+                        let mut cleanup_list = _rt::Vec::new();
+                        #[repr(align(8))]
+                        struct RetArea([::core::mem::MaybeUninit<u8>; 24]);
+                        let mut ret_area = RetArea([::core::mem::MaybeUninit::uninit(); 24]);
+                        let vec0 = statement;
+                        let ptr0 = vec0.as_ptr().cast::<u8>();
+                        let len0 = vec0.len();
+                        let vec17 = params;
+                        let len17 = vec17.len();
+                        let layout17 =
+                            _rt::alloc::Layout::from_size_align_unchecked(vec17.len() * 32, 8);
+                        let result17 = if layout17.size() != 0 {
+                            let ptr = _rt::alloc::alloc(layout17).cast::<u8>();
+                            if ptr.is_null() {
+                                _rt::alloc::handle_alloc_error(layout17);
+                            }
+                            ptr
+                        } else {
+                            {
+                                ::core::ptr::null_mut()
+                            }
+                        };
+                        for (i, e) in vec17.into_iter().enumerate() {
+                            let base = result17.add(i * 32);
+                            {
+                                use super::super::super::wasi::rdbms::types::DbValue as V16;
+                                match e {
+                                    V16::Primitive(e) => {
+                                        *base.add(0).cast::<u8>() = (0i32) as u8;
+                                        use super::super::super::wasi::rdbms::types::DbValuePrimitive as V7;
+                                        match e {
+                                            V7::Int8(e) => {
+                                                *base.add(8).cast::<u8>() = (0i32) as u8;
+                                                *base.add(16).cast::<u8>() = (_rt::as_i32(e)) as u8;
+                                            }
+                                            V7::Int16(e) => {
+                                                *base.add(8).cast::<u8>() = (1i32) as u8;
+                                                *base.add(16).cast::<u16>() =
+                                                    (_rt::as_i32(e)) as u16;
+                                            }
+                                            V7::Int32(e) => {
+                                                *base.add(8).cast::<u8>() = (2i32) as u8;
+                                                *base.add(16).cast::<i32>() = _rt::as_i32(e);
+                                            }
+                                            V7::Int64(e) => {
+                                                *base.add(8).cast::<u8>() = (3i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Float(e) => {
+                                                *base.add(8).cast::<u8>() = (4i32) as u8;
+                                                *base.add(16).cast::<f32>() = _rt::as_f32(e);
+                                            }
+                                            V7::Double(e) => {
+                                                *base.add(8).cast::<u8>() = (5i32) as u8;
+                                                *base.add(16).cast::<f64>() = _rt::as_f64(e);
+                                            }
+                                            V7::Decimal(e) => {
+                                                *base.add(8).cast::<u8>() = (6i32) as u8;
+                                                let vec1 = e;
+                                                let ptr1 = vec1.as_ptr().cast::<u8>();
+                                                let len1 = vec1.len();
+                                                *base.add(20).cast::<usize>() = len1;
+                                                *base.add(16).cast::<*mut u8>() = ptr1.cast_mut();
+                                            }
+                                            V7::Boolean(e) => {
+                                                *base.add(8).cast::<u8>() = (7i32) as u8;
+                                                *base.add(16).cast::<u8>() = (match e {
+                                                    true => 1,
+                                                    false => 0,
+                                                })
+                                                    as u8;
+                                            }
+                                            V7::Timestamp(e) => {
+                                                *base.add(8).cast::<u8>() = (8i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Date(e) => {
+                                                *base.add(8).cast::<u8>() = (9i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Time(e) => {
+                                                *base.add(8).cast::<u8>() = (10i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Interval(e) => {
+                                                *base.add(8).cast::<u8>() = (11i32) as u8;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(e);
+                                            }
+                                            V7::Text(e) => {
+                                                *base.add(8).cast::<u8>() = (12i32) as u8;
+                                                let vec2 = e;
+                                                let ptr2 = vec2.as_ptr().cast::<u8>();
+                                                let len2 = vec2.len();
+                                                *base.add(20).cast::<usize>() = len2;
+                                                *base.add(16).cast::<*mut u8>() = ptr2.cast_mut();
+                                            }
+                                            V7::Blob(e) => {
+                                                *base.add(8).cast::<u8>() = (13i32) as u8;
+                                                let vec3 = e;
+                                                let ptr3 = vec3.as_ptr().cast::<u8>();
+                                                let len3 = vec3.len();
+                                                *base.add(20).cast::<usize>() = len3;
+                                                *base.add(16).cast::<*mut u8>() = ptr3.cast_mut();
+                                            }
+                                            V7::Json(e) => {
+                                                *base.add(8).cast::<u8>() = (14i32) as u8;
+                                                let vec4 = e;
+                                                let ptr4 = vec4.as_ptr().cast::<u8>();
+                                                let len4 = vec4.len();
+                                                *base.add(20).cast::<usize>() = len4;
+                                                *base.add(16).cast::<*mut u8>() = ptr4.cast_mut();
+                                            }
+                                            V7::Xml(e) => {
+                                                *base.add(8).cast::<u8>() = (15i32) as u8;
+                                                let vec5 = e;
+                                                let ptr5 = vec5.as_ptr().cast::<u8>();
+                                                let len5 = vec5.len();
+                                                *base.add(20).cast::<usize>() = len5;
+                                                *base.add(16).cast::<*mut u8>() = ptr5.cast_mut();
+                                            }
+                                            V7::Uuid(e) => {
+                                                *base.add(8).cast::<u8>() = (16i32) as u8;
+                                                let (t6_0, t6_1) = e;
+                                                *base.add(16).cast::<i64>() = _rt::as_i64(t6_0);
+                                                *base.add(24).cast::<i64>() = _rt::as_i64(t6_1);
+                                            }
+                                            V7::DbNull => {
+                                                *base.add(8).cast::<u8>() = (17i32) as u8;
+                                            }
+                                        }
+                                    }
+                                    V16::Array(e) => {
+                                        *base.add(0).cast::<u8>() = (1i32) as u8;
+                                        let vec15 = e;
+                                        let len15 = vec15.len();
+                                        let layout15 =
+                                            _rt::alloc::Layout::from_size_align_unchecked(
+                                                vec15.len() * 24,
+                                                8,
+                                            );
+                                        let result15 = if layout15.size() != 0 {
+                                            let ptr = _rt::alloc::alloc(layout15).cast::<u8>();
+                                            if ptr.is_null() {
+                                                _rt::alloc::handle_alloc_error(layout15);
+                                            }
+                                            ptr
+                                        } else {
+                                            {
+                                                ::core::ptr::null_mut()
+                                            }
+                                        };
+                                        for (i, e) in vec15.into_iter().enumerate() {
+                                            let base = result15.add(i * 24);
+                                            {
+                                                use super::super::super::wasi::rdbms::types::DbValuePrimitive as V14;
+                                                match e {
+                                                    V14::Int8(e) => {
+                                                        *base.add(0).cast::<u8>() = (0i32) as u8;
+                                                        *base.add(8).cast::<u8>() =
+                                                            (_rt::as_i32(e)) as u8;
+                                                    }
+                                                    V14::Int16(e) => {
+                                                        *base.add(0).cast::<u8>() = (1i32) as u8;
+                                                        *base.add(8).cast::<u16>() =
+                                                            (_rt::as_i32(e)) as u16;
+                                                    }
+                                                    V14::Int32(e) => {
+                                                        *base.add(0).cast::<u8>() = (2i32) as u8;
+                                                        *base.add(8).cast::<i32>() = _rt::as_i32(e);
+                                                    }
+                                                    V14::Int64(e) => {
+                                                        *base.add(0).cast::<u8>() = (3i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Float(e) => {
+                                                        *base.add(0).cast::<u8>() = (4i32) as u8;
+                                                        *base.add(8).cast::<f32>() = _rt::as_f32(e);
+                                                    }
+                                                    V14::Double(e) => {
+                                                        *base.add(0).cast::<u8>() = (5i32) as u8;
+                                                        *base.add(8).cast::<f64>() = _rt::as_f64(e);
+                                                    }
+                                                    V14::Decimal(e) => {
+                                                        *base.add(0).cast::<u8>() = (6i32) as u8;
+                                                        let vec8 = e;
+                                                        let ptr8 = vec8.as_ptr().cast::<u8>();
+                                                        let len8 = vec8.len();
+                                                        *base.add(12).cast::<usize>() = len8;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr8.cast_mut();
+                                                    }
+                                                    V14::Boolean(e) => {
+                                                        *base.add(0).cast::<u8>() = (7i32) as u8;
+                                                        *base.add(8).cast::<u8>() = (match e {
+                                                            true => 1,
+                                                            false => 0,
+                                                        })
+                                                            as u8;
+                                                    }
+                                                    V14::Timestamp(e) => {
+                                                        *base.add(0).cast::<u8>() = (8i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Date(e) => {
+                                                        *base.add(0).cast::<u8>() = (9i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Time(e) => {
+                                                        *base.add(0).cast::<u8>() = (10i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Interval(e) => {
+                                                        *base.add(0).cast::<u8>() = (11i32) as u8;
+                                                        *base.add(8).cast::<i64>() = _rt::as_i64(e);
+                                                    }
+                                                    V14::Text(e) => {
+                                                        *base.add(0).cast::<u8>() = (12i32) as u8;
+                                                        let vec9 = e;
+                                                        let ptr9 = vec9.as_ptr().cast::<u8>();
+                                                        let len9 = vec9.len();
+                                                        *base.add(12).cast::<usize>() = len9;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr9.cast_mut();
+                                                    }
+                                                    V14::Blob(e) => {
+                                                        *base.add(0).cast::<u8>() = (13i32) as u8;
+                                                        let vec10 = e;
+                                                        let ptr10 = vec10.as_ptr().cast::<u8>();
+                                                        let len10 = vec10.len();
+                                                        *base.add(12).cast::<usize>() = len10;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr10.cast_mut();
+                                                    }
+                                                    V14::Json(e) => {
+                                                        *base.add(0).cast::<u8>() = (14i32) as u8;
+                                                        let vec11 = e;
+                                                        let ptr11 = vec11.as_ptr().cast::<u8>();
+                                                        let len11 = vec11.len();
+                                                        *base.add(12).cast::<usize>() = len11;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr11.cast_mut();
+                                                    }
+                                                    V14::Xml(e) => {
+                                                        *base.add(0).cast::<u8>() = (15i32) as u8;
+                                                        let vec12 = e;
+                                                        let ptr12 = vec12.as_ptr().cast::<u8>();
+                                                        let len12 = vec12.len();
+                                                        *base.add(12).cast::<usize>() = len12;
+                                                        *base.add(8).cast::<*mut u8>() =
+                                                            ptr12.cast_mut();
+                                                    }
+                                                    V14::Uuid(e) => {
+                                                        *base.add(0).cast::<u8>() = (16i32) as u8;
+                                                        let (t13_0, t13_1) = e;
+                                                        *base.add(8).cast::<i64>() =
+                                                            _rt::as_i64(t13_0);
+                                                        *base.add(16).cast::<i64>() =
+                                                            _rt::as_i64(t13_1);
+                                                    }
+                                                    V14::DbNull => {
+                                                        *base.add(0).cast::<u8>() = (17i32) as u8;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        *base.add(12).cast::<usize>() = len15;
+                                        *base.add(8).cast::<*mut u8>() = result15;
+                                        cleanup_list.extend_from_slice(&[(result15, layout15)]);
+                                    }
+                                }
+                            }
+                        }
+                        let ptr18 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:rdbms/mysql@0.0.1")]
+                        extern "C" {
+                            #[link_name = "[method]db-connection.execute"]
+                            fn wit_import(
+                                _: i32,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                                _: usize,
+                                _: *mut u8,
+                            );
+                        }
+
+                        #[cfg(not(target_arch = "wasm32"))]
+                        fn wit_import(
+                            _: i32,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                            _: usize,
+                            _: *mut u8,
+                        ) {
+                            unreachable!()
+                        }
+                        wit_import(
+                            (self).handle() as i32,
+                            ptr0.cast_mut(),
+                            len0,
+                            result17,
+                            len17,
+                            ptr18,
+                        );
+                        let l19 = i32::from(*ptr18.add(0).cast::<u8>());
+                        if layout17.size() != 0 {
+                            _rt::alloc::dealloc(result17.cast(), layout17);
+                        }
+                        for (ptr, layout) in cleanup_list {
+                            if layout.size() != 0 {
+                                _rt::alloc::dealloc(ptr.cast(), layout);
+                            }
+                        }
+                        match l19 {
+                            0 => {
+                                let e = {
+                                    let l20 = *ptr18.add(8).cast::<i64>();
+
+                                    l20 as u64
+                                };
+                                Ok(e)
+                            }
+                            1 => {
+                                let e = {
+                                    let l21 = i32::from(*ptr18.add(8).cast::<u8>());
+                                    use super::super::super::wasi::rdbms::types::Error as V37;
+                                    let v37 = match l21 {
+                                        0 => {
+                                            let e37 = {
+                                                let l22 = *ptr18.add(12).cast::<*mut u8>();
+                                                let l23 = *ptr18.add(16).cast::<usize>();
+                                                let len24 = l23;
+                                                let bytes24 = _rt::Vec::from_raw_parts(
+                                                    l22.cast(),
+                                                    len24,
+                                                    len24,
+                                                );
+
+                                                _rt::string_lift(bytes24)
+                                            };
+                                            V37::ConnectionFailure(e37)
+                                        }
+                                        1 => {
+                                            let e37 = {
+                                                let l25 = *ptr18.add(12).cast::<*mut u8>();
+                                                let l26 = *ptr18.add(16).cast::<usize>();
+                                                let len27 = l26;
+                                                let bytes27 = _rt::Vec::from_raw_parts(
+                                                    l25.cast(),
+                                                    len27,
+                                                    len27,
+                                                );
+
+                                                _rt::string_lift(bytes27)
+                                            };
+                                            V37::QueryParameterFailure(e37)
+                                        }
+                                        2 => {
+                                            let e37 = {
+                                                let l28 = *ptr18.add(12).cast::<*mut u8>();
+                                                let l29 = *ptr18.add(16).cast::<usize>();
+                                                let len30 = l29;
+                                                let bytes30 = _rt::Vec::from_raw_parts(
+                                                    l28.cast(),
+                                                    len30,
+                                                    len30,
+                                                );
+
+                                                _rt::string_lift(bytes30)
+                                            };
+                                            V37::QueryExecutionFailure(e37)
+                                        }
+                                        3 => {
+                                            let e37 = {
+                                                let l31 = *ptr18.add(12).cast::<*mut u8>();
+                                                let l32 = *ptr18.add(16).cast::<usize>();
+                                                let len33 = l32;
+                                                let bytes33 = _rt::Vec::from_raw_parts(
+                                                    l31.cast(),
+                                                    len33,
+                                                    len33,
+                                                );
+
+                                                _rt::string_lift(bytes33)
+                                            };
+                                            V37::QueryResponseFailure(e37)
+                                        }
+                                        n => {
+                                            debug_assert_eq!(n, 4, "invalid enum discriminant");
+                                            let e37 = {
+                                                let l34 = *ptr18.add(12).cast::<*mut u8>();
+                                                let l35 = *ptr18.add(16).cast::<usize>();
+                                                let len36 = l35;
+                                                let bytes36 = _rt::Vec::from_raw_parts(
+                                                    l34.cast(),
+                                                    len36,
+                                                    len36,
+                                                );
+
+                                                _rt::string_lift(bytes36)
+                                            };
+                                            V37::Other(e37)
+                                        }
+                                    };
+
+                                    v37
+                                };
+                                Err(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 #[allow(dead_code)]
@@ -2043,6 +3067,20 @@ pub mod exports {
                     super::super::super::super::__link_custom_section_describing_imports;
                 use super::super::super::super::_rt;
                 pub type DbRow = super::super::super::super::wasi::rdbms::types::DbRow;
+                pub type DbColumn = super::super::super::super::wasi::rdbms::types::DbColumn;
+                #[derive(Clone)]
+                pub struct QueryResult {
+                    pub columns: _rt::Vec<DbColumn>,
+                    pub rows: _rt::Vec<DbRow>,
+                }
+                impl ::core::fmt::Debug for QueryResult {
+                    fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                        f.debug_struct("QueryResult")
+                            .field("columns", &self.columns)
+                            .field("rows", &self.rows)
+                            .finish()
+                    }
+                }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
                 pub unsafe fn _export_check_cabi<T: Guest>() -> *mut u8 {
@@ -2067,7 +3105,7 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_execute_cabi<T: Guest>(
+                pub unsafe fn _export_mysql_execute_cabi<T: Guest>(
                     arg0: *mut u8,
                     arg1: usize,
                     arg2: *mut u8,
@@ -2093,7 +3131,7 @@ pub mod exports {
                         result4.push(e4);
                     }
                     _rt::cabi_dealloc(base4, len4 * 8, 4);
-                    let result5 = T::execute(_rt::string_lift(bytes0), result4);
+                    let result5 = T::mysql_execute(_rt::string_lift(bytes0), result4);
                     let ptr6 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
                     match result5 {
                         Ok(e) => {
@@ -2114,7 +3152,7 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn __post_return_execute<T: Guest>(arg0: *mut u8) {
+                pub unsafe fn __post_return_mysql_execute<T: Guest>(arg0: *mut u8) {
                     let l0 = i32::from(*arg0.add(0).cast::<u8>());
                     match l0 {
                         0 => (),
@@ -2127,7 +3165,7 @@ pub mod exports {
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn _export_query_cabi<T: Guest>(
+                pub unsafe fn _export_mysql_query_cabi<T: Guest>(
                     arg0: *mut u8,
                     arg1: usize,
                     arg2: *mut u8,
@@ -2153,19 +3191,23 @@ pub mod exports {
                         result4.push(e4);
                     }
                     _rt::cabi_dealloc(base4, len4 * 8, 4);
-                    let result5 = T::query(_rt::string_lift(bytes0), result4);
+                    let result5 = T::mysql_query(_rt::string_lift(bytes0), result4);
                     let ptr6 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
                     match result5 {
                         Ok(e) => {
                             *ptr6.add(0).cast::<u8>() = (0i32) as u8;
-                            let vec25 = e;
-                            let len25 = vec25.len();
-                            let layout25 =
-                                _rt::alloc::Layout::from_size_align_unchecked(vec25.len() * 8, 4);
-                            let result25 = if layout25.size() != 0 {
-                                let ptr = _rt::alloc::alloc(layout25).cast::<u8>();
+                            let QueryResult {
+                                columns: columns7,
+                                rows: rows7,
+                            } = e;
+                            let vec14 = columns7;
+                            let len14 = vec14.len();
+                            let layout14 =
+                                _rt::alloc::Layout::from_size_align_unchecked(vec14.len() * 32, 8);
+                            let result14 = if layout14.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout14).cast::<u8>();
                                 if ptr.is_null() {
-                                    _rt::alloc::handle_alloc_error(layout25);
+                                    _rt::alloc::handle_alloc_error(layout14);
                                 }
                                 ptr
                             } else {
@@ -2173,22 +3215,180 @@ pub mod exports {
                                     ::core::ptr::null_mut()
                                 }
                             };
-                            for (i, e) in vec25.into_iter().enumerate() {
-                                let base = result25.add(i * 8);
+                            for (i, e) in vec14.into_iter().enumerate() {
+                                let base = result14.add(i * 32);
+                                {
+                                    let super::super::super::super::wasi::rdbms::types::DbColumn {
+                                        ordinal: ordinal8,
+                                        name: name8,
+                                        db_type: db_type8,
+                                        db_type_name: db_type_name8,
+                                    } = e;
+                                    *base.add(0).cast::<i64>() = _rt::as_i64(ordinal8);
+                                    let vec9 = (name8.into_bytes()).into_boxed_slice();
+                                    let ptr9 = vec9.as_ptr().cast::<u8>();
+                                    let len9 = vec9.len();
+                                    ::core::mem::forget(vec9);
+                                    *base.add(12).cast::<usize>() = len9;
+                                    *base.add(8).cast::<*mut u8>() = ptr9.cast_mut();
+                                    use super::super::super::super::wasi::rdbms::types::DbColumnType as V12;
+                                    match db_type8 {
+                                        V12::Primitive(e) => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                            use super::super::super::super::wasi::rdbms::types::DbColumnTypePrimitive as V10;
+                                            match e {
+                                                V10::Int8 => {
+                                                    *base.add(17).cast::<u8>() = (0i32) as u8;
+                                                }
+                                                V10::Int16 => {
+                                                    *base.add(17).cast::<u8>() = (1i32) as u8;
+                                                }
+                                                V10::Int32 => {
+                                                    *base.add(17).cast::<u8>() = (2i32) as u8;
+                                                }
+                                                V10::Int64 => {
+                                                    *base.add(17).cast::<u8>() = (3i32) as u8;
+                                                }
+                                                V10::Float => {
+                                                    *base.add(17).cast::<u8>() = (4i32) as u8;
+                                                }
+                                                V10::Double => {
+                                                    *base.add(17).cast::<u8>() = (5i32) as u8;
+                                                }
+                                                V10::Decimal => {
+                                                    *base.add(17).cast::<u8>() = (6i32) as u8;
+                                                }
+                                                V10::Boolean => {
+                                                    *base.add(17).cast::<u8>() = (7i32) as u8;
+                                                }
+                                                V10::Timestamp => {
+                                                    *base.add(17).cast::<u8>() = (8i32) as u8;
+                                                }
+                                                V10::Date => {
+                                                    *base.add(17).cast::<u8>() = (9i32) as u8;
+                                                }
+                                                V10::Time => {
+                                                    *base.add(17).cast::<u8>() = (10i32) as u8;
+                                                }
+                                                V10::Interval => {
+                                                    *base.add(17).cast::<u8>() = (11i32) as u8;
+                                                }
+                                                V10::Text => {
+                                                    *base.add(17).cast::<u8>() = (12i32) as u8;
+                                                }
+                                                V10::Blob => {
+                                                    *base.add(17).cast::<u8>() = (13i32) as u8;
+                                                }
+                                                V10::Json => {
+                                                    *base.add(17).cast::<u8>() = (14i32) as u8;
+                                                }
+                                                V10::Xml => {
+                                                    *base.add(17).cast::<u8>() = (15i32) as u8;
+                                                }
+                                                V10::Uuid => {
+                                                    *base.add(17).cast::<u8>() = (16i32) as u8;
+                                                }
+                                            }
+                                        }
+                                        V12::Array(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            use super::super::super::super::wasi::rdbms::types::DbColumnTypePrimitive as V11;
+                                            match e {
+                                                V11::Int8 => {
+                                                    *base.add(17).cast::<u8>() = (0i32) as u8;
+                                                }
+                                                V11::Int16 => {
+                                                    *base.add(17).cast::<u8>() = (1i32) as u8;
+                                                }
+                                                V11::Int32 => {
+                                                    *base.add(17).cast::<u8>() = (2i32) as u8;
+                                                }
+                                                V11::Int64 => {
+                                                    *base.add(17).cast::<u8>() = (3i32) as u8;
+                                                }
+                                                V11::Float => {
+                                                    *base.add(17).cast::<u8>() = (4i32) as u8;
+                                                }
+                                                V11::Double => {
+                                                    *base.add(17).cast::<u8>() = (5i32) as u8;
+                                                }
+                                                V11::Decimal => {
+                                                    *base.add(17).cast::<u8>() = (6i32) as u8;
+                                                }
+                                                V11::Boolean => {
+                                                    *base.add(17).cast::<u8>() = (7i32) as u8;
+                                                }
+                                                V11::Timestamp => {
+                                                    *base.add(17).cast::<u8>() = (8i32) as u8;
+                                                }
+                                                V11::Date => {
+                                                    *base.add(17).cast::<u8>() = (9i32) as u8;
+                                                }
+                                                V11::Time => {
+                                                    *base.add(17).cast::<u8>() = (10i32) as u8;
+                                                }
+                                                V11::Interval => {
+                                                    *base.add(17).cast::<u8>() = (11i32) as u8;
+                                                }
+                                                V11::Text => {
+                                                    *base.add(17).cast::<u8>() = (12i32) as u8;
+                                                }
+                                                V11::Blob => {
+                                                    *base.add(17).cast::<u8>() = (13i32) as u8;
+                                                }
+                                                V11::Json => {
+                                                    *base.add(17).cast::<u8>() = (14i32) as u8;
+                                                }
+                                                V11::Xml => {
+                                                    *base.add(17).cast::<u8>() = (15i32) as u8;
+                                                }
+                                                V11::Uuid => {
+                                                    *base.add(17).cast::<u8>() = (16i32) as u8;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let vec13 = (db_type_name8.into_bytes()).into_boxed_slice();
+                                    let ptr13 = vec13.as_ptr().cast::<u8>();
+                                    let len13 = vec13.len();
+                                    ::core::mem::forget(vec13);
+                                    *base.add(24).cast::<usize>() = len13;
+                                    *base.add(20).cast::<*mut u8>() = ptr13.cast_mut();
+                                }
+                            }
+                            *ptr6.add(8).cast::<usize>() = len14;
+                            *ptr6.add(4).cast::<*mut u8>() = result14;
+                            let vec33 = rows7;
+                            let len33 = vec33.len();
+                            let layout33 =
+                                _rt::alloc::Layout::from_size_align_unchecked(vec33.len() * 8, 4);
+                            let result33 = if layout33.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout33).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout33);
+                                }
+                                ptr
+                            } else {
+                                {
+                                    ::core::ptr::null_mut()
+                                }
+                            };
+                            for (i, e) in vec33.into_iter().enumerate() {
+                                let base = result33.add(i * 8);
                                 {
                                     let super::super::super::super::wasi::rdbms::types::DbRow {
-                                        values: values7,
+                                        values: values15,
                                     } = e;
-                                    let vec24 = values7;
-                                    let len24 = vec24.len();
-                                    let layout24 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec24.len() * 32,
+                                    let vec32 = values15;
+                                    let len32 = vec32.len();
+                                    let layout32 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec32.len() * 32,
                                         8,
                                     );
-                                    let result24 = if layout24.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout24).cast::<u8>();
+                                    let result32 = if layout32.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout32).cast::<u8>();
                                         if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout24);
+                                            _rt::alloc::handle_alloc_error(layout32);
                                         }
                                         ptr
                                     } else {
@@ -2196,64 +3396,64 @@ pub mod exports {
                                             ::core::ptr::null_mut()
                                         }
                                     };
-                                    for (i, e) in vec24.into_iter().enumerate() {
-                                        let base = result24.add(i * 32);
+                                    for (i, e) in vec32.into_iter().enumerate() {
+                                        let base = result32.add(i * 32);
                                         {
-                                            use super::super::super::super::wasi::rdbms::types::DbValue as V23;
+                                            use super::super::super::super::wasi::rdbms::types::DbValue as V31;
                                             match e {
-                                                V23::Primitive(e) => {
+                                                V31::Primitive(e) => {
                                                     *base.add(0).cast::<u8>() = (0i32) as u8;
-                                                    use super::super::super::super::wasi::rdbms::types::DbValuePrimitive as V14;
+                                                    use super::super::super::super::wasi::rdbms::types::DbValuePrimitive as V22;
                                                     match e {
-                                                        V14::Int8(e) => {
+                                                        V22::Int8(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (0i32) as u8;
                                                             *base.add(16).cast::<u8>() =
                                                                 (_rt::as_i32(e)) as u8;
                                                         }
-                                                        V14::Int16(e) => {
+                                                        V22::Int16(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (1i32) as u8;
                                                             *base.add(16).cast::<u16>() =
                                                                 (_rt::as_i32(e)) as u16;
                                                         }
-                                                        V14::Int32(e) => {
+                                                        V22::Int32(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (2i32) as u8;
                                                             *base.add(16).cast::<i32>() =
                                                                 _rt::as_i32(e);
                                                         }
-                                                        V14::Int64(e) => {
+                                                        V22::Int64(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (3i32) as u8;
                                                             *base.add(16).cast::<i64>() =
                                                                 _rt::as_i64(e);
                                                         }
-                                                        V14::Float(e) => {
+                                                        V22::Float(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (4i32) as u8;
                                                             *base.add(16).cast::<f32>() =
                                                                 _rt::as_f32(e);
                                                         }
-                                                        V14::Double(e) => {
+                                                        V22::Double(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (5i32) as u8;
                                                             *base.add(16).cast::<f64>() =
                                                                 _rt::as_f64(e);
                                                         }
-                                                        V14::Decimal(e) => {
+                                                        V22::Decimal(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (6i32) as u8;
-                                                            let vec8 =
+                                                            let vec16 =
                                                                 (e.into_bytes()).into_boxed_slice();
-                                                            let ptr8 = vec8.as_ptr().cast::<u8>();
-                                                            let len8 = vec8.len();
-                                                            ::core::mem::forget(vec8);
-                                                            *base.add(20).cast::<usize>() = len8;
+                                                            let ptr16 = vec16.as_ptr().cast::<u8>();
+                                                            let len16 = vec16.len();
+                                                            ::core::mem::forget(vec16);
+                                                            *base.add(20).cast::<usize>() = len16;
                                                             *base.add(16).cast::<*mut u8>() =
-                                                                ptr8.cast_mut();
+                                                                ptr16.cast_mut();
                                                         }
-                                                        V14::Boolean(e) => {
+                                                        V22::Boolean(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (7i32) as u8;
                                                             *base.add(16).cast::<u8>() = (match e {
@@ -2262,103 +3462,103 @@ pub mod exports {
                                                             })
                                                                 as u8;
                                                         }
-                                                        V14::Timestamp(e) => {
+                                                        V22::Timestamp(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (8i32) as u8;
                                                             *base.add(16).cast::<i64>() =
                                                                 _rt::as_i64(e);
                                                         }
-                                                        V14::Date(e) => {
+                                                        V22::Date(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (9i32) as u8;
                                                             *base.add(16).cast::<i64>() =
                                                                 _rt::as_i64(e);
                                                         }
-                                                        V14::Time(e) => {
+                                                        V22::Time(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (10i32) as u8;
                                                             *base.add(16).cast::<i64>() =
                                                                 _rt::as_i64(e);
                                                         }
-                                                        V14::Interval(e) => {
+                                                        V22::Interval(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (11i32) as u8;
                                                             *base.add(16).cast::<i64>() =
                                                                 _rt::as_i64(e);
                                                         }
-                                                        V14::Text(e) => {
+                                                        V22::Text(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (12i32) as u8;
-                                                            let vec9 =
+                                                            let vec17 =
                                                                 (e.into_bytes()).into_boxed_slice();
-                                                            let ptr9 = vec9.as_ptr().cast::<u8>();
-                                                            let len9 = vec9.len();
-                                                            ::core::mem::forget(vec9);
-                                                            *base.add(20).cast::<usize>() = len9;
+                                                            let ptr17 = vec17.as_ptr().cast::<u8>();
+                                                            let len17 = vec17.len();
+                                                            ::core::mem::forget(vec17);
+                                                            *base.add(20).cast::<usize>() = len17;
                                                             *base.add(16).cast::<*mut u8>() =
-                                                                ptr9.cast_mut();
+                                                                ptr17.cast_mut();
                                                         }
-                                                        V14::Blob(e) => {
+                                                        V22::Blob(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (13i32) as u8;
-                                                            let vec10 = (e).into_boxed_slice();
-                                                            let ptr10 = vec10.as_ptr().cast::<u8>();
-                                                            let len10 = vec10.len();
-                                                            ::core::mem::forget(vec10);
-                                                            *base.add(20).cast::<usize>() = len10;
+                                                            let vec18 = (e).into_boxed_slice();
+                                                            let ptr18 = vec18.as_ptr().cast::<u8>();
+                                                            let len18 = vec18.len();
+                                                            ::core::mem::forget(vec18);
+                                                            *base.add(20).cast::<usize>() = len18;
                                                             *base.add(16).cast::<*mut u8>() =
-                                                                ptr10.cast_mut();
+                                                                ptr18.cast_mut();
                                                         }
-                                                        V14::Json(e) => {
+                                                        V22::Json(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (14i32) as u8;
-                                                            let vec11 =
+                                                            let vec19 =
                                                                 (e.into_bytes()).into_boxed_slice();
-                                                            let ptr11 = vec11.as_ptr().cast::<u8>();
-                                                            let len11 = vec11.len();
-                                                            ::core::mem::forget(vec11);
-                                                            *base.add(20).cast::<usize>() = len11;
+                                                            let ptr19 = vec19.as_ptr().cast::<u8>();
+                                                            let len19 = vec19.len();
+                                                            ::core::mem::forget(vec19);
+                                                            *base.add(20).cast::<usize>() = len19;
                                                             *base.add(16).cast::<*mut u8>() =
-                                                                ptr11.cast_mut();
+                                                                ptr19.cast_mut();
                                                         }
-                                                        V14::Xml(e) => {
+                                                        V22::Xml(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (15i32) as u8;
-                                                            let vec12 =
+                                                            let vec20 =
                                                                 (e.into_bytes()).into_boxed_slice();
-                                                            let ptr12 = vec12.as_ptr().cast::<u8>();
-                                                            let len12 = vec12.len();
-                                                            ::core::mem::forget(vec12);
-                                                            *base.add(20).cast::<usize>() = len12;
+                                                            let ptr20 = vec20.as_ptr().cast::<u8>();
+                                                            let len20 = vec20.len();
+                                                            ::core::mem::forget(vec20);
+                                                            *base.add(20).cast::<usize>() = len20;
                                                             *base.add(16).cast::<*mut u8>() =
-                                                                ptr12.cast_mut();
+                                                                ptr20.cast_mut();
                                                         }
-                                                        V14::Uuid(e) => {
+                                                        V22::Uuid(e) => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (16i32) as u8;
-                                                            let (t13_0, t13_1) = e;
+                                                            let (t21_0, t21_1) = e;
                                                             *base.add(16).cast::<i64>() =
-                                                                _rt::as_i64(t13_0);
+                                                                _rt::as_i64(t21_0);
                                                             *base.add(24).cast::<i64>() =
-                                                                _rt::as_i64(t13_1);
+                                                                _rt::as_i64(t21_1);
                                                         }
-                                                        V14::DbNull => {
+                                                        V22::DbNull => {
                                                             *base.add(8).cast::<u8>() =
                                                                 (17i32) as u8;
                                                         }
                                                     }
                                                 }
-                                                V23::Array(e) => {
+                                                V31::Array(e) => {
                                                     *base.add(0).cast::<u8>() = (1i32) as u8;
-                                                    let vec22 = e;
-                                                    let len22 = vec22.len();
-                                                    let layout22 = _rt::alloc::Layout::from_size_align_unchecked(vec22.len() * 24, 8);
-                                                    let result22 = if layout22.size() != 0 {
-                                                        let ptr = _rt::alloc::alloc(layout22)
+                                                    let vec30 = e;
+                                                    let len30 = vec30.len();
+                                                    let layout30 = _rt::alloc::Layout::from_size_align_unchecked(vec30.len() * 24, 8);
+                                                    let result30 = if layout30.size() != 0 {
+                                                        let ptr = _rt::alloc::alloc(layout30)
                                                             .cast::<u8>();
                                                         if ptr.is_null() {
                                                             _rt::alloc::handle_alloc_error(
-                                                                layout22,
+                                                                layout30,
                                                             );
                                                         }
                                                         ptr
@@ -2367,64 +3567,64 @@ pub mod exports {
                                                             ::core::ptr::null_mut()
                                                         }
                                                     };
-                                                    for (i, e) in vec22.into_iter().enumerate() {
-                                                        let base = result22.add(i * 24);
+                                                    for (i, e) in vec30.into_iter().enumerate() {
+                                                        let base = result30.add(i * 24);
                                                         {
-                                                            use super::super::super::super::wasi::rdbms::types::DbValuePrimitive as V21;
+                                                            use super::super::super::super::wasi::rdbms::types::DbValuePrimitive as V29;
                                                             match e {
-                                                                V21::Int8(e) => {
+                                                                V29::Int8(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (0i32) as u8;
                                                                     *base.add(8).cast::<u8>() =
                                                                         (_rt::as_i32(e)) as u8;
                                                                 }
-                                                                V21::Int16(e) => {
+                                                                V29::Int16(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (1i32) as u8;
                                                                     *base.add(8).cast::<u16>() =
                                                                         (_rt::as_i32(e)) as u16;
                                                                 }
-                                                                V21::Int32(e) => {
+                                                                V29::Int32(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (2i32) as u8;
                                                                     *base.add(8).cast::<i32>() =
                                                                         _rt::as_i32(e);
                                                                 }
-                                                                V21::Int64(e) => {
+                                                                V29::Int64(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (3i32) as u8;
                                                                     *base.add(8).cast::<i64>() =
                                                                         _rt::as_i64(e);
                                                                 }
-                                                                V21::Float(e) => {
+                                                                V29::Float(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (4i32) as u8;
                                                                     *base.add(8).cast::<f32>() =
                                                                         _rt::as_f32(e);
                                                                 }
-                                                                V21::Double(e) => {
+                                                                V29::Double(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (5i32) as u8;
                                                                     *base.add(8).cast::<f64>() =
                                                                         _rt::as_f64(e);
                                                                 }
-                                                                V21::Decimal(e) => {
+                                                                V29::Decimal(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (6i32) as u8;
-                                                                    let vec15 = (e.into_bytes())
+                                                                    let vec23 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr15 =
-                                                                        vec15.as_ptr().cast::<u8>();
-                                                                    let len15 = vec15.len();
-                                                                    ::core::mem::forget(vec15);
+                                                                    let ptr23 =
+                                                                        vec23.as_ptr().cast::<u8>();
+                                                                    let len23 = vec23.len();
+                                                                    ::core::mem::forget(vec23);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len15;
+                                                                        len23;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr15.cast_mut();
+                                                                        ptr23.cast_mut();
                                                                 }
-                                                                V21::Boolean(e) => {
+                                                                V29::Boolean(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (7i32) as u8;
                                                                     *base.add(8).cast::<u8>() =
@@ -2434,160 +3634,176 @@ pub mod exports {
                                                                         })
                                                                             as u8;
                                                                 }
-                                                                V21::Timestamp(e) => {
+                                                                V29::Timestamp(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (8i32) as u8;
                                                                     *base.add(8).cast::<i64>() =
                                                                         _rt::as_i64(e);
                                                                 }
-                                                                V21::Date(e) => {
+                                                                V29::Date(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (9i32) as u8;
                                                                     *base.add(8).cast::<i64>() =
                                                                         _rt::as_i64(e);
                                                                 }
-                                                                V21::Time(e) => {
+                                                                V29::Time(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (10i32) as u8;
                                                                     *base.add(8).cast::<i64>() =
                                                                         _rt::as_i64(e);
                                                                 }
-                                                                V21::Interval(e) => {
+                                                                V29::Interval(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (11i32) as u8;
                                                                     *base.add(8).cast::<i64>() =
                                                                         _rt::as_i64(e);
                                                                 }
-                                                                V21::Text(e) => {
+                                                                V29::Text(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (12i32) as u8;
-                                                                    let vec16 = (e.into_bytes())
+                                                                    let vec24 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr16 =
-                                                                        vec16.as_ptr().cast::<u8>();
-                                                                    let len16 = vec16.len();
-                                                                    ::core::mem::forget(vec16);
+                                                                    let ptr24 =
+                                                                        vec24.as_ptr().cast::<u8>();
+                                                                    let len24 = vec24.len();
+                                                                    ::core::mem::forget(vec24);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len16;
+                                                                        len24;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr16.cast_mut();
+                                                                        ptr24.cast_mut();
                                                                 }
-                                                                V21::Blob(e) => {
+                                                                V29::Blob(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (13i32) as u8;
-                                                                    let vec17 =
+                                                                    let vec25 =
                                                                         (e).into_boxed_slice();
-                                                                    let ptr17 =
-                                                                        vec17.as_ptr().cast::<u8>();
-                                                                    let len17 = vec17.len();
-                                                                    ::core::mem::forget(vec17);
+                                                                    let ptr25 =
+                                                                        vec25.as_ptr().cast::<u8>();
+                                                                    let len25 = vec25.len();
+                                                                    ::core::mem::forget(vec25);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len17;
+                                                                        len25;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr17.cast_mut();
+                                                                        ptr25.cast_mut();
                                                                 }
-                                                                V21::Json(e) => {
+                                                                V29::Json(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (14i32) as u8;
-                                                                    let vec18 = (e.into_bytes())
+                                                                    let vec26 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr18 =
-                                                                        vec18.as_ptr().cast::<u8>();
-                                                                    let len18 = vec18.len();
-                                                                    ::core::mem::forget(vec18);
+                                                                    let ptr26 =
+                                                                        vec26.as_ptr().cast::<u8>();
+                                                                    let len26 = vec26.len();
+                                                                    ::core::mem::forget(vec26);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len18;
+                                                                        len26;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr18.cast_mut();
+                                                                        ptr26.cast_mut();
                                                                 }
-                                                                V21::Xml(e) => {
+                                                                V29::Xml(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (15i32) as u8;
-                                                                    let vec19 = (e.into_bytes())
+                                                                    let vec27 = (e.into_bytes())
                                                                         .into_boxed_slice();
-                                                                    let ptr19 =
-                                                                        vec19.as_ptr().cast::<u8>();
-                                                                    let len19 = vec19.len();
-                                                                    ::core::mem::forget(vec19);
+                                                                    let ptr27 =
+                                                                        vec27.as_ptr().cast::<u8>();
+                                                                    let len27 = vec27.len();
+                                                                    ::core::mem::forget(vec27);
                                                                     *base.add(12).cast::<usize>() =
-                                                                        len19;
+                                                                        len27;
                                                                     *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>() =
-                                                                        ptr19.cast_mut();
+                                                                        ptr27.cast_mut();
                                                                 }
-                                                                V21::Uuid(e) => {
+                                                                V29::Uuid(e) => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (16i32) as u8;
-                                                                    let (t20_0, t20_1) = e;
+                                                                    let (t28_0, t28_1) = e;
                                                                     *base.add(8).cast::<i64>() =
-                                                                        _rt::as_i64(t20_0);
+                                                                        _rt::as_i64(t28_0);
                                                                     *base.add(16).cast::<i64>() =
-                                                                        _rt::as_i64(t20_1);
+                                                                        _rt::as_i64(t28_1);
                                                                 }
-                                                                V21::DbNull => {
+                                                                V29::DbNull => {
                                                                     *base.add(0).cast::<u8>() =
                                                                         (17i32) as u8;
                                                                 }
                                                             }
                                                         }
                                                     }
-                                                    *base.add(12).cast::<usize>() = len22;
-                                                    *base.add(8).cast::<*mut u8>() = result22;
+                                                    *base.add(12).cast::<usize>() = len30;
+                                                    *base.add(8).cast::<*mut u8>() = result30;
                                                 }
                                             }
                                         }
                                     }
-                                    *base.add(4).cast::<usize>() = len24;
-                                    *base.add(0).cast::<*mut u8>() = result24;
+                                    *base.add(4).cast::<usize>() = len32;
+                                    *base.add(0).cast::<*mut u8>() = result32;
                                 }
                             }
-                            *ptr6.add(8).cast::<usize>() = len25;
-                            *ptr6.add(4).cast::<*mut u8>() = result25;
+                            *ptr6.add(16).cast::<usize>() = len33;
+                            *ptr6.add(12).cast::<*mut u8>() = result33;
                         }
                         Err(e) => {
                             *ptr6.add(0).cast::<u8>() = (1i32) as u8;
-                            let vec26 = (e.into_bytes()).into_boxed_slice();
-                            let ptr26 = vec26.as_ptr().cast::<u8>();
-                            let len26 = vec26.len();
-                            ::core::mem::forget(vec26);
-                            *ptr6.add(8).cast::<usize>() = len26;
-                            *ptr6.add(4).cast::<*mut u8>() = ptr26.cast_mut();
+                            let vec34 = (e.into_bytes()).into_boxed_slice();
+                            let ptr34 = vec34.as_ptr().cast::<u8>();
+                            let len34 = vec34.len();
+                            ::core::mem::forget(vec34);
+                            *ptr6.add(8).cast::<usize>() = len34;
+                            *ptr6.add(4).cast::<*mut u8>() = ptr34.cast_mut();
                         }
                     };
                     ptr6
                 }
                 #[doc(hidden)]
                 #[allow(non_snake_case)]
-                pub unsafe fn __post_return_query<T: Guest>(arg0: *mut u8) {
+                pub unsafe fn __post_return_mysql_query<T: Guest>(arg0: *mut u8) {
                     let l0 = i32::from(*arg0.add(0).cast::<u8>());
                     match l0 {
                         0 => {
-                            let l32 = *arg0.add(4).cast::<*mut u8>();
-                            let l33 = *arg0.add(8).cast::<usize>();
-                            let base34 = l32;
-                            let len34 = l33;
-                            for i in 0..len34 {
-                                let base = base34.add(i * 8);
+                            let l5 = *arg0.add(4).cast::<*mut u8>();
+                            let l6 = *arg0.add(8).cast::<usize>();
+                            let base7 = l5;
+                            let len7 = l6;
+                            for i in 0..len7 {
+                                let base = base7.add(i * 32);
                                 {
-                                    let l29 = *base.add(0).cast::<*mut u8>();
-                                    let l30 = *base.add(4).cast::<usize>();
-                                    let base31 = l29;
-                                    let len31 = l30;
-                                    for i in 0..len31 {
-                                        let base = base31.add(i * 32);
+                                    let l1 = *base.add(8).cast::<*mut u8>();
+                                    let l2 = *base.add(12).cast::<usize>();
+                                    _rt::cabi_dealloc(l1, l2, 1);
+                                    let l3 = *base.add(20).cast::<*mut u8>();
+                                    let l4 = *base.add(24).cast::<usize>();
+                                    _rt::cabi_dealloc(l3, l4, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(base7, len7 * 32, 8);
+                            let l39 = *arg0.add(12).cast::<*mut u8>();
+                            let l40 = *arg0.add(16).cast::<usize>();
+                            let base41 = l39;
+                            let len41 = l40;
+                            for i in 0..len41 {
+                                let base = base41.add(i * 8);
+                                {
+                                    let l36 = *base.add(0).cast::<*mut u8>();
+                                    let l37 = *base.add(4).cast::<usize>();
+                                    let base38 = l36;
+                                    let len38 = l37;
+                                    for i in 0..len38 {
+                                        let base = base38.add(i * 32);
                                         {
-                                            let l1 = i32::from(*base.add(0).cast::<u8>());
-                                            match l1 {
+                                            let l8 = i32::from(*base.add(0).cast::<u8>());
+                                            match l8 {
                                                 0 => {
-                                                    let l2 = i32::from(*base.add(8).cast::<u8>());
-                                                    match l2 {
+                                                    let l9 = i32::from(*base.add(8).cast::<u8>());
+                                                    match l9 {
                                                         0 => (),
                                                         1 => (),
                                                         2 => (),
@@ -2595,10 +3811,10 @@ pub mod exports {
                                                         4 => (),
                                                         5 => (),
                                                         6 => {
-                                                            let l3 =
+                                                            let l10 =
                                                                 *base.add(16).cast::<*mut u8>();
-                                                            let l4 = *base.add(20).cast::<usize>();
-                                                            _rt::cabi_dealloc(l3, l4, 1);
+                                                            let l11 = *base.add(20).cast::<usize>();
+                                                            _rt::cabi_dealloc(l10, l11, 1);
                                                         }
                                                         7 => (),
                                                         8 => (),
@@ -2606,47 +3822,47 @@ pub mod exports {
                                                         10 => (),
                                                         11 => (),
                                                         12 => {
-                                                            let l5 =
-                                                                *base.add(16).cast::<*mut u8>();
-                                                            let l6 = *base.add(20).cast::<usize>();
-                                                            _rt::cabi_dealloc(l5, l6, 1);
-                                                        }
-                                                        13 => {
-                                                            let l7 =
-                                                                *base.add(16).cast::<*mut u8>();
-                                                            let l8 = *base.add(20).cast::<usize>();
-                                                            let base9 = l7;
-                                                            let len9 = l8;
-                                                            _rt::cabi_dealloc(base9, len9 * 1, 1);
-                                                        }
-                                                        14 => {
-                                                            let l10 =
-                                                                *base.add(16).cast::<*mut u8>();
-                                                            let l11 = *base.add(20).cast::<usize>();
-                                                            _rt::cabi_dealloc(l10, l11, 1);
-                                                        }
-                                                        15 => {
                                                             let l12 =
                                                                 *base.add(16).cast::<*mut u8>();
                                                             let l13 = *base.add(20).cast::<usize>();
                                                             _rt::cabi_dealloc(l12, l13, 1);
+                                                        }
+                                                        13 => {
+                                                            let l14 =
+                                                                *base.add(16).cast::<*mut u8>();
+                                                            let l15 = *base.add(20).cast::<usize>();
+                                                            let base16 = l14;
+                                                            let len16 = l15;
+                                                            _rt::cabi_dealloc(base16, len16 * 1, 1);
+                                                        }
+                                                        14 => {
+                                                            let l17 =
+                                                                *base.add(16).cast::<*mut u8>();
+                                                            let l18 = *base.add(20).cast::<usize>();
+                                                            _rt::cabi_dealloc(l17, l18, 1);
+                                                        }
+                                                        15 => {
+                                                            let l19 =
+                                                                *base.add(16).cast::<*mut u8>();
+                                                            let l20 = *base.add(20).cast::<usize>();
+                                                            _rt::cabi_dealloc(l19, l20, 1);
                                                         }
                                                         16 => (),
                                                         _ => (),
                                                     }
                                                 }
                                                 _ => {
-                                                    let l26 = *base.add(8).cast::<*mut u8>();
-                                                    let l27 = *base.add(12).cast::<usize>();
-                                                    let base28 = l26;
-                                                    let len28 = l27;
-                                                    for i in 0..len28 {
-                                                        let base = base28.add(i * 24);
+                                                    let l33 = *base.add(8).cast::<*mut u8>();
+                                                    let l34 = *base.add(12).cast::<usize>();
+                                                    let base35 = l33;
+                                                    let len35 = l34;
+                                                    for i in 0..len35 {
+                                                        let base = base35.add(i * 24);
                                                         {
-                                                            let l14 = i32::from(
+                                                            let l21 = i32::from(
                                                                 *base.add(0).cast::<u8>(),
                                                             );
-                                                            match l14 {
+                                                            match l21 {
                                                                 0 => (),
                                                                 1 => (),
                                                                 2 => (),
@@ -2654,44 +3870,6 @@ pub mod exports {
                                                                 4 => (),
                                                                 5 => (),
                                                                 6 => {
-                                                                    let l15 = *base
-                                                                        .add(8)
-                                                                        .cast::<*mut u8>();
-                                                                    let l16 = *base
-                                                                        .add(12)
-                                                                        .cast::<usize>();
-                                                                    _rt::cabi_dealloc(l15, l16, 1);
-                                                                }
-                                                                7 => (),
-                                                                8 => (),
-                                                                9 => (),
-                                                                10 => (),
-                                                                11 => (),
-                                                                12 => {
-                                                                    let l17 = *base
-                                                                        .add(8)
-                                                                        .cast::<*mut u8>();
-                                                                    let l18 = *base
-                                                                        .add(12)
-                                                                        .cast::<usize>();
-                                                                    _rt::cabi_dealloc(l17, l18, 1);
-                                                                }
-                                                                13 => {
-                                                                    let l19 = *base
-                                                                        .add(8)
-                                                                        .cast::<*mut u8>();
-                                                                    let l20 = *base
-                                                                        .add(12)
-                                                                        .cast::<usize>();
-                                                                    let base21 = l19;
-                                                                    let len21 = l20;
-                                                                    _rt::cabi_dealloc(
-                                                                        base21,
-                                                                        len21 * 1,
-                                                                        1,
-                                                                    );
-                                                                }
-                                                                14 => {
                                                                     let l22 = *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>();
@@ -2700,7 +3878,12 @@ pub mod exports {
                                                                         .cast::<usize>();
                                                                     _rt::cabi_dealloc(l22, l23, 1);
                                                                 }
-                                                                15 => {
+                                                                7 => (),
+                                                                8 => (),
+                                                                9 => (),
+                                                                10 => (),
+                                                                11 => (),
+                                                                12 => {
                                                                     let l24 = *base
                                                                         .add(8)
                                                                         .cast::<*mut u8>();
@@ -2709,75 +3892,976 @@ pub mod exports {
                                                                         .cast::<usize>();
                                                                     _rt::cabi_dealloc(l24, l25, 1);
                                                                 }
+                                                                13 => {
+                                                                    let l26 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l27 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    let base28 = l26;
+                                                                    let len28 = l27;
+                                                                    _rt::cabi_dealloc(
+                                                                        base28,
+                                                                        len28 * 1,
+                                                                        1,
+                                                                    );
+                                                                }
+                                                                14 => {
+                                                                    let l29 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l30 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l29, l30, 1);
+                                                                }
+                                                                15 => {
+                                                                    let l31 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l32 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l31, l32, 1);
+                                                                }
                                                                 16 => (),
                                                                 _ => (),
                                                             }
                                                         }
                                                     }
-                                                    _rt::cabi_dealloc(base28, len28 * 24, 8);
+                                                    _rt::cabi_dealloc(base35, len35 * 24, 8);
                                                 }
                                             }
                                         }
                                     }
-                                    _rt::cabi_dealloc(base31, len31 * 32, 8);
+                                    _rt::cabi_dealloc(base38, len38 * 32, 8);
                                 }
                             }
-                            _rt::cabi_dealloc(base34, len34 * 8, 4);
+                            _rt::cabi_dealloc(base41, len41 * 8, 4);
                         }
                         _ => {
-                            let l35 = *arg0.add(4).cast::<*mut u8>();
-                            let l36 = *arg0.add(8).cast::<usize>();
-                            _rt::cabi_dealloc(l35, l36, 1);
+                            let l42 = *arg0.add(4).cast::<*mut u8>();
+                            let l43 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l42, l43, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_postgres_execute_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                    arg2: *mut u8,
+                    arg3: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let base4 = arg2;
+                    let len4 = arg3;
+                    let mut result4 = _rt::Vec::with_capacity(len4);
+                    for i in 0..len4 {
+                        let base = base4.add(i * 8);
+                        let e4 = {
+                            let l1 = *base.add(0).cast::<*mut u8>();
+                            let l2 = *base.add(4).cast::<usize>();
+                            let len3 = l2;
+                            let bytes3 = _rt::Vec::from_raw_parts(l1.cast(), len3, len3);
+
+                            _rt::string_lift(bytes3)
+                        };
+                        result4.push(e4);
+                    }
+                    _rt::cabi_dealloc(base4, len4 * 8, 4);
+                    let result5 = T::postgres_execute(_rt::string_lift(bytes0), result4);
+                    let ptr6 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result5 {
+                        Ok(e) => {
+                            *ptr6.add(0).cast::<u8>() = (0i32) as u8;
+                            *ptr6.add(8).cast::<i64>() = _rt::as_i64(e);
+                        }
+                        Err(e) => {
+                            *ptr6.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec7 = (e.into_bytes()).into_boxed_slice();
+                            let ptr7 = vec7.as_ptr().cast::<u8>();
+                            let len7 = vec7.len();
+                            ::core::mem::forget(vec7);
+                            *ptr6.add(12).cast::<usize>() = len7;
+                            *ptr6.add(8).cast::<*mut u8>() = ptr7.cast_mut();
+                        }
+                    };
+                    ptr6
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_postgres_execute<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => (),
+                        _ => {
+                            let l1 = *arg0.add(8).cast::<*mut u8>();
+                            let l2 = *arg0.add(12).cast::<usize>();
+                            _rt::cabi_dealloc(l1, l2, 1);
+                        }
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_postgres_query_cabi<T: Guest>(
+                    arg0: *mut u8,
+                    arg1: usize,
+                    arg2: *mut u8,
+                    arg3: usize,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")]
+                    _rt::run_ctors_once();
+                    let len0 = arg1;
+                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
+                    let base4 = arg2;
+                    let len4 = arg3;
+                    let mut result4 = _rt::Vec::with_capacity(len4);
+                    for i in 0..len4 {
+                        let base = base4.add(i * 8);
+                        let e4 = {
+                            let l1 = *base.add(0).cast::<*mut u8>();
+                            let l2 = *base.add(4).cast::<usize>();
+                            let len3 = l2;
+                            let bytes3 = _rt::Vec::from_raw_parts(l1.cast(), len3, len3);
+
+                            _rt::string_lift(bytes3)
+                        };
+                        result4.push(e4);
+                    }
+                    _rt::cabi_dealloc(base4, len4 * 8, 4);
+                    let result5 = T::postgres_query(_rt::string_lift(bytes0), result4);
+                    let ptr6 = _RET_AREA.0.as_mut_ptr().cast::<u8>();
+                    match result5 {
+                        Ok(e) => {
+                            *ptr6.add(0).cast::<u8>() = (0i32) as u8;
+                            let QueryResult {
+                                columns: columns7,
+                                rows: rows7,
+                            } = e;
+                            let vec14 = columns7;
+                            let len14 = vec14.len();
+                            let layout14 =
+                                _rt::alloc::Layout::from_size_align_unchecked(vec14.len() * 32, 8);
+                            let result14 = if layout14.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout14).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout14);
+                                }
+                                ptr
+                            } else {
+                                {
+                                    ::core::ptr::null_mut()
+                                }
+                            };
+                            for (i, e) in vec14.into_iter().enumerate() {
+                                let base = result14.add(i * 32);
+                                {
+                                    let super::super::super::super::wasi::rdbms::types::DbColumn {
+                                        ordinal: ordinal8,
+                                        name: name8,
+                                        db_type: db_type8,
+                                        db_type_name: db_type_name8,
+                                    } = e;
+                                    *base.add(0).cast::<i64>() = _rt::as_i64(ordinal8);
+                                    let vec9 = (name8.into_bytes()).into_boxed_slice();
+                                    let ptr9 = vec9.as_ptr().cast::<u8>();
+                                    let len9 = vec9.len();
+                                    ::core::mem::forget(vec9);
+                                    *base.add(12).cast::<usize>() = len9;
+                                    *base.add(8).cast::<*mut u8>() = ptr9.cast_mut();
+                                    use super::super::super::super::wasi::rdbms::types::DbColumnType as V12;
+                                    match db_type8 {
+                                        V12::Primitive(e) => {
+                                            *base.add(16).cast::<u8>() = (0i32) as u8;
+                                            use super::super::super::super::wasi::rdbms::types::DbColumnTypePrimitive as V10;
+                                            match e {
+                                                V10::Int8 => {
+                                                    *base.add(17).cast::<u8>() = (0i32) as u8;
+                                                }
+                                                V10::Int16 => {
+                                                    *base.add(17).cast::<u8>() = (1i32) as u8;
+                                                }
+                                                V10::Int32 => {
+                                                    *base.add(17).cast::<u8>() = (2i32) as u8;
+                                                }
+                                                V10::Int64 => {
+                                                    *base.add(17).cast::<u8>() = (3i32) as u8;
+                                                }
+                                                V10::Float => {
+                                                    *base.add(17).cast::<u8>() = (4i32) as u8;
+                                                }
+                                                V10::Double => {
+                                                    *base.add(17).cast::<u8>() = (5i32) as u8;
+                                                }
+                                                V10::Decimal => {
+                                                    *base.add(17).cast::<u8>() = (6i32) as u8;
+                                                }
+                                                V10::Boolean => {
+                                                    *base.add(17).cast::<u8>() = (7i32) as u8;
+                                                }
+                                                V10::Timestamp => {
+                                                    *base.add(17).cast::<u8>() = (8i32) as u8;
+                                                }
+                                                V10::Date => {
+                                                    *base.add(17).cast::<u8>() = (9i32) as u8;
+                                                }
+                                                V10::Time => {
+                                                    *base.add(17).cast::<u8>() = (10i32) as u8;
+                                                }
+                                                V10::Interval => {
+                                                    *base.add(17).cast::<u8>() = (11i32) as u8;
+                                                }
+                                                V10::Text => {
+                                                    *base.add(17).cast::<u8>() = (12i32) as u8;
+                                                }
+                                                V10::Blob => {
+                                                    *base.add(17).cast::<u8>() = (13i32) as u8;
+                                                }
+                                                V10::Json => {
+                                                    *base.add(17).cast::<u8>() = (14i32) as u8;
+                                                }
+                                                V10::Xml => {
+                                                    *base.add(17).cast::<u8>() = (15i32) as u8;
+                                                }
+                                                V10::Uuid => {
+                                                    *base.add(17).cast::<u8>() = (16i32) as u8;
+                                                }
+                                            }
+                                        }
+                                        V12::Array(e) => {
+                                            *base.add(16).cast::<u8>() = (1i32) as u8;
+                                            use super::super::super::super::wasi::rdbms::types::DbColumnTypePrimitive as V11;
+                                            match e {
+                                                V11::Int8 => {
+                                                    *base.add(17).cast::<u8>() = (0i32) as u8;
+                                                }
+                                                V11::Int16 => {
+                                                    *base.add(17).cast::<u8>() = (1i32) as u8;
+                                                }
+                                                V11::Int32 => {
+                                                    *base.add(17).cast::<u8>() = (2i32) as u8;
+                                                }
+                                                V11::Int64 => {
+                                                    *base.add(17).cast::<u8>() = (3i32) as u8;
+                                                }
+                                                V11::Float => {
+                                                    *base.add(17).cast::<u8>() = (4i32) as u8;
+                                                }
+                                                V11::Double => {
+                                                    *base.add(17).cast::<u8>() = (5i32) as u8;
+                                                }
+                                                V11::Decimal => {
+                                                    *base.add(17).cast::<u8>() = (6i32) as u8;
+                                                }
+                                                V11::Boolean => {
+                                                    *base.add(17).cast::<u8>() = (7i32) as u8;
+                                                }
+                                                V11::Timestamp => {
+                                                    *base.add(17).cast::<u8>() = (8i32) as u8;
+                                                }
+                                                V11::Date => {
+                                                    *base.add(17).cast::<u8>() = (9i32) as u8;
+                                                }
+                                                V11::Time => {
+                                                    *base.add(17).cast::<u8>() = (10i32) as u8;
+                                                }
+                                                V11::Interval => {
+                                                    *base.add(17).cast::<u8>() = (11i32) as u8;
+                                                }
+                                                V11::Text => {
+                                                    *base.add(17).cast::<u8>() = (12i32) as u8;
+                                                }
+                                                V11::Blob => {
+                                                    *base.add(17).cast::<u8>() = (13i32) as u8;
+                                                }
+                                                V11::Json => {
+                                                    *base.add(17).cast::<u8>() = (14i32) as u8;
+                                                }
+                                                V11::Xml => {
+                                                    *base.add(17).cast::<u8>() = (15i32) as u8;
+                                                }
+                                                V11::Uuid => {
+                                                    *base.add(17).cast::<u8>() = (16i32) as u8;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let vec13 = (db_type_name8.into_bytes()).into_boxed_slice();
+                                    let ptr13 = vec13.as_ptr().cast::<u8>();
+                                    let len13 = vec13.len();
+                                    ::core::mem::forget(vec13);
+                                    *base.add(24).cast::<usize>() = len13;
+                                    *base.add(20).cast::<*mut u8>() = ptr13.cast_mut();
+                                }
+                            }
+                            *ptr6.add(8).cast::<usize>() = len14;
+                            *ptr6.add(4).cast::<*mut u8>() = result14;
+                            let vec33 = rows7;
+                            let len33 = vec33.len();
+                            let layout33 =
+                                _rt::alloc::Layout::from_size_align_unchecked(vec33.len() * 8, 4);
+                            let result33 = if layout33.size() != 0 {
+                                let ptr = _rt::alloc::alloc(layout33).cast::<u8>();
+                                if ptr.is_null() {
+                                    _rt::alloc::handle_alloc_error(layout33);
+                                }
+                                ptr
+                            } else {
+                                {
+                                    ::core::ptr::null_mut()
+                                }
+                            };
+                            for (i, e) in vec33.into_iter().enumerate() {
+                                let base = result33.add(i * 8);
+                                {
+                                    let super::super::super::super::wasi::rdbms::types::DbRow {
+                                        values: values15,
+                                    } = e;
+                                    let vec32 = values15;
+                                    let len32 = vec32.len();
+                                    let layout32 = _rt::alloc::Layout::from_size_align_unchecked(
+                                        vec32.len() * 32,
+                                        8,
+                                    );
+                                    let result32 = if layout32.size() != 0 {
+                                        let ptr = _rt::alloc::alloc(layout32).cast::<u8>();
+                                        if ptr.is_null() {
+                                            _rt::alloc::handle_alloc_error(layout32);
+                                        }
+                                        ptr
+                                    } else {
+                                        {
+                                            ::core::ptr::null_mut()
+                                        }
+                                    };
+                                    for (i, e) in vec32.into_iter().enumerate() {
+                                        let base = result32.add(i * 32);
+                                        {
+                                            use super::super::super::super::wasi::rdbms::types::DbValue as V31;
+                                            match e {
+                                                V31::Primitive(e) => {
+                                                    *base.add(0).cast::<u8>() = (0i32) as u8;
+                                                    use super::super::super::super::wasi::rdbms::types::DbValuePrimitive as V22;
+                                                    match e {
+                                                        V22::Int8(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (0i32) as u8;
+                                                            *base.add(16).cast::<u8>() =
+                                                                (_rt::as_i32(e)) as u8;
+                                                        }
+                                                        V22::Int16(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (1i32) as u8;
+                                                            *base.add(16).cast::<u16>() =
+                                                                (_rt::as_i32(e)) as u16;
+                                                        }
+                                                        V22::Int32(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (2i32) as u8;
+                                                            *base.add(16).cast::<i32>() =
+                                                                _rt::as_i32(e);
+                                                        }
+                                                        V22::Int64(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (3i32) as u8;
+                                                            *base.add(16).cast::<i64>() =
+                                                                _rt::as_i64(e);
+                                                        }
+                                                        V22::Float(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (4i32) as u8;
+                                                            *base.add(16).cast::<f32>() =
+                                                                _rt::as_f32(e);
+                                                        }
+                                                        V22::Double(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (5i32) as u8;
+                                                            *base.add(16).cast::<f64>() =
+                                                                _rt::as_f64(e);
+                                                        }
+                                                        V22::Decimal(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (6i32) as u8;
+                                                            let vec16 =
+                                                                (e.into_bytes()).into_boxed_slice();
+                                                            let ptr16 = vec16.as_ptr().cast::<u8>();
+                                                            let len16 = vec16.len();
+                                                            ::core::mem::forget(vec16);
+                                                            *base.add(20).cast::<usize>() = len16;
+                                                            *base.add(16).cast::<*mut u8>() =
+                                                                ptr16.cast_mut();
+                                                        }
+                                                        V22::Boolean(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (7i32) as u8;
+                                                            *base.add(16).cast::<u8>() = (match e {
+                                                                true => 1,
+                                                                false => 0,
+                                                            })
+                                                                as u8;
+                                                        }
+                                                        V22::Timestamp(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (8i32) as u8;
+                                                            *base.add(16).cast::<i64>() =
+                                                                _rt::as_i64(e);
+                                                        }
+                                                        V22::Date(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (9i32) as u8;
+                                                            *base.add(16).cast::<i64>() =
+                                                                _rt::as_i64(e);
+                                                        }
+                                                        V22::Time(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (10i32) as u8;
+                                                            *base.add(16).cast::<i64>() =
+                                                                _rt::as_i64(e);
+                                                        }
+                                                        V22::Interval(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (11i32) as u8;
+                                                            *base.add(16).cast::<i64>() =
+                                                                _rt::as_i64(e);
+                                                        }
+                                                        V22::Text(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (12i32) as u8;
+                                                            let vec17 =
+                                                                (e.into_bytes()).into_boxed_slice();
+                                                            let ptr17 = vec17.as_ptr().cast::<u8>();
+                                                            let len17 = vec17.len();
+                                                            ::core::mem::forget(vec17);
+                                                            *base.add(20).cast::<usize>() = len17;
+                                                            *base.add(16).cast::<*mut u8>() =
+                                                                ptr17.cast_mut();
+                                                        }
+                                                        V22::Blob(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (13i32) as u8;
+                                                            let vec18 = (e).into_boxed_slice();
+                                                            let ptr18 = vec18.as_ptr().cast::<u8>();
+                                                            let len18 = vec18.len();
+                                                            ::core::mem::forget(vec18);
+                                                            *base.add(20).cast::<usize>() = len18;
+                                                            *base.add(16).cast::<*mut u8>() =
+                                                                ptr18.cast_mut();
+                                                        }
+                                                        V22::Json(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (14i32) as u8;
+                                                            let vec19 =
+                                                                (e.into_bytes()).into_boxed_slice();
+                                                            let ptr19 = vec19.as_ptr().cast::<u8>();
+                                                            let len19 = vec19.len();
+                                                            ::core::mem::forget(vec19);
+                                                            *base.add(20).cast::<usize>() = len19;
+                                                            *base.add(16).cast::<*mut u8>() =
+                                                                ptr19.cast_mut();
+                                                        }
+                                                        V22::Xml(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (15i32) as u8;
+                                                            let vec20 =
+                                                                (e.into_bytes()).into_boxed_slice();
+                                                            let ptr20 = vec20.as_ptr().cast::<u8>();
+                                                            let len20 = vec20.len();
+                                                            ::core::mem::forget(vec20);
+                                                            *base.add(20).cast::<usize>() = len20;
+                                                            *base.add(16).cast::<*mut u8>() =
+                                                                ptr20.cast_mut();
+                                                        }
+                                                        V22::Uuid(e) => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (16i32) as u8;
+                                                            let (t21_0, t21_1) = e;
+                                                            *base.add(16).cast::<i64>() =
+                                                                _rt::as_i64(t21_0);
+                                                            *base.add(24).cast::<i64>() =
+                                                                _rt::as_i64(t21_1);
+                                                        }
+                                                        V22::DbNull => {
+                                                            *base.add(8).cast::<u8>() =
+                                                                (17i32) as u8;
+                                                        }
+                                                    }
+                                                }
+                                                V31::Array(e) => {
+                                                    *base.add(0).cast::<u8>() = (1i32) as u8;
+                                                    let vec30 = e;
+                                                    let len30 = vec30.len();
+                                                    let layout30 = _rt::alloc::Layout::from_size_align_unchecked(vec30.len() * 24, 8);
+                                                    let result30 = if layout30.size() != 0 {
+                                                        let ptr = _rt::alloc::alloc(layout30)
+                                                            .cast::<u8>();
+                                                        if ptr.is_null() {
+                                                            _rt::alloc::handle_alloc_error(
+                                                                layout30,
+                                                            );
+                                                        }
+                                                        ptr
+                                                    } else {
+                                                        {
+                                                            ::core::ptr::null_mut()
+                                                        }
+                                                    };
+                                                    for (i, e) in vec30.into_iter().enumerate() {
+                                                        let base = result30.add(i * 24);
+                                                        {
+                                                            use super::super::super::super::wasi::rdbms::types::DbValuePrimitive as V29;
+                                                            match e {
+                                                                V29::Int8(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (0i32) as u8;
+                                                                    *base.add(8).cast::<u8>() =
+                                                                        (_rt::as_i32(e)) as u8;
+                                                                }
+                                                                V29::Int16(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (1i32) as u8;
+                                                                    *base.add(8).cast::<u16>() =
+                                                                        (_rt::as_i32(e)) as u16;
+                                                                }
+                                                                V29::Int32(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (2i32) as u8;
+                                                                    *base.add(8).cast::<i32>() =
+                                                                        _rt::as_i32(e);
+                                                                }
+                                                                V29::Int64(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (3i32) as u8;
+                                                                    *base.add(8).cast::<i64>() =
+                                                                        _rt::as_i64(e);
+                                                                }
+                                                                V29::Float(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (4i32) as u8;
+                                                                    *base.add(8).cast::<f32>() =
+                                                                        _rt::as_f32(e);
+                                                                }
+                                                                V29::Double(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (5i32) as u8;
+                                                                    *base.add(8).cast::<f64>() =
+                                                                        _rt::as_f64(e);
+                                                                }
+                                                                V29::Decimal(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (6i32) as u8;
+                                                                    let vec23 = (e.into_bytes())
+                                                                        .into_boxed_slice();
+                                                                    let ptr23 =
+                                                                        vec23.as_ptr().cast::<u8>();
+                                                                    let len23 = vec23.len();
+                                                                    ::core::mem::forget(vec23);
+                                                                    *base.add(12).cast::<usize>() =
+                                                                        len23;
+                                                                    *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>() =
+                                                                        ptr23.cast_mut();
+                                                                }
+                                                                V29::Boolean(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (7i32) as u8;
+                                                                    *base.add(8).cast::<u8>() =
+                                                                        (match e {
+                                                                            true => 1,
+                                                                            false => 0,
+                                                                        })
+                                                                            as u8;
+                                                                }
+                                                                V29::Timestamp(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (8i32) as u8;
+                                                                    *base.add(8).cast::<i64>() =
+                                                                        _rt::as_i64(e);
+                                                                }
+                                                                V29::Date(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (9i32) as u8;
+                                                                    *base.add(8).cast::<i64>() =
+                                                                        _rt::as_i64(e);
+                                                                }
+                                                                V29::Time(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (10i32) as u8;
+                                                                    *base.add(8).cast::<i64>() =
+                                                                        _rt::as_i64(e);
+                                                                }
+                                                                V29::Interval(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (11i32) as u8;
+                                                                    *base.add(8).cast::<i64>() =
+                                                                        _rt::as_i64(e);
+                                                                }
+                                                                V29::Text(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (12i32) as u8;
+                                                                    let vec24 = (e.into_bytes())
+                                                                        .into_boxed_slice();
+                                                                    let ptr24 =
+                                                                        vec24.as_ptr().cast::<u8>();
+                                                                    let len24 = vec24.len();
+                                                                    ::core::mem::forget(vec24);
+                                                                    *base.add(12).cast::<usize>() =
+                                                                        len24;
+                                                                    *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>() =
+                                                                        ptr24.cast_mut();
+                                                                }
+                                                                V29::Blob(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (13i32) as u8;
+                                                                    let vec25 =
+                                                                        (e).into_boxed_slice();
+                                                                    let ptr25 =
+                                                                        vec25.as_ptr().cast::<u8>();
+                                                                    let len25 = vec25.len();
+                                                                    ::core::mem::forget(vec25);
+                                                                    *base.add(12).cast::<usize>() =
+                                                                        len25;
+                                                                    *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>() =
+                                                                        ptr25.cast_mut();
+                                                                }
+                                                                V29::Json(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (14i32) as u8;
+                                                                    let vec26 = (e.into_bytes())
+                                                                        .into_boxed_slice();
+                                                                    let ptr26 =
+                                                                        vec26.as_ptr().cast::<u8>();
+                                                                    let len26 = vec26.len();
+                                                                    ::core::mem::forget(vec26);
+                                                                    *base.add(12).cast::<usize>() =
+                                                                        len26;
+                                                                    *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>() =
+                                                                        ptr26.cast_mut();
+                                                                }
+                                                                V29::Xml(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (15i32) as u8;
+                                                                    let vec27 = (e.into_bytes())
+                                                                        .into_boxed_slice();
+                                                                    let ptr27 =
+                                                                        vec27.as_ptr().cast::<u8>();
+                                                                    let len27 = vec27.len();
+                                                                    ::core::mem::forget(vec27);
+                                                                    *base.add(12).cast::<usize>() =
+                                                                        len27;
+                                                                    *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>() =
+                                                                        ptr27.cast_mut();
+                                                                }
+                                                                V29::Uuid(e) => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (16i32) as u8;
+                                                                    let (t28_0, t28_1) = e;
+                                                                    *base.add(8).cast::<i64>() =
+                                                                        _rt::as_i64(t28_0);
+                                                                    *base.add(16).cast::<i64>() =
+                                                                        _rt::as_i64(t28_1);
+                                                                }
+                                                                V29::DbNull => {
+                                                                    *base.add(0).cast::<u8>() =
+                                                                        (17i32) as u8;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    *base.add(12).cast::<usize>() = len30;
+                                                    *base.add(8).cast::<*mut u8>() = result30;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    *base.add(4).cast::<usize>() = len32;
+                                    *base.add(0).cast::<*mut u8>() = result32;
+                                }
+                            }
+                            *ptr6.add(16).cast::<usize>() = len33;
+                            *ptr6.add(12).cast::<*mut u8>() = result33;
+                        }
+                        Err(e) => {
+                            *ptr6.add(0).cast::<u8>() = (1i32) as u8;
+                            let vec34 = (e.into_bytes()).into_boxed_slice();
+                            let ptr34 = vec34.as_ptr().cast::<u8>();
+                            let len34 = vec34.len();
+                            ::core::mem::forget(vec34);
+                            *ptr6.add(8).cast::<usize>() = len34;
+                            *ptr6.add(4).cast::<*mut u8>() = ptr34.cast_mut();
+                        }
+                    };
+                    ptr6
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_postgres_query<T: Guest>(arg0: *mut u8) {
+                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
+                    match l0 {
+                        0 => {
+                            let l5 = *arg0.add(4).cast::<*mut u8>();
+                            let l6 = *arg0.add(8).cast::<usize>();
+                            let base7 = l5;
+                            let len7 = l6;
+                            for i in 0..len7 {
+                                let base = base7.add(i * 32);
+                                {
+                                    let l1 = *base.add(8).cast::<*mut u8>();
+                                    let l2 = *base.add(12).cast::<usize>();
+                                    _rt::cabi_dealloc(l1, l2, 1);
+                                    let l3 = *base.add(20).cast::<*mut u8>();
+                                    let l4 = *base.add(24).cast::<usize>();
+                                    _rt::cabi_dealloc(l3, l4, 1);
+                                }
+                            }
+                            _rt::cabi_dealloc(base7, len7 * 32, 8);
+                            let l39 = *arg0.add(12).cast::<*mut u8>();
+                            let l40 = *arg0.add(16).cast::<usize>();
+                            let base41 = l39;
+                            let len41 = l40;
+                            for i in 0..len41 {
+                                let base = base41.add(i * 8);
+                                {
+                                    let l36 = *base.add(0).cast::<*mut u8>();
+                                    let l37 = *base.add(4).cast::<usize>();
+                                    let base38 = l36;
+                                    let len38 = l37;
+                                    for i in 0..len38 {
+                                        let base = base38.add(i * 32);
+                                        {
+                                            let l8 = i32::from(*base.add(0).cast::<u8>());
+                                            match l8 {
+                                                0 => {
+                                                    let l9 = i32::from(*base.add(8).cast::<u8>());
+                                                    match l9 {
+                                                        0 => (),
+                                                        1 => (),
+                                                        2 => (),
+                                                        3 => (),
+                                                        4 => (),
+                                                        5 => (),
+                                                        6 => {
+                                                            let l10 =
+                                                                *base.add(16).cast::<*mut u8>();
+                                                            let l11 = *base.add(20).cast::<usize>();
+                                                            _rt::cabi_dealloc(l10, l11, 1);
+                                                        }
+                                                        7 => (),
+                                                        8 => (),
+                                                        9 => (),
+                                                        10 => (),
+                                                        11 => (),
+                                                        12 => {
+                                                            let l12 =
+                                                                *base.add(16).cast::<*mut u8>();
+                                                            let l13 = *base.add(20).cast::<usize>();
+                                                            _rt::cabi_dealloc(l12, l13, 1);
+                                                        }
+                                                        13 => {
+                                                            let l14 =
+                                                                *base.add(16).cast::<*mut u8>();
+                                                            let l15 = *base.add(20).cast::<usize>();
+                                                            let base16 = l14;
+                                                            let len16 = l15;
+                                                            _rt::cabi_dealloc(base16, len16 * 1, 1);
+                                                        }
+                                                        14 => {
+                                                            let l17 =
+                                                                *base.add(16).cast::<*mut u8>();
+                                                            let l18 = *base.add(20).cast::<usize>();
+                                                            _rt::cabi_dealloc(l17, l18, 1);
+                                                        }
+                                                        15 => {
+                                                            let l19 =
+                                                                *base.add(16).cast::<*mut u8>();
+                                                            let l20 = *base.add(20).cast::<usize>();
+                                                            _rt::cabi_dealloc(l19, l20, 1);
+                                                        }
+                                                        16 => (),
+                                                        _ => (),
+                                                    }
+                                                }
+                                                _ => {
+                                                    let l33 = *base.add(8).cast::<*mut u8>();
+                                                    let l34 = *base.add(12).cast::<usize>();
+                                                    let base35 = l33;
+                                                    let len35 = l34;
+                                                    for i in 0..len35 {
+                                                        let base = base35.add(i * 24);
+                                                        {
+                                                            let l21 = i32::from(
+                                                                *base.add(0).cast::<u8>(),
+                                                            );
+                                                            match l21 {
+                                                                0 => (),
+                                                                1 => (),
+                                                                2 => (),
+                                                                3 => (),
+                                                                4 => (),
+                                                                5 => (),
+                                                                6 => {
+                                                                    let l22 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l23 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l22, l23, 1);
+                                                                }
+                                                                7 => (),
+                                                                8 => (),
+                                                                9 => (),
+                                                                10 => (),
+                                                                11 => (),
+                                                                12 => {
+                                                                    let l24 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l25 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l24, l25, 1);
+                                                                }
+                                                                13 => {
+                                                                    let l26 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l27 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    let base28 = l26;
+                                                                    let len28 = l27;
+                                                                    _rt::cabi_dealloc(
+                                                                        base28,
+                                                                        len28 * 1,
+                                                                        1,
+                                                                    );
+                                                                }
+                                                                14 => {
+                                                                    let l29 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l30 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l29, l30, 1);
+                                                                }
+                                                                15 => {
+                                                                    let l31 = *base
+                                                                        .add(8)
+                                                                        .cast::<*mut u8>();
+                                                                    let l32 = *base
+                                                                        .add(12)
+                                                                        .cast::<usize>();
+                                                                    _rt::cabi_dealloc(l31, l32, 1);
+                                                                }
+                                                                16 => (),
+                                                                _ => (),
+                                                            }
+                                                        }
+                                                    }
+                                                    _rt::cabi_dealloc(base35, len35 * 24, 8);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _rt::cabi_dealloc(base38, len38 * 32, 8);
+                                }
+                            }
+                            _rt::cabi_dealloc(base41, len41 * 8, 4);
+                        }
+                        _ => {
+                            let l42 = *arg0.add(4).cast::<*mut u8>();
+                            let l43 = *arg0.add(8).cast::<usize>();
+                            _rt::cabi_dealloc(l42, l43, 1);
                         }
                     }
                 }
                 pub trait Guest {
                     fn check() -> _rt::String;
-                    fn execute(
+                    fn mysql_execute(
                         statement: _rt::String,
                         params: _rt::Vec<_rt::String>,
                     ) -> Result<u64, _rt::String>;
-                    fn query(
+                    fn mysql_query(
                         statement: _rt::String,
                         params: _rt::Vec<_rt::String>,
-                    ) -> Result<_rt::Vec<DbRow>, _rt::String>;
+                    ) -> Result<QueryResult, _rt::String>;
+                    fn postgres_execute(
+                        statement: _rt::String,
+                        params: _rt::Vec<_rt::String>,
+                    ) -> Result<u64, _rt::String>;
+                    fn postgres_query(
+                        statement: _rt::String,
+                        params: _rt::Vec<_rt::String>,
+                    ) -> Result<QueryResult, _rt::String>;
                 }
                 #[doc(hidden)]
 
                 macro_rules! __export_golem_it_api_cabi{
-    ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
+  ($ty:ident with_types_in $($path_to_types:tt)*) => (const _: () = {
 
-      #[export_name = "golem:it/api#check"]
-      unsafe extern "C" fn export_check() -> *mut u8 {
-        $($path_to_types)*::_export_check_cabi::<$ty>()
-      }
-      #[export_name = "cabi_post_golem:it/api#check"]
-      unsafe extern "C" fn _post_return_check(arg0: *mut u8,) {
-        $($path_to_types)*::__post_return_check::<$ty>(arg0)
-      }
-      #[export_name = "golem:it/api#execute"]
-      unsafe extern "C" fn export_execute(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
-        $($path_to_types)*::_export_execute_cabi::<$ty>(arg0, arg1, arg2, arg3)
-      }
-      #[export_name = "cabi_post_golem:it/api#execute"]
-      unsafe extern "C" fn _post_return_execute(arg0: *mut u8,) {
-        $($path_to_types)*::__post_return_execute::<$ty>(arg0)
-      }
-      #[export_name = "golem:it/api#query"]
-      unsafe extern "C" fn export_query(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
-        $($path_to_types)*::_export_query_cabi::<$ty>(arg0, arg1, arg2, arg3)
-      }
-      #[export_name = "cabi_post_golem:it/api#query"]
-      unsafe extern "C" fn _post_return_query(arg0: *mut u8,) {
-        $($path_to_types)*::__post_return_query::<$ty>(arg0)
-      }
-    };);
-  }
+    #[export_name = "golem:it/api#check"]
+    unsafe extern "C" fn export_check() -> *mut u8 {
+      $($path_to_types)*::_export_check_cabi::<$ty>()
+    }
+    #[export_name = "cabi_post_golem:it/api#check"]
+    unsafe extern "C" fn _post_return_check(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_check::<$ty>(arg0)
+    }
+    #[export_name = "golem:it/api#mysql-execute"]
+    unsafe extern "C" fn export_mysql_execute(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+      $($path_to_types)*::_export_mysql_execute_cabi::<$ty>(arg0, arg1, arg2, arg3)
+    }
+    #[export_name = "cabi_post_golem:it/api#mysql-execute"]
+    unsafe extern "C" fn _post_return_mysql_execute(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_mysql_execute::<$ty>(arg0)
+    }
+    #[export_name = "golem:it/api#mysql-query"]
+    unsafe extern "C" fn export_mysql_query(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+      $($path_to_types)*::_export_mysql_query_cabi::<$ty>(arg0, arg1, arg2, arg3)
+    }
+    #[export_name = "cabi_post_golem:it/api#mysql-query"]
+    unsafe extern "C" fn _post_return_mysql_query(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_mysql_query::<$ty>(arg0)
+    }
+    #[export_name = "golem:it/api#postgres-execute"]
+    unsafe extern "C" fn export_postgres_execute(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+      $($path_to_types)*::_export_postgres_execute_cabi::<$ty>(arg0, arg1, arg2, arg3)
+    }
+    #[export_name = "cabi_post_golem:it/api#postgres-execute"]
+    unsafe extern "C" fn _post_return_postgres_execute(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_postgres_execute::<$ty>(arg0)
+    }
+    #[export_name = "golem:it/api#postgres-query"]
+    unsafe extern "C" fn export_postgres_query(arg0: *mut u8,arg1: usize,arg2: *mut u8,arg3: usize,) -> *mut u8 {
+      $($path_to_types)*::_export_postgres_query_cabi::<$ty>(arg0, arg1, arg2, arg3)
+    }
+    #[export_name = "cabi_post_golem:it/api#postgres-query"]
+    unsafe extern "C" fn _post_return_postgres_query(arg0: *mut u8,) {
+      $($path_to_types)*::__post_return_postgres_query::<$ty>(arg0)
+    }
+  };);
+}
                 #[doc(hidden)]
                 pub(crate) use __export_golem_it_api_cabi;
                 #[repr(align(8))]
-                struct _RetArea([::core::mem::MaybeUninit<u8>; 16]);
-                static mut _RET_AREA: _RetArea = _RetArea([::core::mem::MaybeUninit::uninit(); 16]);
+                struct _RetArea([::core::mem::MaybeUninit<u8>; 20]);
+                static mut _RET_AREA: _RetArea = _RetArea([::core::mem::MaybeUninit::uninit(); 20]);
             }
         }
     }
@@ -3092,9 +5176,9 @@ pub(crate) use __export_rdbms_service_impl as export;
 #[cfg(target_arch = "wasm32")]
 #[link_section = "component-type:wit-bindgen:0.25.0:rdbms-service:encoded world"]
 #[doc(hidden)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1526] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xf2\x0a\x01A\x02\x01\
-A\x0a\x01B\x1f\x01y\x04\0\x0anode-index\x03\0\0\x01s\x04\0\x0atable-name\x03\0\x02\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1959] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xa3\x0e\x01A\x02\x01\
+A\x0d\x01B\x1f\x01y\x04\0\x0anode-index\x03\0\0\x01s\x04\0\x0atable-name\x03\0\x02\
 \x01q\x05\x12connection-failure\x01s\0\x17query-parameter-failure\x01s\0\x17quer\
 y-execution-failure\x01s\0\x16query-response-failure\x01s\0\x05other\x01s\0\x04\0\
 \x05error\x03\0\x04\x01q\x11\x04int8\0\0\x05int16\0\0\x05int32\0\0\x05int64\0\0\x05\
@@ -3120,13 +5204,23 @@ dresss\0\x08\x04\0\x1a[static]db-connection.open\x01\x09\x01h\x06\x01p\x03\x01i\
 \x01j\x01\x0c\x01\x05\x01@\x03\x04self\x0a\x09statements\x06params\x0b\0\x0d\x04\
 \0\x1b[method]db-connection.query\x01\x0e\x01j\x01w\x01\x05\x01@\x03\x04self\x0a\
 \x09statements\x06params\x0b\0\x0f\x04\0\x1d[method]db-connection.execute\x01\x10\
-\x03\x01\x19wasi:rdbms/postgres@0.0.1\x05\x04\x02\x03\0\0\x06db-row\x01B\x0c\x02\
-\x03\x02\x01\x05\x04\0\x06db-row\x03\0\0\x01@\0\0s\x04\0\x05check\x01\x02\x01ps\x01\
-j\x01w\x01s\x01@\x02\x09statements\x06params\x03\0\x04\x04\0\x07execute\x01\x05\x01\
-p\x01\x01j\x01\x06\x01s\x01@\x02\x09statements\x06params\x03\0\x07\x04\0\x05quer\
-y\x01\x08\x04\x01\x0cgolem:it/api\x05\x06\x04\x01\x16golem:it/rdbms-service\x04\0\
-\x0b\x13\x01\0\x0drdbms-service\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0d\
-wit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
+\x03\x01\x19wasi:rdbms/postgres@0.0.1\x05\x04\x01B\x14\x02\x03\x02\x01\x01\x04\0\
+\x0ddb-result-set\x03\0\0\x02\x03\x02\x01\x02\x04\0\x08db-value\x03\0\x02\x02\x03\
+\x02\x01\x03\x04\0\x05error\x03\0\x04\x04\0\x0ddb-connection\x03\x01\x01i\x06\x01\
+j\x01\x07\x01\x05\x01@\x01\x07addresss\0\x08\x04\0\x1a[static]db-connection.open\
+\x01\x09\x01h\x06\x01p\x03\x01i\x01\x01j\x01\x0c\x01\x05\x01@\x03\x04self\x0a\x09\
+statements\x06params\x0b\0\x0d\x04\0\x1b[method]db-connection.query\x01\x0e\x01j\
+\x01w\x01\x05\x01@\x03\x04self\x0a\x09statements\x06params\x0b\0\x0f\x04\0\x1d[m\
+ethod]db-connection.execute\x01\x10\x03\x01\x16wasi:rdbms/mysql@0.0.1\x05\x05\x02\
+\x03\0\0\x06db-row\x02\x03\0\0\x09db-column\x01B\x13\x02\x03\x02\x01\x06\x04\0\x06\
+db-row\x03\0\0\x02\x03\x02\x01\x07\x04\0\x09db-column\x03\0\x02\x01p\x03\x01p\x01\
+\x01r\x02\x07columns\x04\x04rows\x05\x04\0\x0cquery-result\x03\0\x06\x01@\0\0s\x04\
+\0\x05check\x01\x08\x01ps\x01j\x01w\x01s\x01@\x02\x09statements\x06params\x09\0\x0a\
+\x04\0\x0dmysql-execute\x01\x0b\x01j\x01\x07\x01s\x01@\x02\x09statements\x06para\
+ms\x09\0\x0c\x04\0\x0bmysql-query\x01\x0d\x04\0\x10postgres-execute\x01\x0b\x04\0\
+\x0epostgres-query\x01\x0d\x04\x01\x0cgolem:it/api\x05\x08\x04\x01\x16golem:it/r\
+dbms-service\x04\0\x0b\x13\x01\0\x0drdbms-service\x03\0\0\0G\x09producers\x01\x0c\
+processed-by\x02\x0dwit-component\x070.208.1\x10wit-bindgen-rust\x060.25.0";
 
 #[inline(never)]
 #[doc(hidden)]

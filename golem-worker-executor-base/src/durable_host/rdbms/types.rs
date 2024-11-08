@@ -23,6 +23,7 @@ use crate::services::rdbms::types as rdbms_types;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 use wasmtime::component::Resource;
@@ -134,7 +135,9 @@ impl From<DbValuePrimitive> for rdbms_types::DbValuePrimitive {
             DbValuePrimitive::Int16(i) => Self::Int16(i),
             DbValuePrimitive::Int32(i) => Self::Int32(i),
             DbValuePrimitive::Int64(i) => Self::Int64(i),
-            DbValuePrimitive::Decimal(s) => Self::Decimal(s),
+            DbValuePrimitive::Decimal(s) => {
+                Self::Decimal(bigdecimal::BigDecimal::from_str(&s).unwrap())
+            } // FIXME change to TryFrom
             DbValuePrimitive::Float(f) => Self::Float(f),
             DbValuePrimitive::Double(f) => Self::Double(f),
             DbValuePrimitive::Boolean(b) => Self::Boolean(b),
@@ -159,7 +162,7 @@ impl From<rdbms_types::DbValuePrimitive> for DbValuePrimitive {
             rdbms_types::DbValuePrimitive::Int16(i) => Self::Int16(i),
             rdbms_types::DbValuePrimitive::Int32(i) => Self::Int32(i),
             rdbms_types::DbValuePrimitive::Int64(i) => Self::Int64(i),
-            rdbms_types::DbValuePrimitive::Decimal(s) => Self::Decimal(s),
+            rdbms_types::DbValuePrimitive::Decimal(s) => Self::Decimal(s.to_string()),
             rdbms_types::DbValuePrimitive::Float(f) => Self::Float(f),
             rdbms_types::DbValuePrimitive::Double(f) => Self::Double(f),
             rdbms_types::DbValuePrimitive::Boolean(b) => Self::Boolean(b),

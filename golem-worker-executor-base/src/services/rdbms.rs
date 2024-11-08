@@ -68,10 +68,170 @@ impl RdbmsPoolKey {
     }
 }
 
+pub mod sqlx_common {
+    use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, DbValuePrimitive};
+    use async_trait::async_trait;
+    use futures::Stream;
+    use futures_util::stream::BoxStream;
+    use futures_util::StreamExt;
+    use sqlx::{Database, Error, IntoArguments, Row};
+    use std::fmt::Display;
+    use std::sync::Arc;
+    use tracing::info;
+
+    // pub(crate) async fn query_stream<DB, A>(
+    //     statement: &str,
+    //     params: Vec<DbValue>,
+    //     batch: usize,
+    //     pool: &sqlx::Pool<DB>,
+    // ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>
+    // where
+    //     DB: Database,
+    //     DB::Row: Row,
+    //     A: Send + IntoArguments<DB>,
+    //     sqlx::query::Query<DB, A>: QueryParamsBinder<DB, A>,
+    //     DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
+    //     DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
+    // {
+    //     let query: sqlx::query::Query<DB, A> =
+    //         sqlx::query(statement.to_string().leak()).bind_params(params)?;
+    //
+    //     let stream: BoxStream<Result<DB::Row, sqlx::Error>> = query.fetch(pool);
+    //
+    //     let response: StreamDbResultSet<DB> = StreamDbResultSet::create(stream, batch).await?;
+    //     Ok(Arc::new(response))
+    // }
+    //
+    // pub(crate) async fn execute<DB, A>(
+    //     statement: &str,
+    //     params: Vec<DbValue>,
+    //     pool: &sqlx::Pool<DB>,
+    // ) -> Result<u64, String>
+    // where
+    //     DB: Database,
+    //     A: Send + IntoArguments<DB>,
+    //     sqlx::query::Query<DB, A>: QueryParamsBinder<DB, A>,
+    // {
+    //     let query: sqlx::query::Query<DB, A> = sqlx::query(statement).bind_params(params)?;
+    //
+    //     let result = query.execute(pool).await.map_err(|e| e.to_string())?;
+    //     Ok(result.rows_affected())
+    // }
+
+    #[derive(Clone)]
+    pub struct StreamDbResultSet<'q, DB: Database> {
+        columns: Vec<DbColumn>,
+        first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow>>>>,
+        row_stream: Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>>>,
+    }
+
+    impl<'q, DB: Database> StreamDbResultSet<'q, DB>
+    where
+        DB::Row: Row,
+        DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
+        DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
+    {
+        fn new(
+            columns: Vec<DbColumn>,
+            first_rows: Vec<DbRow>,
+            row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>,
+        ) -> Self {
+            Self {
+                columns,
+                first_rows: Arc::new(async_mutex::Mutex::new(Some(first_rows))),
+                row_stream: Arc::new(async_mutex::Mutex::new(row_stream)),
+            }
+        }
+
+        pub(crate) async fn create(
+            stream: BoxStream<'q, Result<DB::Row, sqlx::Error>>,
+            batch: usize,
+        ) -> Result<StreamDbResultSet<'q, DB>, String> {
+            let mut row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>> =
+                Box::pin(stream.chunks(batch));
+
+            let first: Option<Vec<Result<DB::Row, Error>>> = row_stream.next().await;
+
+            match first {
+                Some(rows) if !rows.is_empty() => {
+                    let rows: Vec<DB::Row> = rows
+                        .into_iter()
+                        .map(|r| r.map_err(|e| e.to_string()))
+                        .collect::<Result<Vec<_>, String>>()?;
+
+                    let columns = rows[0]
+                        .columns()
+                        .into_iter()
+                        .map(|c: &DB::Column| c.try_into())
+                        .collect::<Result<Vec<_>, String>>()?;
+
+                    let first_rows = rows
+                        .iter()
+                        .map(|r: &DB::Row| r.try_into())
+                        .collect::<Result<Vec<_>, String>>()?;
+
+                    Ok(StreamDbResultSet::new(columns, first_rows, row_stream))
+                }
+                _ => Ok(StreamDbResultSet::new(vec![], vec![], row_stream)),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl<DB: Database> DbResultSet for StreamDbResultSet<'_, DB>
+    where
+        DB::Row: Row,
+        DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
+    {
+        async fn get_columns(&self) -> Result<Vec<DbColumn>, String> {
+            info!("get_columns");
+            Ok(self.columns.clone())
+        }
+
+        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
+            let mut rows = self.first_rows.lock().await;
+            if rows.is_some() {
+                info!("get_next - initial");
+                let result = rows.clone();
+                *rows = None;
+                Ok(result)
+            } else {
+                info!("get_next");
+                let mut stream = self.row_stream.lock().await;
+                let next = stream.next().await;
+
+                if let Some(rows) = next {
+                    let values = rows
+                        .into_iter()
+                        .map(|r| {
+                            r.map_err(|e| e.to_string())
+                                .and_then(|r: DB::Row| (&r).try_into())
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    Ok(Some(values))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    pub(crate) trait QueryParamsBinder<'q, DB: Database, A> {
+        fn bind_params(self, params: Vec<DbValue>)
+            -> Result<sqlx::query::Query<'q, DB, A>, String>;
+    }
+}
+
 pub mod mysql {
-    use crate::services::rdbms::types::{DbResultSet, DbValue, EmptyDbResultSet};
+    use crate::services::rdbms::postgres::pg_type_name;
+    use crate::services::rdbms::sqlx_common::QueryParamsBinder;
+    use crate::services::rdbms::types::{
+        DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
+        DbValuePrimitive, EmptyDbResultSet,
+    };
     use async_trait::async_trait;
     use golem_common::model::OwnedWorkerId;
+    use sqlx::{Column, Row, TypeInfo};
     use std::sync::Arc;
     use tracing::{error, info};
 
@@ -140,9 +300,279 @@ pub mod mysql {
             Ok(Arc::new(EmptyDbResultSet::default()))
         }
     }
+
+    impl<'q> QueryParamsBinder<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>
+        for sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>
+    {
+        fn bind_params(
+            mut self,
+            params: Vec<DbValue>,
+        ) -> Result<sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>, String>
+        {
+            for param in params {
+                self = bind_value(self, param)?;
+            }
+            Ok(self)
+        }
+    }
+
+    fn bind_value(
+        query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments>,
+        value: DbValue,
+    ) -> Result<sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments>, String> {
+        match value {
+            DbValue::Primitive(v) => bind_value_primitive(query, v),
+            DbValue::Array(_) => Err("Array param not supported".to_string()),
+        }
+    }
+
+    fn bind_value_primitive(
+        query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments>,
+        value: DbValuePrimitive,
+    ) -> Result<sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments>, String> {
+        match value {
+            DbValuePrimitive::Int8(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Int16(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Int32(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Int64(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Decimal(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Float(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Boolean(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Text(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Blob(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Json(v) => Ok(query.bind(v)),
+            // DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
+            DbValuePrimitive::Timestamp(v) => {
+                Ok(query.bind(chrono::DateTime::from_timestamp_millis(v)))
+            }
+            // DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
+            DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
+            _ => Err(format!("Unsupported value: {:?}", value)),
+        }
+    }
+
+    impl TryFrom<&sqlx::mysql::MySqlRow> for DbRow {
+        type Error = String;
+
+        fn try_from(value: &sqlx::mysql::MySqlRow) -> Result<Self, Self::Error> {
+            let count = value.len();
+            let mut values = Vec::with_capacity(count);
+            for index in 0..count {
+                values.push(get_db_value(index, value)?);
+            }
+            Ok(DbRow { values })
+        }
+    }
+
+    fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, String> {
+        let column = &row.columns()[index];
+        let type_name = column.type_info().name();
+        let value = match type_name {
+            mysql_type_name::BOOLEAN => {
+                let v: Option<bool> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Boolean(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            mysql_type_name::TINYINT => {
+                let v: Option<i8> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int8(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            mysql_type_name::SMALLINT => {
+                let v: Option<i16> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int16(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            mysql_type_name::INT => {
+                let v: Option<i32> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int32(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            mysql_type_name::BIGINT => {
+                let v: Option<i64> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Int64(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            mysql_type_name::FLOAT => {
+                let v: Option<f32> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Float(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            mysql_type_name::DOUBLE => {
+                let v: Option<f64> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Double(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            mysql_type_name::TEXT | mysql_type_name::VARCHAR | mysql_type_name::CHAR => {
+                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            mysql_type_name::JSON => {
+                let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Json(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            mysql_type_name::VARBINARY | mysql_type_name::BINARY | mysql_type_name::BLOB => {
+                let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => DbValue::Primitive(DbValuePrimitive::Blob(v)),
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            // mysql_type_name::UUID => {
+            //     let v: Option<Uuid> = row.try_get(index).map_err(|e| e.to_string())?;
+            //     match v {
+            //         Some(v) => DbValue::Primitive(DbValuePrimitive::Uuid(v)),
+            //         None => DbValue::Primitive(DbValuePrimitive::DbNull),
+            //     }
+            // }
+            mysql_type_name::TIMESTAMP | mysql_type_name::DATETIME => {
+                let v: Option<chrono::DateTime<chrono::Utc>> =
+                    row.try_get(index).map_err(|e| e.to_string())?;
+                match v {
+                    Some(v) => {
+                        DbValue::Primitive(DbValuePrimitive::Timestamp(v.timestamp_millis()))
+                    }
+                    None => DbValue::Primitive(DbValuePrimitive::DbNull),
+                }
+            }
+            _ => Err(format!("Unsupported type: {:?}", type_name))?,
+        };
+        Ok(value)
+    }
+
+    impl TryFrom<&sqlx::mysql::MySqlColumn> for DbColumn {
+        type Error = String;
+
+        fn try_from(value: &sqlx::mysql::MySqlColumn) -> Result<Self, Self::Error> {
+            let ordinal = value.ordinal() as u64;
+            let db_type: DbColumnType = value.type_info().try_into()?;
+            let db_type_name = value.type_info().name().to_string();
+            let name = value.name().to_string();
+            Ok(DbColumn {
+                ordinal,
+                name,
+                db_type,
+                db_type_name,
+            })
+        }
+    }
+
+    impl TryFrom<&sqlx::mysql::MySqlTypeInfo> for DbColumnType {
+        type Error = String;
+
+        fn try_from(value: &sqlx::mysql::MySqlTypeInfo) -> Result<Self, Self::Error> {
+            let type_name = value.name();
+
+            match type_name {
+                mysql_type_name::BOOLEAN => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean))
+                }
+                mysql_type_name::TINYINT => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int8))
+                }
+                mysql_type_name::SMALLINT => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int16))
+                }
+                mysql_type_name::INT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int32)),
+                mysql_type_name::BIGINT => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Int64))
+                }
+                mysql_type_name::DECIMAL => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Decimal))
+                }
+                mysql_type_name::FLOAT => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Float)),
+                mysql_type_name::DOUBLE => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Double))
+                }
+                // mysql_type_name::UUID => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Uuid)),
+                mysql_type_name::TEXT | mysql_type_name::VARCHAR | mysql_type_name::CHAR => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text))
+                }
+                mysql_type_name::JSON => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Json)),
+                // mysql_type_name::XML => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Xml)),
+                mysql_type_name::TIMESTAMP | mysql_type_name::DATETIME => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Timestamp))
+                }
+                mysql_type_name::DATE => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Date)),
+                mysql_type_name::TIME => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Time)),
+                mysql_type_name::VARBINARY | mysql_type_name::BINARY | mysql_type_name::BLOB => {
+                    Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Blob))
+                }
+                _ => Err(format!("Unsupported type: {:?}", value)),
+            }
+        }
+    }
+
+    pub(crate) mod mysql_type_name {
+        pub(crate) const BOOLEAN: &str = "BOOLEAN";
+        pub(crate) const TINYINT_UNSIGNED: &str = "TINYINT UNSIGNED";
+        pub(crate) const SMALLINT_UNSIGNED: &str = "SMALLINT UNSIGNED";
+        pub(crate) const INT_UNSIGNED: &str = "INT UNSIGNED";
+        pub(crate) const MEDIUMINT_UNSIGNED: &str = "MEDIUMINT UNSIGNED";
+        pub(crate) const BIGINT_UNSIGNED: &str = "BIGINT UNSIGNED";
+        pub(crate) const TINYINT: &str = "TINYINT";
+        pub(crate) const SMALLINT: &str = "SMALLINT";
+        pub(crate) const INT: &str = "INT";
+        pub(crate) const MEDIUMINT: &str = "MEDIUMINT";
+        pub(crate) const BIGINT: &str = "BIGINT";
+        pub(crate) const FLOAT: &str = "FLOAT";
+        pub(crate) const DOUBLE: &str = "DOUBLE";
+        pub(crate) const NULL: &str = "NULL";
+        pub(crate) const TIMESTAMP: &str = "TIMESTAMP";
+        pub(crate) const DATE: &str = "DATE";
+        pub(crate) const TIME: &str = "TIME";
+        pub(crate) const DATETIME: &str = "DATETIME";
+        pub(crate) const YEAR: &str = "YEAR";
+        pub(crate) const BIT: &str = "BIT";
+        pub(crate) const ENUM: &str = "ENUM";
+        pub(crate) const SET: &str = "SET";
+        pub(crate) const DECIMAL: &str = "DECIMAL";
+        pub(crate) const GEOMETRY: &str = "GEOMETRY";
+        pub(crate) const JSON: &str = "JSON";
+
+        pub(crate) const BINARY: &str = "BINARY";
+        pub(crate) const VARBINARY: &str = "VARBINARY";
+
+        pub(crate) const CHAR: &str = "CHAR";
+        pub(crate) const VARCHAR: &str = "VARCHAR";
+
+        pub(crate) const TINYBLOB: &str = "TINYBLOB";
+        pub(crate) const TINYTEXT: &str = "TINYTEXT";
+
+        pub(crate) const BLOB: &str = "BLOB";
+        pub(crate) const TEXT: &str = "TEXT";
+
+        pub(crate) const MEDIUMBLOB: &str = "MEDIUMBLOB";
+        pub(crate) const MEDIUMTEXT: &str = "MEDIUMTEXT";
+
+        pub(crate) const LONGBLOB: &str = "LONGBLOB";
+        pub(crate) const LONGTEXT: &str = "LONGTEXT";
+    }
 }
 
 pub mod postgres {
+    use crate::services::rdbms::sqlx_common::{QueryParamsBinder, StreamDbResultSet};
     use crate::services::rdbms::types::{
         DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
         DbValuePrimitive, EmptyDbResultSet, SimpleDbResultSet,
@@ -337,112 +767,20 @@ pub mod postgres {
         }
     }
 
-    #[derive(Clone)]
-    pub struct StreamDbResultSet<'q> {
-        columns: Vec<DbColumn>,
-        first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow>>>>,
-        row_stream:
-            Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<sqlx::postgres::PgRow, sqlx::Error>>>>>,
-    }
-
-    impl<'q> StreamDbResultSet<'q> {
-        fn new(
-            columns: Vec<DbColumn>,
-            first_rows: Vec<DbRow>,
-            row_stream: BoxStream<'q, Vec<Result<sqlx::postgres::PgRow, sqlx::Error>>>,
-        ) -> Self {
-            Self {
-                columns,
-                first_rows: Arc::new(async_mutex::Mutex::new(Some(first_rows))),
-                row_stream: Arc::new(async_mutex::Mutex::new(row_stream)),
-            }
-        }
-
-        async fn create(
-            stream: BoxStream<'q, Result<sqlx::postgres::PgRow, sqlx::Error>>,
-            batch: usize,
-        ) -> Result<StreamDbResultSet<'q>, String> {
-            let mut row_stream: BoxStream<'q, Vec<Result<sqlx::postgres::PgRow, sqlx::Error>>> =
-                Box::pin(stream.chunks(batch));
-
-            let first = row_stream.next().await;
-
-            match first {
-                Some(rows) if !rows.is_empty() => {
-                    let rows = rows
-                        .into_iter()
-                        .map(|r| r.map_err(|e| e.to_string()))
-                        .collect::<Result<Vec<_>, String>>()?;
-
-                    let columns = rows[0]
-                        .columns()
-                        .into_iter()
-                        .map(|c| c.try_into())
-                        .collect::<Result<Vec<_>, String>>()?;
-
-                    let first_rows = rows
-                        .iter()
-                        .map(|r| r.try_into())
-                        .collect::<Result<Vec<_>, String>>()?;
-
-                    Ok(StreamDbResultSet::new(columns, first_rows, row_stream))
-                }
-                _ => Ok(StreamDbResultSet::new(vec![], vec![], row_stream)),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl DbResultSet for StreamDbResultSet<'_> {
-        async fn get_columns(&self) -> Result<Vec<DbColumn>, String> {
-            info!("get_columns");
-            Ok(self.columns.clone())
-        }
-
-        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
-            let mut rows = self.first_rows.lock().await;
-            if rows.is_some() {
-                info!("get_next - initial");
-                let result = rows.clone();
-                *rows = None;
-                Ok(result)
-            } else {
-                info!("get_next");
-                let mut stream = self.row_stream.lock().await;
-                let next = stream.next().await;
-
-                if let Some(rows) = next {
-                    let values = rows
-                        .into_iter()
-                        .map(|r| {
-                            r.map_err(|e| e.to_string())
-                                .and_then(|r: sqlx::postgres::PgRow| (&r).try_into())
-                        })
-                        .collect::<Result<Vec<_>, String>>()?;
-                    Ok(Some(values))
-                } else {
-                    Ok(None)
-                }
-            }
-        }
-    }
-
     async fn query_stream(
         statement: &str,
         params: Vec<DbValue>,
         batch: usize,
         pool: &sqlx::Pool<sqlx::Postgres>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-        let mut query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement.to_string().leak());
-
-        for param in params {
-            query = bind_value(query, param)?;
-        }
+        let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+            sqlx::query(statement.to_string().leak()).bind_params(params)?;
 
         let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(pool);
 
-        Ok(Arc::new(StreamDbResultSet::create(stream, batch).await?))
+        let response: StreamDbResultSet<sqlx::postgres::Postgres> =
+            StreamDbResultSet::create(stream, batch).await?;
+        Ok(Arc::new(response))
     }
 
     async fn execute(
@@ -450,15 +788,26 @@ pub mod postgres {
         params: Vec<DbValue>,
         pool: &sqlx::Pool<sqlx::Postgres>,
     ) -> Result<u64, String> {
-        let mut query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement);
-
-        for param in params {
-            query = bind_value(query, param)?;
-        }
+        let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+            sqlx::query(statement).bind_params(params)?;
 
         let result = query.execute(pool).await.map_err(|e| e.to_string())?;
         Ok(result.rows_affected())
+    }
+
+    impl<'q> QueryParamsBinder<'q, sqlx::Postgres, sqlx::postgres::PgArguments>
+        for sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>
+    {
+        fn bind_params(
+            mut self,
+            params: Vec<DbValue>,
+        ) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>, String>
+        {
+            for param in params {
+                self = bind_value(self, param)?;
+            }
+            Ok(self)
+        }
     }
 
     fn bind_value(
@@ -785,6 +1134,7 @@ pub mod postgres {
 
 pub mod types {
     use async_trait::async_trait;
+    use bigdecimal::BigDecimal;
     use std::collections::HashSet;
     use std::sync::{Arc, Mutex};
     use tracing::{error, info};
@@ -880,7 +1230,7 @@ pub mod types {
         Int64(i64),
         Float(f32),
         Double(f64),
-        Decimal(String),
+        Decimal(BigDecimal),
         Boolean(bool),
         Timestamp(i64),
         Date(i64),

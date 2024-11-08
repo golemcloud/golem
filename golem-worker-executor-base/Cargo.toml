@@ -34,6 +34,7 @@ aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
 bitflags = "2.6.0"
+bigdecimal = "0.4"
 bytes = { workspace = true }
 cap-fs-ext = "3.4.2"                                # keep in sync with wasmtime
 cap-std = { workspace = true }
