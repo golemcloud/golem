@@ -107,6 +107,7 @@ mod internal {
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, WorkerBinding};
     use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
+    use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -169,7 +170,7 @@ mod internal {
 
         let method = method_res?;
 
-        let worker_bridge_info = method_operation
+        let     worker_bridge_info = method_operation
             .extensions
             .get(GOLEM_WORKER_BRIDGE_EXTENSION)
             .ok_or(format!(
@@ -177,11 +178,15 @@ mod internal {
                 GOLEM_WORKER_BRIDGE_EXTENSION
             ))?;
 
+        let http_middlewares = get_middleware(worker_bridge_info)?;
+        let middlewares = http_middlewares.iter().map(Middleware::http).collect();
+
         let binding = WorkerBinding {
             worker_name: get_worker_id_expr(worker_bridge_info)?,
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
+            middlewares: middlewares,
         };
 
         Ok(Route {
@@ -213,6 +218,32 @@ mod internal {
             component_id,
             version,
         })
+    }
+
+    pub(crate) fn get_middleware(
+        worker_bridge_info: &Value,
+    ) -> Result<Vec<HttpMiddleware>, String> {
+        let mut middlewares = vec![];
+        if let Some(middleware_value) = worker_bridge_info.get("middlewares") {
+            match middleware_value {
+                Value::Object(map) => {
+                    let cors_preflight: Option<CorsPreflight> = map.get("cors")
+                        .map(|json_value| serde_json::from_value(json_value.clone())).transpose().map_err(|err| "Invalid schema for Cors")?;
+
+                   if let Some(cors_preflight) = cors_preflight {
+                       middlewares.push(HttpMiddleware::cors(cors_preflight));
+                   }
+
+                }
+                _ => return Err(
+                    "Invalid response mapping type. It should be a string representing expression"
+                        .to_string(),
+                ),
+            }
+        }
+
+        Ok(middlewares)
+
     }
 
     pub(crate) fn get_response_mapping(
@@ -277,6 +308,7 @@ mod tests {
     use rib::Expr;
     use serde_json::json;
     use uuid::Uuid;
+    use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
 
     #[test]
     fn test_get_route_from_path_item() {
@@ -286,7 +318,15 @@ mod tests {
                 "component-id": "00000000-0000-0000-0000-000000000000",
                 "component-version": 0,
                 "idempotency-key": "\"test-key\"",
-                "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}"
+                "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}",
+                "middlewares": {
+                    "cors" : {
+                        "allow_headers": "Content-Type, Authorization",
+                        "allow_methods": "GET, POST, PUT, DELETE, OPTIONS",
+                        "allow_origin": "*",
+
+                    }
+                }
             }))]
                 .into_iter()
                 .collect(),
@@ -335,7 +375,14 @@ mod tests {
                         ]
                         .into_iter()
                         .collect()
-                    ))
+                    )),
+                    middlewares: vec![Middleware::Http(HttpMiddleware::cors(CorsPreflight {
+                        allow_headers: "Content-Type, Authorization".to_string(),
+                        allow_methods: "GET, POST, PUT, DELETE, OPTIONS".to_string(),
+                        allow_origin: "*".to_string(),
+                        expose_headers: None,
+                        max_age: None,
+                    }))]
                 })
             })
         );

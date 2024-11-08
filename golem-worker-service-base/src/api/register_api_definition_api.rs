@@ -122,20 +122,44 @@ impl From<CompiledRoute> for RouteWithTypeInfo {
     }
 }
 
+// GatewayBindingData is a user exposed structure of GatewayBinding
+// GatewayBindingData is flattened here only to keep the REST API backward compatibility.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct GatewayBindingData {
     pub binding_type: Option<GatewayBindingType>, // descriminator to keep backward compatibility
-    pub component_id: Option<VersionedComponentId>, // Optional only to keep backward compatibility
+
+    // WORKER
+    // For binding type - worker
+    // Optional only to keep backward compatibility
+    pub component_id: Option<VersionedComponentId>,
+    // For binding type - worker
     pub worker_name: Option<String>,
+    // For binding type - worker
     pub idempotency_key: Option<String>,
-    pub response: Option<String>, // Optional only to keep backward compatibility
-    // CORS: if binding_type is corsPlugin, then following parameters required
-    pub allow_origin: Option<String>, // Optional only to keep backward compatibility
-    pub allow_methods: Option<String>, // Optional only to keep backward compatibility
-    pub allow_headers: Option<String>, // Optional only to keep backward compatibility
+    // For binding type - worker
+    // Optional only to keep backward compatibility
+    pub response: Option<String>,
+    // For binding type - worker
+    // Optional only to keep backward compatibility
+    pub middlewares: Option<Vec<Middleware>>,
+
+    // CORS
+    //  For binding type - cors-middleware
+    // Optional only to keep backward compatibility
+    pub allow_origin: Option<String>,
+    //  For binding type - cors-middleware
+    // Optional only to keep backward compatibility
+    pub allow_methods: Option<String>,
+    //  For binding type - cors-middleware
+    // Optional only to keep backward compatibility
+    pub allow_headers: Option<String>,
+    //  For binding type - cors-middleware
+    // Optional only to keep backward compatibility
     pub expose_headers: Option<String>,
+    //  For binding type - cors-middleware
+    // Optional only to keep backward compatibility
     pub max_age: Option<u64>,
 }
 
