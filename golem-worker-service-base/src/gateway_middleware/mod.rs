@@ -39,6 +39,10 @@ pub enum Middleware {
 }
 
 impl Middleware {
+    pub fn cors(cors: &CorsPreflight) -> Middleware {
+        Middleware::Http(HttpMiddleware::cors(cors.clone()))
+    }
+
     pub fn get_cors(&self) -> Option<CorsPreflight> {
         match self {
             Middleware::Http(HttpMiddleware::Cors(cors)) => Some(cors.clone()),
