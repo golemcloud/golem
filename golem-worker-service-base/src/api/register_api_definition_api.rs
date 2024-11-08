@@ -1,3 +1,4 @@
+use crate::api;
 use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
@@ -5,7 +6,6 @@ use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::http::ApiSite;
 use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, StaticBinding};
 use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
-use crate::api;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::VersionedComponentId;
 use poem_openapi::*;
