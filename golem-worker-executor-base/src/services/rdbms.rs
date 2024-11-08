@@ -77,23 +77,24 @@ pub mod sqlx_common {
     use sqlx::{Database, Error, IntoArguments, Row};
     use std::fmt::Display;
     use std::sync::Arc;
+    use sqlx::database::HasArguments;
     use tracing::info;
 
-    // pub(crate) async fn query_stream<DB, A>(
+    // pub(crate) async fn query_stream<DB>(
     //     statement: &str,
     //     params: Vec<DbValue>,
     //     batch: usize,
     //     pool: &sqlx::Pool<DB>,
     // ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>
     // where
-    //     DB: Database,
+    //     DB: Database + for<'q> HasArguments<'q>,
     //     DB::Row: Row,
-    //     A: Send + IntoArguments<DB>,
-    //     sqlx::query::Query<DB, A>: QueryParamsBinder<DB, A>,
+    //     <DB as HasArguments<'_>>::Arguments: IntoArguments<DB>,
+    //     sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments>: for<'q>  QueryParamsBinder<'q, DB, <DB as HasArguments<'_>>::Arguments>,
     //     DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
     //     DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
     // {
-    //     let query: sqlx::query::Query<DB, A> =
+    //     let query: sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments> =
     //         sqlx::query(statement.to_string().leak()).bind_params(params)?;
     //
     //     let stream: BoxStream<Result<DB::Row, sqlx::Error>> = query.fetch(pool);
@@ -102,17 +103,17 @@ pub mod sqlx_common {
     //     Ok(Arc::new(response))
     // }
     //
-    // pub(crate) async fn execute<DB, A>(
+    // pub(crate) async fn execute<DB>(
     //     statement: &str,
     //     params: Vec<DbValue>,
     //     pool: &sqlx::Pool<DB>,
     // ) -> Result<u64, String>
     // where
-    //     DB: Database,
-    //     A: Send + IntoArguments<DB>,
-    //     sqlx::query::Query<DB, A>: QueryParamsBinder<DB, A>,
+    //     DB: Database + for<'q> HasArguments<'q>,
+    //     <DB as HasArguments<'_>>::Arguments: IntoArguments<DB>,
+    //     sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments>: for<'q>  QueryParamsBinder<'q, DB, <DB as HasArguments<'_>>::Arguments>,
     // {
-    //     let query: sqlx::query::Query<DB, A> = sqlx::query(statement).bind_params(params)?;
+    //     let query: sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments> = sqlx::query(statement).bind_params(params)?;
     //
     //     let result = query.execute(pool).await.map_err(|e| e.to_string())?;
     //     Ok(result.rows_affected())
