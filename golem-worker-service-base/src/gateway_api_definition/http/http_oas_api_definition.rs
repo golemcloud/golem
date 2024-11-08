@@ -104,7 +104,7 @@ mod internal {
     use rib::Expr;
     use serde_json::Value;
 
-    use crate::gateway_binding::{ResponseMapping, WorkerBinding};
+    use crate::gateway_binding::{GatewayBinding, ResponseMapping, WorkerBinding};
     use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
 
@@ -187,7 +187,7 @@ mod internal {
         Ok(Route {
             path: path_pattern.clone(),
             method,
-            binding,
+            binding: GatewayBinding::Worker(binding),
         })
     }
 

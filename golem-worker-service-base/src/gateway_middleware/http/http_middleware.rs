@@ -1,4 +1,3 @@
-
 use crate::gateway_middleware::http::cors::CorsPreflight;
 
 #[derive(Debug, Clone, PartialEq)]

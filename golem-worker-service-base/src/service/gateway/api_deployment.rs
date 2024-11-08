@@ -27,6 +27,7 @@ use crate::gateway_api_definition::ApiDefinitionId;
 use crate::gateway_api_deployment::http::{
     ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
+use crate::gateway_binding::GatewayBindingCompiled;
 use crate::gateway_execution::router::{Router, RouterPattern};
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRecord;
@@ -222,13 +223,15 @@ impl<AuthCtx> ApiDeploymentServiceDefault<AuthCtx> {
 
         for definition in definitions {
             for route in definition.routes {
-                let component_id = route.binding.component_id;
-                let worker_calls = route.binding.response_compiled.worker_calls;
-                if let Some(worker_calls) = worker_calls {
-                    worker_functions_in_rib
-                        .entry(component_id.component_id)
-                        .or_insert_with(Vec::new)
-                        .push(worker_calls)
+                if let GatewayBindingCompiled::Worker(worker_binding) = route.binding {
+                    let component_id = worker_binding.component_id;
+                    let worker_calls = worker_binding.response_compiled.worker_calls;
+                    if let Some(worker_calls) = worker_calls {
+                        worker_functions_in_rib
+                            .entry(component_id.component_id)
+                            .or_insert_with(Vec::new)
+                            .push(worker_calls)
+                    }
                 }
             }
         }

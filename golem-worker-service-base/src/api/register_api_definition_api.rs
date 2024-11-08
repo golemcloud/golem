@@ -363,7 +363,7 @@ impl TryFrom<crate::gateway_binding::GatewayBinding> for GatewayBindingData {
                         binding_type: Some(api::GatewayBindingType::Cors),
                         component_id: None,
                         worker_name: None,
-                        idempotency_key,
+                        idempotency_key: None,
                         response: None,
                         allow_origin: Some(cors.allow_origin),
                         allow_methods: Some(cors.allow_methods),
@@ -571,7 +571,10 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
     ) -> Result<Self, Self::Error> {
         let method = MethodPattern::try_from(value.method)?;
         let path = AllPathPatterns::parse(value.path.as_str())?;
-        let binding = value.binding.ok_or("binding is missing")?.into();
+        let binding = value.binding.ok_or("binding is missing".to_string())?;
+
+        let binding = crate::gateway_binding::GatewayBindingCompiled::try_from(binding)?;
+
         Ok(CompiledRoute {
             method,
             path,

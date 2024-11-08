@@ -3,7 +3,8 @@ use crate::gateway_binding::{
     GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_middleware::CorsPreflight;
+use crate::gateway_middleware::Middleware::Http;
+use crate::gateway_middleware::{CorsPreflight, HttpMiddleware};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBindingCompiled {
@@ -155,9 +156,11 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                 ) {
                     (Some(worker_name), Some(compiled_worker_name), Some(rib_input_type_info)) => {
                         Some(WorkerNameCompiled {
-                            worker_name: worker_name.into(),
-                            compiled_worker_name: compiled_worker_name.into(),
-                            rib_input_type_info: rib_input_type_info.into(),
+                            worker_name: rib::Expr::try_from(worker_name)?,
+                            compiled_worker_name: rib::RibByteCode::try_from(compiled_worker_name)?,
+                            rib_input_type_info: rib::RibInputTypeInfo::try_from(
+                                rib_input_type_info,
+                            )?,
                         })
                     }
                     _ => None,
@@ -170,25 +173,34 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                 ) {
                     (Some(idempotency_key), Some(compiled_idempotency_key), Some(rib_input)) => {
                         Some(IdempotencyKeyCompiled {
-                            idempotency_key: idempotency_key.into(),
-                            compiled_idempotency_key: compiled_idempotency_key.into(),
-                            rib_input: rib_input.into(),
+                            idempotency_key: rib::Expr::try_from(idempotency_key)?,
+                            compiled_idempotency_key: rib::RibByteCode::try_from(
+                                compiled_idempotency_key,
+                            )?,
+                            rib_input: rib::RibInputTypeInfo::try_from(rib_input)?,
                         })
                     }
                     _ => None,
                 };
 
                 let response_compiled = ResponseMappingCompiled {
-                    response_rib_expr: value.response.ok_or("Missing response for Worker")?.into(),
-                    compiled_response: value
-                        .compiled_response_expr
-                        .ok_or("Missing compiled_response for Worker")?
-                        .into(),
-                    rib_input: value
-                        .response_rib_input
-                        .ok_or("Missing response_rib_input for Worker")?
-                        .into(),
-                    worker_calls: value.worker_functions_in_response.map(|x| x.into()),
+                    response_rib_expr: rib::Expr::try_from(
+                        value.response.ok_or("Missing response for Worker")?,
+                    )?,
+                    compiled_response: rib::RibByteCode::try_from(
+                        value
+                            .compiled_response_expr
+                            .ok_or("Missing compiled_response for Worker")?,
+                    )?,
+                    rib_input: rib::RibInputTypeInfo::try_from(
+                        value
+                            .response_rib_input
+                            .ok_or("Missing response_rib_input for Worker")?,
+                    )?,
+                    worker_calls: value
+                        .worker_functions_in_response
+                        .map(|x| rib::WorkerFunctionsInRib::try_from(x))
+                        .transpose()?,
                 };
 
                 Ok(GatewayBindingCompiled::Worker(WorkerBindingCompiled {
@@ -204,20 +216,20 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     if let (Some(allow_methods), Some(allow_headers), Some(allow_origin)) =
                         (value.allow_methods, value.allow_headers, value.allow_origin)
                     {
-                        Some(CorsPreflight {
+                        CorsPreflight {
                             allow_methods,
                             allow_headers,
                             allow_origin,
                             expose_headers: value.expose_headers,
                             max_age: value.max_age,
-                        })
+                        }
                     } else {
-                        None
+                        CorsPreflight::default()
                     };
 
-                Ok(GatewayBindingCompiled::Static(StaticBinding {
-                    cors_preflight,
-                }))
+                Ok(GatewayBindingCompiled::Static(
+                    StaticBinding::from_http_middleware(HttpMiddleware::cors(cors_preflight)),
+                ))
             }
             _ => Err("Unknown binding type".to_string()),
         }

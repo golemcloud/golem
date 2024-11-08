@@ -248,7 +248,7 @@ mod conversion {
                         .map(|r| apidefinition::v1::RouteValidationError {
                             method: r.method.to_string(),
                             path: r.path.to_string(),
-                            component: Some(r.component.component_id.into()),
+                            component: r.component.map(|x| x.component_id.into()),
                             detail: r.detail,
                         })
                         .collect();

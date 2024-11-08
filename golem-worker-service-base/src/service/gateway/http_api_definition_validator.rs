@@ -17,28 +17,24 @@ use crate::service::gateway::api_definition_validator::{
 pub struct RouteValidationError {
     pub method: MethodPattern,
     pub path: String,
-    pub component: VersionedComponentId,
+    pub component: Option<VersionedComponentId>,
     pub detail: String,
-}
-
-impl RouteValidationError {
-    pub fn from_route(route: Route, detail: String) -> Self {
-        Self {
-            method: route.method,
-            path: route.path.to_string(),
-            component: route.binding.component_id,
-            detail,
-        }
-    }
 }
 
 impl Display for RouteValidationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RouteValidationError: method: {}, path: {}, component: {}, detail: {}",
-            self.method, self.path, self.component, self.detail
-        )
+            "RouteValidationError: method: {}, path: {}, detail: {}",
+            self.method, self.path, self.detail
+        )?;
+
+        // Append component if it's present
+        if let Some(ref component) = self.component {
+            write!(f, ", component: {}", component)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -92,7 +88,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
             errors.push(RouteValidationError {
                 method: route.method.clone(),
                 path: route.path.to_string(),
-                component: route.binding.component_id.clone(),
+                component: route.binding.get_worker_binding().map(|x| x.component_id),
                 detail,
             });
         }

@@ -45,9 +45,9 @@ impl From<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Gatew
             GatewayBinding::Worker(worker_binding) => {
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
                     binding_type: Some(0),
-                    component: worker_binding.component_id.into(),
+                    component: Some(worker_binding.component_id.into()),
                     worker_name: worker_binding.worker_name.map(|x| x.into()),
-                    response: worker_binding.response.0.into(),
+                    response: Some(worker_binding.response.0.into()),
                     idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
                     allow_origin: None,
                     allow_headers: None,
@@ -100,7 +100,8 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
         let binding_type_proto =
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::try_from(
                 value.binding_type.unwrap_or(0),
-            )?;
+            )
+            .map_err(|_| "Failed to convert binding type".to_string())?;
 
         match binding_type_proto {
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default => {
