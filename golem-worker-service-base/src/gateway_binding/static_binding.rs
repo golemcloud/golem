@@ -6,7 +6,8 @@ use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
 // While a middleware can exist within other bindings,
 // a middleware by itself can sometimes behave as a static binding.
 // This separation is to ensure that no worker is involved in certain requests.
-// Example: browser requests for preflight requests need only what's contained in a middleware.
+// Example: browser requests for preflights need only what's contained in a middleware and
+// don't need to pass through to the backend.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticBinding {
     Middleware(Middleware),

@@ -5,6 +5,8 @@ use crate::gateway_binding::{
 };
 use crate::gateway_middleware::{CorsPreflight, HttpMiddleware};
 
+// A compiled binding is a binding with all existence of Rib Expr
+// get replaced with their compiled form - RibByteCode.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
