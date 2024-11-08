@@ -4,7 +4,7 @@ use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo, WorkerFunctionsInRib};
-use crate::gateway_middleware::Middleware;
+use crate::gateway_middleware::{Middleware, Middlewares};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerBindingCompiled {
@@ -12,7 +12,7 @@ pub struct WorkerBindingCompiled {
     pub worker_name_compiled: Option<WorkerNameCompiled>,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub response_compiled: ResponseMappingCompiled,
-    pub middleware: Vec<Middleware>,
+    pub middleware: Option<Middlewares>
 }
 
 impl WorkerBindingCompiled {

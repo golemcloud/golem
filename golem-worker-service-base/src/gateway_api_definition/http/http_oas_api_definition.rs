@@ -108,7 +108,7 @@ mod internal {
     use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
     use crate::api::GatewayBindingType;
-    use crate::gateway_middleware::{CorsPreflight, CorsPreflightExpr, HttpMiddleware, Middleware};
+    use crate::gateway_middleware::{CorsPreflight, CorsPreflightExpr, HttpMiddleware, Middleware, Middlewares};
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -183,7 +183,7 @@ mod internal {
 
         match (binding_type, &method) {
             (GatewayBindingType::Cors, MethodPattern::Options) => {
-                Err("CORS binding type is not supported for OPTIONS method".to_string());
+                Err("CORS binding type is not supported for OPTIONS method".to_string())
             }
             (GatewayBindingType::Default, _) => {
                 let binding = get_worker_binding(worker_bridge_info)?;
@@ -209,14 +209,20 @@ mod internal {
 
     pub(crate) fn get_worker_binding(worker_bridge_info: &Value) -> Result<WorkerBinding, String> {
         let http_middlewares = get_middleware(worker_bridge_info)?;
-        let middlewares = http_middlewares.iter().map(Middleware::http).collect();
+        let middlewares = http_middlewares.into_iter().map(Middleware::http).collect::<Vec<_>>();
+
+        let binding_middleware = if middlewares.is_empty() {
+            Some(Middlewares(middlewares))
+        } else {
+            None
+        };
 
         let binding = WorkerBinding {
             worker_name: get_worker_id_expr(worker_bridge_info)?,
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
-            middlewares: middlewares,
+            middleware: binding_middleware,
         };
 
         Ok(binding)
@@ -367,7 +373,7 @@ mod tests {
     use rib::Expr;
     use serde_json::json;
     use uuid::Uuid;
-    use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
+    use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware, Middlewares};
 
     #[test]
     fn test_get_route_from_path_item() {
@@ -435,13 +441,13 @@ mod tests {
                         .into_iter()
                         .collect()
                     )),
-                    middlewares: vec![Middleware::Http(HttpMiddleware::cors(CorsPreflight {
+                    middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::cors(CorsPreflight {
                         allow_headers: "Content-Type, Authorization".to_string(),
                         allow_methods: "GET, POST, PUT, DELETE, OPTIONS".to_string(),
                         allow_origin: "*".to_string(),
                         expose_headers: None,
                         max_age: None,
-                    }))]
+                    }))]))
                 })
             })
         );

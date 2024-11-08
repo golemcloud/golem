@@ -134,4 +134,30 @@ impl CorsPreflight {
     }
 }
 
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CorsPreflight> for CorsPreflight {
+    type Error = String;
+
+    fn try_from(value: golem_api_grpc::proto::golem::apidefinition::CorsPreflight) -> Result<Self, Self::Error> {
+        Ok(CorsPreflight {
+            allow_origin: value.allow_origin.ok_or("Missing allow origin")?,
+            allow_methods: value.allow_methods.ok_or("Missing allow methods")?,
+            allow_headers: value.allow_headers.ok_or("Missing allow headers")?,
+            expose_headers: value.expose_headers,
+            max_age: value.max_age,
+        })
+    }
+}
+
+impl From<CorsPreflight> for golem_api_grpc::proto::golem::apidefinition::CorsPreflight {
+    fn from(value: CorsPreflight) -> Self {
+        golem_api_grpc::proto::golem::apidefinition::CorsPreflight {
+            allow_origin: Some(value.allow_origin),
+            allow_methods: Some(value.allow_methods),
+            allow_headers: Some(value.allow_headers),
+            expose_headers: value.expose_headers,
+            max_age: value.max_age,
+        }
+    }
+}
+
 pub struct CorsPreflightExpr(pub Expr);

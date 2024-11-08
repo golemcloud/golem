@@ -4,7 +4,7 @@ use crate::gateway_api_definition::http::{
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::http::ApiSite;
-use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, StaticBinding};
+use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding};
 use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::VersionedComponentId;
@@ -143,7 +143,7 @@ pub struct GatewayBindingData {
     pub response: Option<String>,
     // For binding type - worker
     // Optional only to keep backward compatibility
-    pub middlewares: Option<Vec<Middleware>>,
+    pub middleware: Option<MiddlewareData>,
 
     // CORS
     //  For binding type - cors-middleware
@@ -161,6 +161,13 @@ pub struct GatewayBindingData {
     //  For binding type - cors-middleware
     // Optional only to keep backward compatibility
     pub max_age: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct MiddlewareData {
+    pub cors: Option<CorsPreflight>,
 }
 
 // This is only to keep backward compatibility we introduce an optional discriminator
@@ -367,7 +374,12 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     None
                 };
 
-                let middlewares = worker_binding.middlewares.into_iter().map(|m| m.into()).collect();
+                let middleware = worker_binding
+                    .middleware
+                    .and_then(|x|
+                    x.0.iter().find_map(|m| m.get_cors().map(|c| MiddlewareData {
+                        cors: Some(c.clone())
+                    })));
 
                 Ok(Self {
                     binding_type: Some(api::GatewayBindingType::Default),
@@ -380,23 +392,26 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     allow_headers: None,
                     expose_headers: None,
                     max_age: None,
-                    middlewares: Some(middlewares),
+                    middleware
                 })
             }
 
             GatewayBinding::Static(plugin) => match plugin {
-                StaticBinding::Middleware(Middleware::Http(HttpMiddleware::Cors(cors))) => {
+                StaticBinding::Middleware(middleware) => {
+                    let cors = middleware.get_cors().clone();
+
                     Ok(Self {
                         binding_type: Some(api::GatewayBindingType::Cors),
                         component_id: None,
                         worker_name: None,
                         idempotency_key: None,
                         response: None,
-                        allow_origin: Some(cors.allow_origin),
-                        allow_methods: Some(cors.allow_methods),
-                        allow_headers: Some(cors.allow_headers),
-                        expose_headers: cors.expose_headers,
-                        max_age: cors.max_age,
+                        allow_origin: cors.as_ref().map(|c| c.allow_origin.clone()),
+                        allow_methods: cors.as_ref().map(|c| c.allow_methods.clone()),
+                        allow_headers: cors.as_ref().map(|c| c.allow_headers.clone()),
+                        expose_headers: cors.as_ref().and_then(|c| c.expose_headers.clone()),
+                        max_age: cors.as_ref().and_then(|c| c.max_age.clone()),
+                        middleware: None
                     })
                 }
             },
@@ -435,19 +450,23 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                     None
                 };
 
-                let middlewares = gateway_binding_data
-                    .middlewares
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|m| m.into())
-                    .collect();
+                let mut middlewares = Vec::new();
+                if let Some(middle_ware_daa) = gateway_binding_data.middleware {
+                    if let Some(cors) = middle_ware_daa.cors {
+                        middlewares.push(Middleware::http(HttpMiddleware::cors(cors)));
+                    }
+                }
 
-                let worker_binding = crate::gateway_binding::WorkerBinding {
+                let worker_binding = WorkerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
                     response,
-                    middlewares
+                    middleware: if middlewares.is_empty() {
+                        None
+                    } else {
+                        Some(crate::gateway_middleware::Middlewares(middlewares))
+                    },
                 };
 
                 Ok(GatewayBinding::Worker(worker_binding))

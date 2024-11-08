@@ -70,17 +70,32 @@ message GatewayBinding {
 
   // type discriminator to keep backward compatibility
   optional GatewayBindingType binding_type = 5;
-  optional string allow_origin = 6;
-  optional string allow_methods = 7;
-  optional string allow_headers = 8;
-  optional string expose_headers = 9;
-  optional uint64 max_age = 10;
+  optional StaticBinding static_binding = 6;
+  optional Middleware middleware = 7;
 }
 
 
 enum GatewayBindingType {
   DEFAULT = 0;
   CORS = 1;
+}
+
+message StaticBinding {
+  oneof static_binding {
+    Middleware middleware = 1;
+  }
+}
+
+message Middleware {
+  optional CorsPreflight cors = 1;
+}
+
+message CorsPreflight {
+  optional string allow_origin = 6;
+  optional string allow_methods = 7;
+  optional string allow_headers = 8;
+  optional string expose_headers = 9;
+  optional uint64 max_age = 10;
 }
 
 message CompiledGatewayBinding {
@@ -98,9 +113,7 @@ message CompiledGatewayBinding {
   optional golem.rib.WorkerFunctionsInRib worker_functions_in_response = 11;
   // type discriminator to keep backward compatibility
   optional GatewayBindingType binding_type = 12;
-  optional string allow_origin = 13;
-  optional string allow_methods = 14;
-  optional string allow_headers = 15;
-  optional string expose_headers = 16;
-  optional uint64 max_age = 17;
+  optional StaticBinding static_binding = 13;
+  // middleware
+  optional Middleware middleware = 14;
 }
