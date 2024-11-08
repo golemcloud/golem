@@ -115,7 +115,11 @@ mod internal {
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
-    pub(crate) const GOLEM_WORKER_GATEWAY_EXTENSION: &str = "x-golem-worker-bridge";
+
+    // Legacy extension for worker bridge
+    pub(crate) const GOLEM_WORKER_GATEWAY_EXTENSION_LEGACY: &str = "x-golem-worker-bridge";
+
+    pub(crate) const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
     pub(crate) fn get_root_extension(open_api: &OpenAPI, key_name: &str) -> Result<String, String> {
         open_api
@@ -176,10 +180,12 @@ mod internal {
 
         let worker_gateway_info = method_operation
             .extensions
-            .get(GOLEM_WORKER_GATEWAY_EXTENSION)
+            // TO keep backward compatibility with the old extension
+            .get(GOLEM_WORKER_GATEWAY_EXTENSION_LEGACY)
+            .or(method_operation.extensions.get(GOLEM_API_GATEWAY_BINDING))
             .ok_or(format!(
                 "No {} extension found",
-                GOLEM_WORKER_GATEWAY_EXTENSION
+                GOLEM_WORKER_GATEWAY_EXTENSION_LEGACY
             ))?;
 
         let binding_type = get_binding_type(worker_gateway_info)?;
@@ -390,7 +396,7 @@ mod tests {
     #[test]
     fn test_get_route_from_path_item() {
         let path_item = Operation {
-            extensions: vec![("x-golem-worker-bridge".to_string(), json!({
+            extensions: vec![("x-golem-api-gateway-binding".to_string(), json!({
                 "worker-name": "let x: str = request.body.user; \"worker-${x}\"",
                 "component-id": "00000000-0000-0000-0000-000000000000",
                 "component-version": 0,
