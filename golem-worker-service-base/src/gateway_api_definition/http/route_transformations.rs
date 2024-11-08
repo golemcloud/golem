@@ -2,9 +2,9 @@ use crate::gateway_api_definition::http::{MethodPattern, Route};
 use crate::gateway_binding::{GatewayBinding, StaticBinding};
 use crate::gateway_middleware::{HttpMiddleware, Middleware};
 
-// For those resources, with CORS enabled throught OPTIONS method,
+// For those resources, with CORS enabled through OPTIONS method,
 // update the middlewares of all the endpoints accessing that resource
-pub(crate) fn update_routes_with_cors_middleware(routes: Vec<Route>) -> Result<Vec<Route>, String> {
+pub fn update_routes_with_cors_middleware(routes: Vec<Route>) -> Result<Vec<Route>, String> {
     let mut updated_routes = routes.clone();
 
     for route in routes.iter() {
@@ -37,8 +37,8 @@ mod tests {
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
     use crate::gateway_api_definition::http::AllPathPatterns;
-    use crate::gateway_binding::ResponseMapping;
-    use crate::gateway_middleware::CorsPreflight;
+    use crate::gateway_binding::{ResponseMapping, WorkerBinding};
+    use crate::gateway_middleware::{CorsPreflight, Middlewares};
     use super::*;
 
     #[test]
@@ -55,21 +55,24 @@ mod tests {
         let cors_route = Route {
             method: MethodPattern::Options,
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Static(StaticBinding::Middleware(HttpMiddleware::Cors(cors_preflight.clone()))),
+            binding: GatewayBinding::Static(StaticBinding::from_http_middleware(HttpMiddleware::cors(cors_preflight.clone()))),
         };
 
         // Worker route for the same path but with a different method (e.g., GET)
         let mut worker_binding = WorkerBinding {
-            component_id: VersionedComponentId::new("test_component", 1),
+            component_id: VersionedComponentId {
+                component_id: ComponentId::new_v4(),
+                version: 1,
+            },
             worker_name: None,
             idempotency_key: None,
-            response: ResponseMapping::Default,
+            response: ResponseMapping(Expr::literal("")),
             middleware: None,
         };
 
         let worker_route = Route {
             method: MethodPattern::Get,
-            path: AllPathPatterns::Single("/test".to_string()),
+            path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Worker(worker_binding.clone()),
         };
 
@@ -105,7 +108,7 @@ mod tests {
         let invalid_cors_route = Route {
             method: MethodPattern::Get, // Should be OPTIONS
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Static(StaticBinding::Middleware(HttpMiddleware::Cors(cors_preflight.clone()))),
+            binding: GatewayBinding::Static(StaticBinding::from_http_middleware(HttpMiddleware::cors(cors_preflight.clone()))),
         };
 
         let worker_route = Route {
@@ -146,28 +149,30 @@ mod tests {
 
         let cors_route = Route {
             method: MethodPattern::Options,
-            path: AllPathPatterns::Single("/test".to_string()),
-            binding: GatewayBinding::Static(StaticBinding::Middleware(HttpMiddleware::Cors(cors_preflight.clone()))),
+            path: AllPathPatterns::parse("/test").unwrap(),
+            binding: GatewayBinding::Static(StaticBinding::from_http_middleware(HttpMiddleware::cors(cors_preflight.clone()))),
         };
 
         // Worker route for the same path with pre-existing CORS middleware
         let mut worker_binding = WorkerBinding {
-            component_id: VersionedComponentId::new("test_component", 1),
+            component_id: VersionedComponentId {
+                component_id: ComponentId::new_v4(),
+                version: 1,
+            },
             worker_name: None,
             idempotency_key: None,
-            response: ResponseMapping::Default,
+            response: ResponseMapping(Expr::literal("")),
             middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::Cors(cors_preflight.clone()))])),
         };
 
         let worker_route = Route {
             method: MethodPattern::Get,
-            path: AllPathPatterns::Single("/test".to_string()),
+            path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Worker(worker_binding.clone()),
         };
 
         let routes = vec![cors_route.clone(), worker_route.clone()];
 
-        // Call the function
         let result = update_routes_with_cors_middleware(routes);
 
         // Assert that the function was successful
