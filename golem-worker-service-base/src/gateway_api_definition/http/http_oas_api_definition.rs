@@ -115,7 +115,7 @@ mod internal {
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
-    pub(crate) const GOLEM_WORKER_BRIDGE_EXTENSION: &str = "x-golem-worker-bridge";
+    pub(crate) const GOLEM_WORKER_GATEWAY_EXTENSION: &str = "x-golem-worker-bridge";
 
     pub(crate) fn get_root_extension(open_api: &OpenAPI, key_name: &str) -> Result<String, String> {
         open_api
@@ -174,22 +174,22 @@ mod internal {
 
         let method = method_res?;
 
-        let worker_bridge_info = method_operation
+        let worker_gateway_info = method_operation
             .extensions
-            .get(GOLEM_WORKER_BRIDGE_EXTENSION)
+            .get(GOLEM_WORKER_GATEWAY_EXTENSION)
             .ok_or(format!(
                 "No {} extension found",
-                GOLEM_WORKER_BRIDGE_EXTENSION
+                GOLEM_WORKER_GATEWAY_EXTENSION
             ))?;
 
-        let binding_type = get_binding_type(worker_bridge_info)?;
+        let binding_type = get_binding_type(worker_gateway_info)?;
 
         match (binding_type, &method) {
             (GatewayBindingType::Cors, MethodPattern::Options) => {
                 Err("CORS binding type is not supported for OPTIONS method".to_string())
             }
             (GatewayBindingType::Default, _) => {
-                let binding = get_worker_binding(worker_bridge_info)?;
+                let binding = get_worker_binding(worker_gateway_info)?;
 
                 Ok(Route {
                     path: path_pattern.clone(),
@@ -199,7 +199,7 @@ mod internal {
             }
 
             (GatewayBindingType::Cors, _) => {
-                let binding = get_cors_binding(worker_bridge_info)?;
+                let binding = get_cors_binding(worker_gateway_info)?;
 
                 Ok(Route {
                     method,
@@ -210,8 +210,8 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_worker_binding(worker_bridge_info: &Value) -> Result<WorkerBinding, String> {
-        let http_middlewares = get_middleware(worker_bridge_info)?;
+    pub(crate) fn get_worker_binding(worker_gateway_info: &Value) -> Result<WorkerBinding, String> {
+        let http_middlewares = get_middleware(worker_gateway_info)?;
         let middlewares = http_middlewares
             .into_iter()
             .map(Middleware::http)
@@ -224,18 +224,18 @@ mod internal {
         };
 
         let binding = WorkerBinding {
-            worker_name: get_worker_id_expr(worker_bridge_info)?,
-            component_id: get_component_id(worker_bridge_info)?,
-            idempotency_key: get_idempotency_key(worker_bridge_info)?,
-            response: get_response_mapping(worker_bridge_info)?,
+            worker_name: get_worker_id_expr(worker_gateway_info)?,
+            component_id: get_component_id(worker_gateway_info)?,
+            idempotency_key: get_idempotency_key(worker_gateway_info)?,
+            response: get_response_mapping(worker_gateway_info)?,
             middleware: binding_middleware,
         };
 
         Ok(binding)
     }
 
-    pub(crate) fn get_cors_binding(worker_bridge_info: &Value) -> Result<StaticBinding, String> {
-        match worker_bridge_info {
+    pub(crate) fn get_cors_binding(worker_gateway_info: &Value) -> Result<StaticBinding, String> {
+        match worker_gateway_info {
             Value::Object(map) => match map.get("response") {
                 Some(value) => {
                     let rib_expr_text = value
@@ -261,15 +261,15 @@ mod internal {
     }
 
     pub(crate) fn get_component_id(
-        worker_bridge_info: &Value,
+        worker_gateway_info: &Value,
     ) -> Result<VersionedComponentId, String> {
-        let component_id_str = worker_bridge_info
+        let component_id_str = worker_gateway_info
             .get("component-id")
             .ok_or("No component-id found")?
             .as_str()
             .ok_or("component-id is not a string")?;
 
-        let version = worker_bridge_info
+        let version = worker_gateway_info
             .get("component-version")
             .ok_or("No component-version found")?
             .as_u64()
@@ -285,9 +285,9 @@ mod internal {
     }
 
     pub(crate) fn get_binding_type(
-        worker_bridge_info: &Value,
+        worker_gateway_info: &Value,
     ) -> Result<GatewayBindingType, String> {
-        let binding_type_optional: Option<GatewayBindingType> = worker_bridge_info
+        let binding_type_optional: Option<GatewayBindingType> = worker_gateway_info
             .get("binding-type")
             .map(|value| serde_json::from_value(value.clone()))
             .transpose()
@@ -297,10 +297,10 @@ mod internal {
     }
 
     pub(crate) fn get_middleware(
-        worker_bridge_info: &Value,
+        worker_gateway_info: &Value,
     ) -> Result<Vec<HttpMiddleware>, String> {
         let mut middlewares = vec![];
-        if let Some(middleware_value) = worker_bridge_info.get("middlewares") {
+        if let Some(middleware_value) = worker_gateway_info.get("middlewares") {
             match middleware_value {
                 Value::Object(map) => {
                     let cors_preflight: Option<CorsPreflight> = map
@@ -324,10 +324,10 @@ mod internal {
     }
 
     pub(crate) fn get_response_mapping(
-        worker_bridge_info: &Value,
+        worker_gateway_info: &Value,
     ) -> Result<ResponseMapping, String> {
         let response = {
-            let response_mapping_optional = worker_bridge_info.get("response").ok_or(
+            let response_mapping_optional = worker_gateway_info.get("response").ok_or(
                 "No response mapping found. It should be a string representing expression"
                     .to_string(),
             )?;
@@ -344,8 +344,8 @@ mod internal {
         Ok(ResponseMapping(response.clone()))
     }
 
-    pub(crate) fn get_worker_id_expr(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
-        let worker_id_str_opt = worker_bridge_info
+    pub(crate) fn get_worker_id_expr(worker_gateway_info: &Value) -> Result<Option<Expr>, String> {
+        let worker_id_str_opt = worker_gateway_info
             .get("worker-name")
             .map(|json_value| json_value.as_str().ok_or("worker-name is not a string"))
             .transpose()?;
@@ -357,8 +357,8 @@ mod internal {
         Ok(worker_id_expr_opt)
     }
 
-    pub(crate) fn get_idempotency_key(worker_bridge_info: &Value) -> Result<Option<Expr>, String> {
-        if let Some(key) = worker_bridge_info.get("idempotency-key") {
+    pub(crate) fn get_idempotency_key(worker_gateway_info: &Value) -> Result<Option<Expr>, String> {
+        if let Some(key) = worker_gateway_info.get("idempotency-key") {
             let key_expr = key.as_str().ok_or("idempotency-key is not a string")?;
             Ok(Some(
                 rib::from_string(key_expr).map_err(|err| err.to_string())?,
