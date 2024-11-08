@@ -46,12 +46,21 @@ impl Display for GatewayBindingResolutionError {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ResolvedGatewayBinding {
     pub request_details: GatewayRequestDetails,
     pub resolved_binding: ResolvedBinding,
 }
 
 impl ResolvedGatewayBinding {
+    pub fn get_worker_detail(&self) -> Option<WorkerDetail> {
+        match &self.resolved_binding {
+            ResolvedBinding::Worker(resolved_worker_binding) => {
+                Some(resolved_worker_binding.worker_detail.clone())
+            }
+            _ => None,
+        }
+    }
     pub fn from_static(
         request_details: &GatewayRequestDetails,
         static_binding: &StaticBinding,
@@ -73,6 +82,7 @@ impl ResolvedGatewayBinding {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum ResolvedBinding {
     Static(StaticBinding),
     Worker(ResolvedWorkerBinding),

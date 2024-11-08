@@ -102,7 +102,7 @@ mod tests {
     use test_r::test;
 
     use crate::gateway_api_definition::http::{MethodPattern, Route};
-    use crate::gateway_binding::ResponseMapping;
+    use crate::gateway_binding::{GatewayBinding, ResponseMapping};
     use crate::service::gateway::http_api_definition_validator::unique_routes;
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
@@ -114,7 +114,7 @@ mod tests {
             Route {
                 method,
                 path: crate::gateway_api_definition::http::AllPathPatterns::parse(path).unwrap(),
-                binding: crate::gateway_binding::WorkerBinding {
+                binding: GatewayBinding::Worker(crate::gateway_binding::WorkerBinding {
                     component_id: VersionedComponentId {
                         component_id: ComponentId::new_v4(),
                         version: 1,
@@ -122,7 +122,7 @@ mod tests {
                     worker_name: Some(Expr::identifier("request")),
                     idempotency_key: None,
                     response: ResponseMapping(Expr::literal("sample")),
-                },
+                }),
             }
         }
 

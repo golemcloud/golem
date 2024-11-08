@@ -103,7 +103,6 @@ pub mod router {
 mod tests {
     use test_r::test;
 
-    use crate::api::HttpApiDefinitionRequest;
     use crate::gateway_api_definition::http::{
         CompiledHttpApiDefinition, ComponentMetadataDictionary, HttpApiDefinition,
     };
@@ -113,6 +112,7 @@ mod tests {
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor,
         GatewayWorkerRequestExecutorError, WorkerResponse,
     };
+    use crate::gateway_middleware::HttpMiddleware;
     use crate::gateway_request::gateway_request_details::GatewayRequestDetails;
     use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
     use crate::gateway_rib_interpreter::{
@@ -134,6 +134,7 @@ mod tests {
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
     use http::{HeaderMap, HeaderValue, Method};
+    use nom::sequence::pair;
     use rib::{GetLiteralValue, RibResult};
     use serde_json::Value;
     use std::collections::HashMap;
@@ -256,6 +257,12 @@ mod tests {
     impl ToResponse<TestResponse> for RibInputTypeMismatch {
         fn to_response(&self, _request_details: &GatewayRequestDetails) -> TestResponse {
             panic!("{}", self.to_string())
+        }
+    }
+
+    impl ToResponse<TestResponse> for HttpMiddleware {
+        fn to_response(&self, request_details: &GatewayRequestDetails) -> TestResponse {
+            panic!("Test failure. Http middleware cannot be converted to TestResponse")
         }
     }
 
@@ -851,13 +858,16 @@ mod tests {
 
             let resolved_route = api_request
                 .resolve_gateway_binding(vec![compiled_api_spec])
-                .await;
+                .await
+                .map_err(|err| err.to_string());
 
-            let result = resolved_route.map(|x| x.worker_detail);
+            let result =
+                resolved_route.map(|x| x.get_worker_detail().expect("Tests expect worker detail"));
 
             assert_eq!(result.is_ok(), ok);
         }
 
+        // https://github.com/golemcloud/golem/issues/1054
         test_paths("getcartcontent/{cart-id}", "/noexist", false).await;
         test_paths("/getcartcontent/{cart-id}", "noexist", false).await;
         test_paths("getcartcontent/{cart-id}", "noexist", false).await;
@@ -896,7 +906,7 @@ mod tests {
                 .unwrap();
 
             assert_eq!(
-                resolved_route.worker_detail.idempotency_key,
+                resolved_route.get_worker_detail().unwrap().idempotency_key,
                 idempotency_key
             );
         }

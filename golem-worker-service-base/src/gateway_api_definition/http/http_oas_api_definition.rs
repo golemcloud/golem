@@ -271,7 +271,7 @@ mod tests {
 
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
-    use crate::gateway_binding::{ResponseMapping, WorkerBinding};
+    use crate::gateway_binding::{GatewayBinding, ResponseMapping, WorkerBinding};
     use golem_common::model::ComponentId;
     use openapiv3::Operation;
     use rib::Expr;
@@ -301,7 +301,7 @@ mod tests {
             Ok(Route {
                 path: path_pattern,
                 method: MethodPattern::Get,
-                binding: WorkerBinding {
+                binding: GatewayBinding::Worker(WorkerBinding {
                     worker_name: Some(Expr::expr_block(vec![
                         Expr::let_binding_with_type(
                             "x",
@@ -336,7 +336,7 @@ mod tests {
                         .into_iter()
                         .collect()
                     ))
-                }
+                })
             })
         );
     }
