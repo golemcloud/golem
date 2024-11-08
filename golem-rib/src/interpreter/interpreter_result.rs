@@ -15,7 +15,7 @@
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::{GetLiteralValue, LiteralValue};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::{NameValuePair, TypedRecord};
+use golem_wasm_rpc::protobuf::{NameValuePair};
 
 pub enum RibResult {
     Unit,

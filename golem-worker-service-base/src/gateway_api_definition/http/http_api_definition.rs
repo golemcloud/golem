@@ -395,7 +395,7 @@ impl CompiledRoute {
                     ))?;
 
                 let binding =
-                    WorkerBindingCompiled::from_raw_worker_binding(&worker_binding, metadata)
+                    WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
                         .map_err(RouteCompilationErrors::RibCompilationError)?;
 
                 Ok(CompiledRoute {
@@ -637,24 +637,6 @@ mod tests {
 
         let de = serde_yaml::Deserializer::from_str(yaml_string.as_str());
         serde_yaml::Value::deserialize(de).unwrap()
-    }
-
-    #[track_caller]
-    fn test_serde(path_pattern: &str, worker_id: &str, response_mapping: &str) {
-        let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
-
-        let result: api::HttpApiDefinitionRequest = serde_yaml::from_value(yaml.clone()).unwrap();
-
-        let yaml2 = serde_yaml::to_value(result.clone()).unwrap();
-
-        let result2: api::HttpApiDefinitionRequest = serde_yaml::from_value(yaml2.clone()).unwrap();
-
-        assert_eq!(
-            result,
-            result2,
-            "Assertion failed for test case at {}",
-            std::panic::Location::caller()
-        );
     }
 
     #[test]

@@ -1,5 +1,4 @@
-pub use http::*;
-
+pub(crate) use http::*;
 mod http;
 
 #[derive(Debug, Clone, PartialEq)]

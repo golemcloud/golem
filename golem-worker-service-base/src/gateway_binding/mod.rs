@@ -105,11 +105,8 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let component_id = VersionedComponentId::try_from(
                     value.component.ok_or("Missing component id".to_string())?,
                 )?;
-                let worker_name = value.worker_name.map(|x| Expr::try_from(x)).transpose()?;
-                let idempotency_key = value
-                    .idempotency_key
-                    .map(|x| Expr::try_from(x))
-                    .transpose()?;
+                let worker_name = value.worker_name.map(Expr::try_from).transpose()?;
+                let idempotency_key = value.idempotency_key.map(Expr::try_from).transpose()?;
                 let response_proto = value.response.ok_or("Missing response field")?;
                 let response = Expr::try_from(response_proto)?;
 

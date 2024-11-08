@@ -134,7 +134,6 @@ mod tests {
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
     use http::{HeaderMap, HeaderValue, Method};
-    use nom::sequence::pair;
     use rib::{GetLiteralValue, RibResult};
     use serde_json::Value;
     use std::collections::HashMap;
@@ -261,7 +260,7 @@ mod tests {
     }
 
     impl ToResponse<TestResponse> for HttpMiddleware {
-        fn to_response(&self, request_details: &GatewayRequestDetails) -> TestResponse {
+        fn to_response(&self, _request_details: &GatewayRequestDetails) -> TestResponse {
             panic!("Test failure. Http middleware cannot be converted to TestResponse")
         }
     }
@@ -970,7 +969,6 @@ mod tests {
             http_api_definition_request.try_into().unwrap();
 
         let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-        let http_api_definition = HttpApiDefinition::new(core_request, create_at);
-        http_api_definition
+        HttpApiDefinition::new(core_request, create_at)
     }
 }

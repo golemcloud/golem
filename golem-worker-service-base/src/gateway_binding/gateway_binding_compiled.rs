@@ -198,7 +198,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     )?,
                     worker_calls: value
                         .worker_functions_in_response
-                        .map(|x| rib::WorkerFunctionsInRib::try_from(x))
+                        .map(rib::WorkerFunctionsInRib::try_from)
                         .transpose()?,
                 };
 

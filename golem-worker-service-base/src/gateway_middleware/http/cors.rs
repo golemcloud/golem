@@ -45,6 +45,7 @@ impl CorsPreflight {
         cors_preflight
     }
 
+    // https://github.com/afsalthaj/golem-timeline/issues/70
     async fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<CorsPreflight, String> {
         // Compile and evaluate the expression
         let compiled_expr = rib::compile(&expr.0, &vec![]).map_err(|_| "Compilation failed")?;
