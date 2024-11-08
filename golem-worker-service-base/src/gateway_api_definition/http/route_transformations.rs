@@ -1,6 +1,4 @@
-use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
-use crate::gateway_binding::GatewayBinding;
-use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
+use crate::gateway_api_definition::http::Route;
 
 // For those resources with cors preflight enabled,
 // update the middlewares of all the endpoints accessing that resource with cors middleware
@@ -73,13 +71,13 @@ mod internal {
 mod tests {
     use test_r::test;
 
-    use super::*;
-    use crate::gateway_api_definition::http::AllPathPatterns;
-    use crate::gateway_binding::{ResponseMapping, StaticBinding, WorkerBinding};
-    use crate::gateway_middleware::{CorsPreflight, Middlewares};
+    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
+    use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
+    use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware, Middlewares};
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
+    use crate::gateway_api_definition::http::route_transformations::update_routes_with_cors_middleware;
 
     fn get_cors_preflight_route() -> Route {
         Route {
