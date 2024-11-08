@@ -33,6 +33,8 @@ pub fn  update_routes_with_cors_middleware(routes: Vec<Route>) -> Result<Vec<Rou
 
 #[cfg(test)]
 mod tests {
+    use test_r::test;
+    
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
