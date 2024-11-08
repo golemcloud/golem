@@ -28,11 +28,12 @@ pub enum GatewayBinding {
 }
 
 impl GatewayBinding {
-
     pub fn is_http_cors_binding(&self) -> bool {
         match self {
             Self::Worker(_) => false,
-            Self::Static(StaticBinding::Middleware(Middleware::Http(HttpMiddleware::Cors(_)))) => true
+            Self::Static(StaticBinding::Middleware(Middleware::Http(HttpMiddleware::Cors(_)))) => {
+                true
+            }
         }
     }
     pub fn get_worker_binding(&self) -> Option<WorkerBinding> {
@@ -45,9 +46,9 @@ impl GatewayBinding {
     pub fn get_http_cors(&self) -> Option<HttpMiddleware> {
         match self {
             Self::Worker(_) => None,
-            Self::Static(static_binding) => {
-                static_binding.get_cors_preflight().map(HttpMiddleware::cors)
-            }
+            Self::Static(static_binding) => static_binding
+                .get_cors_preflight()
+                .map(HttpMiddleware::cors),
         }
     }
 }

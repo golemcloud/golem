@@ -21,8 +21,7 @@ impl OpenApiDefinitionRequest {
             ApiVersion(get_root_extension(open_api, GOLEM_API_DEFINITION_VERSION)?);
 
         let routes = get_routes(&open_api.paths)?;
-        let updated_routes =
-            route_transformations::update_routes_with_cors_middleware(routes)?;
+        let updated_routes = route_transformations::update_routes_with_cors_middleware(routes)?;
 
         Ok(HttpApiDefinitionRequest {
             id: api_definition_id,

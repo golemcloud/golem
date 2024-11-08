@@ -1,5 +1,5 @@
 use crate::gateway_binding::WorkerBindingCompiled;
-use crate::gateway_middleware::{Middleware, Middlewares};
+use crate::gateway_middleware::{CorsPreflight, Middleware, Middlewares};
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 
@@ -19,6 +19,10 @@ impl WorkerBinding {
         } else {
             self.middleware = Some(Middlewares(vec![middleware]));
         }
+    }
+
+    pub fn get_cors_middleware(&self) -> Option<CorsPreflight> {
+        self.middleware.as_ref().and_then(|m| m.get_cors())
     }
 }
 

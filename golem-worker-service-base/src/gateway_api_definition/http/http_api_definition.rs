@@ -6,6 +6,7 @@ use Iterator;
 use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, WorkerBindingCompiled};
+use crate::gateway_middleware::CorsPreflight;
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use golem_service_base::model::{Component, VersionedComponentId};
@@ -346,6 +347,15 @@ pub struct Route {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
     pub binding: GatewayBinding,
+}
+
+impl Route {
+    pub fn cors_preflight(&self) -> Option<CorsPreflight> {
+        match &self.binding {
+            GatewayBinding::Static(static_binding) => static_binding.get_cors_preflight(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

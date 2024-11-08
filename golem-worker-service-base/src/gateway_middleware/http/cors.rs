@@ -175,7 +175,7 @@ pub struct CorsPreflightExpr(pub Expr);
 
 impl CorsPreflightExpr {
     pub fn default(middleware: &CorsPreflight) -> CorsPreflightExpr {
-        let mut cors_parameters =  vec![
+        let mut cors_parameters = vec![
             (
                 "Access-Control-Allow-Origin".to_string(),
                 Expr::literal(middleware.allow_origin.as_str()),
