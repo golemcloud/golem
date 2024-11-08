@@ -3,7 +3,7 @@ pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
 pub(crate) use worker_binding_compiled::*;
 
-use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middlewares};
+use crate::gateway_middleware::Middlewares;
 pub(crate) use gateway_binding_compiled::*;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;

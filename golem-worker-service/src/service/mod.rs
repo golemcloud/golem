@@ -10,23 +10,22 @@ use golem_worker_service_base::gateway_api_definition::http::{
 
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::http::InputHttpRequest;
 
-use golem_worker_service_base::repo::api_definition;
-use golem_worker_service_base::repo::api_deployment;
-use golem_worker_service_base::service::gateway::api_definition::{
-    ApiDefinitionService, ApiDefinitionServiceDefault,
-};
 use golem_worker_service_base::gateway_execution::api_definition_lookup::{
     ApiDefinitionsLookup, HttpApiDefinitionLookup,
 };
-use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;
+use golem_worker_service_base::gateway_execution::GatewayWorkerRequestExecutor;
+use golem_worker_service_base::repo::api_definition;
+use golem_worker_service_base::repo::api_deployment;
 use golem_worker_service_base::service::component::RemoteComponentService;
+use golem_worker_service_base::service::gateway::api_definition::{
+    ApiDefinitionService, ApiDefinitionServiceDefault,
+};
+use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;
 use golem_worker_service_base::service::gateway::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
 use golem_worker_service_base::service::worker::WorkerServiceDefault;
-use golem_worker_service_base::gateway_execution::GatewayWorkerRequestExecutor;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
@@ -34,6 +33,7 @@ use golem_common::config::RetryConfig;
 
 use golem_common::config::DbConfig;
 use golem_service_base::db;
+use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
 };

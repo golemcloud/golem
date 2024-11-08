@@ -15,7 +15,7 @@
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::{GetLiteralValue, LiteralValue};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::protobuf::{NameValuePair};
+use golem_wasm_rpc::protobuf::NameValuePair;
 
 pub enum RibResult {
     Unit,
@@ -57,7 +57,7 @@ impl RibResult {
     pub fn get_record(&self) -> Option<Vec<NameValuePair>> {
         self.get_val().and_then(|x| match x {
             TypeAnnotatedValue::Record(record) => Some(record.value),
-            _ => None
+            _ => None,
         })
     }
 }

@@ -1,4 +1,4 @@
-use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware, Middlewares};
+use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
 // as it may introduce unnecessary latency
@@ -31,10 +31,18 @@ impl StaticBinding {
 
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::StaticBinding> for StaticBinding {
     type Error = String;
-    fn try_from(value: golem_api_grpc::proto::golem::apidefinition::StaticBinding) -> Result<Self, String> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::StaticBinding,
+    ) -> Result<Self, String> {
         match value.static_binding {
             Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::Middleware(middleware)) => {
-                Ok(StaticBinding::Middleware(Middlewares::try_from(middleware)?))
+                let middleware = middleware.cors;
+                if let Some(cors) = middleware {
+                    // StaticBinding is about a single middleware
+                    Ok(StaticBinding::Middleware(Middleware::Http(HttpMiddleware::Cors(cors.try_into()?))))
+                } else {
+                    Err("Middleware is not a CORS middleware".to_string())
+                }
             }
             _ => Err("Unknown static binding type".to_string()),
         }
@@ -44,9 +52,13 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::StaticBinding> for Sta
 impl From<StaticBinding> for golem_api_grpc::proto::golem::apidefinition::StaticBinding {
     fn from(value: StaticBinding) -> Self {
         match value {
-            StaticBinding::Middleware(middleware) => {
+            StaticBinding::Middleware(Middleware::Http(HttpMiddleware::Cors(cors))) => {
                 golem_api_grpc::proto::golem::apidefinition::StaticBinding {
-                    static_binding: Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::Middleware(middleware.into())),
+                    static_binding: Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::Middleware(
+                        golem_api_grpc::proto::golem::apidefinition::Middleware {
+                            cors: Some(golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors)),
+                        }
+                    )),
                 }
             }
         }

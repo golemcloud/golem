@@ -3,7 +3,7 @@ use crate::gateway_binding::{
     GatewayBinding, IdempotencyKeyCompiled, ResponseMappingCompiled, WorkerBinding,
     WorkerBindingCompiled, WorkerNameCompiled,
 };
-use crate::gateway_middleware::{Middlewares};
+use crate::gateway_middleware::Middlewares;
 
 // A compiled binding is a binding with all existence of Rib Expr
 // get replaced with their compiled form - RibByteCode.
@@ -67,11 +67,15 @@ impl From<GatewayBindingCompiled>
                     .worker_calls
                     .map(|x| x.into());
 
-                let middleware = worker_binding.middleware.iter().find_map(
-                    |m| Some(golem_api_grpc::proto::golem::apidefinition::Middleware {
-                        cors: m.get_cors().map(|x| x.into()),
-                    })
-                );
+                let middleware = worker_binding
+                    .middleware
+                    .iter()
+                    .map(
+                        |m| golem_api_grpc::proto::golem::apidefinition::Middleware {
+                            cors: m.get_cors().map(|x| x.into()),
+                        },
+                    )
+                    .next();
 
                 golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
                     component,
@@ -87,7 +91,7 @@ impl From<GatewayBindingCompiled>
                     worker_functions_in_response,
                     binding_type: Some(0),
                     static_binding: None,
-                    middleware
+                    middleware,
                 }
             }
             GatewayBindingCompiled::Static(static_binding) => {
@@ -105,7 +109,7 @@ impl From<GatewayBindingCompiled>
                     worker_functions_in_response: None,
                     binding_type: Some(1),
                     static_binding: Some(static_binding.into()),
-                    middleware: None
+                    middleware: None,
                 }
             }
         }
@@ -182,21 +186,20 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         .transpose()?,
                 };
 
-                let middleware = value.middleware.map(|m| {
-                   Middlewares::try_from(m)
-                }).transpose()?;
+                let middleware = value.middleware.map(Middlewares::try_from).transpose()?;
 
                 Ok(GatewayBindingCompiled::Worker(WorkerBindingCompiled {
                     component_id,
                     worker_name_compiled,
                     idempotency_key_compiled,
                     response_compiled,
-                    middleware
+                    middleware,
                 }))
             }
             Some(1) => {
-                let static_binding =
-                    value.static_binding.ok_or("Missing static_binding for Static")?;
+                let static_binding = value
+                    .static_binding
+                    .ok_or("Missing static_binding for Static")?;
 
                 Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
             }

@@ -50,7 +50,7 @@ impl RegisterApiDefinitionApi {
         let record = recorded_http_api_request!("import_open_api",);
 
         let response = {
-            let definition = get_api_definition(payload.0 .0).map_err(|e| {
+            let definition = payload.0.to_http_api_definition().map_err(|e| {
                 error!("Invalid Spec {}", e);
                 ApiEndpointError::bad_request(safe(e))
             })?;
@@ -315,8 +315,8 @@ mod test {
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
     };
     use golem_worker_service_base::repo::api_deployment;
-    use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::component::ComponentResult;
+    use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
     use http::StatusCode;
     use poem::test::TestClient;
@@ -417,13 +417,12 @@ mod test {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        let definition =
-            golem_worker_service_base::api::HttpApiDefinitionRequest {
-                id: ApiDefinitionId("test".to_string()),
-                version: ApiVersion("1.0".to_string()),
-                routes: vec![],
-                draft: false,
-            };
+        let definition = golem_worker_service_base::api::HttpApiDefinitionRequest {
+            id: ApiDefinitionId("test".to_string()),
+            version: ApiVersion("1.0".to_string()),
+            routes: vec![],
+            draft: false,
+        };
 
         let response = client
             .post("/v1/api/definitions")
@@ -447,13 +446,12 @@ mod test {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        let definition =
-            HttpApiDefinitionRequest {
-                id: ApiDefinitionId("sample".to_string()),
-                version: ApiVersion("42.0".to_string()),
-                routes: vec![],
-                draft: false,
-            };
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("sample".to_string()),
+            version: ApiVersion("42.0".to_string()),
+            routes: vec![],
+            draft: false,
+        };
 
         let response = client
             .post("/v1/api/definitions")
@@ -469,13 +467,12 @@ mod test {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        let definition =
-            HttpApiDefinitionRequest {
-                id: ApiDefinitionId("sample".to_string()),
-                version: ApiVersion("42.0".to_string()),
-                routes: vec![],
-                draft: false,
-            };
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("sample".to_string()),
+            version: ApiVersion("42.0".to_string()),
+            routes: vec![],
+            draft: false,
+        };
 
         let response = client
             .post("/v1/api/definitions")
@@ -491,13 +488,12 @@ mod test {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        let definition =
-            HttpApiDefinitionRequest {
-                id: ApiDefinitionId("test".to_string()),
-                version: ApiVersion("42.0".to_string()),
-                routes: vec![],
-                draft: false,
-            };
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("test".to_string()),
+            version: ApiVersion("42.0".to_string()),
+            routes: vec![],
+            draft: false,
+        };
 
         let response = client
             .put(format!(
@@ -516,13 +512,12 @@ mod test {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
 
-        let definition =
-            HttpApiDefinitionRequest {
-                id: ApiDefinitionId("test".to_string()),
-                version: ApiVersion("1.0".to_string()),
-                routes: vec![],
-                draft: false,
-            };
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("test".to_string()),
+            version: ApiVersion("1.0".to_string()),
+            routes: vec![],
+            draft: false,
+        };
         let response = client
             .post("/v1/api/definitions")
             .body_json(&definition)
@@ -530,13 +525,12 @@ mod test {
             .await;
         response.assert_status_is_ok();
 
-        let definition =
-            HttpApiDefinitionRequest {
-                id: ApiDefinitionId("test".to_string()),
-                version: ApiVersion("2.0".to_string()),
-                routes: vec![],
-                draft: false,
-            };
+        let definition = HttpApiDefinitionRequest {
+            id: ApiDefinitionId("test".to_string()),
+            version: ApiVersion("2.0".to_string()),
+            routes: vec![],
+            draft: false,
+        };
         let response = client
             .post("/v1/api/definitions")
             .body_json(&definition)

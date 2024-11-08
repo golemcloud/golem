@@ -4,7 +4,9 @@ use crate::gateway_api_definition::http::{
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::http::ApiSite;
-use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding};
+use crate::gateway_binding::{
+    GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding,
+};
 use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_service_base::model::VersionedComponentId;
@@ -374,12 +376,13 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     None
                 };
 
-                let middleware = worker_binding
-                    .middleware
-                    .and_then(|x|
-                    x.0.iter().find_map(|m| m.get_cors().map(|c| MiddlewareData {
-                        cors: Some(c.clone())
-                    })));
+                let middleware = worker_binding.middleware.and_then(|x| {
+                    x.0.iter().find_map(|m| {
+                        m.get_cors().map(|c| MiddlewareData {
+                            cors: Some(c.clone()),
+                        })
+                    })
+                });
 
                 Ok(Self {
                     binding_type: Some(api::GatewayBindingType::Default),
@@ -392,7 +395,7 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     allow_headers: None,
                     expose_headers: None,
                     max_age: None,
-                    middleware
+                    middleware,
                 })
             }
 
@@ -410,8 +413,8 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                         allow_methods: cors.as_ref().map(|c| c.allow_methods.clone()),
                         allow_headers: cors.as_ref().map(|c| c.allow_headers.clone()),
                         expose_headers: cors.as_ref().and_then(|c| c.expose_headers.clone()),
-                        max_age: cors.as_ref().and_then(|c| c.max_age.clone()),
-                        middleware: None
+                        max_age: cors.as_ref().and_then(|c| c.max_age),
+                        middleware: None,
                     })
                 }
             },

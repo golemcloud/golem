@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_service_base::auth::EmptyAuthCtx;
-use golem_worker_service_base::service::worker::WorkerService;
 use golem_worker_service_base::gateway_execution::{
-    GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, GatewayWorkerRequestExecutorError, WorkerResponse,
+    GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, GatewayWorkerRequestExecutorError,
+    WorkerResponse,
 };
+use golem_worker_service_base::service::worker::WorkerService;
 
 // The open source deviates from the proprietary codebase here, only in terms of authorisation
 pub struct UnauthorisedWorkerRequestExecutor {

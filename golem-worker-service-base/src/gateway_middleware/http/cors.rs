@@ -48,11 +48,20 @@ impl CorsPreflight {
     // https://github.com/afsalthaj/golem-timeline/issues/70
     pub fn from_cors_preflight_expr(expr: &CorsPreflightExpr) -> Result<CorsPreflight, String> {
         // Compile and evaluate the expression
-        let compiled_expr = rib::compile(&expr.0, &vec![]).map_err(|_| "Compilation failed")?;
-        let evaluate_rib = rib::interpret_pure(&compiled_expr.byte_code, &RibInput::default());
 
-        let result =
-            futures::executor::block_on(evaluate_rib).map_err(|_| "Evaluation failed")?;
+        let compiled_expr =
+            rib::compile(&expr.0, &vec![]).map_err(|_| "Compilation of Rib script failed")?;
+
+        let rib_input = RibInput::default();
+
+        let evaluate_rib = rib::interpret_pure(&compiled_expr.byte_code, &rib_input);
+
+        let result = futures::executor::block_on(evaluate_rib).map_err(|e| {
+            format!(
+                "Failed to evaluate Rib script to form pre-flight CORS {}",
+                e
+            )
+        })?;
 
         // Ensure the result is a record
         let record = result
@@ -137,7 +146,9 @@ impl CorsPreflight {
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CorsPreflight> for CorsPreflight {
     type Error = String;
 
-    fn try_from(value: golem_api_grpc::proto::golem::apidefinition::CorsPreflight) -> Result<Self, Self::Error> {
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::CorsPreflight,
+    ) -> Result<Self, Self::Error> {
         Ok(CorsPreflight {
             allow_origin: value.allow_origin.ok_or("Missing allow origin")?,
             allow_methods: value.allow_methods.ok_or("Missing allow methods")?,

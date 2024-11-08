@@ -104,11 +104,13 @@ mod internal {
     use rib::Expr;
     use serde_json::Value;
 
+    use crate::api::GatewayBindingType;
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
+    use crate::gateway_middleware::{
+        CorsPreflight, CorsPreflightExpr, HttpMiddleware, Middleware, Middlewares,
+    };
     use golem_service_base::model::VersionedComponentId;
     use uuid::Uuid;
-    use crate::api::GatewayBindingType;
-    use crate::gateway_middleware::{CorsPreflight, CorsPreflightExpr, HttpMiddleware, Middleware, Middlewares};
 
     pub(crate) const GOLEM_API_DEFINITION_ID_EXTENSION: &str = "x-golem-api-definition-id";
     pub(crate) const GOLEM_API_DEFINITION_VERSION: &str = "x-golem-api-definition-version";
@@ -209,12 +211,15 @@ mod internal {
 
     pub(crate) fn get_worker_binding(worker_bridge_info: &Value) -> Result<WorkerBinding, String> {
         let http_middlewares = get_middleware(worker_bridge_info)?;
-        let middlewares = http_middlewares.into_iter().map(Middleware::http).collect::<Vec<_>>();
+        let middlewares = http_middlewares
+            .into_iter()
+            .map(Middleware::http)
+            .collect::<Vec<_>>();
 
         let binding_middleware = if middlewares.is_empty() {
-            Some(Middlewares(middlewares))
-        } else {
             None
+        } else {
+            Some(Middlewares(middlewares))
         };
 
         let binding = WorkerBinding {
@@ -232,20 +237,24 @@ mod internal {
         match worker_bridge_info {
             Value::Object(map) => match map.get("response") {
                 Some(value) => {
-                    let rib_expr_text =
-                        value.as_str().ok_or("response is not a Rib expression string")?;
+                    let rib_expr_text = value
+                        .as_str()
+                        .ok_or("response is not a Rib expression string")?;
 
                     let rib = rib::from_string(rib_expr_text).map_err(|err| err.to_string())?;
 
-                    let cors_preflight = CorsPreflight::from_cors_preflight_expr(&CorsPreflightExpr(rib))?;
+                    let cors_preflight =
+                        CorsPreflight::from_cors_preflight_expr(&CorsPreflightExpr(rib))?;
 
-                    Ok(StaticBinding::from_http_middleware(HttpMiddleware::cors(cors_preflight)))
+                    Ok(StaticBinding::from_http_middleware(HttpMiddleware::cors(
+                        cors_preflight,
+                    )))
                 }
 
-                None => {
-                    Ok(StaticBinding::from_http_middleware(HttpMiddleware::cors(CorsPreflight::default())))
-                }
-            }
+                None => Ok(StaticBinding::from_http_middleware(HttpMiddleware::cors(
+                    CorsPreflight::default(),
+                ))),
+            },
             _ => Err("Invalid schema for cors binding".to_string()),
         }
     }
@@ -279,8 +288,9 @@ mod internal {
     ) -> Result<GatewayBindingType, String> {
         let binding_type_optional: Option<GatewayBindingType> = worker_bridge_info
             .get("binding-type")
-            .map(|value|  serde_json::from_value(value.clone()))
-            .transpose().map_err(|err| "Invalid schema for binding-type")?;
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|err| format!("Invalid schema for binding-type. {}", err))?;
 
         Ok(binding_type_optional.unwrap_or(GatewayBindingType::Default))
     }
@@ -292,13 +302,15 @@ mod internal {
         if let Some(middleware_value) = worker_bridge_info.get("middlewares") {
             match middleware_value {
                 Value::Object(map) => {
-                    let cors_preflight: Option<CorsPreflight> = map.get("cors")
-                        .map(|json_value| serde_json::from_value(json_value.clone())).transpose().map_err(|err| "Invalid schema for Cors")?;
+                    let cors_preflight: Option<CorsPreflight> = map
+                        .get("cors")
+                        .map(|json_value| serde_json::from_value(json_value.clone()))
+                        .transpose()
+                        .map_err(|err| format!("Invalid schema for Cors {}", err))?;
 
-                   if let Some(cors_preflight) = cors_preflight {
-                       middlewares.push(HttpMiddleware::cors(cors_preflight));
-                   }
-
+                    if let Some(cors_preflight) = cors_preflight {
+                        middlewares.push(HttpMiddleware::cors(cors_preflight));
+                    }
                 }
                 _ => return Err(
                     "Invalid response mapping type. It should be a string representing expression"
@@ -308,7 +320,6 @@ mod internal {
         }
 
         Ok(middlewares)
-
     }
 
     pub(crate) fn get_response_mapping(
@@ -368,12 +379,12 @@ mod tests {
     use super::*;
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, WorkerBinding};
+    use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware, Middlewares};
     use golem_common::model::ComponentId;
     use openapiv3::Operation;
     use rib::Expr;
     use serde_json::json;
     use uuid::Uuid;
-    use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware, Middlewares};
 
     #[test]
     fn test_get_route_from_path_item() {
@@ -386,9 +397,9 @@ mod tests {
                 "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}",
                 "middlewares": {
                     "cors" : {
-                        "allow_headers": "Content-Type, Authorization",
-                        "allow_methods": "GET, POST, PUT, DELETE, OPTIONS",
-                        "allow_origin": "*",
+                        "allowHeaders": "Content-Type, Authorization",
+                        "allowMethods": "GET, POST, PUT, DELETE, OPTIONS",
+                        "allowOrigin": "*",
 
                     }
                 }
@@ -441,13 +452,15 @@ mod tests {
                         .into_iter()
                         .collect()
                     )),
-                    middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::cors(CorsPreflight {
-                        allow_headers: "Content-Type, Authorization".to_string(),
-                        allow_methods: "GET, POST, PUT, DELETE, OPTIONS".to_string(),
-                        allow_origin: "*".to_string(),
-                        expose_headers: None,
-                        max_age: None,
-                    }))]))
+                    middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::cors(
+                        CorsPreflight {
+                            allow_headers: "Content-Type, Authorization".to_string(),
+                            allow_methods: "GET, POST, PUT, DELETE, OPTIONS".to_string(),
+                            allow_origin: "*".to_string(),
+                            expose_headers: None,
+                            max_age: None,
+                        }
+                    ))]))
                 })
             })
         );

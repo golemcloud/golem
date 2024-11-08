@@ -1,10 +1,10 @@
 use crate::gateway_binding::{ResponseMapping, WorkerBinding};
+use crate::gateway_middleware::Middlewares;
 use crate::gateway_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
 use bincode::{Decode, Encode};
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo, WorkerFunctionsInRib};
-use crate::gateway_middleware::{Middleware, Middlewares};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerBindingCompiled {
@@ -12,7 +12,7 @@ pub struct WorkerBindingCompiled {
     pub worker_name_compiled: Option<WorkerNameCompiled>,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub response_compiled: ResponseMappingCompiled,
-    pub middleware: Option<Middlewares>
+    pub middleware: Option<Middlewares>,
 }
 
 impl WorkerBindingCompiled {
@@ -40,11 +40,14 @@ impl WorkerBindingCompiled {
             export_metadata,
         )?;
 
+        let middleware = gateway_worker_binding.middleware.clone();
+
         Ok(WorkerBindingCompiled {
             component_id: gateway_worker_binding.component_id.clone(),
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
+            middleware,
         })
     }
 }
