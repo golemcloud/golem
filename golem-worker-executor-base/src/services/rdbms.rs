@@ -45,14 +45,12 @@ impl RdbmsService for RdbmsServiceDefault {
 #[derive(Clone, Copy, Debug)]
 pub struct RdbmsPoolConfig {
     pub max_connections: u32,
-    pub query_batch: u32,
 }
 
 impl Default for RdbmsPoolConfig {
     fn default() -> Self {
         Self {
             max_connections: 20,
-            query_batch: 100,
         }
     }
 }
@@ -70,15 +68,33 @@ impl RdbmsPoolKey {
 
 pub mod sqlx_common {
     use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, DbValuePrimitive};
+    use crate::services::rdbms::RdbmsPoolConfig;
     use async_trait::async_trait;
     use futures::Stream;
     use futures_util::stream::BoxStream;
     use futures_util::StreamExt;
+    use sqlx::database::HasArguments;
     use sqlx::{Database, Error, IntoArguments, Row};
     use std::fmt::Display;
     use std::sync::Arc;
-    use sqlx::database::HasArguments;
     use tracing::info;
+
+    #[async_trait]
+    pub(crate) trait PoolCreator<DB: Database> {
+        async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<sqlx::Pool<DB>, sqlx::Error>;
+    }
+
+    #[async_trait]
+    pub(crate) trait QueryExecutor {
+        async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, String>;
+
+        async fn query_stream(
+            &self,
+            statement: &str,
+            params: Vec<DbValue>,
+            batch: usize,
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
+    }
 
     // pub(crate) async fn query_stream<DB>(
     //     statement: &str,
@@ -110,10 +126,11 @@ pub mod sqlx_common {
     // ) -> Result<u64, String>
     // where
     //     DB: Database + for<'q> HasArguments<'q>,
-    //     <DB as HasArguments<'_>>::Arguments: IntoArguments<DB>,
-    //     sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments>: for<'q>  QueryParamsBinder<'q, DB, <DB as HasArguments<'_>>::Arguments>,
+    //     for<'q> <DB as HasArguments<'q>>::Arguments: IntoArguments<DB>,
+    //     for<'q> sqlx::query::Query<'q, DB, <DB as HasArguments<'q>>::Arguments>: QueryParamsBinder<'q, DB>,
     // {
-    //     let query: sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments> = sqlx::query(statement).bind_params(params)?;
+    //     let query: sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments> = sqlx::query(statement);
+    //     let query = query.bind_params(params)?;
     //
     //     let result = query.execute(pool).await.map_err(|e| e.to_string())?;
     //     Ok(result.rows_affected())
@@ -217,22 +234,28 @@ pub mod sqlx_common {
         }
     }
 
-    pub(crate) trait QueryParamsBinder<'q, DB: Database, A> {
-        fn bind_params(self, params: Vec<DbValue>)
-            -> Result<sqlx::query::Query<'q, DB, A>, String>;
+    pub(crate) trait QueryParamsBinder<'q, DB: Database> {
+        fn bind_params(
+            self,
+            params: Vec<DbValue>,
+        ) -> Result<sqlx::query::Query<'q, DB, <DB as HasArguments<'q>>::Arguments>, String>;
     }
 }
 
 pub mod mysql {
     use crate::services::rdbms::postgres::pg_type_name;
-    use crate::services::rdbms::sqlx_common::QueryParamsBinder;
+    use crate::services::rdbms::sqlx_common::{
+        PoolCreator, QueryExecutor, QueryParamsBinder, StreamDbResultSet,
+    };
     use crate::services::rdbms::types::{
         DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
         DbValuePrimitive, EmptyDbResultSet,
     };
+    use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
+    use futures_util::stream::BoxStream;
     use golem_common::model::OwnedWorkerId;
-    use sqlx::{Column, Row, TypeInfo};
+    use sqlx::{Column, Pool, Row, TypeInfo};
     use std::sync::Arc;
     use tracing::{error, info};
 
@@ -302,7 +325,46 @@ pub mod mysql {
         }
     }
 
-    impl<'q> QueryParamsBinder<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>
+    #[async_trait]
+    impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
+        async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<sqlx::MySql>, sqlx::Error> {
+            let address = self.address.clone();
+
+            sqlx::mysql::MySqlPoolOptions::new()
+                .max_connections(config.max_connections)
+                .connect(&address)
+                .await
+        }
+    }
+
+    #[async_trait]
+    impl QueryExecutor for sqlx::Pool<sqlx::MySql> {
+        async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, String> {
+            let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
+                sqlx::query(statement).bind_params(params)?;
+
+            let result = query.execute(self).await.map_err(|e| e.to_string())?;
+            Ok(result.rows_affected())
+        }
+
+        async fn query_stream(
+            &self,
+            statement: &str,
+            params: Vec<DbValue>,
+            batch: usize,
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+            let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
+                sqlx::query(statement.to_string().leak()).bind_params(params)?;
+
+            let stream: BoxStream<Result<sqlx::mysql::MySqlRow, sqlx::Error>> = query.fetch(self);
+
+            let response: StreamDbResultSet<sqlx::mysql::MySql> =
+                StreamDbResultSet::create(stream, batch).await?;
+            Ok(Arc::new(response))
+        }
+    }
+
+    impl<'q> QueryParamsBinder<'q, sqlx::MySql>
         for sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>
     {
         fn bind_params(
@@ -573,7 +635,9 @@ pub mod mysql {
 }
 
 pub mod postgres {
-    use crate::services::rdbms::sqlx_common::{QueryParamsBinder, StreamDbResultSet};
+    use crate::services::rdbms::sqlx_common::{
+        PoolCreator, QueryExecutor, QueryParamsBinder, StreamDbResultSet,
+    };
     use crate::services::rdbms::types::{
         DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
         DbValuePrimitive, EmptyDbResultSet, SimpleDbResultSet,
@@ -586,7 +650,7 @@ pub mod postgres {
     use futures_util::StreamExt;
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::model::OwnedWorkerId;
-    use sqlx::{Column, Row, TypeInfo};
+    use sqlx::{Column, Pool, Row, TypeInfo};
     use std::collections::HashSet;
     use std::ops::Deref;
     use std::pin::Pin;
@@ -690,7 +754,20 @@ pub mod postgres {
 
             self.pool_cache
                 .get_or_insert_simple(&key.clone(), || {
-                    Box::pin(async move { Ok(Arc::new(create_pool2(&key, &pool_config).await?)) })
+                    Box::pin(async move {
+                        info!(
+                            "DB Pool: {}, connections: {}",
+                            key.address, pool_config.max_connections
+                        );
+                        let result = key.create_pool(&pool_config).await.map_err(|e| {
+                            error!(
+                                "DB Pool: {}, connections: {} -  error {}",
+                                key.address, pool_config.max_connections, e
+                            );
+                            e.to_string()
+                        })?;
+                        Ok(Arc::new(result))
+                    })
                 })
                 .await
         }
@@ -744,7 +821,7 @@ pub mod postgres {
                 "execute - address: {}, statement: {} - 1",
                 address, statement
             );
-            let result = execute(statement, params, pool.deref()).await;
+            let result = pool.deref().execute(statement, params).await;
             info!(
                 "execute - address: {}, statement: {} - 2",
                 address, statement
@@ -762,41 +839,55 @@ pub mod postgres {
             info!("query - address: {}, statement: {} - 0", address, statement);
             let pool = self.get_or_create(worker_id, address).await?;
             info!("query - address: {}, statement: {} - 1", address, statement);
-            let result = query_stream(statement, params, 50, pool.deref()).await;
+            let result = pool.deref().query_stream(statement, params, 50).await;
             info!("query - address: {}, statement: {} - 2", address, statement);
             result
         }
     }
 
-    async fn query_stream(
-        statement: &str,
-        params: Vec<DbValue>,
-        batch: usize,
-        pool: &sqlx::Pool<sqlx::Postgres>,
-    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-        let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement.to_string().leak()).bind_params(params)?;
+    #[async_trait]
+    impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
+        async fn create_pool(
+            &self,
+            config: &RdbmsPoolConfig,
+        ) -> Result<Pool<sqlx::Postgres>, sqlx::Error> {
+            let address = self.address.clone();
 
-        let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(pool);
-
-        let response: StreamDbResultSet<sqlx::postgres::Postgres> =
-            StreamDbResultSet::create(stream, batch).await?;
-        Ok(Arc::new(response))
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(config.max_connections)
+                .connect(&address)
+                .await
+        }
     }
 
-    async fn execute(
-        statement: &str,
-        params: Vec<DbValue>,
-        pool: &sqlx::Pool<sqlx::Postgres>,
-    ) -> Result<u64, String> {
-        let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
-            sqlx::query(statement).bind_params(params)?;
+    #[async_trait]
+    impl QueryExecutor for sqlx::Pool<sqlx::Postgres> {
+        async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, String> {
+            let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+                sqlx::query(statement).bind_params(params)?;
 
-        let result = query.execute(pool).await.map_err(|e| e.to_string())?;
-        Ok(result.rows_affected())
+            let result = query.execute(self).await.map_err(|e| e.to_string())?;
+            Ok(result.rows_affected())
+        }
+
+        async fn query_stream(
+            &self,
+            statement: &str,
+            params: Vec<DbValue>,
+            batch: usize,
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+            let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
+                sqlx::query(statement.to_string().leak()).bind_params(params)?;
+
+            let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(self);
+
+            let response: StreamDbResultSet<sqlx::postgres::Postgres> =
+                StreamDbResultSet::create(stream, batch).await?;
+            Ok(Arc::new(response))
+        }
     }
 
-    impl<'q> QueryParamsBinder<'q, sqlx::Postgres, sqlx::postgres::PgArguments>
+    impl<'q> QueryParamsBinder<'q, sqlx::Postgres>
         for sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>
     {
         fn bind_params(
@@ -845,33 +936,6 @@ pub mod postgres {
             DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
             _ => Err(format!("Unsupported value: {:?}", value)),
         }
-    }
-
-    async fn create_pool2(
-        key: &RdbmsPoolKey,
-        pool_config: &RdbmsPoolConfig,
-    ) -> Result<sqlx::Pool<sqlx::Postgres>, String> {
-        info!(
-            "DB Pool: {}, connections: {}",
-            key.address, pool_config.max_connections
-        );
-
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(pool_config.max_connections)
-            .connect(&key.address)
-            .await
-            .map_err(|e| {
-                error!(
-                    "DB Pool: {}, connections: {} -  error {}",
-                    key.address, pool_config.max_connections, e
-                );
-                e.to_string()
-            })?;
-        info!(
-            "DB Pool: {}, connections: {} - created",
-            key.address, pool_config.max_connections
-        );
-        Ok(pool)
     }
 
     impl TryFrom<&sqlx::postgres::PgRow> for DbRow {
