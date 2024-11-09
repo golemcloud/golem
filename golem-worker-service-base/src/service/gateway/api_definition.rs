@@ -76,14 +76,6 @@ impl<E> From<RepoError> for ApiDefinitionError<E> {
     }
 }
 
-impl<E> From<ApiDefTransformationError> for ApiDefinitionError<E> {
-    fn from(error: ApiDefTransformationError) -> Self {
-        ApiDefinitionError::ValidationError(ValidationErrors {
-            errors: vec![error.into()],
-        })
-    }
-}
-
 impl<E: SafeDisplay + Display> SafeDisplay for ApiDefinitionError<E> {
     fn to_safe_string(&self) -> String {
         match self {
@@ -242,6 +234,7 @@ impl<AuthCtx, Namespace, ValidationError> ApiDefinitionService<AuthCtx, Namespac
 where
     AuthCtx: Send + Sync,
     Namespace: Display + Clone + Send + Sync,
+    ValidationError: From<ApiDefTransformationError>
 {
     async fn create(
         &self,
@@ -269,7 +262,11 @@ where
 
         let mut definition = HttpApiDefinition::new(definition.clone(), created_at);
 
-        let _ = definition.transform()?;
+        let _ = definition.transform().map_err(|error| {
+            ApiDefinitionError::ValidationError(ValidationErrors {
+                errors: vec![error.into()],
+            })
+        })?;
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
@@ -328,7 +325,11 @@ where
         }?;
         let mut definition = HttpApiDefinition::new(definition.clone(), created_at);
 
-        let _ = definition.transform()?;
+        let _ = definition.transform().map_err(|error| {
+            ApiDefinitionError::ValidationError(ValidationErrors {
+                errors: vec![error.into()],
+            })
+        })?;
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 

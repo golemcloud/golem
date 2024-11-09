@@ -34,14 +34,21 @@ mod internal {
     use crate::service::gateway::api_definition_transformer::ApiDefTransformationError;
 
     pub(crate) fn update_routes_with_cors_middleware(routes: &mut Vec<Route>) -> Result<(), ApiDefTransformationError> {
-        for route in routes {
+        // Collect paths that need CORS middleware to apply
+        let mut paths_to_apply_cors = Vec::new();
+
+        for route in routes.iter_mut() {
             // If Route has a preflight binding,
             // enforce OPTIONS method
-            // and apply CORS middleware to all the other routes with the same path / resource
+            // and mark this route for CORS middleware application
             if let Some(cors) = route.cors_preflight_binding() {
                 enforce_options_method(&route.path, &route.method)?;
-                apply_cors_middleware_to_routes(routes, &route.path, cors)?;
+                paths_to_apply_cors.push((route.path.clone(), cors)); // collect the paths and their CORS data
             }
+        }
+
+        for (path, cors) in paths_to_apply_cors {
+            apply_cors_middleware_to_routes(routes, &path, cors)?;
         }
 
         Ok(())
