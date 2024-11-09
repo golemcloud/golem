@@ -45,7 +45,7 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
         format!("api_deployment_fileserver_simple{suffix}"),
         TestType::IntegrationTest,
         move |deps: &EnvBasedTestDependencies, cli: &CliLive, _tracing: &Tracing| {
-            api_deployment_fileserver_simple((deps, name.to_string(), cli.with_args(short)))
+            api_deployment_file_server_simple((deps, name.to_string(), cli.with_args(short)))
         }
     );
     add_test!(
@@ -70,7 +70,7 @@ fn make(r: &mut DynamicTestRegistration, suffix: &'static str, name: &'static st
     );
 }
 
-fn api_deployment_fileserver_simple(
+fn api_deployment_file_server_simple(
     (deps, name, cli): (
         &(impl TestDependencies + Send + Sync + 'static),
         String,
@@ -83,7 +83,6 @@ fn api_deployment_fileserver_simple(
     );
     let component_name = format!("api_deployment_fileserver_simple{name}");
     let golem_yaml = deps.component_directory().join("file-server/golem.yaml");
-
     let cfg = &cli.config;
     let component: ComponentView = cli.run_trimmed(&[
         "component",
@@ -96,10 +95,8 @@ fn api_deployment_fileserver_simple(
     let component_id = component.component_urn.id;
 
     let temp_dir = tempfile::tempdir()?;
-
     let api_definition = make_file_server_api_definition_simple(&component_id)?;
     let api_path = temp_dir.path().join("api-file-server.json");
-
     {
         let mut api_file = std::fs::File::create_new(&api_path)?;
         let mut writer = std::io::BufWriter::new(&mut api_file);

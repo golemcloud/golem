@@ -279,10 +279,19 @@ pub mod api_definition {
             Self {
                 method: value.method.to_string(),
                 path: value.path.to_string(),
-                component_urn: ComponentUrn {
-                    id: ComponentId(value.binding.component_id.component_id),
-                }
-                .to_string(),
+                component_urn: value
+                    .binding
+                    .clone()
+                    .component_id
+                    .map(|id| {
+                        ComponentUrn {
+                            id: ComponentId(id.component_id),
+                        }
+                        .to_string()
+                    })
+                    .unwrap_or("NA".to_string())
+                    .to_string(),
+
                 worker_name: value
                     .binding
                     .worker_name

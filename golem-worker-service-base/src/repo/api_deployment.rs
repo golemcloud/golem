@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api_definition::ApiSite;
+use crate::gateway_api_definition::ApiSite;
 use crate::repo::api_definition::ApiDefinitionRecord;
-use crate::service::api_definition::ApiDefinitionIdWithVersion;
+use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_service_base::repo::RepoError;

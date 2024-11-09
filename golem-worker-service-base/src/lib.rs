@@ -3,20 +3,20 @@ use golem_common::golem_version;
 use service::worker::WorkerRequestMetadata;
 
 pub mod api;
-pub mod api_definition;
 pub mod app_config;
+pub mod gateway_api_definition;
+pub mod gateway_binding;
+pub mod gateway_execution;
+pub mod gateway_middleware;
+pub mod gateway_request;
+mod gateway_rib_compiler;
+pub mod gateway_rib_interpreter;
 pub mod getter;
 mod headers;
-pub mod http;
 pub mod metrics;
-mod parser;
-pub(crate) mod path;
+pub mod path;
 pub mod repo;
 pub mod service;
-pub mod worker_binding;
-pub mod worker_bridge_execution;
-mod worker_service_rib_compiler;
-pub mod worker_service_rib_interpreter;
 
 #[cfg(test)]
 test_r::enable!();

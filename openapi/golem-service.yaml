@@ -2915,6 +2915,26 @@ components:
       enum:
       - ReadOnly
       - ReadWrite
+    Cors:
+      type: object
+      properties:
+        allowOrigin:
+          type: string
+        allowMethods:
+          type: string
+        allowHeaders:
+          type: string
+        exposeHeaders:
+          type: string
+        allowCredentials:
+          type: boolean
+        maxAge:
+          type: integer
+          format: uint64
+      required:
+      - allowOrigin
+      - allowMethods
+      - allowHeaders
     CreateParameters:
       type: object
       properties:
@@ -3125,6 +3145,61 @@ components:
       enum:
       - directory
       - file
+    GatewayBindingData:
+      type: object
+      properties:
+        bindingType:
+          $ref: '#/components/schemas/GatewayBindingType'
+        componentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        workerName:
+          type: string
+        idempotencyKey:
+          type: string
+        response:
+          type: string
+        middleware:
+          $ref: '#/components/schemas/MiddlewareData'
+        allowOrigin:
+          type: string
+        allowMethods:
+          type: string
+        allowHeaders:
+          type: string
+        exposeHeaders:
+          type: string
+        maxAge:
+          type: integer
+          format: uint64
+        allowCredentials:
+          type: boolean
+    GatewayBindingType:
+      type: string
+      enum:
+      - default
+      - file-server
+      - cors-preflight
+    GatewayBindingWithTypeInfo:
+      type: object
+      properties:
+        componentId:
+          $ref: '#/components/schemas/VersionedComponentId'
+        workerName:
+          type: string
+        idempotencyKey:
+          type: string
+        response:
+          type: string
+        bindingType:
+          $ref: '#/components/schemas/GatewayBindingType'
+        responseMappingInput:
+          $ref: '#/components/schemas/RibInputTypeInfo'
+        workerNameInput:
+          $ref: '#/components/schemas/RibInputTypeInfo'
+        idempotencyKeyInput:
+          $ref: '#/components/schemas/RibInputTypeInfo'
+        corsPreflight:
+          $ref: '#/components/schemas/Cors'
     GetFilesResponse:
       type: object
       properties:
@@ -3701,44 +3776,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorWorkerNotFound'
-    GolemWorkerBinding:
-      type: object
-      properties:
-        componentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-        workerName:
-          type: string
-        idempotencyKey:
-          type: string
-        response:
-          type: string
-        bindingType:
-          $ref: '#/components/schemas/WorkerBindingType'
-      required:
-      - componentId
-      - response
-    GolemWorkerBindingWithTypeInfo:
-      type: object
-      properties:
-        componentId:
-          $ref: '#/components/schemas/VersionedComponentId'
-        workerName:
-          type: string
-        idempotencyKey:
-          type: string
-        response:
-          type: string
-        bindingType:
-          $ref: '#/components/schemas/WorkerBindingType'
-        responseMappingInput:
-          $ref: '#/components/schemas/RibInputTypeInfo'
-        workerNameInput:
-          $ref: '#/components/schemas/RibInputTypeInfo'
-        idempotencyKeyInput:
-          $ref: '#/components/schemas/RibInputTypeInfo'
-      required:
-      - componentId
-      - response
     GrowMemoryParameters:
       type: object
       properties:
@@ -3763,7 +3800,7 @@ components:
         routes:
           type: array
           items:
-            $ref: '#/components/schemas/Route'
+            $ref: '#/components/schemas/RouteData'
         draft:
           type: boolean
       required:
@@ -3913,6 +3950,11 @@ components:
       - Options
       - Trace
       - Head
+    MiddlewareData:
+      type: object
+      properties:
+        cors:
+          $ref: '#/components/schemas/Cors'
     NameOptionTypePair:
       type: object
       properties:
@@ -4449,7 +4491,7 @@ components:
             $ref: '#/components/schemas/AnalysedType'
       required:
       - types
-    Route:
+    RouteData:
       type: object
       properties:
         method:
@@ -4457,7 +4499,7 @@ components:
         path:
           type: string
         binding:
-          $ref: '#/components/schemas/GolemWorkerBinding'
+          $ref: '#/components/schemas/GatewayBindingData'
       required:
       - method
       - path
@@ -4476,7 +4518,6 @@ components:
       required:
       - method
       - path
-      - component
       - detail
     RouteWithTypeInfo:
       type: object
@@ -4486,7 +4527,7 @@ components:
         path:
           type: string
         binding:
-          $ref: '#/components/schemas/GolemWorkerBindingWithTypeInfo'
+          $ref: '#/components/schemas/GatewayBindingWithTypeInfo'
       required:
       - method
       - path
@@ -4783,11 +4824,6 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
       required:
       - filters
-    WorkerBindingType:
-      type: string
-      enum:
-      - default
-      - file-server
     WorkerCreatedAtFilter:
       type: object
       properties:
