@@ -17,6 +17,7 @@ use async_lock::Mutex;
 use golem_common::model::{AccountId, InitialComponentFileKey};
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::AtomicU64;
 use std::sync::Weak;
 use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
@@ -41,6 +42,10 @@ pub struct FileLoader {
     // Note: The cache is shared between accounts. One account no accessing data from another account
     // is implicitly done by the key being a hash of the content.
     cache: Cache,
+    // When the last reference to a file is dropped, the file is deleted.
+    // We need to ensure that no one else is using the file while we are deleting it.
+    // To do that, give every file a unique number.
+    item_counter: AtomicU64,
 }
 
 impl FileLoader {
@@ -55,6 +60,7 @@ impl FileLoader {
             initial_component_files_service,
             cache: Mutex::new(HashMap::new()),
             cache_dir,
+            item_counter: AtomicU64::new(0),
         })
     }
 
@@ -103,7 +109,18 @@ impl FileLoader {
             tokio::fs::create_dir_all(parent).await?;
         };
 
-        let (token, cache_entry_path) = self.get_or_add_cache_entry(account_id, key).await?;
+        let cache_entry = self.get_or_add_cache_entry(account_id, key).await?;
+
+        // peek at the cache entry. It's fine to not hold the lock here.
+        // as long as we keep a ref to the cache entry, the file will not be deleted
+        let cache_entry_path = {
+            let cache_entry_guard = cache_entry.lock().await;
+            cache_entry_guard
+                .as_ref()
+                .map_err(|e| anyhow!(e.clone()))?
+                .path
+                .clone()
+        };
 
         debug!(
             "Hardlinking {} to {}",
@@ -112,7 +129,9 @@ impl FileLoader {
         );
         tokio::fs::hard_link(&cache_entry_path, target).await?;
 
-        Ok(token)
+        Ok(FileUseToken {
+            _handle: cache_entry,
+        })
     }
 
     async fn get_read_write_to_impl(
@@ -128,28 +147,31 @@ impl FileLoader {
         // fast path for files that are already in cache
         {
             let cache_guard = self.cache.lock().await;
-            if let Some(cache_entry) = cache_guard.get(key).and_then(|weak| weak.upgrade()) {
-                // get access to inner data;
-                let cache_entry_guard = cache_entry.lock().await;
+            let cache_entry = cache_guard.get(key).and_then(|weak| weak.upgrade());
 
-                match cache_entry_guard.as_ref() {
-                    Ok(path_handle) => {
-                        debug!(
-                            "Copying {} to {}",
-                            path_handle.path.display(),
-                            target.display()
-                        );
-                        tokio::fs::copy(&path_handle.path, target).await?;
-                        drop(cache_entry_guard);
-                        drop(cache_entry);
-                        return Ok(());
-                    }
-                    Err(e) => {
-                        return Err(anyhow!("Failed to download file: {}", e));
-                    }
-                };
-            }
+            // make sure we drop the lock to not block other threads
             drop(cache_guard);
+
+            if let Some(cache_entry) = cache_entry {
+                // peek at the cache entry. It's fine to not hold the lock here.
+                // as long as we keep a ref to the cache entry, the file will not be deleted
+                let cache_entry_path = {
+                    let cache_entry_guard = cache_entry.lock().await;
+                    cache_entry_guard
+                        .as_ref()
+                        .map_err(|e| anyhow!(e.clone()))?
+                        .path
+                        .clone()
+                };
+
+                // copy the file to the target
+                debug!(
+                    "Copying {} to {}",
+                    cache_entry_path.display(),
+                    target.display()
+                );
+                tokio::fs::copy(&cache_entry_path, target).await?;
+            }
         }
 
         // alternative, download the file directly to the target
@@ -161,8 +183,7 @@ impl FileLoader {
         &self,
         account_id: &AccountId,
         key: &InitialComponentFileKey,
-    ) -> Result<(FileUseToken, PathBuf), anyhow::Error> {
-        let path = self.cache_dir.path().join(key.to_string());
+    ) -> Result<Arc<CacheEntry>, anyhow::Error> {
         let cache_entry;
         {
             let maybe_prelocked_entry;
@@ -176,7 +197,7 @@ impl FileLoader {
                     cache_entry = existing_cache_entry;
                 } else {
                     // insert an entry so no one else tries to download the file
-                    cache_entry = Arc::new(Mutex::new(Err(anyhow!("File not downloaded yet"))));
+                    cache_entry = Arc::new(Mutex::new(Err("File not downloaded yet".to_string())));
 
                     // immediately lock the entry so no one accesses the file while we are downloading it
                     maybe_prelocked_entry = Some(cache_entry.lock().await);
@@ -187,22 +208,26 @@ impl FileLoader {
                 drop(cache_guard);
             };
 
-            // we may need to initialize the file in case we are the first ones to access it
+            // we may need to initialize the entry in case we are the first ones to access it
             if let Some(mut prelocked_entry) = maybe_prelocked_entry {
                 debug!("Adding {} to cache", key);
-                match self.download_file_to_path(account_id, &path, key).await {
-                    Ok(()) => {
-                        let mut perms = tokio::fs::metadata(&path).await?.permissions();
-                        perms.set_readonly(true);
-                        tokio::fs::set_permissions(&path, perms).await?;
 
-                        // we successfully downloaded the file, set the cache entry to the file
-                        *prelocked_entry = Ok(PathHandle { path: path.clone() });
+                let counter = self
+                    .item_counter
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let path = self.cache_dir.path().join(counter.to_string());
+
+                match self
+                    .download_file_to_path_as_read_only(account_id, &path, key)
+                    .await
+                {
+                    Ok(()) => {
+                        // we successfully downloaded the file and set it to read-only, set the cache entry to the file
+                        *prelocked_entry = Ok(InitializedCacheEntry { path: path.clone() });
                     }
                     Err(e) => {
-                        // we failed to download the file, we need to fail the cache entry, remove it from the cache and return the error
-                        *prelocked_entry = Err(anyhow!("Other thread failed to download: {}", e));
-
+                        // we failed to set the file to read-only, we need to fail the entry, remove it from the cache and return the error
+                        *prelocked_entry = Err(format!("Other thread failed to download: {}", e));
                         self.cache.lock().await.remove(key);
 
                         return Err(e);
@@ -211,12 +236,18 @@ impl FileLoader {
                 drop(prelocked_entry);
             };
         };
-        Ok((
-            FileUseToken {
-                _handle: cache_entry,
-            },
-            path,
-        ))
+        Ok(cache_entry)
+    }
+
+    async fn download_file_to_path_as_read_only(
+        &self,
+        account_id: &AccountId,
+        path: &Path,
+        key: &InitialComponentFileKey,
+    ) -> Result<(), anyhow::Error> {
+        self.download_file_to_path(account_id, path, key).await?;
+        self.set_path_read_only(path).await?;
+        Ok(())
     }
 
     async fn download_file_to_path(
@@ -237,6 +268,13 @@ impl FileLoader {
         tokio::fs::write(&path, data).await?;
         Ok(())
     }
+
+    async fn set_path_read_only(&self, path: &Path) -> Result<(), anyhow::Error> {
+        let mut perms = tokio::fs::metadata(path).await?.permissions();
+        perms.set_readonly(true);
+        tokio::fs::set_permissions(path, perms).await?;
+        Ok(())
+    }
 }
 
 // Scary type, let's break it down:
@@ -246,17 +284,18 @@ impl FileLoader {
 // Weak: A weak reference to the cache entry. This is used to avoid keeping the cache entry alive if no one else is using it.
 // Mutex: The cache entry itself. This is used to ensure that no one is accessing the file while it is being downloaded.
 // Result: The result of the cache entry. This is used to store the file path and any errors that occurred while downloading the file.
-// CacheEntry: The cache entry itself. This is used to store the file path and ensure that the file is deleted when the cache entry is dropped.
+// InitializedCacheEntry: The cache entry itself. This is used to store the file path and ensure that the file is deleted when the cache entry is dropped.
 type Cache = Mutex<HashMap<InitialComponentFileKey, Weak<CacheEntry>>>;
 
-type CacheEntry = Mutex<Result<PathHandle, anyhow::Error>>;
+type CacheEntry = Mutex<Result<InitializedCacheEntry, String>>;
 
-struct PathHandle {
+struct InitializedCacheEntry {
     path: PathBuf,
 }
 
-impl Drop for PathHandle {
+impl Drop for InitializedCacheEntry {
     fn drop(&mut self) {
+        tracing::debug!("Removing file {}", self.path.display());
         if let Err(e) = std::fs::remove_file(&self.path) {
             tracing::error!("Failed to remove file {}: {}", self.path.display(), e);
         }
