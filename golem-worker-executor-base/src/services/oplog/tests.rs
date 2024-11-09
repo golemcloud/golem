@@ -29,10 +29,10 @@ use golem_common::tracing::{init_tracing, TracingConfig};
 
 use crate::services::oplog::compressed::CompressedOplogArchiveService;
 use crate::services::oplog::multilayer::OplogArchiveService;
-use crate::storage::blob::memory::InMemoryBlobStorage;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
+use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 
 use super::*;
 

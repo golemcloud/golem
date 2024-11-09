@@ -17,6 +17,7 @@ golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
 
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
@@ -52,6 +53,7 @@ tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-serde = { workspace = true }
+typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
 wasm-wave = { workspace = true }

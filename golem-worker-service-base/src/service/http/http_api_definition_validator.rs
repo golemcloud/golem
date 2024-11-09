@@ -107,6 +107,7 @@ mod tests {
     use crate::service::http::http_api_definition_validator::unique_routes;
     use crate::worker_binding::ResponseMapping;
     use golem_common::model::ComponentId;
+    use golem_common::model::WorkerBindingType;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
 
@@ -121,6 +122,7 @@ mod tests {
                         component_id: ComponentId::new_v4(),
                         version: 1,
                     },
+                    worker_binding_type: WorkerBindingType::Default,
                     worker_name: Some(Expr::identifier("request")),
                     idempotency_key: None,
                     response: ResponseMapping(Expr::literal("sample")),

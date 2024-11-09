@@ -2,6 +2,12 @@
 grpc_port = 9090
 http_port = 8083
 
+[blob_storage]
+type = "LocalFileSystem"
+
+[blob_storage.config]
+root = "../data/blob_storage"
+
 [compilation]
 type = "Enabled"
 
@@ -57,6 +63,26 @@ without_time = false
 ## Generated from example config: with postgres, s3 and disabled compilation
 # grpc_port = 9090
 # http_port = 8083
+# 
+# [blob_storage]
+# type = "S3"
+# 
+# [blob_storage.config]
+# compilation_cache_bucket = "golem-compiled-components"
+# compressed_oplog_buckets = ["oplog-archive-1"]
+# custom_data_bucket = "custom-data"
+# initial_component_files_bucket = "golem-initial-component-files"
+# object_prefix = ""
+# oplog_payload_bucket = "oplog-payload"
+# region = "us-east-1"
+# use_minio_credentials = false
+# 
+# [blob_storage.config.retries]
+# max_attempts = 3
+# max_delay = "1s"
+# max_jitter_factor = 0.15
+# min_delay = "100ms"
+# multiplier = 3.0
 # 
 # [compilation]
 # type = "Disabled"

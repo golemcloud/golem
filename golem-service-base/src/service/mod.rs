@@ -13,4 +13,5 @@
 // limitations under the License.
 
 pub mod component_object_store;
+pub mod initial_component_files;
 pub mod routing_table;

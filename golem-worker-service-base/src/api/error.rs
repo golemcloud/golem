@@ -96,6 +96,12 @@ impl From<WorkerServiceError> for WorkerApiBaseError {
             }
             ServiceError::Component(error) => error.into(),
             ServiceError::InternalCallError(_) => internal(error.to_safe_string()),
+            ServiceError::FileNotFound(_) => WorkerApiBaseError::NotFound(Json(ErrorBody {
+                error: error.to_safe_string(),
+            })),
+            ServiceError::BadFileType(_) => WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+                errors: vec![error.to_safe_string()],
+            })),
         }
     }
 }

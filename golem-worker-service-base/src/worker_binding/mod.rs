@@ -5,6 +5,7 @@ pub(crate) use rib_input_value_resolver::*;
 pub(crate) use worker_binding_resolver::*;
 
 mod compiled_golem_worker_binding;
+pub mod fileserver_binding_handler;
 mod golem_worker_binding;
 mod request_details;
 mod rib_input_value_resolver;

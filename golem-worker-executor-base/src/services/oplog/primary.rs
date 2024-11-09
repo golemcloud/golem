@@ -15,7 +15,6 @@
 use crate::error::GolemError;
 use crate::metrics::oplog::record_oplog_call;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
-use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
 use async_mutex::Mutex;
 use async_trait::async_trait;
@@ -24,6 +23,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, OwnedWorkerId, ScanCursor, WorkerId,
 };
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::path::Path;

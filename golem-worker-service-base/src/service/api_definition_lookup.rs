@@ -19,6 +19,7 @@ use crate::api_definition::http::CompiledHttpApiDefinition;
 use crate::http::InputHttpRequest;
 use crate::service::api_deployment::ApiDeploymentService;
 use async_trait::async_trait;
+use golem_common::model::HasAccountId;
 use tracing::error;
 
 // TODO; We could optimise this further
@@ -52,13 +53,14 @@ impl<AuthCtx, Namespace> HttpApiDefinitionLookup<AuthCtx, Namespace> {
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace> ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition>
+impl<AuthCtx, Namespace: HasAccountId + Send + Sync>
+    ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<Namespace>>
     for HttpApiDefinitionLookup<AuthCtx, Namespace>
 {
     async fn get(
         &self,
         input_http_request: InputHttpRequest,
-    ) -> Result<Vec<CompiledHttpApiDefinition>, ApiDefinitionLookupError> {
+    ) -> Result<Vec<CompiledHttpApiDefinition<Namespace>>, ApiDefinitionLookupError> {
         // HOST should exist in Http Request
         let host = input_http_request
             .get_host()

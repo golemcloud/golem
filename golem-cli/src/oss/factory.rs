@@ -15,6 +15,7 @@
 use crate::clients::api_definition::ApiDefinitionClient;
 use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::clients::component::ComponentClient;
+use crate::clients::file_download;
 use crate::clients::health_check::HealthCheckClient;
 use crate::clients::worker::WorkerClient;
 use crate::config::{HttpClientConfig, OssProfile};
@@ -39,6 +40,7 @@ pub struct OssServiceFactoryConfig {
     pub worker_url: Url,
     pub service_http_client_config: HttpClientConfig,
     pub health_check_http_client_config: HttpClientConfig,
+    pub file_download_http_client_config: HttpClientConfig,
     pub allow_insecure: bool,
 }
 
@@ -47,17 +49,21 @@ pub struct OssServiceFactory {
     config: OssServiceFactoryConfig,
     http_client_service: reqwest::Client,
     http_client_health_check: reqwest::Client,
+    http_client_file_download: reqwest::Client,
 }
 
 impl OssServiceFactory {
     pub fn new(config: OssServiceFactoryConfig) -> Result<Self, GolemError> {
         let service_http_client = make_reqwest_client(&config.service_http_client_config)?;
         let healthcheck_http_client = make_reqwest_client(&config.health_check_http_client_config)?;
+        let file_download_http_client =
+            make_reqwest_client(&config.file_download_http_client_config)?;
 
         Ok(Self {
             config,
             http_client_service: service_http_client,
             http_client_health_check: healthcheck_http_client,
+            http_client_file_download: file_download_http_client,
         })
     }
 
@@ -74,6 +80,9 @@ impl OssServiceFactory {
             worker_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
             health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
+            file_download_http_client_config: HttpClientConfig::new_for_file_download(
+                allow_insecure,
+            ),
             allow_insecure,
         })
     }
@@ -115,6 +124,12 @@ impl ServiceFactory for OssServiceFactory {
         &self,
     ) -> Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync> {
         Arc::new(ProjectResolverOss::DUMMY)
+    }
+
+    fn file_download_client(&self) -> Box<dyn file_download::FileDownloadClient + Send + Sync> {
+        Box::new(file_download::FileDownloadClientLive {
+            client: self.http_client_file_download.clone(),
+        })
     }
 
     fn component_client(

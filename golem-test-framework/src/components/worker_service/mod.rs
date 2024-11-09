@@ -17,21 +17,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 use tonic::Streaming;
 use tracing::Level;
 
+use anyhow::anyhow;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest,
-    GetOplogResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
-    GetWorkersMetadataRequest, GetWorkersMetadataResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitJsonResponse,
-    InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest, InvokeRequest,
-    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
-    ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest,
-    UpdateWorkerResponse,
+    get_file_contents_response, ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse,
+    GetFileContentsRequest, GetOplogRequest, GetOplogResponse, GetWorkerMetadataRequest,
+    GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
+    InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    ListDirectoryRequest, ListDirectoryResponse, ResumeWorkerRequest, ResumeWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::LogEvent;
 
@@ -202,6 +204,43 @@ pub trait WorkerService {
             .into_inner())
     }
 
+    async fn list_directory(
+        &self,
+        request: ListDirectoryRequest,
+    ) -> crate::Result<ListDirectoryResponse> {
+        Ok(self
+            .client()
+            .await?
+            .list_directory(request)
+            .await?
+            .into_inner())
+    }
+
+    async fn get_file_contents(&self, request: GetFileContentsRequest) -> crate::Result<Bytes> {
+        let mut stream = self
+            .client()
+            .await?
+            .get_file_contents(request)
+            .await?
+            .into_inner();
+
+        let mut bytes = Vec::new();
+        while let Some(chunk) = stream.message().await? {
+            match chunk.result {
+                Some(get_file_contents_response::Result::Success(data)) => {
+                    bytes.extend_from_slice(&data);
+                }
+                Some(get_file_contents_response::Result::Error(err)) => {
+                    return Err(anyhow!("Error from get_file_contents: {err:?}"));
+                }
+                None => {
+                    return Err(anyhow!("Unexpected response from get_file_contents"));
+                }
+            }
+        }
+        Ok(Bytes::from(bytes))
+    }
+
     fn private_host(&self) -> String;
     fn private_http_port(&self) -> u16;
     fn private_grpc_port(&self) -> u16;
@@ -269,6 +308,11 @@ impl WorkerServiceEnvVars for GolemEnvVars {
         verbosity: Level,
     ) -> HashMap<String, String> {
         EnvVarBuilder::golem_service(verbosity)
+            .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+            .with_str(
+                "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
+                "/tmp/ittest-local-object-store/golem",
+            )
             .with(
                 "GOLEM__COMPONENT_SERVICE__HOST",
                 component_service.private_host(),

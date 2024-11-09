@@ -4,6 +4,7 @@ use crate::api_definition::http::{
 use crate::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
 use crate::worker_binding::CompiledGolemWorkerBinding;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+use golem_common::model::WorkerBindingType;
 use golem_service_base::model::VersionedComponentId;
 use poem_openapi::*;
 use rib::{Expr, RibInputTypeInfo};
@@ -78,8 +79,8 @@ pub struct HttpApiDefinitionWithTypeInfo {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl From<CompiledHttpApiDefinition> for HttpApiDefinitionWithTypeInfo {
-    fn from(value: CompiledHttpApiDefinition) -> Self {
+impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionWithTypeInfo {
+    fn from(value: CompiledHttpApiDefinition<Namespace>) -> Self {
         let routes = value.routes.into_iter().map(|route| route.into()).collect();
 
         Self {
@@ -127,6 +128,8 @@ pub struct GolemWorkerBinding {
     pub worker_name: Option<String>,
     pub idempotency_key: Option<String>,
     pub response: String,
+    #[oai(rename = "bindingType")]
+    pub worker_binding_type: Option<WorkerBindingType>,
 }
 
 // GolemWorkerBindingWithTypeInfo is a subset of CompiledGolemWorkerBinding
@@ -140,6 +143,8 @@ pub struct GolemWorkerBindingWithTypeInfo {
     pub worker_name: Option<String>,
     pub idempotency_key: Option<String>,
     pub response: String,
+    #[oai(rename = "bindingType")]
+    pub worker_binding_type: Option<WorkerBindingType>,
     pub response_mapping_input: Option<RibInputTypeInfo>,
     pub worker_name_input: Option<RibInputTypeInfo>,
     pub idempotency_key_input: Option<RibInputTypeInfo>,
@@ -162,6 +167,7 @@ impl From<CompiledGolemWorkerBinding> for GolemWorkerBindingWithTypeInfo {
                 .response_compiled
                 .response_rib_expr
                 .to_string(),
+            worker_binding_type: Some(worker_binding.worker_binding_type),
             response_mapping_input: Some(worker_binding.response_compiled.rib_input),
             worker_name_input: worker_binding
                 .worker_name_compiled
@@ -288,6 +294,7 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             worker_name: worker_id,
             idempotency_key,
             response,
+            worker_binding_type: Some(value.worker_binding_type),
         })
     }
 }
@@ -317,6 +324,7 @@ impl TryInto<crate::worker_binding::GolemWorkerBinding> for GolemWorkerBinding {
             worker_name,
             idempotency_key,
             response,
+            worker_binding_type: self.worker_binding_type.unwrap_or_default(),
         })
     }
 }
@@ -347,36 +355,6 @@ impl TryFrom<crate::api_definition::http::HttpApiDefinition> for grpc_apidefinit
             )),
             draft: value.draft,
             created_at: Some(created_at),
-        };
-
-        Ok(result)
-    }
-}
-
-impl TryFrom<grpc_apidefinition::ApiDefinition> for crate::api_definition::http::HttpApiDefinition {
-    type Error = String;
-
-    fn try_from(value: grpc_apidefinition::ApiDefinition) -> Result<Self, Self::Error> {
-        let routes = match value.definition.ok_or("definition is missing")? {
-            grpc_apidefinition::api_definition::Definition::Http(http) => http
-                .routes
-                .into_iter()
-                .map(crate::api_definition::http::Route::try_from)
-                .collect::<Result<Vec<crate::api_definition::http::Route>, String>>()?,
-        };
-
-        let id = value.id.ok_or("Api Definition ID is missing")?;
-        let created_at = value
-            .created_at
-            .ok_or("Created At is missing")
-            .and_then(|t| SystemTime::try_from(t).map_err(|_| "Failed to convert timestamp"))?;
-
-        let result = crate::api_definition::http::HttpApiDefinition {
-            id: ApiDefinitionId(id.value),
-            version: ApiVersion(value.version),
-            routes,
-            draft: value.draft,
-            created_at: created_at.into(),
         };
 
         Ok(result)
@@ -505,11 +483,14 @@ impl TryFrom<crate::worker_binding::GolemWorkerBinding> for grpc_apidefinition::
 
         let idempotency_key = value.idempotency_key.map(|key| key.into());
 
+        let r#type: grpc_apidefinition::WorkerBindingType = value.worker_binding_type.into();
+
         let result = grpc_apidefinition::WorkerBinding {
             component: Some(value.component_id.into()),
             worker_name,
             idempotency_key,
             response,
+            r#type: Some(r#type.into()),
         };
 
         Ok(result)
@@ -535,11 +516,19 @@ impl TryFrom<grpc_apidefinition::WorkerBinding> for crate::worker_binding::Golem
             None
         };
 
+        let r#type = value
+            .r#type
+            .map(grpc_apidefinition::WorkerBindingType::try_from)
+            .transpose()
+            .map_err(|e| format!("Failed to convert WorkerBindingType: {}", e))?
+            .map_or(WorkerBindingType::default(), WorkerBindingType::from);
+
         let result = crate::worker_binding::GolemWorkerBinding {
             component_id,
             worker_name,
             idempotency_key,
             response,
+            worker_binding_type: r#type,
         };
 
         Ok(result)

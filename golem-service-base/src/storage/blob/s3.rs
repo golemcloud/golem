@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::golem_config::S3BlobStorageConfig;
+use crate::config::S3BlobStorageConfig;
 use crate::storage::blob::{BlobMetadata, BlobStorage, BlobStorageNamespace, ExistsResult};
 use async_trait::async_trait;
 use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
@@ -71,6 +71,9 @@ impl S3BlobStorage {
             BlobStorageNamespace::CompressedOplog { level, .. } => {
                 &self.config.compressed_oplog_buckets[*level]
             }
+            BlobStorageNamespace::InitialComponentFiles { .. } => {
+                &self.config.initial_component_files_bucket
+            }
         }
     }
 
@@ -121,6 +124,16 @@ impl S3BlobStorage {
                     Path::new(&self.config.object_prefix)
                         .join(account_id_string)
                         .join(component_id_string)
+                        .to_path_buf()
+                }
+            }
+            BlobStorageNamespace::InitialComponentFiles { account_id } => {
+                let account_id_string = account_id.to_string();
+                if self.config.object_prefix.is_empty() {
+                    PathBuf::from(&account_id_string)
+                } else {
+                    Path::new(&self.config.object_prefix)
+                        .join(account_id_string)
                         .to_path_buf()
                 }
             }

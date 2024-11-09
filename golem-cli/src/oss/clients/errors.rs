@@ -18,7 +18,8 @@ use golem_client::api::{
 };
 use golem_client::model::{
     GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
-    GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfComponentFailed,
+    GolemErrorFailedToResumeWorker, GolemErrorFileSystemError,
+    GolemErrorGetLatestVersionOfComponentFailed, GolemErrorInitialComponentFileDownloadFailed,
     GolemErrorInterrupted, GolemErrorInvalidRequest, GolemErrorInvalidShardId,
     GolemErrorPromiseAlreadyCompleted, GolemErrorPromiseDropped, GolemErrorPromiseNotFound,
     GolemErrorRuntimeError, GolemErrorUnexpectedOplogEntry, GolemErrorUnknown,
@@ -193,6 +194,14 @@ fn display_golem_error(error: GolemError) -> String {
         }
         GolemError::InvalidAccount(_) => "Invalid account".to_string(),
         GolemError::ShardingNotReady(_) => "Sharding not ready".to_string(),
+        GolemError::InitialComponentFileDownloadFailed(
+            GolemErrorInitialComponentFileDownloadFailed { path, reason, .. },
+        ) => {
+            format!("Failed to download initial file {}: {}", path, reason)
+        }
+        GolemError::FileSystemError(GolemErrorFileSystemError { path, reason, .. }) => {
+            format!("Error working with file {}: {}", path, reason)
+        }
     }
 }
 

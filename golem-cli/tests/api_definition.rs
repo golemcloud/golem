@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::WorkerBindingType;
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
 use crate::cli::{Cli, CliLive};
@@ -207,6 +208,7 @@ fn golem_def_with_response(
                 worker_name: Some("\"foo\"".to_string()),
                 idempotency_key: None,
                 response,
+                binding_type: None,
             },
         }],
     }
@@ -376,6 +378,7 @@ pub fn to_api_definition_with_type_info(
                             types: HashMap::new(),
                         }),
                         idempotency_key_input: None,
+                        binding_type: Some(WorkerBindingType::Default),
                     },
                 }
             })

@@ -939,7 +939,7 @@ pub mod worker {
                             "
                             Failed to convert invocation result to WAVE format.
                             At the moment WAVE does not support Handle (aka Resource) data type.
-        
+
                             Use -vvv flags to get detailed logs.
 
                             "

@@ -12,31 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::sync::{Arc, RwLock, Weak};
-
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{Uri, Value};
-use wasmtime::component::{Instance, ResourceAny};
-use wasmtime::{AsContextMut, ResourceLimiterAsync};
-
 use golem_common::model::oplog::WorkerResourceId;
+use golem_common::model::ComponentFilePath;
 use golem_common::model::{
     AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::{Uri, Value};
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::{ComponentMetadata, ComponentService};
+use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::{Oplog, OplogService};
@@ -51,9 +49,12 @@ use golem_worker_executor_base::services::{
 };
 use golem_worker_executor_base::worker::{RetryDecision, Worker};
 use golem_worker_executor_base::workerctx::{
-    ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
+    ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks,
     InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
+use std::sync::{Arc, RwLock, Weak};
+use wasmtime::component::{Instance, ResourceAny};
+use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use crate::services::AdditionalDeps;
 
@@ -305,6 +306,7 @@ impl WorkerCtx for Context {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        file_loader: Arc<FileLoader>,
     ) -> Result<Self, GolemError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -325,6 +327,7 @@ impl WorkerCtx for Context {
             config,
             worker_config,
             execution_status,
+            file_loader,
         )
         .await?;
         Ok(Self {
@@ -404,5 +407,19 @@ impl ResourceStore for Context {
 
     async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
         self.durable_ctx.borrow(resource_id).await
+    }
+}
+
+#[async_trait]
+impl FileSystemReading for Context {
+    async fn list_directory(
+        &self,
+        path: &ComponentFilePath,
+    ) -> Result<ListDirectoryResult, GolemError> {
+        self.durable_ctx.list_directory(path).await
+    }
+
+    async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
+        self.durable_ctx.read_file(path).await
     }
 }

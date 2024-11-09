@@ -33,6 +33,8 @@ message WorkerExecutionError {
     InvalidAccount invalid_account = 21;
     WorkerNotFound worker_not_found = 22;
     ShardingNotReady sharding_not_ready = 23;
+    InitialComponentFileDownloadFailed initial_component_file_download_failed = 24;
+    FileSystemError file_system_error = 25;
   }
 }
 
@@ -128,3 +130,13 @@ message WorkerNotFound {
 }
 
 message ShardingNotReady {}
+
+message InitialComponentFileDownloadFailed {
+  string path = 1;
+  string reason = 2;
+}
+
+message FileSystemError {
+  string path = 1;
+  string reason = 2;
+}

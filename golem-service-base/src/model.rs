@@ -17,9 +17,11 @@ use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
+use golem_common::model::AccountId;
 use golem_common::model::{
-    ComponentId, ComponentType, ComponentVersion, PromiseId, ScanCursor, ShardId, Timestamp,
-    WorkerFilter, WorkerId, WorkerStatus,
+    ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
+    ComponentType, ComponentVersion, InitialComponentFile, PromiseId, ScanCursor, ShardId,
+    Timestamp, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_common::SafeDisplay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -913,6 +915,8 @@ impl From<GolemErrorUnknown> for golem_api_grpc::proto::golem::worker::v1::Unkno
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 #[error("Invalid account")]
 pub struct GolemErrorInvalidAccount {}
 
@@ -931,6 +935,90 @@ impl From<golem_api_grpc::proto::golem::worker::v1::InvalidAccount> for GolemErr
 impl From<GolemErrorInvalidAccount> for golem_api_grpc::proto::golem::worker::v1::InvalidAccount {
     fn from(_value: GolemErrorInvalidAccount) -> Self {
         Self {}
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+#[error("Initial file upload failed")]
+pub struct GolemErrorInitialComponentFileUploadFailed {
+    pub component_id: VersionedComponentId,
+    pub path: String,
+    pub reason: String,
+}
+
+impl SafeDisplay for GolemErrorInitialComponentFileUploadFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Initial file download failed")]
+pub struct GolemErrorInitialComponentFileDownloadFailed {
+    pub path: String,
+    pub reason: String,
+}
+
+impl SafeDisplay for GolemErrorInitialComponentFileDownloadFailed {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::v1::InitialComponentFileDownloadFailed>
+    for GolemErrorInitialComponentFileDownloadFailed
+{
+    fn from(
+        value: golem_api_grpc::proto::golem::worker::v1::InitialComponentFileDownloadFailed,
+    ) -> Self {
+        Self {
+            path: value.path,
+            reason: value.reason,
+        }
+    }
+}
+
+impl From<GolemErrorInitialComponentFileDownloadFailed>
+    for golem_api_grpc::proto::golem::worker::v1::InitialComponentFileDownloadFailed
+{
+    fn from(value: GolemErrorInitialComponentFileDownloadFailed) -> Self {
+        Self {
+            path: value.path,
+            reason: value.reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object, thiserror::Error)]
+#[error("Error with accessing worker files")]
+pub struct GolemErrorFileSystemError {
+    pub path: String,
+    pub reason: String,
+}
+
+impl SafeDisplay for GolemErrorFileSystemError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+impl From<golem_api_grpc::proto::golem::worker::v1::FileSystemError> for GolemErrorFileSystemError {
+    fn from(value: golem_api_grpc::proto::golem::worker::v1::FileSystemError) -> Self {
+        Self {
+            path: value.path,
+            reason: value.reason,
+        }
+    }
+}
+
+impl From<GolemErrorFileSystemError> for golem_api_grpc::proto::golem::worker::v1::FileSystemError {
+    fn from(value: GolemErrorFileSystemError) -> Self {
+        Self {
+            path: value.path,
+            reason: value.reason,
+        }
     }
 }
 
@@ -988,6 +1076,59 @@ pub struct GetOplogResponse {
     pub next: Option<OplogCursor>,
     pub first_index_in_chunk: u64,
     pub last_index: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct GetFilesResponse {
+    pub nodes: Vec<FlatComponentFileSystemNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Enum)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub enum FlatComponentFileSystemNodeKind {
+    Directory,
+    File,
+}
+
+// Flat, worse typed version ComponentFileSystemNode for rest representation
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct FlatComponentFileSystemNode {
+    pub name: String,
+    pub last_modified: u64,
+    pub kind: FlatComponentFileSystemNodeKind,
+    pub permissions: Option<ComponentFilePermissions>, // only for files
+    pub size: Option<u64>,                             // only for files
+}
+
+impl From<ComponentFileSystemNode> for FlatComponentFileSystemNode {
+    fn from(value: ComponentFileSystemNode) -> Self {
+        let last_modified = value
+            .last_modified
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        match value.details {
+            ComponentFileSystemNodeDetails::Directory => Self {
+                name: value.name,
+                last_modified,
+                kind: FlatComponentFileSystemNodeKind::Directory,
+                permissions: None,
+                size: None,
+            },
+            ComponentFileSystemNodeDetails::File { permissions, size } => Self {
+                name: value.name,
+                last_modified,
+                kind: FlatComponentFileSystemNodeKind::File,
+                permissions: Some(permissions),
+                size: Some(size),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -1129,9 +1270,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     fn from(value: WorkerMetadata) -> Self {
         Self {
             worker_id: Some(value.worker_id.into()),
-            account_id: Some(golem_api_grpc::proto::golem::common::AccountId {
-                name: "-1".to_string(),
-            }),
+            account_id: Some(AccountId::placeholder().into()),
             args: value.args,
             env: value.env,
             status: value.status.into(),
@@ -1371,6 +1510,10 @@ pub enum GolemError {
     InvalidAccount(GolemErrorInvalidAccount),
     #[error(transparent)]
     ShardingNotReady(GolemErrorShardingNotReady),
+    #[error(transparent)]
+    InitialComponentFileDownloadFailed(GolemErrorInitialComponentFileDownloadFailed),
+    #[error(transparent)]
+    FileSystemError(GolemErrorFileSystemError),
 }
 
 impl SafeDisplay for GolemError {
@@ -1399,6 +1542,8 @@ impl SafeDisplay for GolemError {
             GolemError::Unknown(inner) => inner.to_safe_string(),
             GolemError::InvalidAccount(inner) => inner.to_safe_string(),
             GolemError::ShardingNotReady(inner) => inner.to_safe_string(),
+            GolemError::InitialComponentFileDownloadFailed(inner) => inner.to_safe_string(),
+            GolemError::FileSystemError(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -1482,6 +1627,12 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError> for
             }
             Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err)) => {
                 Ok(GolemError::ShardingNotReady(err.into()))
+            }
+            Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(err)) => {
+                Ok(GolemError::InitialComponentFileDownloadFailed(err.into()))
+            }
+            Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::FileSystemError(err)) => {
+                Ok(GolemError::FileSystemError(err.into()))
             }
             None => Err("Missing field: error".to_string()),
         }
@@ -1568,6 +1719,12 @@ impl From<GolemError> for golem_api_grpc::proto::golem::worker::v1::worker_execu
             GolemError::ShardingNotReady(err) => {
                 golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::ShardingNotReady(err.into())
             }
+            GolemError::InitialComponentFileDownloadFailed(err) => {
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(err.into())
+            }
+            GolemError::FileSystemError(err) => {
+                golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::FileSystemError(err.into())
+            }
         }
     }
 }
@@ -1624,6 +1781,7 @@ pub struct Component {
     pub metadata: ComponentMetadata,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub component_type: Option<ComponentType>,
+    pub files: Vec<InitialComponentFile>,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
@@ -1640,6 +1798,19 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             }
             None => None,
         };
+
+        let component_type = if value.component_type.is_some() {
+            Some(value.component_type().into())
+        } else {
+            None
+        };
+
+        let files = value
+            .files
+            .into_iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
@@ -1654,11 +1825,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
                 .ok_or("Missing metadata")?
                 .try_into()?,
             created_at,
-            component_type: if value.component_type.is_some() {
-                Some(value.component_type().into())
-            } else {
-                None
-            },
+            component_type,
+            files,
         })
     }
 }
@@ -1678,6 +1846,7 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 let c: golem_api_grpc::proto::golem::component::ComponentType = c.into();
                 c.into()
             }),
+            files: value.files.into_iter().map(|f| f.into()).collect(),
         }
     }
 }

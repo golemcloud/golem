@@ -2,6 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::api_definition::http::CompiledHttpApiDefinition;
+use crate::worker_binding::fileserver_binding_handler::FileServerBindingHandler;
 use crate::worker_service_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
 use futures_util::FutureExt;
 use hyper::header::HOST;
@@ -18,18 +19,25 @@ use crate::worker_bridge_execution::WorkerRequestExecutor;
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
-pub struct CustomHttpRequestApi {
+pub struct CustomHttpRequestApi<Namespace> {
     pub worker_service_rib_interpreter: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
-    pub api_definition_lookup_service:
-        Arc<dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send>,
+    pub api_definition_lookup_service: Arc<
+        dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<Namespace>>
+            + Sync
+            + Send,
+    >,
+    pub fileserver_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
 }
 
-impl CustomHttpRequestApi {
+impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
     pub fn new(
         worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
         api_definition_lookup_service: Arc<
-            dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition> + Sync + Send,
+            dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<Namespace>>
+                + Sync
+                + Send,
         >,
+        fileserver_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     ) -> Self {
         let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             worker_request_executor_service.clone(),
@@ -38,6 +46,7 @@ impl CustomHttpRequestApi {
         Self {
             worker_service_rib_interpreter: evaluator,
             api_definition_lookup_service,
+            fileserver_binding_handler,
         }
     }
 
@@ -104,7 +113,10 @@ impl CustomHttpRequestApi {
         {
             Ok(resolved_worker_binding) => {
                 resolved_worker_binding
-                    .interpret_response_mapping(&self.worker_service_rib_interpreter)
+                    .interpret_response_mapping(
+                        &self.worker_service_rib_interpreter,
+                        &self.fileserver_binding_handler,
+                    )
                     .await
             }
 
@@ -119,7 +131,7 @@ impl CustomHttpRequestApi {
     }
 }
 
-impl Endpoint for CustomHttpRequestApi {
+impl<Namespace: Clone + Send + Sync + 'static> Endpoint for CustomHttpRequestApi<Namespace> {
     type Output = Response;
 
     fn call(&self, req: Request) -> impl Future<Output = poem::Result<Self::Output>> + Send {

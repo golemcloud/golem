@@ -15,5 +15,6 @@
 pub mod api_definition;
 pub mod api_deployment;
 pub mod component;
+pub mod file_download;
 pub mod health_check;
 pub mod worker;

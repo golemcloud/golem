@@ -57,17 +57,20 @@ pub mod router {
     };
 
     #[derive(Debug, Clone)]
-    pub struct RouteEntry {
+    pub struct RouteEntry<Namespace> {
         // size is the index of all path patterns.
         pub path_params: Vec<(VarInfo, usize)>,
         pub query_params: Vec<QueryInfo>,
+        pub namespace: Namespace,
         pub binding: CompiledGolemWorkerBinding,
     }
 
-    pub fn build(routes: Vec<CompiledRoute>) -> Router<RouteEntry> {
+    pub fn build<Namespace>(
+        routes: Vec<(Namespace, CompiledRoute)>,
+    ) -> Router<RouteEntry<Namespace>> {
         let mut router = Router::new();
 
-        for route in routes {
+        for (namespace, route) in routes {
             let method = route.method.into();
             let path = route.path;
             let binding = route.binding;
@@ -85,6 +88,7 @@ pub mod router {
             let entry = RouteEntry {
                 path_params,
                 query_params: path.query_params,
+                namespace,
                 binding,
             };
 
@@ -103,6 +107,7 @@ pub mod router {
 
 #[cfg(test)]
 mod tests {
+    use golem_service_base::auth::DefaultNamespace;
     use test_r::test;
 
     use crate::api_definition::http::{
@@ -111,6 +116,10 @@ mod tests {
     use crate::getter::Getter;
     use crate::http::http_request::{ApiInputPath, InputHttpRequest};
     use crate::path::Path;
+    use crate::worker_binding::fileserver_binding_handler::{
+        FileServerBindingHandler, FileServerBindingResult,
+    };
+    use crate::worker_binding::WorkerDetail;
     use crate::worker_binding::{
         RequestDetails, RequestToWorkerBindingResolver, RibInputTypeMismatch,
     };
@@ -151,6 +160,20 @@ mod tests {
             let response_dummy = create_tuple(vec![response]);
 
             Ok(WorkerResponse::new(response_dummy))
+        }
+    }
+
+    struct TestFileServerBindingHandler {}
+
+    #[async_trait]
+    impl<Namespace> FileServerBindingHandler<Namespace> for TestFileServerBindingHandler {
+        async fn handle_file_server_binding(
+            &self,
+            _namespace: &Namespace,
+            _worker_detail: &WorkerDetail,
+            _original_result: RibResult,
+        ) -> FileServerBindingResult {
+            unimplemented!()
         }
     }
 
@@ -237,6 +260,11 @@ mod tests {
         ))
     }
 
+    fn get_test_fileserver_binding_handler<Namespace>(
+    ) -> Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send> {
+        Arc::new(TestFileServerBindingHandler {})
+    }
+
     #[derive(Debug)]
     struct TestResponse {
         worker_name: String,
@@ -244,20 +272,26 @@ mod tests {
         function_params: Value,
     }
 
+    impl ToResponse<TestResponse> for FileServerBindingResult {
+        fn to_response(self, _request_details: &RequestDetails) -> TestResponse {
+            panic!("FileServerBindingResult")
+        }
+    }
+
     impl ToResponse<TestResponse> for EvaluationError {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+        fn to_response(self, _request_details: &RequestDetails) -> TestResponse {
             panic!("{}", self.to_string())
         }
     }
 
     impl ToResponse<TestResponse> for RibInputTypeMismatch {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+        fn to_response(self, _request_details: &RequestDetails) -> TestResponse {
             panic!("{}", self.to_string())
         }
     }
 
     impl ToResponse<TestResponse> for RibResult {
-        fn to_response(&self, _request_details: &RequestDetails) -> TestResponse {
+        fn to_response(self, _request_details: &RequestDetails) -> TestResponse {
             let function_name = self
                 .get_val()
                 .map(|x| x.get(&Path::from_key("function_name")).unwrap())
@@ -338,16 +372,22 @@ mod tests {
         api_specification: &HttpApiDefinition,
     ) -> TestResponse {
         let evaluator = get_test_evaluator();
-        let compiled =
-            CompiledHttpApiDefinition::from_http_api_definition(api_specification, &get_metadata())
-                .unwrap();
+        let fileserver_binding_handler = get_test_fileserver_binding_handler();
+        let compiled = CompiledHttpApiDefinition::from_http_api_definition(
+            api_specification,
+            &get_metadata(),
+            &DefaultNamespace::default(),
+        )
+        .unwrap();
 
         let resolved_route = api_request
             .resolve_worker_binding(vec![compiled])
             .await
             .unwrap();
 
-        resolved_route.interpret_response_mapping(&evaluator).await
+        resolved_route
+            .interpret_response_mapping(&evaluator, &fileserver_binding_handler)
+            .await
     }
 
     #[test]
@@ -843,6 +883,7 @@ mod tests {
             let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
                 &api_specification,
                 &get_metadata(),
+                &DefaultNamespace::default(),
             )
             .unwrap();
 
@@ -884,6 +925,7 @@ mod tests {
             let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
                 &api_specification,
                 &get_metadata(),
+                &DefaultNamespace::default(),
             )
             .unwrap();
 

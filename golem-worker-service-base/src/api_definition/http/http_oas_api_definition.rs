@@ -98,6 +98,7 @@ mod internal {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
+    use golem_common::model::WorkerBindingType;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use rib::Expr;
     use serde_json::Value;
@@ -178,6 +179,7 @@ mod internal {
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
+            worker_binding_type: get_binding_type(worker_bridge_info)?,
         };
 
         Ok(Route {
@@ -259,6 +261,19 @@ mod internal {
     pub(crate) fn get_path_pattern(path: &str) -> Result<AllPathPatterns, String> {
         AllPathPatterns::parse(path).map_err(|err| err.to_string())
     }
+
+    pub(crate) fn get_binding_type(
+        worker_bridge_info: &Value,
+    ) -> Result<WorkerBindingType, String> {
+        let binding_type = worker_bridge_info
+            .get("type")
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| format!("Failed to parse binding type: {}", e))?
+            .unwrap_or_default();
+
+        Ok(binding_type)
+    }
 }
 
 #[cfg(test)]
@@ -269,6 +284,7 @@ mod tests {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
+    use golem_common::model::WorkerBindingType;
     use openapiv3::PathItem;
     use rib::Expr;
     use serde_json::json;
@@ -282,6 +298,7 @@ mod tests {
                 "component-id": "00000000-0000-0000-0000-000000000000",
                 "component-version": 0,
                 "idempotency-key": "\"test-key\"",
+                "type": "file-server",
                 "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}"
             }))]
                 .into_iter()
@@ -331,7 +348,8 @@ mod tests {
                         ]
                         .into_iter()
                         .collect()
-                    ))
+                    )),
+                    worker_binding_type: WorkerBindingType::FileServer
                 }
             })
         );

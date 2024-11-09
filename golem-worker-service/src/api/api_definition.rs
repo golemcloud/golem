@@ -280,7 +280,7 @@ impl RegisterApiDefinitionApi {
     async fn create_api(
         &self,
         definition: &CoreHttpApiDefinitionRequest,
-    ) -> Result<CompiledHttpApiDefinition, ApiEndpointError> {
+    ) -> Result<CompiledHttpApiDefinition<DefaultNamespace>, ApiEndpointError> {
         let result = self
             .definition_service
             .create(
@@ -616,7 +616,7 @@ mod test {
                               "$ref": "#/components/schemas/CartItem"
                             }
                           }
-            
+
                         }
                       },
                       "404": {

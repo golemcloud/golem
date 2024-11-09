@@ -7,6 +7,8 @@ homepage = "https://golem.cloud"
 repository = "https://github.com/golemcloud/golem"
 description = "Shared code between Golem services"
 
+autotests = false
+
 [lib]
 harness = false
 
@@ -17,13 +19,17 @@ golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
 anyhow = { workspace = true }
+async-fs = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3 = { workspace = true }
 bigdecimal = { workspace = true }
 bincode = { workspace = true }
+bytes = { workspace = true }
 chrono = { workspace = true }
+dashmap = { workspace = true }
 futures = { workspace = true }
+hex = { workspace = true }
 http = { workspace = true }
 http_02 = { workspace = true }
 humantime-serde = { workspace = true }
@@ -43,13 +49,27 @@ sqlx = { workspace = true, features = [
     "migrate",
     "chrono",
 ] }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 url = { workspace = true }
 
 [dev-dependencies]
+golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
+
+assert2 = { workspace = true }
 proptest = { workspace = true }
+tempfile = { workspace = true }
 test-r = { workspace = true }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+uuid = { workspace = true }
+
+[[test]]
+name = "integration"
+path = "tests/lib.rs"
+harness = false

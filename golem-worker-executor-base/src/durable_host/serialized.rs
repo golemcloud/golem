@@ -684,6 +684,7 @@ mod tests {
             ".*".prop_map(|details| GolemError::PreviousInvocationFailed { details }),
             Just(GolemError::PreviousInvocationExited),
             ".*".prop_map(|details| GolemError::Unknown { details }),
+            (".*", ".*").prop_map(|(path, reason)| GolemError::InitialComponentFileDownloadFailed { path, reason }),
         }
     }
 

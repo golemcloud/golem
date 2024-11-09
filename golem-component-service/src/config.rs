@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_service_base::config::BlobStorageConfig;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -33,6 +34,7 @@ pub struct ComponentServiceConfig {
     pub db: DbConfig,
     pub component_store: ComponentStoreConfig,
     pub compilation: ComponentCompilationConfig,
+    pub blob_storage: BlobStorageConfig,
 }
 
 impl Default for ComponentServiceConfig {
@@ -50,6 +52,7 @@ impl Default for ComponentServiceConfig {
                 object_prefix: "".to_string(),
             }),
             compilation: ComponentCompilationConfig::default(),
+            blob_storage: BlobStorageConfig::default(),
         }
     }
 }
@@ -65,6 +68,7 @@ impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
                     object_prefix: "object_prefix".to_string(),
                 }),
                 compilation: ComponentCompilationConfig::Disabled(Empty {}),
+                blob_storage: BlobStorageConfig::default_s3(),
                 ..ComponentServiceConfig::default()
             },
         )]

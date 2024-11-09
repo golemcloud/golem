@@ -167,13 +167,20 @@ impl ComponentGrpcApi {
         data: Vec<u8>,
     ) -> Result<Component, ComponentError> {
         let name = golem_service_base::model::ComponentName(request.component_name.clone());
+        let files = request
+            .files
+            .iter()
+            .map(|f| f.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e: String| bad_request_error(&format!("Failed reading files: {e}")))?;
         let result = self
             .component_service
-            .create(
+            .create_internal(
                 &component_id,
                 &name,
                 request.component_type().into(),
                 data,
+                files,
                 &DefaultNamespace::default(),
             )
             .await?;
@@ -189,6 +196,7 @@ impl ComponentGrpcApi {
             .component_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
+
         let component_type = match request.component_type {
             Some(n) => Some(
                 ComponentType::try_from(n)
@@ -196,9 +204,28 @@ impl ComponentGrpcApi {
             ),
             None => None,
         };
+
+        let files = if request.update_files {
+            let value = request
+                .files
+                .iter()
+                .map(|f| f.clone().try_into())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e: String| bad_request_error(&format!("Failed reading files: {e}")))?;
+            Some(value)
+        } else {
+            None
+        };
+
         let result = self
             .component_service
-            .update(&id, data, component_type, &DefaultNamespace::default())
+            .update_internal(
+                &id,
+                data,
+                component_type,
+                files,
+                &DefaultNamespace::default(),
+            )
             .await?;
         Ok(result.into())
     }

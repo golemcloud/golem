@@ -356,6 +356,12 @@ impl From<WorkerExecutionError> for ResponseMapResult {
     }
 }
 
+impl From<WorkerServiceError> for ResponseMapResult {
+    fn from(error: WorkerServiceError) -> Self {
+        Self::Other(error)
+    }
+}
+
 #[async_trait]
 impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> RoutingLogic for T {
     async fn call_worker_executor<Target, F, G, H, Out, R>(

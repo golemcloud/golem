@@ -16,6 +16,7 @@ use test_r::{inherit_test_dep, test};
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU8;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -23,7 +24,11 @@ use std::time::{Duration, SystemTime};
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{assert, check};
-use golem_common::model::{IdempotencyKey, WorkerStatus};
+use golem_common::model::{
+    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
+    ComponentFileSystemNodeDetails, ComponentType, IdempotencyKey, InitialComponentFile,
+    WorkerStatus,
+};
 use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_message, TestDslUnsafe,
 };
@@ -193,6 +198,249 @@ async fn file_write_read_delete(
                 Value::Option(None)
             ])]
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn initial_file_read_write(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let account_id = AccountId {
+        value: "test-account".to_string(),
+    };
+
+    let file1_key = executor
+        .add_initial_component_file(
+            &account_id,
+            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+        )
+        .await;
+    let file2_key = executor
+        .add_initial_component_file(
+            &account_id,
+            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+        )
+        .await;
+
+    let component_files: Vec<InitialComponentFile> = vec![
+        InitialComponentFile {
+            key: file1_key,
+            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadOnly,
+        },
+        InitialComponentFile {
+            key: file2_key,
+            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
+        },
+    ];
+
+    let component_id = executor
+        .store_unique_component_with_files(
+            "initial-file-read-write",
+            ComponentType::Durable,
+            &component_files,
+        )
+        .await;
+    let mut env = HashMap::new();
+    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let worker_id = executor
+        .start_worker_with(&component_id, "initial-file-read-write-1", vec![], env)
+        .await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    check!(
+        result
+            == vec![Value::Tuple(vec![
+                Value::Option(Some(Box::new(Value::String("foo\n".to_string())))),
+                Value::Option(None),
+                Value::Option(None),
+                Value::Option(Some(Box::new(Value::String("baz\n".to_string())))),
+                Value::Option(Some(Box::new(Value::String("hello world".to_string())))),
+            ])]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn initial_file_listing_through_api(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let account_id = AccountId {
+        value: "test-account".to_string(),
+    };
+
+    let file1_key = executor
+        .add_initial_component_file(
+            &account_id,
+            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+        )
+        .await;
+    let file2_key = executor
+        .add_initial_component_file(
+            &account_id,
+            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+        )
+        .await;
+
+    let component_files: Vec<InitialComponentFile> = vec![
+        InitialComponentFile {
+            key: file1_key,
+            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadOnly,
+        },
+        InitialComponentFile {
+            key: file2_key.clone(),
+            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
+        },
+        InitialComponentFile {
+            key: file2_key,
+            path: ComponentFilePath::from_abs_str("/baz.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
+        },
+    ];
+
+    let component_id = executor
+        .store_unique_component_with_files(
+            "initial-file-read-write",
+            ComponentType::Durable,
+            &component_files,
+        )
+        .await;
+    let mut env = HashMap::new();
+    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let worker_id = executor
+        .start_worker_with(&component_id, "initial-file-read-write-2", vec![], env)
+        .await;
+
+    let result = executor.list_directory(&worker_id, "/").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    drop(executor);
+
+    check!(
+        result
+            == vec![
+                ComponentFileSystemNode {
+                    name: "bar".to_string(),
+                    last_modified: SystemTime::UNIX_EPOCH,
+                    details: ComponentFileSystemNodeDetails::Directory
+                },
+                ComponentFileSystemNode {
+                    name: "baz.txt".to_string(),
+                    last_modified: SystemTime::UNIX_EPOCH,
+                    details: ComponentFileSystemNodeDetails::File {
+                        permissions: ComponentFilePermissions::ReadWrite,
+                        size: 4,
+                    }
+                },
+                ComponentFileSystemNode {
+                    name: "foo.txt".to_string(),
+                    last_modified: SystemTime::UNIX_EPOCH,
+                    details: ComponentFileSystemNodeDetails::File {
+                        permissions: ComponentFilePermissions::ReadOnly,
+                        size: 4,
+                    }
+                },
+            ]
+    );
+}
+
+#[test]
+#[tracing::instrument]
+async fn initial_file_reading_through_api(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let account_id = AccountId {
+        value: "test-account".to_string(),
+    };
+
+    let file1_key = executor
+        .add_initial_component_file(
+            &account_id,
+            PathBuf::from("initial-file-read-write/files/foo.txt").as_path(),
+        )
+        .await;
+    let file2_key = executor
+        .add_initial_component_file(
+            &account_id,
+            PathBuf::from("initial-file-read-write/files/baz.txt").as_path(),
+        )
+        .await;
+
+    let component_files: Vec<InitialComponentFile> = vec![
+        InitialComponentFile {
+            key: file1_key,
+            path: ComponentFilePath::from_abs_str("/foo.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadOnly,
+        },
+        InitialComponentFile {
+            key: file2_key.clone(),
+            path: ComponentFilePath::from_abs_str("/bar/baz.txt").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
+        },
+    ];
+
+    let component_id = executor
+        .store_unique_component_with_files(
+            "initial-file-read-write",
+            ComponentType::Durable,
+            &component_files,
+        )
+        .await;
+    let mut env = HashMap::new();
+    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+    let worker_id = executor
+        .start_worker_with(&component_id, "initial-file-read-write-3", vec![], env)
+        .await;
+
+    // run the worker so it can update the files.
+    executor
+        .invoke_and_await(&worker_id, "run", vec![])
+        .await
+        .unwrap();
+
+    let result1 = executor.get_file_contents(&worker_id, "/foo.txt").await;
+    let result1 = std::str::from_utf8(&result1).unwrap();
+
+    let result2 = executor.get_file_contents(&worker_id, "/bar/baz.txt").await;
+    let result2 = std::str::from_utf8(&result2).unwrap();
+
+    drop(executor);
+
+    check!(result1 == "foo\n");
+    check!(result2 == "hello world");
 }
 
 #[test]
