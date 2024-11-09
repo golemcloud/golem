@@ -34,7 +34,7 @@ mod internal {
     use crate::service::gateway::api_definition_transformer::ApiDefTransformationError;
 
     pub(crate) fn update_routes_with_cors_middleware(
-        routes: &mut Vec<Route>,
+        routes: &mut [Route],
     ) -> Result<(), ApiDefTransformationError> {
         // Collect paths that need CORS middleware to apply
         let mut paths_to_apply_cors = Vec::new();
@@ -209,7 +209,7 @@ mod tests {
             route_with_worker_binding.clone(),
         ];
 
-        let api_definition = HttpApiDefinition {
+        let mut api_definition = HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
             routes,
             version: ApiVersion::new("v1"),
@@ -217,9 +217,9 @@ mod tests {
             created_at: chrono::Utc::now(),
         };
 
-        let transformed_definition = api_definition.transform().unwrap();
+        api_definition.transform().unwrap();
 
-        let updated_route_with_worker_binding = transformed_definition
+        let updated_route_with_worker_binding = api_definition
             .routes
             .iter()
             .find(|r| r.method == MethodPattern::Get && r.path == route_with_worker_binding.path)
@@ -245,7 +245,7 @@ mod tests {
 
         let routes = vec![invalid_cors_preflight_route, route_with_worker_binding];
 
-        let api_definition = HttpApiDefinition {
+        let mut api_definition = HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
             routes,
             version: ApiVersion::new("v1"),
@@ -272,7 +272,7 @@ mod tests {
             route_with_worker_binding_with_cors_middleware.clone(),
         ];
 
-        let api_definition = HttpApiDefinition {
+        let mut api_definition = HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
             routes,
             version: ApiVersion::new("v1"),
