@@ -28,6 +28,11 @@ impl Display for ApiDefinitionId {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Serialize, Deserialize, Encode, Decode, NewType)]
 pub struct ApiVersion(pub String);
 
+impl ApiVersion {
+    pub fn new(version: &str) -> Self {
+        ApiVersion(version.to_string())
+    }
+}
 impl From<String> for ApiVersion {
     fn from(id: String) -> Self {
         ApiVersion(id)

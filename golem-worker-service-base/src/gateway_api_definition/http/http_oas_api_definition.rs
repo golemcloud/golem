@@ -1,4 +1,4 @@
-use crate::gateway_api_definition::http::{route_transformations, HttpApiDefinitionRequest};
+use crate::gateway_api_definition::http::{HttpApiDefinitionRequest};
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 use openapiv3::OpenAPI;
@@ -21,12 +21,11 @@ impl OpenApiDefinitionRequest {
             ApiVersion(get_root_extension(open_api, GOLEM_API_DEFINITION_VERSION)?);
 
         let routes = get_routes(&open_api.paths)?;
-        let updated_routes = route_transformations::update_routes_with_cors_middleware(routes)?;
 
         Ok(HttpApiDefinitionRequest {
             id: api_definition_id,
             version: api_definition_version,
-            routes: updated_routes,
+            routes,
             draft: true,
         })
     }

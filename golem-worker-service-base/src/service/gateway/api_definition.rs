@@ -34,6 +34,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use tracing::{error, info};
+use crate::service::gateway::api_definition_transformer::{ApiDefTransformationError, ApiDefinitionTransformer};
 
 pub type ApiResult<T, E> = Result<T, ApiDefinitionError<E>>;
 
@@ -75,6 +76,14 @@ impl<E> From<RepoError> for ApiDefinitionError<E> {
     }
 }
 
+impl<E> From<ApiDefTransformationError> for ApiDefinitionError<E> {
+    fn from(error: ApiDefTransformationError) -> Self {
+        ApiDefinitionError::ValidationError(ValidationErrors {
+            errors: vec![error.into()],
+        })
+    }
+}
+
 impl<E: SafeDisplay + Display> SafeDisplay for ApiDefinitionError<E> {
     fn to_safe_string(&self) -> String {
         match self {
@@ -107,9 +116,9 @@ impl<E> From<RouteCompilationErrors> for ApiDefinitionError<E> {
     }
 }
 
-// A namespace here can be example: (account, project) etc.
-// Ideally a repo service and its implementation with a different service impl that takes care of
-// validations, authorisations etc is the right approach. However we are keeping it simple for now.
+// TODO;https://github.com/golemcloud/golem/issues/1056
+// This trait is broken in all respects, and needs cleanup
+// including removal of AuthCtx, concrete HttpApiDefinition etc
 #[async_trait]
 pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
     async fn create(
@@ -258,12 +267,16 @@ where
             ));
         }
 
-        let definition = HttpApiDefinition::new(definition.clone(), created_at);
+        let mut definition = HttpApiDefinition::new(definition.clone(), created_at);
+
+        let _ = definition.transform()?;
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
         self.api_definition_validator
             .validate(&definition, components.as_slice())?;
+
+
 
         let component_metadata_dictionary =
             ComponentMetadataDictionary::from_components(&components);
@@ -313,13 +326,15 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
-        let definition = HttpApiDefinition::new(definition.clone(), created_at);
+        let mut definition = HttpApiDefinition::new(definition.clone(), created_at);
+
+        let _ = definition.transform()?;
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
         self.api_definition_validator
             .validate(&definition, components.as_slice())?;
-
+        
         let component_metadata_dictionary =
             ComponentMetadataDictionary::from_components(&components);
 

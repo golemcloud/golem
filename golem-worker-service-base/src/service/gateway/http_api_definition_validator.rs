@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern, Route};
 
 use crate::gateway_execution::router::{Router, RouterPattern};
+use crate::service::gateway::api_definition_transformer::{ApiDefinitionTransformer, ApiDefTransformationError};
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
@@ -21,6 +22,17 @@ pub struct RouteValidationError {
     pub detail: String,
 }
 
+impl From<ApiDefTransformationError> for RouteValidationError {
+    fn from(value: ApiDefTransformationError) -> Self {
+        RouteValidationError {
+            method: value.method,
+            path: value.path,
+            component: None,
+            detail: value.detail,
+        }
+    }
+}
+
 impl Display for RouteValidationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -29,7 +41,6 @@ impl Display for RouteValidationError {
             self.method, self.path, self.detail
         )?;
 
-        // Append component if it's present
         if let Some(ref component) = self.component {
             write!(f, ", component: {}", component)?;
         }
@@ -55,6 +66,7 @@ impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
         api: &HttpApiDefinition,
         _components: &[Component],
     ) -> Result<(), ValidationErrors<RouteValidationError>> {
+
         let errors = unique_routes(api.routes.as_slice());
 
         if errors.is_empty() {
@@ -88,7 +100,7 @@ fn unique_routes(routes: &[Route]) -> Vec<RouteValidationError> {
             errors.push(RouteValidationError {
                 method: route.method.clone(),
                 path: route.path.to_string(),
-                component: route.binding.get_worker_binding().map(|x| x.component_id),
+                component: route.binding.get_worker_binding().map(|w| w.component_id),
                 detail,
             });
         }
