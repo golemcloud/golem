@@ -25,6 +25,9 @@ use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRepo;
 use crate::service::component::ComponentService;
+use crate::service::gateway::api_definition_transformer::{
+    ApiDefTransformationError, ApiDefinitionTransformer,
+};
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
@@ -34,7 +37,6 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use tracing::{error, info};
-use crate::service::gateway::api_definition_transformer::{ApiDefTransformationError, ApiDefinitionTransformer};
 
 pub type ApiResult<T, E> = Result<T, ApiDefinitionError<E>>;
 
@@ -234,7 +236,7 @@ impl<AuthCtx, Namespace, ValidationError> ApiDefinitionService<AuthCtx, Namespac
 where
     AuthCtx: Send + Sync,
     Namespace: Display + Clone + Send + Sync,
-    ValidationError: From<ApiDefTransformationError>
+    ValidationError: From<ApiDefTransformationError>,
 {
     async fn create(
         &self,
@@ -272,8 +274,6 @@ where
 
         self.api_definition_validator
             .validate(&definition, components.as_slice())?;
-
-
 
         let component_metadata_dictionary =
             ComponentMetadataDictionary::from_components(&components);
@@ -335,7 +335,7 @@ where
 
         self.api_definition_validator
             .validate(&definition, components.as_slice())?;
-        
+
         let component_metadata_dictionary =
             ComponentMetadataDictionary::from_components(&components);
 

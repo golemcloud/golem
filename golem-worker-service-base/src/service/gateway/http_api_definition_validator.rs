@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern, Route};
 
 use crate::gateway_execution::router::{Router, RouterPattern};
-use crate::service::gateway::api_definition_transformer::{ApiDefinitionTransformer, ApiDefTransformationError};
+use crate::service::gateway::api_definition_transformer::ApiDefTransformationError;
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
@@ -66,7 +66,6 @@ impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
         api: &HttpApiDefinition,
         _components: &[Component],
     ) -> Result<(), ValidationErrors<RouteValidationError>> {
-
         let errors = unique_routes(api.routes.as_slice());
 
         if errors.is_empty() {

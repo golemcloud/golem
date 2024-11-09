@@ -33,7 +33,9 @@ mod internal {
     use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware};
     use crate::service::gateway::api_definition_transformer::ApiDefTransformationError;
 
-    pub(crate) fn update_routes_with_cors_middleware(routes: &mut Vec<Route>) -> Result<(), ApiDefTransformationError> {
+    pub(crate) fn update_routes_with_cors_middleware(
+        routes: &mut Vec<Route>,
+    ) -> Result<(), ApiDefTransformationError> {
         // Collect paths that need CORS middleware to apply
         let mut paths_to_apply_cors = Vec::new();
 
@@ -86,7 +88,10 @@ mod internal {
         Ok(())
     }
 
-    fn add_cors_middleware_to_route(route: &mut Route, cors: CorsPreflight) -> Result<(), ApiDefTransformationError> {
+    fn add_cors_middleware_to_route(
+        route: &mut Route,
+        cors: CorsPreflight,
+    ) -> Result<(), ApiDefTransformationError> {
         if let Some(worker_binding) = route.binding.get_worker_binding_mut() {
             if worker_binding.get_cors_middleware().is_some() {
                 let error = ApiDefTransformationError::new(
@@ -96,7 +101,7 @@ mod internal {
                         "Conflicting CORS middleware configuration for path '{}' at method '{}'. \
                     CORS preflight is already configured for the same path.",
                         route.path, route.method
-                    )
+                    ),
                 );
                 Err(error)
             } else {
@@ -112,14 +117,16 @@ mod internal {
 mod tests {
     use test_r::test;
 
-    use crate::gateway_api_definition::http::{AllPathPatterns, HttpApiDefinition, MethodPattern, Route};
+    use crate::gateway_api_definition::http::{
+        AllPathPatterns, HttpApiDefinition, MethodPattern, Route,
+    };
+    use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{CorsPreflight, HttpMiddleware, Middleware, Middlewares};
+    use crate::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
     use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
-    use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-    use crate::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
 
     fn get_cors_preflight_route() -> Route {
         Route {
@@ -202,7 +209,6 @@ mod tests {
             route_with_worker_binding.clone(),
         ];
 
-
         let api_definition = HttpApiDefinition {
             id: ApiDefinitionId("test".to_string()),
             routes,
@@ -211,9 +217,7 @@ mod tests {
             created_at: chrono::Utc::now(),
         };
 
-
-        let transformed_definition =
-            api_definition.transform().unwrap();
+        let transformed_definition = api_definition.transform().unwrap();
 
         let updated_route_with_worker_binding = transformed_definition
             .routes
@@ -249,8 +253,7 @@ mod tests {
             created_at: chrono::Utc::now(),
         };
 
-        let result =
-            api_definition.transform().map_err(|x| x.detail);
+        let result = api_definition.transform().map_err(|x| x.detail);
 
         assert_eq!(result.err(), Some("Invalid binding for resource '/test' with method 'Get'. CORS binding is only supported for the OPTIONS method.".to_string()));
     }
@@ -277,9 +280,7 @@ mod tests {
             created_at: chrono::Utc::now(),
         };
 
-
-        let result =
-            api_definition.transform();
+        let result = api_definition.transform();
 
         assert!(result.is_err());
     }

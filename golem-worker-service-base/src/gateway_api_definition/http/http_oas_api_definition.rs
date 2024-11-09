@@ -1,4 +1,4 @@
-use crate::gateway_api_definition::http::{HttpApiDefinitionRequest};
+use crate::gateway_api_definition::http::HttpApiDefinitionRequest;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
 use openapiv3::OpenAPI;
