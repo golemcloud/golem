@@ -12,9 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod api_definition;
-pub mod api_deployment;
-pub mod component;
-pub mod file_download;
-pub mod health_check;
-pub mod worker;
+use crate::model::GolemError;
+use async_trait::async_trait;
+use url::Url;
+
+#[async_trait]
+pub trait FileDownloadClient {
+    async fn download_file(&self, url: Url) -> Result<Vec<u8>, GolemError>;
+}
+
+pub struct FileDownloadClientLive {
+    pub client: reqwest::Client,
+}
+
+#[async_trait]
+impl FileDownloadClient for FileDownloadClientLive {
+    async fn download_file(&self, url: Url) -> Result<Vec<u8>, GolemError> {
+        let response = self.client.get(url).send().await?;
+        let bytes = response.bytes().await?;
+        Ok(bytes.to_vec())
+    }
+}

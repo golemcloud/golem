@@ -109,6 +109,8 @@ impl InvokeResultView {
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use test_r::test;
 
     use chrono::Utc;
@@ -169,6 +171,7 @@ mod tests {
             },
             project_id: None,
             created_at: Some(Utc::now()),
+            files: vec![],
         };
 
         InvokeResultView::try_parse_or_json(

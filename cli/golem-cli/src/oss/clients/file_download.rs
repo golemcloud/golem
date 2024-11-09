@@ -12,9 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod api_definition;
-pub mod api_deployment;
-pub mod component;
-pub mod file_download;
-pub mod health_check;
-pub mod worker;
+use crate::clients::health_check::HealthCheckClient;
+use async_trait::async_trait;
+use golem_client::model::VersionInfo;
+use tracing::debug;
+
+use crate::model::GolemError;
+
+#[derive(Clone)]
+pub struct FileDownloadClientLive<C: golem_client::api::HealthCheckClient + Sync + Send> {
+    pub client: C,
+}
+
+#[async_trait]
+impl<C: golem_client::api::HealthCheckClient + Sync + Send> HealthCheckClient
+    for HealthCheckClientLive<C>
+{
+    async fn version(&self) -> Result<VersionInfo, GolemError> {
+        debug!("Getting server version");
+
+        Ok(self.client.version().await?)
+    }
+}
