@@ -1,4 +1,4 @@
-use crate::services::rdbms::mysql::{Mysql, MysqlNoOp};
+use crate::services::rdbms::mysql::{Mysql, MysqlDefault};
 use crate::services::rdbms::postgres::{Postgres, PostgresDefault};
 use std::error::Error;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ impl RdbmsServiceDefault {
 impl Default for RdbmsServiceDefault {
     fn default() -> Self {
         Self::new(
-            Arc::new(MysqlNoOp::default()),
+            Arc::new(MysqlDefault::default()),
             Arc::new(PostgresDefault::default()),
         )
     }
@@ -68,20 +68,169 @@ impl RdbmsPoolKey {
 
 pub mod sqlx_common {
     use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, DbValuePrimitive};
-    use crate::services::rdbms::RdbmsPoolConfig;
+    use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
     use futures::Stream;
     use futures_util::stream::BoxStream;
     use futures_util::StreamExt;
+    use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+    use golem_common::model::OwnedWorkerId;
     use sqlx::database::HasArguments;
     use sqlx::{Database, Error, IntoArguments, Row};
     use std::fmt::Display;
+    use std::ops::Deref;
     use std::sync::Arc;
-    use tracing::info;
+    use tracing::{error, info};
+
+    #[derive(Clone)]
+    pub(crate) struct SqlxRdbms<DB>
+    where
+        DB: Database,
+    {
+        name: &'static str,
+        pool_config: RdbmsPoolConfig,
+        pool_cache: Cache<RdbmsPoolKey, (), Arc<sqlx::Pool<DB>>, String>,
+    }
+
+    impl<DB> SqlxRdbms<DB>
+    where
+        DB: Database,
+        sqlx::Pool<DB>: QueryExecutor,
+        RdbmsPoolKey: PoolCreator<DB>,
+    {
+        pub(crate) fn new(name: &'static str, pool_config: RdbmsPoolConfig) -> Self {
+            let cache_name: &'static str = format!("rdbms-{}-pools", name).leak();
+            let pool_cache = Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                cache_name,
+            );
+            Self {
+                name,
+                pool_config,
+                pool_cache,
+            }
+        }
+
+        async fn get_or_create(
+            &self,
+            _worker_id: &OwnedWorkerId,
+            address: &str,
+        ) -> Result<Arc<sqlx::Pool<DB>>, String> {
+            let key = RdbmsPoolKey::new(address.to_string());
+            let pool_config = self.pool_config.clone();
+            let name = self.name.to_string();
+            self.pool_cache
+                .get_or_insert_simple(&key.clone(), || {
+                    Box::pin(async move {
+                        info!(
+                            "{} DB Pool: {}, connections: {}",
+                            name, key.address, pool_config.max_connections
+                        );
+                        let result = key.create_pool(&pool_config).await.map_err(|e| {
+                            error!(
+                                "{} DB Pool: {}, connections: {} - error {}",
+                                name, key.address, pool_config.max_connections, e
+                            );
+                            e.to_string()
+                        })?;
+                        Ok(Arc::new(result))
+                    })
+                })
+                .await
+        }
+
+        pub(crate) async fn create(
+            &self,
+            worker_id: &OwnedWorkerId,
+            address: &str,
+        ) -> Result<(), String> {
+            info!("{} create connection - address: {}", self.name, address);
+            let _pool = self.get_or_create(worker_id, address).await?;
+            info!(
+                "{} create connection - address: {} - done",
+                self.name, address
+            );
+            Ok(())
+        }
+
+        pub(crate) async fn remove(
+            &self,
+            _worker_id: &OwnedWorkerId,
+            address: &str,
+        ) -> Result<bool, String> {
+            let key = RdbmsPoolKey::new(address.to_string());
+            let pool = self.pool_cache.try_get(&key);
+            if let Some(pool) = pool {
+                self.pool_cache.remove(&key);
+                pool.close().await;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+
+        pub(crate) async fn exists(&self, _worker_id: &OwnedWorkerId, address: &str) -> bool {
+            let key = RdbmsPoolKey::new(address.to_string());
+            self.pool_cache.contains_key(&key)
+        }
+
+        pub(crate) async fn execute(
+            &self,
+            worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            params: Vec<DbValue>,
+        ) -> Result<u64, String> {
+            info!(
+                "{} execute - address: {}, statement: {} - 0",
+                self.name, address, statement
+            );
+            let pool = self.get_or_create(worker_id, address).await?;
+            info!(
+                "{} execute - address: {}, statement: {} - 1",
+                self.name, address, statement
+            );
+            let result = pool.deref().execute(statement, params).await;
+            info!(
+                "{} execute - address: {}, statement: {} - 2",
+                self.name, address, statement
+            );
+            result
+        }
+
+        pub(crate) async fn query(
+            &self,
+            worker_id: &OwnedWorkerId,
+            address: &str,
+            statement: &str,
+            params: Vec<DbValue>,
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+            info!(
+                "{} query - address: {}, statement: {} - 0",
+                self.name, address, statement
+            );
+            let pool = self.get_or_create(worker_id, address).await?;
+            info!(
+                "{} query - address: {}, statement: {} - 1",
+                self.name, address, statement
+            );
+            let result = pool.deref().query_stream(statement, params, 50).await;
+            info!(
+                "{} query - address: {}, statement: {} - 2",
+                self.name, address, statement
+            );
+            result
+        }
+    }
 
     #[async_trait]
     pub(crate) trait PoolCreator<DB: Database> {
-        async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<sqlx::Pool<DB>, sqlx::Error>;
+        async fn create_pool(
+            &self,
+            config: &RdbmsPoolConfig,
+        ) -> Result<sqlx::Pool<DB>, sqlx::Error>;
     }
 
     #[async_trait]
@@ -95,46 +244,6 @@ pub mod sqlx_common {
             batch: usize,
         ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
     }
-
-    // pub(crate) async fn query_stream<DB>(
-    //     statement: &str,
-    //     params: Vec<DbValue>,
-    //     batch: usize,
-    //     pool: &sqlx::Pool<DB>,
-    // ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>
-    // where
-    //     DB: Database + for<'q> HasArguments<'q>,
-    //     DB::Row: Row,
-    //     <DB as HasArguments<'_>>::Arguments: IntoArguments<DB>,
-    //     sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments>: for<'q>  QueryParamsBinder<'q, DB, <DB as HasArguments<'_>>::Arguments>,
-    //     DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
-    //     DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
-    // {
-    //     let query: sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments> =
-    //         sqlx::query(statement.to_string().leak()).bind_params(params)?;
-    //
-    //     let stream: BoxStream<Result<DB::Row, sqlx::Error>> = query.fetch(pool);
-    //
-    //     let response: StreamDbResultSet<DB> = StreamDbResultSet::create(stream, batch).await?;
-    //     Ok(Arc::new(response))
-    // }
-    //
-    // pub(crate) async fn execute<DB>(
-    //     statement: &str,
-    //     params: Vec<DbValue>,
-    //     pool: &sqlx::Pool<DB>,
-    // ) -> Result<u64, String>
-    // where
-    //     DB: Database + for<'q> HasArguments<'q>,
-    //     for<'q> <DB as HasArguments<'q>>::Arguments: IntoArguments<DB>,
-    //     for<'q> sqlx::query::Query<'q, DB, <DB as HasArguments<'q>>::Arguments>: QueryParamsBinder<'q, DB>,
-    // {
-    //     let query: sqlx::query::Query<DB, <DB as HasArguments<'_>>::Arguments> = sqlx::query(statement);
-    //     let query = query.bind_params(params)?;
-    //
-    //     let result = query.execute(pool).await.map_err(|e| e.to_string())?;
-    //     Ok(result.rows_affected())
-    // }
 
     #[derive(Clone)]
     pub struct StreamDbResultSet<'q, DB: Database> {
@@ -243,13 +352,12 @@ pub mod sqlx_common {
 }
 
 pub mod mysql {
-    use crate::services::rdbms::postgres::pg_type_name;
     use crate::services::rdbms::sqlx_common::{
-        PoolCreator, QueryExecutor, QueryParamsBinder, StreamDbResultSet,
+        PoolCreator, QueryExecutor, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
     };
     use crate::services::rdbms::types::{
         DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
-        DbValuePrimitive, EmptyDbResultSet,
+        DbValuePrimitive,
     };
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
@@ -257,7 +365,6 @@ pub mod mysql {
     use golem_common::model::OwnedWorkerId;
     use sqlx::{Column, Pool, Row, TypeInfo};
     use std::sync::Arc;
-    use tracing::{error, info};
 
     #[async_trait]
     pub trait Mysql {
@@ -284,50 +391,69 @@ pub mod mysql {
         ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
     }
 
-    #[derive(Clone, Default)]
-    pub struct MysqlNoOp {}
+    #[derive(Clone)]
+    pub struct MysqlDefault {
+        rdbms: Arc<SqlxRdbms<sqlx::MySql>>,
+    }
+
+    impl MysqlDefault {
+        pub fn new(pool_config: RdbmsPoolConfig) -> Self {
+            let rdbms = Arc::new(SqlxRdbms::new("mysql", pool_config));
+            Self { rdbms }
+        }
+    }
 
     #[async_trait]
-    impl Mysql for MysqlNoOp {
-        async fn create(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
-            info!("create connection - address: {}", address);
-            Ok(())
+    impl Mysql for MysqlDefault {
+        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
+            self.rdbms.create(worker_id, address).await
         }
 
-        async fn exists(&self, _worker_id: &OwnedWorkerId, _address: &str) -> bool {
-            false
+        async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
+            self.rdbms.exists(worker_id, address).await
         }
 
-        async fn remove(&self, _worker_id: &OwnedWorkerId, _address: &str) -> Result<bool, String> {
-            Ok(false)
+        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String> {
+            self.rdbms.remove(worker_id, address).await
         }
 
         async fn execute(
             &self,
-            _worker_id: &OwnedWorkerId,
+            worker_id: &OwnedWorkerId,
             address: &str,
             statement: &str,
-            _params: Vec<DbValue>,
+            params: Vec<DbValue>,
         ) -> Result<u64, String> {
-            info!("execute - address: {}, statement: {}", address, statement);
-            Ok(0)
+            self.rdbms
+                .execute(worker_id, address, statement, params)
+                .await
         }
 
         async fn query(
             &self,
-            _worker_id: &OwnedWorkerId,
+            worker_id: &OwnedWorkerId,
             address: &str,
             statement: &str,
-            _params: Vec<DbValue>,
+            params: Vec<DbValue>,
         ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-            info!("query - address: {}, statement: {}", address, statement);
-            Ok(Arc::new(EmptyDbResultSet::default()))
+            self.rdbms
+                .query(worker_id, address, statement, params)
+                .await
+        }
+    }
+
+    impl Default for MysqlDefault {
+        fn default() -> Self {
+            Self::new(RdbmsPoolConfig::default())
         }
     }
 
     #[async_trait]
     impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
-        async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<sqlx::MySql>, sqlx::Error> {
+        async fn create_pool(
+            &self,
+            config: &RdbmsPoolConfig,
+        ) -> Result<Pool<sqlx::MySql>, sqlx::Error> {
             let address = self.address.clone();
 
             sqlx::mysql::MySqlPoolOptions::new()
@@ -636,26 +762,21 @@ pub mod mysql {
 
 pub mod postgres {
     use crate::services::rdbms::sqlx_common::{
-        PoolCreator, QueryExecutor, QueryParamsBinder, StreamDbResultSet,
+        PoolCreator, QueryExecutor, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
     };
     use crate::services::rdbms::types::{
         DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
-        DbValuePrimitive, EmptyDbResultSet, SimpleDbResultSet,
+        DbValuePrimitive,
     };
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
-    use chrono::DateTime;
     use futures::Stream;
     use futures_util::stream::BoxStream;
     use futures_util::StreamExt;
-    use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::model::OwnedWorkerId;
     use sqlx::{Column, Pool, Row, TypeInfo};
-    use std::collections::HashSet;
     use std::ops::Deref;
-    use std::pin::Pin;
     use std::sync::Arc;
-    use tracing::{error, info};
     use uuid::Uuid;
 
     #[async_trait]
@@ -683,126 +804,30 @@ pub mod postgres {
         ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
     }
 
-    // #[derive(Clone, Default)]
-    // pub struct PostgresNoOp {}
-    //
-    // #[async_trait]
-    // impl Postgres for PostgresNoOp {
-    //     async fn create(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
-    //         info!("create connection - address: {}", address);
-    //         Ok(())
-    //     }
-    //
-    //     async fn exists(&self, _worker_id: &OwnedWorkerId, _address: &str) -> bool {
-    //         false
-    //     }
-    //
-    //     async fn remove(&self, _worker_id: &OwnedWorkerId, _address: &str) -> Result<bool, String> {
-    //         Ok(false)
-    //     }
-    //
-    //     async fn execute(
-    //         &self,
-    //         _worker_id: &OwnedWorkerId,
-    //         address: &str,
-    //         statement: &str,
-    //         _params: Vec<DbValue>,
-    //     ) -> Result<u64, String> {
-    //         info!("execute - address: {}, statement: {}", address, statement);
-    //         Ok(0)
-    //     }
-    //
-    //     async fn query(
-    //         &self,
-    //         _worker_id: &OwnedWorkerId,
-    //         address: &str,
-    //         statement: &str,
-    //         _params: Vec<DbValue>,
-    //     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-    //         info!("query - address: {}, statement: {}", address, statement);
-    //         Ok(Arc::new(EmptyDbResultSet::default()))
-    //     }
-    // }
-
     #[derive(Clone)]
     pub struct PostgresDefault {
-        pool_config: RdbmsPoolConfig,
-        pool_cache: Cache<RdbmsPoolKey, (), Arc<sqlx::Pool<sqlx::Postgres>>, String>,
+        rdbms: Arc<SqlxRdbms<sqlx::Postgres>>,
     }
 
     impl PostgresDefault {
         pub fn new(pool_config: RdbmsPoolConfig) -> Self {
-            let pool_cache = Cache::new(
-                None,
-                FullCacheEvictionMode::None,
-                BackgroundEvictionMode::None,
-                "rdbms-postgres-pools",
-            );
-            Self {
-                pool_config,
-                pool_cache,
-            }
-        }
-
-        async fn get_or_create(
-            &self,
-            _worker_id: &OwnedWorkerId,
-            address: &str,
-        ) -> Result<Arc<sqlx::Pool<sqlx::Postgres>>, String> {
-            let key = RdbmsPoolKey::new(address.to_string());
-            let pool_config = self.pool_config.clone();
-
-            self.pool_cache
-                .get_or_insert_simple(&key.clone(), || {
-                    Box::pin(async move {
-                        info!(
-                            "DB Pool: {}, connections: {}",
-                            key.address, pool_config.max_connections
-                        );
-                        let result = key.create_pool(&pool_config).await.map_err(|e| {
-                            error!(
-                                "DB Pool: {}, connections: {} -  error {}",
-                                key.address, pool_config.max_connections, e
-                            );
-                            e.to_string()
-                        })?;
-                        Ok(Arc::new(result))
-                    })
-                })
-                .await
-        }
-    }
-
-    impl Default for PostgresDefault {
-        fn default() -> Self {
-            Self::new(RdbmsPoolConfig::default())
+            let rdbms = Arc::new(SqlxRdbms::new("postgres", pool_config));
+            Self { rdbms }
         }
     }
 
     #[async_trait]
     impl Postgres for PostgresDefault {
         async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
-            info!("create connection - address: {}", address);
-            let _pool = self.get_or_create(worker_id, address).await?;
-            info!("create connection - address: {} - done", address);
-            Ok(())
+            self.rdbms.create(worker_id, address).await
         }
 
-        async fn remove(&self, _worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String> {
-            let key = RdbmsPoolKey::new(address.to_string());
-            let pool = self.pool_cache.try_get(&key);
-            if let Some(pool) = pool {
-                self.pool_cache.remove(&key);
-                pool.close().await;
-                Ok(true)
-            } else {
-                Ok(false)
-            }
+        async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
+            self.rdbms.exists(worker_id, address).await
         }
 
-        async fn exists(&self, _worker_id: &OwnedWorkerId, address: &str) -> bool {
-            let key = RdbmsPoolKey::new(address.to_string());
-            self.pool_cache.contains_key(&key)
+        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String> {
+            self.rdbms.remove(worker_id, address).await
         }
 
         async fn execute(
@@ -812,21 +837,9 @@ pub mod postgres {
             statement: &str,
             params: Vec<DbValue>,
         ) -> Result<u64, String> {
-            info!(
-                "execute - address: {}, statement: {} - 0",
-                address, statement
-            );
-            let pool = self.get_or_create(worker_id, address).await?;
-            info!(
-                "execute - address: {}, statement: {} - 1",
-                address, statement
-            );
-            let result = pool.deref().execute(statement, params).await;
-            info!(
-                "execute - address: {}, statement: {} - 2",
-                address, statement
-            );
-            result
+            self.rdbms
+                .execute(worker_id, address, statement, params)
+                .await
         }
 
         async fn query(
@@ -836,12 +849,15 @@ pub mod postgres {
             statement: &str,
             params: Vec<DbValue>,
         ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
-            info!("query - address: {}, statement: {} - 0", address, statement);
-            let pool = self.get_or_create(worker_id, address).await?;
-            info!("query - address: {}, statement: {} - 1", address, statement);
-            let result = pool.deref().query_stream(statement, params, 50).await;
-            info!("query - address: {}, statement: {} - 2", address, statement);
-            result
+            self.rdbms
+                .query(worker_id, address, statement, params)
+                .await
+        }
+    }
+
+    impl Default for PostgresDefault {
+        fn default() -> Self {
+            Self::new(RdbmsPoolConfig::default())
         }
     }
 
