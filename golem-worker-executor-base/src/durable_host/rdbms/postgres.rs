@@ -63,7 +63,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 let resource = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(resource))
             }
-            Err(e) => Ok(Err(Error::ConnectionFailure(e))),
+            Err(e) => Ok(Err(e.into())),
         }
     }
 
@@ -101,7 +101,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 let db_result_set = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(db_result_set))
             }
-            Err(e) => Ok(Err(Error::QueryExecutionFailure(e))),
+            Err(e) => Ok(Err(e.into())),
         }
     }
 
@@ -132,7 +132,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                 params.into_iter().map(|v| v.into()).collect(),
             )
             .await
-            .map_err(Error::QueryExecutionFailure);
+            .map_err(|e| e.into());
 
         Ok(result)
     }

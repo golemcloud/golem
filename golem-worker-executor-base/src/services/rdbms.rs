@@ -1,6 +1,5 @@
 use crate::services::rdbms::mysql::{Mysql, MysqlDefault};
 use crate::services::rdbms::postgres::{Postgres, PostgresDefault};
-use std::error::Error;
 use std::sync::Arc;
 
 pub trait RdbmsService {
@@ -67,17 +66,15 @@ impl RdbmsPoolKey {
 }
 
 pub mod sqlx_common {
-    use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, DbValuePrimitive};
+    use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, Error};
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
-    use futures::Stream;
     use futures_util::stream::BoxStream;
     use futures_util::StreamExt;
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::model::OwnedWorkerId;
     use sqlx::database::HasArguments;
-    use sqlx::{Database, Error, IntoArguments, Row};
-    use std::fmt::Display;
+    use sqlx::{Database, Pool, Row};
     use std::ops::Deref;
     use std::sync::Arc;
     use tracing::{error, info};
@@ -89,13 +86,13 @@ pub mod sqlx_common {
     {
         name: &'static str,
         pool_config: RdbmsPoolConfig,
-        pool_cache: Cache<RdbmsPoolKey, (), Arc<sqlx::Pool<DB>>, String>,
+        pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, Error>,
     }
 
     impl<DB> SqlxRdbms<DB>
     where
         DB: Database,
-        sqlx::Pool<DB>: QueryExecutor,
+        Pool<DB>: QueryExecutor,
         RdbmsPoolKey: PoolCreator<DB>,
     {
         pub(crate) fn new(name: &'static str, pool_config: RdbmsPoolConfig) -> Self {
@@ -117,7 +114,7 @@ pub mod sqlx_common {
             &self,
             _worker_id: &OwnedWorkerId,
             address: &str,
-        ) -> Result<Arc<sqlx::Pool<DB>>, String> {
+        ) -> Result<Arc<Pool<DB>>, Error> {
             let key = RdbmsPoolKey::new(address.to_string());
             let pool_config = self.pool_config.clone();
             let name = self.name.to_string();
@@ -133,7 +130,7 @@ pub mod sqlx_common {
                                 "{} DB Pool: {}, connections: {} - error {}",
                                 name, key.address, pool_config.max_connections, e
                             );
-                            e.to_string()
+                            Error::ConnectionFailure(e.to_string())
                         })?;
                         Ok(Arc::new(result))
                     })
@@ -145,13 +142,9 @@ pub mod sqlx_common {
             &self,
             worker_id: &OwnedWorkerId,
             address: &str,
-        ) -> Result<(), String> {
+        ) -> Result<(), Error> {
             info!("{} create connection - address: {}", self.name, address);
             let _pool = self.get_or_create(worker_id, address).await?;
-            info!(
-                "{} create connection - address: {} - done",
-                self.name, address
-            );
             Ok(())
         }
 
@@ -159,7 +152,7 @@ pub mod sqlx_common {
             &self,
             _worker_id: &OwnedWorkerId,
             address: &str,
-        ) -> Result<bool, String> {
+        ) -> Result<bool, Error> {
             let key = RdbmsPoolKey::new(address.to_string());
             let pool = self.pool_cache.try_get(&key);
             if let Some(pool) = pool {
@@ -182,22 +175,24 @@ pub mod sqlx_common {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<u64, String> {
+        ) -> Result<u64, Error> {
             info!(
-                "{} execute - address: {}, statement: {} - 0",
+                "{} execute - address: {}, statement: {}",
                 self.name, address, statement
             );
-            let pool = self.get_or_create(worker_id, address).await?;
-            info!(
-                "{} execute - address: {}, statement: {} - 1",
-                self.name, address, statement
-            );
-            let result = pool.deref().execute(statement, params).await;
-            info!(
-                "{} execute - address: {}, statement: {} - 2",
-                self.name, address, statement
-            );
-            result
+
+            let result = {
+                let pool = self.get_or_create(worker_id, address).await?;
+                pool.deref().execute(statement, params).await
+            };
+
+            result.map_err(|e| {
+                error!(
+                    "{} execute - address: {}, statement: {} - error: {}",
+                    self.name, address, statement, e
+                );
+                e
+            })
         }
 
         pub(crate) async fn query(
@@ -206,43 +201,42 @@ pub mod sqlx_common {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
             info!(
-                "{} query - address: {}, statement: {} - 0",
+                "{} query - address: {}, statement: {}",
                 self.name, address, statement
             );
-            let pool = self.get_or_create(worker_id, address).await?;
-            info!(
-                "{} query - address: {}, statement: {} - 1",
-                self.name, address, statement
-            );
-            let result = pool.deref().query_stream(statement, params, 50).await;
-            info!(
-                "{} query - address: {}, statement: {} - 2",
-                self.name, address, statement
-            );
-            result
+
+            let result = {
+                let pool = self.get_or_create(worker_id, address).await?;
+                pool.deref().query_stream(statement, params, 50).await
+            };
+
+            result.map_err(|e| {
+                error!(
+                    "{} query - address: {}, statement: {} - error: {}",
+                    self.name, address, statement, e
+                );
+                e
+            })
         }
     }
 
     #[async_trait]
     pub(crate) trait PoolCreator<DB: Database> {
-        async fn create_pool(
-            &self,
-            config: &RdbmsPoolConfig,
-        ) -> Result<sqlx::Pool<DB>, sqlx::Error>;
+        async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<DB>, sqlx::Error>;
     }
 
     #[async_trait]
     pub(crate) trait QueryExecutor {
-        async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, String>;
+        async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error>;
 
         async fn query_stream(
             &self,
             statement: &str,
             params: Vec<DbValue>,
             batch: usize,
-        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
     }
 
     #[derive(Clone)]
@@ -273,29 +267,32 @@ pub mod sqlx_common {
         pub(crate) async fn create(
             stream: BoxStream<'q, Result<DB::Row, sqlx::Error>>,
             batch: usize,
-        ) -> Result<StreamDbResultSet<'q, DB>, String> {
+        ) -> Result<StreamDbResultSet<'q, DB>, Error> {
             let mut row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>> =
                 Box::pin(stream.chunks(batch));
 
-            let first: Option<Vec<Result<DB::Row, Error>>> = row_stream.next().await;
+            let first: Option<Vec<Result<DB::Row, sqlx::Error>>> = row_stream.next().await;
 
             match first {
                 Some(rows) if !rows.is_empty() => {
                     let rows: Vec<DB::Row> = rows
                         .into_iter()
                         .map(|r| r.map_err(|e| e.to_string()))
-                        .collect::<Result<Vec<_>, String>>()?;
+                        .collect::<Result<Vec<_>, String>>()
+                        .map_err(Error::QueryResponseFailure)?;
 
                     let columns = rows[0]
                         .columns()
                         .into_iter()
                         .map(|c: &DB::Column| c.try_into())
-                        .collect::<Result<Vec<_>, String>>()?;
+                        .collect::<Result<Vec<_>, String>>()
+                        .map_err(Error::QueryResponseFailure)?;
 
                     let first_rows = rows
                         .iter()
                         .map(|r: &DB::Row| r.try_into())
-                        .collect::<Result<Vec<_>, String>>()?;
+                        .collect::<Result<Vec<_>, String>>()
+                        .map_err(Error::QueryResponseFailure)?;
 
                     Ok(StreamDbResultSet::new(columns, first_rows, row_stream))
                 }
@@ -310,12 +307,12 @@ pub mod sqlx_common {
         DB::Row: Row,
         DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
     {
-        async fn get_columns(&self) -> Result<Vec<DbColumn>, String> {
+        async fn get_columns(&self) -> Result<Vec<DbColumn>, Error> {
             info!("get_columns");
             Ok(self.columns.clone())
         }
 
-        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
+        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, Error> {
             let mut rows = self.first_rows.lock().await;
             if rows.is_some() {
                 info!("get_next - initial");
@@ -328,13 +325,12 @@ pub mod sqlx_common {
                 let next = stream.next().await;
 
                 if let Some(rows) = next {
-                    let values = rows
-                        .into_iter()
-                        .map(|r| {
-                            r.map_err(|e| e.to_string())
-                                .and_then(|r: DB::Row| (&r).try_into())
-                        })
-                        .collect::<Result<Vec<_>, String>>()?;
+                    let mut values = Vec::with_capacity(rows.len());
+                    for row in rows.into_iter() {
+                        let row = row.map_err(|e| Error::QueryResponseFailure(e.to_string()))?;
+                        let value = (&row).try_into().map_err(Error::QueryResponseFailure)?;
+                        values.push(value);
+                    }
                     Ok(Some(values))
                 } else {
                     Ok(None)
@@ -347,7 +343,7 @@ pub mod sqlx_common {
         fn bind_params(
             self,
             params: Vec<DbValue>,
-        ) -> Result<sqlx::query::Query<'q, DB, <DB as HasArguments<'q>>::Arguments>, String>;
+        ) -> Result<sqlx::query::Query<'q, DB, <DB as HasArguments<'q>>::Arguments>, Error>;
     }
 }
 
@@ -357,7 +353,7 @@ pub mod mysql {
     };
     use crate::services::rdbms::types::{
         DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
-        DbValuePrimitive,
+        DbValuePrimitive, Error,
     };
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
@@ -368,11 +364,11 @@ pub mod mysql {
 
     #[async_trait]
     pub trait Mysql {
-        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String>;
+        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error>;
 
         async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
 
-        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String>;
+        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, Error>;
 
         async fn execute(
             &self,
@@ -380,7 +376,7 @@ pub mod mysql {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<u64, String>;
+        ) -> Result<u64, Error>;
 
         async fn query(
             &self,
@@ -388,7 +384,7 @@ pub mod mysql {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
     }
 
     #[derive(Clone)]
@@ -405,7 +401,7 @@ pub mod mysql {
 
     #[async_trait]
     impl Mysql for MysqlDefault {
-        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
+        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error> {
             self.rdbms.create(worker_id, address).await
         }
 
@@ -413,7 +409,7 @@ pub mod mysql {
             self.rdbms.exists(worker_id, address).await
         }
 
-        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String> {
+        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, Error> {
             self.rdbms.remove(worker_id, address).await
         }
 
@@ -423,7 +419,7 @@ pub mod mysql {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<u64, String> {
+        ) -> Result<u64, Error> {
             self.rdbms
                 .execute(worker_id, address, statement, params)
                 .await
@@ -435,7 +431,7 @@ pub mod mysql {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
             self.rdbms
                 .query(worker_id, address, statement, params)
                 .await
@@ -464,12 +460,15 @@ pub mod mysql {
     }
 
     #[async_trait]
-    impl QueryExecutor for sqlx::Pool<sqlx::MySql> {
-        async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, String> {
+    impl QueryExecutor for Pool<sqlx::MySql> {
+        async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error> {
             let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
                 sqlx::query(statement).bind_params(params)?;
 
-            let result = query.execute(self).await.map_err(|e| e.to_string())?;
+            let result = query
+                .execute(self)
+                .await
+                .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
             Ok(result.rows_affected())
         }
 
@@ -478,7 +477,7 @@ pub mod mysql {
             statement: &str,
             params: Vec<DbValue>,
             batch: usize,
-        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
             let query: sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments> =
                 sqlx::query(statement.to_string().leak()).bind_params(params)?;
 
@@ -496,10 +495,11 @@ pub mod mysql {
         fn bind_params(
             mut self,
             params: Vec<DbValue>,
-        ) -> Result<sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>, String>
+        ) -> Result<sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>, Error>
         {
             for param in params {
-                self = bind_value(self, param)?;
+                self = bind_value(self, param)
+                    .map_err(|e| Error::QueryParameterFailure(e.to_string()))?;
             }
             Ok(self)
         }
@@ -713,6 +713,7 @@ pub mod mysql {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) mod mysql_type_name {
         pub(crate) const BOOLEAN: &str = "BOOLEAN";
         pub(crate) const TINYINT_UNSIGNED: &str = "TINYINT UNSIGNED";
@@ -766,26 +767,23 @@ pub mod postgres {
     };
     use crate::services::rdbms::types::{
         DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
-        DbValuePrimitive,
+        DbValuePrimitive, Error,
     };
     use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
-    use futures::Stream;
     use futures_util::stream::BoxStream;
-    use futures_util::StreamExt;
     use golem_common::model::OwnedWorkerId;
     use sqlx::{Column, Pool, Row, TypeInfo};
-    use std::ops::Deref;
     use std::sync::Arc;
     use uuid::Uuid;
 
     #[async_trait]
     pub trait Postgres {
-        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String>;
+        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error>;
 
         async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
 
-        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String>;
+        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, Error>;
 
         async fn execute(
             &self,
@@ -793,7 +791,7 @@ pub mod postgres {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<u64, String>;
+        ) -> Result<u64, Error>;
 
         async fn query(
             &self,
@@ -801,7 +799,7 @@ pub mod postgres {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String>;
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
     }
 
     #[derive(Clone)]
@@ -818,7 +816,7 @@ pub mod postgres {
 
     #[async_trait]
     impl Postgres for PostgresDefault {
-        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), String> {
+        async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error> {
             self.rdbms.create(worker_id, address).await
         }
 
@@ -826,7 +824,7 @@ pub mod postgres {
             self.rdbms.exists(worker_id, address).await
         }
 
-        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, String> {
+        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, Error> {
             self.rdbms.remove(worker_id, address).await
         }
 
@@ -836,7 +834,7 @@ pub mod postgres {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<u64, String> {
+        ) -> Result<u64, Error> {
             self.rdbms
                 .execute(worker_id, address, statement, params)
                 .await
@@ -848,7 +846,7 @@ pub mod postgres {
             address: &str,
             statement: &str,
             params: Vec<DbValue>,
-        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
             self.rdbms
                 .query(worker_id, address, statement, params)
                 .await
@@ -878,11 +876,14 @@ pub mod postgres {
 
     #[async_trait]
     impl QueryExecutor for sqlx::Pool<sqlx::Postgres> {
-        async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, String> {
+        async fn execute(&self, statement: &str, params: Vec<DbValue>) -> Result<u64, Error> {
             let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
                 sqlx::query(statement).bind_params(params)?;
 
-            let result = query.execute(self).await.map_err(|e| e.to_string())?;
+            let result = query
+                .execute(self)
+                .await
+                .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
             Ok(result.rows_affected())
         }
 
@@ -891,7 +892,7 @@ pub mod postgres {
             statement: &str,
             params: Vec<DbValue>,
             batch: usize,
-        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, String> {
+        ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
             let query: sqlx::query::Query<sqlx::Postgres, sqlx::postgres::PgArguments> =
                 sqlx::query(statement.to_string().leak()).bind_params(params)?;
 
@@ -909,10 +910,11 @@ pub mod postgres {
         fn bind_params(
             mut self,
             params: Vec<DbValue>,
-        ) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>, String>
+        ) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>, Error>
         {
             for param in params {
-                self = bind_value(self, param)?;
+                self = bind_value(self, param)
+                    .map_err(|e| Error::QueryParameterFailure(e.to_string()))?;
             }
             Ok(self)
         }
@@ -1116,6 +1118,7 @@ pub mod postgres {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) mod pg_type_name {
         pub(crate) const BOOL: &str = "BOOL";
         pub(crate) const BYTEA: &str = "BYTEA";
@@ -1216,16 +1219,16 @@ pub mod postgres {
 pub mod types {
     use async_trait::async_trait;
     use bigdecimal::BigDecimal;
-    use std::collections::HashSet;
+    use std::fmt::Display;
     use std::sync::{Arc, Mutex};
-    use tracing::{error, info};
+    use tracing::info;
     use uuid::Uuid;
 
     #[async_trait]
     pub trait DbResultSet {
-        async fn get_columns(&self) -> Result<Vec<DbColumn>, String>;
+        async fn get_columns(&self) -> Result<Vec<DbColumn>, Error>;
 
-        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String>;
+        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, Error>;
     }
 
     #[derive(Clone, Debug)]
@@ -1245,12 +1248,12 @@ pub mod types {
 
     #[async_trait]
     impl DbResultSet for SimpleDbResultSet {
-        async fn get_columns(&self) -> Result<Vec<DbColumn>, String> {
+        async fn get_columns(&self) -> Result<Vec<DbColumn>, Error> {
             info!("get_columns");
             Ok(self.columns.clone())
         }
 
-        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
+        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, Error> {
             let rows = self.rows.lock().unwrap().clone();
             info!("get_next {}", rows.is_some());
             if rows.is_some() {
@@ -1265,12 +1268,12 @@ pub mod types {
 
     #[async_trait]
     impl DbResultSet for EmptyDbResultSet {
-        async fn get_columns(&self) -> Result<Vec<DbColumn>, String> {
+        async fn get_columns(&self) -> Result<Vec<DbColumn>, Error> {
             info!("get_columns");
             Ok(vec![])
         }
 
-        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, String> {
+        async fn get_next(&self) -> Result<Option<Vec<DbRow>>, Error> {
             info!("get_next");
             Ok(None)
         }
@@ -1371,6 +1374,18 @@ pub mod types {
         QueryExecutionFailure(String),
         QueryResponseFailure(String),
         Other(String),
+    }
+
+    impl Display for Error {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Error::ConnectionFailure(msg) => write!(f, "ConnectionFailure: {}", msg),
+                Error::QueryParameterFailure(msg) => write!(f, "QueryParameterFailure: {}", msg),
+                Error::QueryExecutionFailure(msg) => write!(f, "QueryExecutionFailure: {}", msg),
+                Error::QueryResponseFailure(msg) => write!(f, "QueryResponseFailure: {}", msg),
+                Error::Other(msg) => write!(f, "Other: {}", msg),
+            }
+        }
     }
 }
 

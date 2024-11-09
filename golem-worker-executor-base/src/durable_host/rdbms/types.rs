@@ -66,11 +66,7 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
             .internal
             .clone();
 
-        let columns = internal
-            .deref()
-            .get_columns()
-            .await
-            .map_err(Error::QueryResponseFailure)?;
+        let columns = internal.deref().get_columns().await.map_err(Error::from)?;
 
         let columns = columns.into_iter().map(|c| c.into()).collect();
         Ok(columns)
@@ -89,11 +85,8 @@ impl<Ctx: WorkerCtx> HostDbResultSet for DurableWorkerCtx<Ctx> {
             .internal
             .clone();
 
-        let rows = internal
-            .deref()
-            .get_next()
-            .await
-            .map_err(Error::QueryResponseFailure)?;
+        let rows = internal.deref().get_next().await.map_err(Error::from)?;
+
         let rows = rows.map(|r| r.into_iter().map(|r| r.into()).collect());
         Ok(rows)
     }
