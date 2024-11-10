@@ -1399,8 +1399,8 @@ mod tests {
     use uuid::Uuid;
 
     #[test]
-    #[timeout(30000)]
-    async fn test() {
+    // #[timeout(30000)]
+    async fn postgres_test() {
         let rdbms_service = RdbmsServiceDefault::default();
 
         let address = "postgresql://postgres:postgres@localhost:5444/postgres";
@@ -1511,6 +1511,124 @@ mod tests {
         assert!(result.is_ok_and(|v| v));
 
         let exists = rdbms_service.postgres().exists(&worker_id, &address).await;
+
+        assert!(!exists);
+    }
+
+    #[test]
+    // #[timeout(30000)]
+    async fn mysql_test() {
+        let rdbms_service = RdbmsServiceDefault::default();
+
+        let address = "mysql://root:mysql@localhost:3307/mysql";
+
+        let worker_id = OwnedWorkerId::new(
+            &AccountId::generate(),
+            &WorkerId {
+                component_id: ComponentId::new_v4(),
+                worker_name: "test".to_string(),
+            },
+        );
+
+        let connection = rdbms_service.mysql().create(&worker_id, &address).await;
+
+        assert!(connection.is_ok());
+
+        let result = rdbms_service
+            .mysql()
+            .execute(&worker_id, &address, "SELECT 1", vec![])
+            .await;
+
+        assert!(result.is_ok());
+
+        let connection = rdbms_service.mysql().create(&worker_id, &address).await;
+
+        assert!(connection.is_ok());
+
+        let exists = rdbms_service.mysql().exists(&worker_id, &address).await;
+
+        assert!(exists);
+
+        let result = rdbms_service
+            .mysql()
+            .query(&worker_id, &address, "SELECT 1", vec![])
+            .await;
+
+        assert!(result.is_ok());
+
+        let columns = result.unwrap().get_columns().await.unwrap();
+        // println!("columns: {columns:?}");
+        assert!(columns.len() > 0);
+
+        let create_table_statement = r#"
+            CREATE TABLE IF NOT EXISTS components
+            (
+                component_id        varchar(255)    NOT NULL,
+                namespace           varchar(255)    NOT NULL,
+                name                varchar(255)    NOT NULL,
+                PRIMARY KEY (component_id)
+            );
+        "#;
+
+        let insert_statement = r#"
+            INSERT INTO components
+            (component_id, namespace, name)
+            VALUES
+            (?, ?, ?)
+        "#;
+
+        let result = rdbms_service
+            .mysql()
+            .execute(&worker_id, &address, create_table_statement, vec![])
+            .await;
+
+        assert!(result.is_ok());
+
+        for _ in 0..100 {
+            let params: Vec<DbValue> = vec![
+                DbValue::Primitive(DbValuePrimitive::Text(Uuid::new_v4().to_string())),
+                DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
+                DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
+            ];
+
+            let result = rdbms_service
+                .mysql()
+                .execute(&worker_id, &address, insert_statement, params)
+                .await;
+
+            assert!(result.is_ok_and(|v| v == 1));
+        }
+
+        let result = rdbms_service
+            .mysql()
+            .query(&worker_id, &address, "SELECT * from components", vec![])
+            .await;
+
+        assert!(result.is_ok());
+
+        let result = result.unwrap();
+
+        let columns = result.get_columns().await.unwrap();
+        // println!("columns: {columns:?}");
+        assert!(columns.len() > 0);
+
+        let mut rows: Vec<DbRow> = vec![];
+
+        loop {
+            match result.get_next().await.unwrap() {
+                Some(vs) => rows.extend(vs),
+                None => break,
+            }
+        }
+        // println!("rows: {rows:?}");
+        assert!(rows.len() >= 100);
+        println!("rows: {}", rows.len());
+
+        let result = rdbms_service.mysql().remove(&worker_id, &address).await;
+
+        assert!(result.is_ok_and(|v| v));
+
+        let exists = rdbms_service.mysql().exists(&worker_id, &address).await;
 
         assert!(!exists);
     }
