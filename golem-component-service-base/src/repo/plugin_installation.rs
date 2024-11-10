@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::{
-    ComponentPluginInstallationTarget, PluginInstallation, PluginInstallationTarget, ComponentOwner,
+    ComponentOwner, ComponentPluginInstallationTarget, PluginInstallation, PluginInstallationTarget,
 };
 use crate::repo::RowMeta;
 use conditional_trait_gen::trait_gen;
@@ -40,7 +40,9 @@ pub struct PluginInstallationRecord<Owner: ComponentOwner, Target: PluginInstall
     pub owner: Owner::Row,
 }
 
-impl<Owner: ComponentOwner, Target: PluginInstallationTarget> PluginInstallationRecord<Owner, Target> {
+impl<Owner: ComponentOwner, Target: PluginInstallationTarget>
+    PluginInstallationRecord<Owner, Target>
+{
     pub fn try_from(
         installation: PluginInstallation,
         owner: Owner::Row,

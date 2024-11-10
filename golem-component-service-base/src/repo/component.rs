@@ -51,7 +51,7 @@ pub struct ComponentRecord {
 }
 
 impl ComponentRecord {
-    pub(crate) fn try_from_model<Owner: ComponentOwner>(
+    pub fn try_from_model<Owner: ComponentOwner>(
         value: Component<Owner>,
         available: bool,
     ) -> Result<Self, String> {
@@ -66,7 +66,9 @@ impl ComponentRecord {
             created_at: value.created_at,
             component_type: value.component_type as i32,
             available,
-            object_store_key: value.object_store_key,
+            object_store_key: value
+                .object_store_key
+                .unwrap_or(value.versioned_component_id.to_string()),
         })
     }
 }
@@ -90,7 +92,7 @@ impl<Owner: ComponentOwner> TryFrom<ComponentRecord> for Component<Owner> {
             versioned_component_id,
             created_at: value.created_at,
             component_type: ComponentType::try_from(value.component_type)?,
-            object_store_key: value.object_store_key,
+            object_store_key: Some(value.object_store_key),
         })
     }
 }
@@ -157,6 +159,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
         namespace: &str,
         component_id: &Uuid,
         component_version: i64,
+        object_store_key: &str,
     ) -> Result<(), RepoError>;
 
     async fn get(
@@ -313,10 +316,11 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         namespace: &str,
         component_id: &Uuid,
         component_version: i64,
+        object_store_key: &str,
     ) -> Result<(), RepoError> {
         let result = self
             .repo
-            .activate(namespace, component_id, component_version)
+            .activate(namespace, component_id, component_version, object_store_key)
             .await;
         Self::logged_with_id("activate", component_id, result)
     }
@@ -535,18 +539,19 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         sqlx::query(
             r#"
               INSERT INTO component_versions
-                (component_id, version, size, metadata, created_at, component_type, available)
+                (component_id, version, size, metadata, created_at, component_type, available, object_store_key)
               VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
+                ($1, $2, $3, $4, $5, $6, $7, $8)
                "#,
         )
         .bind(component.component_id)
         .bind(component.version)
         .bind(component.size)
-        .bind(component.metadata.clone())
+        .bind(&component.metadata)
         .bind(component.created_at)
         .bind(component.component_type)
         .bind(component.available)
+        .bind(&component.object_store_key)
         .execute(&mut *transaction)
         .await?;
 
@@ -583,12 +588,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 let new_version = if let Some(component_type) = component_type {
                     sqlx::query(
                         r#"
-                              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
+                              WITH prev AS (SELECT component_id, version, object_store_key
                                    FROM component_versions WHERE component_id = $1
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5, FALSE FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, $5, FALSE, prev.object_store_key FROM prev
                               RETURNING *
                               "#,
                     )
@@ -603,12 +608,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 } else {
                     sqlx::query(
                         r#"
-                              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
+                              WITH prev AS (SELECT component_id, version, component_type, object_store_key
                                    FROM component_versions WHERE component_id = $1
                                    ORDER BY version DESC
                                    LIMIT 1)
                               INSERT INTO component_versions
-                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type, FALSE FROM prev
+                              SELECT prev.component_id, prev.version + 1, $2, $3, $4, prev.component_type, FALSE, prev.object_store_key FROM prev
                               RETURNING *
                               "#,
                     )
@@ -664,6 +669,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                 let component = self
                     .get_by_version(namespace, component_id, new_version as u64)
                     .await?;
+
                 component.ok_or(RepoError::Internal(
                     "Could not re-get newly created component version".to_string(),
                 ))
@@ -681,17 +687,19 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         namespace: &str,
         component_id: &Uuid,
         component_version: i64,
+        object_store_key: &str,
     ) -> Result<(), RepoError> {
         sqlx::query(
             r#"
               UPDATE component_versions
-              SET available = TRUE
+              SET available = TRUE, object_store_key = $4
               WHERE component_id IN (SELECT component_id FROM components WHERE namespace = $1 AND component_id = $2)
-                    AND version = $2
+                    AND version = $3
             "#,
         ).bind(namespace)
             .bind(component_id)
             .bind(component_version)
+            .bind(object_store_key)
             .execute(self.db_pool.deref())
             .await?;
 
@@ -714,7 +722,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -743,7 +753,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2
@@ -768,7 +780,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -792,7 +806,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1
@@ -820,7 +836,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
@@ -851,7 +869,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND c.namespace = $2 AND cv.available = TRUE
@@ -883,7 +903,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -914,7 +936,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.component_id = $1 AND cv.version = $2 AND c.namespace = $3
@@ -944,7 +968,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at::timestamptz AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -973,7 +999,9 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     cv.size AS size,
                     cv.metadata AS metadata,
                     cv.created_at AS created_at,
-                    cv.component_type AS component_type
+                    cv.component_type AS component_type,
+                    cv.available AS available,
+                    cv.object_store_key AS object_store_key
                 FROM components c
                     JOIN component_versions cv ON c.component_id = cv.component_id
                 WHERE c.namespace = $1 AND c.name = $2
@@ -1168,12 +1196,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         let new_version = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, prev.available, prev.object_store_key FROM prev
               RETURNING *
               "#,
         )
@@ -1246,12 +1274,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         let new_version = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, prev.available, prev.object_store_key FROM prev
               RETURNING *
               "#,
         )
@@ -1319,12 +1347,12 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
         let new_version = sqlx::query(
             r#"
-              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type
+              WITH prev AS (SELECT component_id, version, size, metadata, created_at, component_type, available, object_store_key
                    FROM component_versions WHERE component_id = $1
                    ORDER BY version DESC
                    LIMIT 1)
               INSERT INTO component_versions
-              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type FROM prev
+              SELECT prev.component_id, prev.version + 1, prev.size, $2, prev.metadata, prev.component_type, prev.available, prev.object_store_key FROM prev
               RETURNING *
               "#,
         )

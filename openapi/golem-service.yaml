@@ -2404,7 +2404,7 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
-  /v1/components/{component_id}/versions/{version}/plugins/installs/{installation_id}:
+  /v1/components/{component_id}/versions/latest/plugins/installs/{installation_id}:
     put:
       tags:
       - Component
@@ -2418,14 +2418,6 @@ paths:
         schema:
           type: string
           format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: version
-        required: true
-        deprecated: false
-        schema:
-          type: string
         explode: true
         style: simple
       - in: path
@@ -2576,7 +2568,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+                  $ref: '#/components/schemas/PluginDefinition<DefaultComponentOwner, DefaultPluginScope>'
         '400':
           description: ''
           content:
@@ -2690,7 +2682,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+                  $ref: '#/components/schemas/PluginDefinition<DefaultComponentOwner, DefaultPluginScope>'
         '400':
           description: ''
           content:
@@ -2756,7 +2748,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+                $ref: '#/components/schemas/PluginDefinition<DefaultComponentOwner, DefaultPluginScope>'
         '400':
           description: ''
           content:
@@ -5550,7 +5542,7 @@ components:
       enum:
       - Durable
       - Ephemeral
-    DefaultPluginOwner:
+    DefaultComponentOwner:
       type: object
     DefaultPluginScope:
       discriminator:
@@ -5611,7 +5603,7 @@ components:
       required:
       - componentId
       - componentVersion
-    PluginDefinition<DefaultPluginOwner, DefaultPluginScope>:
+    PluginDefinition<DefaultComponentOwner, DefaultPluginScope>:
       type: object
       properties:
         name:
@@ -5632,7 +5624,7 @@ components:
         scope:
           $ref: '#/components/schemas/DefaultPluginScope'
         owner:
-          $ref: '#/components/schemas/DefaultPluginOwner'
+          $ref: '#/components/schemas/DefaultComponentOwner'
       required:
       - name
       - version

@@ -51,10 +51,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::component_metadata::ComponentMetadata",
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
-            (
-                "DefaultComponentOwner",
-                "golem_common::model::DefaultComponentOwner",
-            ),
+            ("DefaultComponentOwner", "crate::DefaultComponentOwner"),
             (
                 "DefaultPluginScope",
                 "golem_common::model::plugin::DefaultPluginScope",

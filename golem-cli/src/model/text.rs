@@ -1223,7 +1223,7 @@ pub mod plugin {
     };
     use cli_table::{print_stdout, Table, WithTitle};
     use golem_client::model::{
-        DefaultPluginScope, PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
+        DefaultPluginScope, PluginDefinitionDefaultComponentOwnerDefaultPluginScope,
         PluginInstallation, PluginTypeSpecificDefinition,
     };
     use itertools::Itertools;
@@ -1244,8 +1244,8 @@ pub mod plugin {
         pub scope: String,
     }
 
-    impl From<&PluginDefinitionDefaultPluginOwnerDefaultPluginScope> for PluginDefinitionTableView {
-        fn from(value: &PluginDefinitionDefaultPluginOwnerDefaultPluginScope) -> Self {
+    impl From<&PluginDefinitionDefaultComponentOwnerDefaultPluginScope> for PluginDefinitionTableView {
+        fn from(value: &PluginDefinitionDefaultComponentOwnerDefaultPluginScope) -> Self {
             Self {
                 name: value.name.clone(),
                 version: value.version.clone(),
@@ -1269,7 +1269,7 @@ pub mod plugin {
         }
     }
 
-    impl TextFormat for Vec<PluginDefinitionDefaultPluginOwnerDefaultPluginScope> {
+    impl TextFormat for Vec<PluginDefinitionDefaultComponentOwnerDefaultPluginScope> {
         fn print(&self) {
             print_stdout(
                 self.iter()
@@ -1281,7 +1281,7 @@ pub mod plugin {
         }
     }
 
-    impl MessageWithFields for PluginDefinitionDefaultPluginOwnerDefaultPluginScope {
+    impl MessageWithFields for PluginDefinitionDefaultComponentOwnerDefaultPluginScope {
         fn message(&self) -> String {
             format!(
                 "Got metadata for plugin {} version {}",

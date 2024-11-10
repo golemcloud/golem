@@ -15,7 +15,7 @@
 use golem_common::model::component_constraint::FunctionConstraint;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
-use golem_component_service_base::model::ComponentConstraints;
+use golem_component_service_base::model::{ComponentConstraints, ComponentOwner};
 use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
 use golem_wasm_ast::analysis::NameTypePair;
 use rib::RegistryKey;
@@ -101,45 +101,45 @@ pub(crate) fn get_random_worker_functions_constraint() -> FunctionConstraintColl
     }
 }
 
-pub(crate) fn get_shopping_cart_component_constraint1<Namespace: Clone>(
-    namespace: &Namespace,
+pub(crate) fn get_shopping_cart_component_constraint1<Owner: ComponentOwner>(
+    owner: &Owner,
     component_id: &ComponentId,
-) -> ComponentConstraints<Namespace> {
+) -> ComponentConstraints<Owner> {
     ComponentConstraints {
-        namespace: namespace.clone(),
+        owner: owner.clone(),
         component_id: component_id.clone(),
         constraints: get_shopping_cart_worker_functions_constraint1(),
     }
 }
 
-pub(crate) fn get_shopping_cart_component_constraint2<Namespace: Clone>(
-    namespace: &Namespace,
+pub(crate) fn get_shopping_cart_component_constraint2<Owner: ComponentOwner>(
+    owner: &Owner,
     component_id: &ComponentId,
-) -> ComponentConstraints<Namespace> {
+) -> ComponentConstraints<Owner> {
     ComponentConstraints {
-        namespace: namespace.clone(),
+        owner: owner.clone(),
         component_id: component_id.clone(),
         constraints: get_shopping_cart_worker_functions_constraint2(),
     }
 }
 
-pub(crate) fn get_random_constraint<Namespace: Clone>(
-    namespace: &Namespace,
+pub(crate) fn get_random_constraint<Owner: ComponentOwner>(
+    owner: &Owner,
     component_id: &ComponentId,
-) -> ComponentConstraints<Namespace> {
+) -> ComponentConstraints<Owner> {
     ComponentConstraints {
-        namespace: namespace.clone(),
+        owner: owner.clone(),
         component_id: component_id.clone(),
         constraints: get_random_worker_functions_constraint(),
     }
 }
 
-pub(crate) fn get_incompatible_constraint<Namespace: Clone>(
-    namespace: &Namespace,
+pub(crate) fn get_incompatible_constraint<Owner: ComponentOwner>(
+    owner: &Owner,
     component_id: &ComponentId,
-) -> ComponentConstraints<Namespace> {
+) -> ComponentConstraints<Owner> {
     ComponentConstraints {
-        namespace: namespace.clone(),
+        owner: owner.clone(),
         component_id: component_id.clone(),
         constraints: get_shopping_cart_worker_functions_constraint_incompatible(),
     }

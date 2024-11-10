@@ -35,7 +35,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use tap::TapFallible;
 use tokio_stream::Stream;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -410,10 +410,14 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
                 component_type.map(|ct| ct as i32),
             )
             .await?;
-        let component: Component<Owner> = component_record
+        let mut component: Component<Owner> = component_record
             .clone()
             .try_into()
             .map_err(|e| ComponentError::conversion_error("record", e))?;
+        let object_store_key = component.versioned_component_id.to_string();
+        component.object_store_key = Some(object_store_key.clone());
+
+        debug!("Result component: {component:?}");
 
         tokio::try_join!(
             self.upload_user_component(&component, data.clone()),
@@ -429,6 +433,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
                 &owner.to_string(),
                 &component_id.0,
                 component.versioned_component_id.version as i64,
+                &object_store_key,
             )
             .await?;
 

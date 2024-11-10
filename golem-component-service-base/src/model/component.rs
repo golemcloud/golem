@@ -30,7 +30,7 @@ pub struct Component<Owner: ComponentOwner> {
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<Utc>,
     pub component_type: ComponentType,
-    pub object_store_key: String,
+    pub object_store_key: Option<String>,
 }
 
 impl<Owner: ComponentOwner> Component<Owner> {
@@ -54,22 +54,32 @@ impl<Owner: ComponentOwner> Component<Owner> {
             component_size: data.len() as u64,
             metadata,
             created_at: Utc::now(),
-            object_store_key: versioned_component_id.to_string(),
+            object_store_key: Some(versioned_component_id.to_string()),
             versioned_component_id,
             component_type,
         })
     }
 
     pub fn user_object_store_key(&self) -> String {
-        format!("{}:user", self.object_store_key)
+        format!(
+            "{}:user",
+            self.object_store_key
+                .as_ref()
+                .unwrap_or(&self.versioned_component_id.to_string())
+        )
     }
 
     pub fn protected_object_store_key(&self) -> String {
-        format!("{}:protected", self.object_store_key)
+        format!(
+            "{}:protected",
+            self.object_store_key
+                .as_ref()
+                .unwrap_or(&self.versioned_component_id.to_string())
+        )
     }
 
     pub fn owns_stored_object(&self) -> bool {
-        self.object_store_key == self.versioned_component_id.to_string()
+        self.object_store_key == Some(self.versioned_component_id.to_string())
     }
 }
 

@@ -30,7 +30,7 @@ use crate::oss::clients::worker::WorkerClientLive;
 use crate::oss::model::OssContext;
 use crate::service::project::{ProjectResolver, ProjectResolverOss};
 use golem_client::model::{
-    PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
+    PluginDefinitionDefaultComponentOwnerDefaultPluginScope,
     PluginDefinitionWithoutOwnerDefaultPluginScope,
 };
 use golem_client::Context;
@@ -117,7 +117,7 @@ impl OssServiceFactory {
 impl ServiceFactory for OssServiceFactory {
     type ProjectRef = OssContext;
     type ProjectContext = OssContext;
-    type PluginDefinition = PluginDefinitionDefaultPluginOwnerDefaultPluginScope;
+    type PluginDefinition = PluginDefinitionDefaultComponentOwnerDefaultPluginScope;
     type PluginDefinitionWithoutOwner = PluginDefinitionWithoutOwnerDefaultPluginScope;
     type PluginScope = DefaultPluginScope;
 

@@ -68,7 +68,8 @@ fn internal_error(error: &str) -> ComponentError {
 }
 
 pub struct ComponentGrpcApi {
-    pub component_service: Arc<dyn component::ComponentService<DefaultComponentOwner> + Sync + Send>,
+    pub component_service:
+        Arc<dyn component::ComponentService<DefaultComponentOwner> + Sync + Send>,
 }
 
 impl ComponentGrpcApi {
@@ -200,12 +201,7 @@ impl ComponentGrpcApi {
         };
         let result = self
             .component_service
-            .update(
-                &id,
-                data,
-                component_type,
-                &DefaultComponentOwner,
-            )
+            .update(&id, data, component_type, &DefaultComponentOwner)
             .await?;
         Ok(result.into())
     }
