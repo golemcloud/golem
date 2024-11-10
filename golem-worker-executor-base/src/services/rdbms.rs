@@ -41,15 +41,36 @@ impl RdbmsService for RdbmsServiceDefault {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RdbmsConfig {
+    pub pool: RdbmsPoolConfig,
+    pub query: RdbmsQueryConfig,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RdbmsQueryConfig {
+    pub query_batch: usize,
+}
+
+impl Default for RdbmsQueryConfig {
+    fn default() -> Self {
+        Self { query_batch: 50 }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RdbmsPoolConfig {
     pub max_connections: u32,
+    pub eviction_ttl: std::time::Duration,
+    pub eviction_period: std::time::Duration,
 }
 
 impl Default for RdbmsPoolConfig {
     fn default() -> Self {
         Self {
             max_connections: 20,
+            eviction_ttl: std::time::Duration::from_secs(10 * 60),
+            eviction_period: std::time::Duration::from_secs(2 * 60),
         }
     }
 }
@@ -67,14 +88,16 @@ impl RdbmsPoolKey {
 
 pub mod sqlx_common {
     use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, Error};
-    use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
+    use crate::services::rdbms::{RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
+    use dashmap::DashMap;
     use futures_util::stream::BoxStream;
     use futures_util::StreamExt;
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::model::OwnedWorkerId;
     use sqlx::database::HasArguments;
     use sqlx::{Database, Pool, Row};
+    use std::collections::HashSet;
     use std::ops::Deref;
     use std::sync::Arc;
     use tracing::{error, info};
@@ -85,8 +108,9 @@ pub mod sqlx_common {
         DB: Database,
     {
         name: &'static str,
-        pool_config: RdbmsPoolConfig,
+        config: RdbmsConfig,
         pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, Error>,
+        pool_workers_cache: DashMap<RdbmsPoolKey, HashSet<OwnedWorkerId>>,
     }
 
     impl<DB> SqlxRdbms<DB>
@@ -95,30 +119,37 @@ pub mod sqlx_common {
         Pool<DB>: QueryExecutor,
         RdbmsPoolKey: PoolCreator<DB>,
     {
-        pub(crate) fn new(name: &'static str, pool_config: RdbmsPoolConfig) -> Self {
+        pub(crate) fn new(name: &'static str, config: RdbmsConfig) -> Self {
             let cache_name: &'static str = format!("rdbms-{}-pools", name).leak();
             let pool_cache = Cache::new(
                 None,
                 FullCacheEvictionMode::None,
-                BackgroundEvictionMode::None,
+                BackgroundEvictionMode::OlderThan {
+                    ttl: config.pool.eviction_ttl,
+                    period: config.pool.eviction_period,
+                },
                 cache_name,
             );
+            let pool_workers_cache = DashMap::new();
             Self {
                 name,
-                pool_config,
+                config,
                 pool_cache,
+                pool_workers_cache,
             }
         }
 
         async fn get_or_create(
             &self,
-            _worker_id: &OwnedWorkerId,
+            worker_id: &OwnedWorkerId,
             address: &str,
         ) -> Result<Arc<Pool<DB>>, Error> {
             let key = RdbmsPoolKey::new(address.to_string());
-            let pool_config = self.pool_config.clone();
+            let key_clone = key.clone();
+            let pool_config = self.config.pool;
             let name = self.name.to_string();
-            self.pool_cache
+            let pool = self
+                .pool_cache
                 .get_or_insert_simple(&key.clone(), || {
                     Box::pin(async move {
                         info!(
@@ -135,7 +166,14 @@ pub mod sqlx_common {
                         Ok(Arc::new(result))
                     })
                 })
-                .await
+                .await?;
+
+            self.pool_workers_cache
+                .entry(key_clone)
+                .or_default()
+                .insert(worker_id.clone());
+
+            Ok(pool)
         }
 
         pub(crate) async fn create(
@@ -148,12 +186,9 @@ pub mod sqlx_common {
             Ok(())
         }
 
-        pub(crate) async fn remove(
-            &self,
-            _worker_id: &OwnedWorkerId,
-            address: &str,
-        ) -> Result<bool, Error> {
+        pub(crate) async fn remove_pool(&self, address: &str) -> Result<bool, Error> {
             let key = RdbmsPoolKey::new(address.to_string());
+            let _ = self.pool_workers_cache.remove(&key);
             let pool = self.pool_cache.try_get(&key);
             if let Some(pool) = pool {
                 self.pool_cache.remove(&key);
@@ -164,9 +199,19 @@ pub mod sqlx_common {
             }
         }
 
-        pub(crate) async fn exists(&self, _worker_id: &OwnedWorkerId, address: &str) -> bool {
+        pub(crate) fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
             let key = RdbmsPoolKey::new(address.to_string());
-            self.pool_cache.contains_key(&key)
+            match self.pool_workers_cache.get_mut(&key) {
+                Some(mut workers) => (*workers).remove(worker_id),
+                None => false,
+            }
+        }
+
+        pub(crate) fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
+            let key = RdbmsPoolKey::new(address.to_string());
+            self.pool_workers_cache
+                .get(&key)
+                .is_some_and(|workers| workers.contains(worker_id))
         }
 
         pub(crate) async fn execute(
@@ -209,7 +254,9 @@ pub mod sqlx_common {
 
             let result = {
                 let pool = self.get_or_create(worker_id, address).await?;
-                pool.deref().query_stream(statement, params, 50).await
+                pool.deref()
+                    .query_stream(statement, params, self.config.query.query_batch)
+                    .await
             };
 
             result.map_err(|e| {
@@ -283,7 +330,7 @@ pub mod sqlx_common {
 
                     let columns = rows[0]
                         .columns()
-                        .into_iter()
+                        .iter()
                         .map(|c: &DB::Column| c.try_into())
                         .collect::<Result<Vec<_>, String>>()
                         .map_err(Error::QueryResponseFailure)?;
@@ -355,7 +402,7 @@ pub mod mysql {
         DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
         DbValuePrimitive, Error,
     };
-    use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
+    use crate::services::rdbms::{RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
     use futures_util::stream::BoxStream;
     use golem_common::model::OwnedWorkerId;
@@ -366,9 +413,9 @@ pub mod mysql {
     pub trait Mysql {
         async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error>;
 
-        async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
+        fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
 
-        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, Error>;
+        fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
 
         async fn execute(
             &self,
@@ -393,8 +440,8 @@ pub mod mysql {
     }
 
     impl MysqlDefault {
-        pub fn new(pool_config: RdbmsPoolConfig) -> Self {
-            let rdbms = Arc::new(SqlxRdbms::new("mysql", pool_config));
+        pub fn new(config: RdbmsConfig) -> Self {
+            let rdbms = Arc::new(SqlxRdbms::new("mysql", config));
             Self { rdbms }
         }
     }
@@ -405,12 +452,12 @@ pub mod mysql {
             self.rdbms.create(worker_id, address).await
         }
 
-        async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
-            self.rdbms.exists(worker_id, address).await
+        fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
+            self.rdbms.exists(worker_id, address)
         }
 
-        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, Error> {
-            self.rdbms.remove(worker_id, address).await
+        fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
+            self.rdbms.remove(worker_id, address)
         }
 
         async fn execute(
@@ -440,7 +487,7 @@ pub mod mysql {
 
     impl Default for MysqlDefault {
         fn default() -> Self {
-            Self::new(RdbmsPoolConfig::default())
+            Self::new(RdbmsConfig::default())
         }
     }
 
@@ -769,7 +816,7 @@ pub mod postgres {
         DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue,
         DbValuePrimitive, Error,
     };
-    use crate::services::rdbms::{RdbmsPoolConfig, RdbmsPoolKey};
+    use crate::services::rdbms::{RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey};
     use async_trait::async_trait;
     use futures_util::stream::BoxStream;
     use golem_common::model::OwnedWorkerId;
@@ -781,9 +828,9 @@ pub mod postgres {
     pub trait Postgres {
         async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error>;
 
-        async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
+        fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
 
-        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, Error>;
+        fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
 
         async fn execute(
             &self,
@@ -808,8 +855,8 @@ pub mod postgres {
     }
 
     impl PostgresDefault {
-        pub fn new(pool_config: RdbmsPoolConfig) -> Self {
-            let rdbms = Arc::new(SqlxRdbms::new("postgres", pool_config));
+        pub fn new(config: RdbmsConfig) -> Self {
+            let rdbms = Arc::new(SqlxRdbms::new("postgres", config));
             Self { rdbms }
         }
     }
@@ -820,12 +867,12 @@ pub mod postgres {
             self.rdbms.create(worker_id, address).await
         }
 
-        async fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
-            self.rdbms.exists(worker_id, address).await
+        fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
+            self.rdbms.exists(worker_id, address)
         }
 
-        async fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<bool, Error> {
-            self.rdbms.remove(worker_id, address).await
+        fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
+            self.rdbms.remove(worker_id, address)
         }
 
         async fn execute(
@@ -855,7 +902,7 @@ pub mod postgres {
 
     impl Default for PostgresDefault {
         fn default() -> Self {
-            Self::new(RdbmsPoolConfig::default())
+            Self::new(RdbmsConfig::default())
         }
     }
 
@@ -1395,11 +1442,10 @@ mod tests {
     use crate::services::rdbms::RdbmsService;
     use crate::services::rdbms::RdbmsServiceDefault;
     use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
-    use test_r::{test, timeout};
+    use test_r::test;
     use uuid::Uuid;
 
     #[test]
-    // #[timeout(30000)]
     async fn postgres_test() {
         let rdbms_service = RdbmsServiceDefault::default();
 
@@ -1413,35 +1459,35 @@ mod tests {
             },
         );
 
-        let connection = rdbms_service.postgres().create(&worker_id, &address).await;
+        let connection = rdbms_service.postgres().create(&worker_id, address).await;
 
         assert!(connection.is_ok());
 
         let result = rdbms_service
             .postgres()
-            .execute(&worker_id, &address, "SELECT 1", vec![])
+            .execute(&worker_id, address, "SELECT 1", vec![])
             .await;
 
         assert!(result.is_ok());
 
-        let connection = rdbms_service.postgres().create(&worker_id, &address).await;
+        let connection = rdbms_service.postgres().create(&worker_id, address).await;
 
         assert!(connection.is_ok());
 
-        let exists = rdbms_service.postgres().exists(&worker_id, &address).await;
+        let exists = rdbms_service.postgres().exists(&worker_id, address);
 
         assert!(exists);
 
         let result = rdbms_service
             .postgres()
-            .query(&worker_id, &address, "SELECT 1", vec![])
+            .query(&worker_id, address, "SELECT 1", vec![])
             .await;
 
         assert!(result.is_ok());
 
         let columns = result.unwrap().get_columns().await.unwrap();
         // println!("columns: {columns:?}");
-        assert!(columns.len() > 0);
+        assert!(!columns.is_empty());
 
         let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
@@ -1461,7 +1507,7 @@ mod tests {
 
         let result = rdbms_service
             .postgres()
-            .execute(&worker_id, &address, create_table_statement, vec![])
+            .execute(&worker_id, address, create_table_statement, vec![])
             .await;
 
         assert!(result.is_ok());
@@ -1475,7 +1521,7 @@ mod tests {
 
             let result = rdbms_service
                 .postgres()
-                .execute(&worker_id, &address, insert_statement, params)
+                .execute(&worker_id, address, insert_statement, params)
                 .await;
 
             assert!(result.is_ok_and(|v| v == 1));
@@ -1483,7 +1529,7 @@ mod tests {
 
         let result = rdbms_service
             .postgres()
-            .query(&worker_id, &address, "SELECT * from components", vec![])
+            .query(&worker_id, address, "SELECT * from components", vec![])
             .await;
 
         assert!(result.is_ok());
@@ -1492,31 +1538,27 @@ mod tests {
 
         let columns = result.get_columns().await.unwrap();
         // println!("columns: {columns:?}");
-        assert!(columns.len() > 0);
+        assert!(!columns.is_empty());
 
         let mut rows: Vec<DbRow> = vec![];
 
-        loop {
-            match result.get_next().await.unwrap() {
-                Some(vs) => rows.extend(vs),
-                None => break,
-            }
+        while let Some(vs) = result.get_next().await.unwrap() {
+            rows.extend(vs);
         }
         // println!("rows: {rows:?}");
         assert!(rows.len() >= 100);
         println!("rows: {}", rows.len());
 
-        let result = rdbms_service.postgres().remove(&worker_id, &address).await;
+        let removed = rdbms_service.postgres().remove(&worker_id, address);
 
-        assert!(result.is_ok_and(|v| v));
+        assert!(removed);
 
-        let exists = rdbms_service.postgres().exists(&worker_id, &address).await;
+        let exists = rdbms_service.postgres().exists(&worker_id, address);
 
         assert!(!exists);
     }
 
     #[test]
-    // #[timeout(30000)]
     async fn mysql_test() {
         let rdbms_service = RdbmsServiceDefault::default();
 
@@ -1530,35 +1572,35 @@ mod tests {
             },
         );
 
-        let connection = rdbms_service.mysql().create(&worker_id, &address).await;
+        let connection = rdbms_service.mysql().create(&worker_id, address).await;
 
         assert!(connection.is_ok());
 
         let result = rdbms_service
             .mysql()
-            .execute(&worker_id, &address, "SELECT 1", vec![])
+            .execute(&worker_id, address, "SELECT 1", vec![])
             .await;
 
         assert!(result.is_ok());
 
-        let connection = rdbms_service.mysql().create(&worker_id, &address).await;
+        let connection = rdbms_service.mysql().create(&worker_id, address).await;
 
         assert!(connection.is_ok());
 
-        let exists = rdbms_service.mysql().exists(&worker_id, &address).await;
+        let exists = rdbms_service.mysql().exists(&worker_id, address);
 
         assert!(exists);
 
         let result = rdbms_service
             .mysql()
-            .query(&worker_id, &address, "SELECT 1", vec![])
+            .query(&worker_id, address, "SELECT 1", vec![])
             .await;
 
         assert!(result.is_ok());
 
         let columns = result.unwrap().get_columns().await.unwrap();
         // println!("columns: {columns:?}");
-        assert!(columns.len() > 0);
+        assert!(!columns.is_empty());
 
         let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
@@ -1579,7 +1621,7 @@ mod tests {
 
         let result = rdbms_service
             .mysql()
-            .execute(&worker_id, &address, create_table_statement, vec![])
+            .execute(&worker_id, address, create_table_statement, vec![])
             .await;
 
         assert!(result.is_ok());
@@ -1593,7 +1635,7 @@ mod tests {
 
             let result = rdbms_service
                 .mysql()
-                .execute(&worker_id, &address, insert_statement, params)
+                .execute(&worker_id, address, insert_statement, params)
                 .await;
 
             assert!(result.is_ok_and(|v| v == 1));
@@ -1601,7 +1643,7 @@ mod tests {
 
         let result = rdbms_service
             .mysql()
-            .query(&worker_id, &address, "SELECT * from components", vec![])
+            .query(&worker_id, address, "SELECT * from components", vec![])
             .await;
 
         assert!(result.is_ok());
@@ -1610,25 +1652,23 @@ mod tests {
 
         let columns = result.get_columns().await.unwrap();
         // println!("columns: {columns:?}");
-        assert!(columns.len() > 0);
+        assert!(!columns.is_empty());
 
         let mut rows: Vec<DbRow> = vec![];
 
-        loop {
-            match result.get_next().await.unwrap() {
-                Some(vs) => rows.extend(vs),
-                None => break,
-            }
+        while let Some(vs) = result.get_next().await.unwrap() {
+            rows.extend(vs);
         }
+
         // println!("rows: {rows:?}");
         assert!(rows.len() >= 100);
         println!("rows: {}", rows.len());
 
-        let result = rdbms_service.mysql().remove(&worker_id, &address).await;
+        let removed = rdbms_service.mysql().remove(&worker_id, address);
 
-        assert!(result.is_ok_and(|v| v));
+        assert!(removed);
 
-        let exists = rdbms_service.mysql().exists(&worker_id, &address).await;
+        let exists = rdbms_service.mysql().exists(&worker_id, address);
 
         assert!(!exists);
     }

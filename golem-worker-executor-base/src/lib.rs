@@ -104,6 +104,7 @@ pub struct RunDetails {
 /// of its services.
 /// With a valid `Bootstrap` implementation the service can be started with the `run` method.
 #[async_trait]
+#[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `ActiveWorkers` service.
     fn create_active_workers(&self, golem_config: &GolemConfig) -> Arc<ActiveWorkers<Ctx>>;

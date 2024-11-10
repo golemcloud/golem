@@ -97,7 +97,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
         match result {
             Ok(result) => {
-                let entry = DbResultSetEntry::new(RdbmsType::Postgres, result);
+                let entry = DbResultSetEntry::new(RdbmsType::Postgres, worker_id, result);
                 let db_result_set = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(db_result_set))
             }
@@ -140,18 +140,19 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::db-connection", "drop");
 
-        // let worker_id = self.state.owned_worker_id.clone();
-        // let address = self
-        //     .as_wasi_view()
-        //     .table()
-        //     .get::<PostgresDbConnection>(&rep)?
-        //     .address
-        //     .clone();
-        //
-        // let _ = self.state
-        //     .rdbms_service
-        //     .postgres()
-        //     .drop(&worker_id, &address).await.map_err(Error::Error)?;
+        let worker_id = self.state.owned_worker_id.clone();
+        let address = self
+            .as_wasi_view()
+            .table()
+            .get::<PostgresDbConnection>(&rep)?
+            .address
+            .clone();
+
+        let _ = self
+            .state
+            .rdbms_service
+            .postgres()
+            .remove(&worker_id, &address);
 
         self.as_wasi_view()
             .table()

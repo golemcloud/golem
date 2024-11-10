@@ -57,7 +57,7 @@ async fn rdbms_postgres_select1(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{postgres-execute}",
-            vec![Value::String(format!("SELECT 1;")), Value::List(vec![])],
+            vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
         )
         .await
         .unwrap();
@@ -66,7 +66,7 @@ async fn rdbms_postgres_select1(
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{postgres-query}",
-            vec![Value::String(format!("SELECT 1;")), Value::List(vec![])],
+            vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
         )
         .await
         .unwrap();
@@ -74,6 +74,59 @@ async fn rdbms_postgres_select1(
     drop(executor);
 
     check!(result_execute == vec![Value::Result(Ok(Some(Box::new(Value::U64(1)))))]);
+
+    check!(result_query == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![])))))]);
+}
+
+#[test]
+#[tracing::instrument]
+async fn rdbms_mysql_select1(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+
+    let component_id = executor.store_component("rdbms-service").await;
+    let worker_name = "rdbms-service-2";
+
+    let mut env = HashMap::new();
+    env.insert(
+        "DB_MYSQL_URL".to_string(),
+        "mysql://root:mysql@localhost:3307/mysql".to_string(),
+    );
+
+    let worker_id = executor
+        .start_worker_with(&component_id, worker_name, vec![], env)
+        .await;
+
+    let _result = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{check}", vec![])
+        .await
+        .unwrap();
+
+    let result_execute = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{mysql-execute}",
+            vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
+        )
+        .await
+        .unwrap();
+
+    let result_query = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{mysql-query}",
+            vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
+        )
+        .await
+        .unwrap();
+
+    drop(executor);
+
+    check!(result_execute == vec![Value::Result(Ok(Some(Box::new(Value::U64(0)))))]);
 
     check!(result_query == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![])))))]);
 }
