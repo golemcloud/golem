@@ -1,37 +1,40 @@
 use std::future::Future;
 use std::sync::Arc;
 
-use crate::api_definition::http::CompiledHttpApiDefinition;
-use crate::worker_binding::fileserver_binding_handler::FileServerBindingHandler;
-use crate::worker_service_rib_interpreter::{DefaultRibInterpreter, WorkerServiceRibInterpreter};
+use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
+use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
+use crate::gateway_rib_interpreter::DefaultRibInterpreter;
 use futures_util::FutureExt;
 use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
 use tracing::{error, info};
 
-use crate::http::{ApiInputPath, InputHttpRequest};
-use crate::service::api_definition_lookup::ApiDefinitionsLookup;
+use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 
-use crate::worker_binding::RequestToWorkerBindingResolver;
-use crate::worker_bridge_execution::WorkerRequestExecutor;
+use crate::gateway_binding::GatewayBindingResolver;
+use crate::gateway_execution::gateway_binding_executor::{
+    DefaultGatewayBindingExecutor, GatewayBindingExecutor,
+};
+use crate::gateway_execution::GatewayWorkerRequestExecutor;
+use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
 #[derive(Clone)]
 pub struct CustomHttpRequestApi<Namespace> {
-    pub worker_service_rib_interpreter: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
     pub api_definition_lookup_service: Arc<
         dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<Namespace>>
             + Sync
             + Send,
     >,
-    pub fileserver_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
+    pub gateway_binding_executor:
+        Arc<dyn GatewayBindingExecutor<Namespace, poem::Response> + Sync + Send>,
 }
 
 impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
     pub fn new(
-        worker_request_executor_service: Arc<dyn WorkerRequestExecutor + Sync + Send>,
+        worker_request_executor_service: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<Namespace>>
                 + Sync
@@ -43,10 +46,14 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             worker_request_executor_service.clone(),
         ));
 
+        let gateway_binding_executor = Arc::new(DefaultGatewayBindingExecutor {
+            evaluator: evaluator.clone(),
+            file_server_binding_handler: fileserver_binding_handler.clone(),
+        });
+
         Self {
-            worker_service_rib_interpreter: evaluator,
             api_definition_lookup_service,
-            fileserver_binding_handler,
+            gateway_binding_executor,
         }
     }
 
@@ -111,13 +118,13 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             .resolve_worker_binding(possible_api_definitions)
             .await
         {
-            Ok(resolved_worker_binding) => {
-                resolved_worker_binding
-                    .interpret_response_mapping(
-                        &self.worker_service_rib_interpreter,
-                        &self.fileserver_binding_handler,
-                    )
-                    .await
+            Ok(resolved_gateway_binding) => {
+                let response: poem::Response = self
+                    .gateway_binding_executor
+                    .execute_binding(&resolved_gateway_binding)
+                    .await;
+
+                response
             }
 
             Err(msg) => {

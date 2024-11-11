@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
+use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_service_base::repo::RepoError;
@@ -79,7 +79,7 @@ impl TryFrom<ApiDefinitionRecord> for HttpApiDefinition {
 
         let routes = routes
             .into_iter()
-            .map(crate::api_definition::http::Route::from)
+            .map(crate::gateway_api_definition::http::Route::from)
             .collect();
 
         Ok(Self {
@@ -424,7 +424,7 @@ impl ApiDefinitionRepo for DbApiDefinitionRepo<sqlx::Postgres> {
 }
 
 pub mod record_data_serde {
-    use crate::api_definition::http::CompiledRoute;
+    use crate::gateway_api_definition::http::CompiledRoute;
     use bytes::{BufMut, Bytes, BytesMut};
     use golem_api_grpc::proto::golem::apidefinition::{
         CompiledHttpApiDefinition, CompiledHttpRoute,

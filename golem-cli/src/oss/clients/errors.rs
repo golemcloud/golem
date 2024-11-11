@@ -223,11 +223,16 @@ fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String 
         WorkerServiceErrorsBody::Validation(validation) => validation
             .errors
             .iter()
-            .map(|e| {
-                format!(
-                    "{}/{}/{}/{}",
-                    e.method, e.path, e.component.component_id, e.detail
-                )
+            .map(|e| match &e.component {
+                Some(component) => {
+                    format!(
+                        "{}/{}/{}/{}",
+                        e.method, e.path, component.component_id, e.detail
+                    )
+                }
+                None => {
+                    format!("{}/{}/{}", e.method, e.path, e.detail)
+                }
             })
             .join("\n"),
     }
@@ -303,21 +308,21 @@ mod tests {
                     RouteValidationError {
                         method: MethodPattern::Get,
                         path: "path".to_string(),
-                        component: VersionedComponentId {
+                        component: Some(VersionedComponentId {
                             component_id: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708208")
                                 .unwrap(),
                             version: 0,
-                        },
+                        }),
                         detail: "Duplicate route".to_string(),
                     },
                     RouteValidationError {
                         method: MethodPattern::Post,
                         path: "path2".to_string(),
-                        component: VersionedComponentId {
+                        component: Some(VersionedComponentId {
                             component_id: Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708209")
                                 .unwrap(),
                             version: 0,
-                        },
+                        }),
                         detail: "Other route".to_string(),
                     },
                 ],
