@@ -254,6 +254,83 @@ pub async fn build(config: Config) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn clean(config: Config) -> anyhow::Result<()> {
+    let app = to_anyhow(
+        "Failed to load application manifest(s), see problems above",
+        load_app_validated(&config),
+    )?;
+
+    {
+        log_action("Cleaning", "components");
+        let _indent = LogIndent::new();
+
+        for (component_name, component) in &app.wasm_components_by_name {
+            log_action(
+                "Cleaning",
+                format!("component {}", component_name.log_color_highlight()),
+            );
+            let _indent = LogIndent::new();
+
+            delete_path("wit output dir", &app.component_output_wit(component_name))?;
+
+            for build_step in &component.build_steps {
+                let build_dir = build_step
+                    .dir
+                    .as_ref()
+                    .map(|dir| component.source_dir().join(dir))
+                    .unwrap_or_else(|| component.source_dir().to_path_buf());
+
+                let outputs = compile_and_collect_globs(&build_dir, &build_step.outputs)?;
+                for output in outputs {
+                    delete_path("build step output", &output)?;
+                }
+            }
+        }
+    }
+
+    {
+        log_action("Cleaning", "component stubs");
+        let _indent = LogIndent::new();
+
+        for component_name in app.all_wasm_rpc_dependencies() {
+            log_action(
+                "Cleaning",
+                format!("component stub {}", component_name.log_color_highlight()),
+            );
+            let _indent = LogIndent::new();
+
+            delete_path("stub wit", &app.stub_wit(&component_name))?;
+            delete_path("stub wasm", &app.stub_wasm(&component_name))?;
+        }
+    }
+
+    {
+        log_action("Cleaning", "application build dir");
+        let _indent = LogIndent::new();
+
+        delete_path("application build dir", &app.build_dir())?;
+    }
+
+    Ok(())
+}
+
+fn delete_path(context: &str, path: &Path) -> anyhow::Result<()> {
+    if path.exists() {
+        log_warn_action(
+            "Deleting",
+            format!("{} {}", context, path.log_color_highlight()),
+        );
+        if path.is_dir() {
+            std::fs::remove_dir_all(path)
+                .with_context(|| anyhow!("Failed to delete directory {}", path.display()))?;
+        } else {
+            std::fs::remove_file(path)
+                .with_context(|| anyhow!("Failed to delete file {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn create_context(config: Config) -> anyhow::Result<ApplicationContext> {
     to_anyhow(
         "Failed to create application context, see problems above",
@@ -299,7 +376,10 @@ fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
         } else {
             format!(
                 "components: {}",
-                app.wasm_components_by_name.keys().join(", ")
+                app.wasm_components_by_name
+                    .keys()
+                    .map(|s| s.log_color_highlight())
+                    .join(", ")
             )
         }
     });
@@ -373,7 +453,10 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<Vec<PathBuf>
         } else {
             format!(
                 "sources: {}",
-                sources.iter().map(|source| source.display()).join(", ")
+                sources
+                    .iter()
+                    .map(|source| source.log_color_highlight())
+                    .join(", ")
             )
         }
     });
@@ -607,9 +690,39 @@ async fn build_stubs(ctx: &ApplicationContext) -> Result<(), Error> {
         let _indent = LogIndent::new();
 
         for component_name in ctx.application.all_wasm_rpc_dependencies() {
+            // TODO: let's try to skip this temp dir creation if possible
+            let target_root = TempDir::new()?;
+            let canonical_target_root = target_root.path().canonicalize()?;
+
+            let stub_def = StubDefinition::new(StubConfig {
+                source_wit_root: ctx.application.component_output_wit(&component_name),
+                target_root: canonical_target_root,
+                selected_world: ctx.application.stub_world(&component_name),
+                stub_crate_version: ctx.application.stub_crate_version(&component_name),
+                wasm_rpc_override: WasmRpcOverride {
+                    wasm_rpc_path_override: ctx.application.stub_wasm_rpc_path(&component_name),
+                    wasm_rpc_version_override: ctx
+                        .application
+                        .stub_wasm_rpc_version(&component_name),
+                },
+                extract_source_interface_package: false,
+            })
+            .context("Failed to gather information for the stub generator")?;
+
+            let stub_dep_package_ids = stub_def.stub_dep_package_ids();
+            let stub_inputs: Vec<PathBuf> = stub_def
+                .packages_with_wit_sources()
+                .flat_map(|(package_id, _, sources)| {
+                    (stub_dep_package_ids.contains(&package_id)
+                        || package_id == stub_def.source_package_id)
+                        .then(|| sources.files.iter().cloned())
+                        .unwrap_or_default()
+                })
+                .collect();
+
             if is_up_to_date(
                 ctx.config.skip_up_to_date_checks,
-                || [ctx.application.component_output_wit(&component_name)],
+                || stub_inputs,
                 || {
                     [
                         ctx.application.stub_wasm(&component_name),
@@ -629,24 +742,6 @@ async fn build_stubs(ctx: &ApplicationContext) -> Result<(), Error> {
                 format!("wasm rpc stub: {}", component_name.log_color_highlight()),
             );
             let _indent = LogIndent::new();
-
-            let target_root = TempDir::new()?;
-            let canonical_target_root = target_root.path().canonicalize()?;
-
-            let stub_def = StubDefinition::new(StubConfig {
-                source_wit_root: ctx.application.component_output_wit(&component_name),
-                target_root: canonical_target_root,
-                selected_world: ctx.application.stub_world(&component_name),
-                stub_crate_version: ctx.application.stub_crate_version(&component_name),
-                wasm_rpc_override: WasmRpcOverride {
-                    wasm_rpc_path_override: ctx.application.stub_wasm_rpc_path(&component_name),
-                    wasm_rpc_version_override: ctx
-                        .application
-                        .stub_wasm_rpc_version(&component_name),
-                },
-                extract_source_interface_package: false,
-            })
-            .context("Failed to gather information for the stub generator")?;
 
             commands::generate::build(
                 &stub_def,

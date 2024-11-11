@@ -400,7 +400,8 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
     });
 
     // Check overwrites
-    let forbidden_overwrites = actions.run(true, log_action_plan)?;
+    // TODO: allow_skip_by_content, decide
+    let forbidden_overwrites = actions.run(true, false, log_action_plan)?;
     if !forbidden_overwrites.is_empty() {
         eprintln!("The following files would have been overwritten with new content:");
         for action in forbidden_overwrites {

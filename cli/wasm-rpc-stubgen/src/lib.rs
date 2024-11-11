@@ -198,6 +198,8 @@ pub enum App {
     PostComponentBuild(DeclarativeBuildArgs),
     /// Runs all build steps (pre-component, component, post-component)
     Build(DeclarativeBuildArgs),
+    /// Clean outputs
+    Clean(DeclarativeBuildArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -293,6 +295,7 @@ pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
             commands::declarative::post_component_build(dec_build_args_to_config(args)).await
         }
         App::Build(args) => commands::declarative::build(dec_build_args_to_config(args)).await,
+        App::Clean(args) => commands::declarative::clean(dec_build_args_to_config(args)),
     }
 }
 
