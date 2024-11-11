@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::ApiSite;
+use crate::gateway_api_deployment::ApiSite;
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
 use async_trait::async_trait;

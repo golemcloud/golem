@@ -12,9 +12,7 @@ use golem_wasm_ast::analysis::{
 };
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest;
-use golem_worker_service_base::gateway_api_definition::{
-    ApiDefinitionId, ApiDeploymentRequest, ApiSite, ApiSiteString, ApiVersion,
-};
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::repo::{api_definition, api_deployment};
 use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
 use golem_worker_service_base::service::gateway::api_definition::{
@@ -32,6 +30,9 @@ use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_wasm_ast::analysis::analysed_type::str;
 use golem_worker_service_base::api;
+use golem_worker_service_base::gateway_api_deployment::{
+    ApiDeploymentRequest, ApiSite, ApiSiteString,
+};
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};

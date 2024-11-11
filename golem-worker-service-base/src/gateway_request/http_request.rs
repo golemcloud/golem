@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::gateway_api_definition::ApiSiteString;
+use crate::gateway_api_deployment::ApiSiteString;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
 

@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::{
-    ApiDefinitionId, ApiDeployment, ApiDeploymentRequest, ApiSite, ApiSiteString,
-};
+use crate::gateway_api_definition::ApiDefinitionId;
+use crate::gateway_api_deployment::*;
 
 use std::collections::{HashMap, HashSet};
 

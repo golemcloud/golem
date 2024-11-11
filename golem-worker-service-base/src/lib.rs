@@ -4,7 +4,9 @@ use service::worker::WorkerRequestMetadata;
 
 pub mod api;
 pub mod app_config;
+
 pub mod gateway_api_definition;
+pub mod gateway_api_deployment;
 pub mod gateway_binding;
 pub mod gateway_execution;
 pub mod gateway_middleware;

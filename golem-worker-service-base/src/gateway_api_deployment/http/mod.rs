@@ -1,11 +1,7 @@
-use std::fmt::Debug;
-use std::fmt::Display;
-
 use crate::service::gateway::api_definition::ApiDefinitionIdWithVersion;
-use poem_openapi::NewType;
+use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
-
-use poem_openapi::Object;
+use std::fmt::Display;
 
 #[derive(Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize)]
 pub struct ApiDeploymentRequest<Namespace> {

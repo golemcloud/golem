@@ -1,7 +1,8 @@
 use crate::gateway_api_definition::http::{
     AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
 };
-use crate::gateway_api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
+use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use crate::gateway_api_deployment::ApiSite;
 use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding,
 };
@@ -236,8 +237,8 @@ impl From<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
     }
 }
 
-impl<N> From<crate::gateway_api_definition::ApiDeployment<N>> for ApiDeployment {
-    fn from(value: crate::gateway_api_definition::ApiDeployment<N>) -> Self {
+impl<N> From<crate::gateway_api_deployment::ApiDeployment<N>> for ApiDeployment {
+    fn from(value: crate::gateway_api_deployment::ApiDeployment<N>) -> Self {
         let api_definitions = value
             .api_definition_keys
             .into_iter()
