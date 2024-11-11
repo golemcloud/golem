@@ -917,13 +917,15 @@ spec:
     - name: component-two
       type: wasm
       properties:
-        wit: wit
+        inputWit: input_wit
+        outputWit: output_wit
         inputWasm: out/in.wasm
         outputWasm: out/out.wasm
     - name: component-three
       type: wasm
       properties:
-        wit: wit
+        inputWit: input_wit
+        outputWit: output_wit
         inputWasm: out/in.wasm
         outputWasm: out/out.wasm
 "#
