@@ -116,7 +116,6 @@ mod tests {
     use crate::gateway_binding::{GatewayBinding, ResponseMapping};
     use crate::service::gateway::http_api_definition_validator::unique_routes;
     use golem_common::model::ComponentId;
-    use golem_common::model::GatewayBindingType;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
 
@@ -135,7 +134,6 @@ mod tests {
                     idempotency_key: None,
                     response_mapping: ResponseMapping(Expr::literal("sample")),
                     middleware: None,
-                    worker_binding_type: GatewayBindingType::Default,
                 }),
             }
         }

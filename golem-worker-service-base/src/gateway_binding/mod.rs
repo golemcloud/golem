@@ -135,7 +135,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
                     middleware,
-                    worker_binding_type: GatewayBindingType::Default,
                 }))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
@@ -154,7 +153,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                     idempotency_key,
                     response_mapping: ResponseMapping(response),
                     middleware,
-                    worker_binding_type: GatewayBindingType::FileServer,
                 }))
             }
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {

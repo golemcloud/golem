@@ -161,7 +161,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         idempotency_key_compiled,
                         response_compiled,
                         middlewares: middleware,
-                        worker_binding_type: GatewayBindingType::Default,
                     }))
                 } else {
                     Ok(GatewayBindingCompiled::FileServer(WorkerBindingCompiled {
@@ -170,7 +169,6 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                         idempotency_key_compiled,
                         response_compiled,
                         middlewares: middleware,
-                        worker_binding_type: GatewayBindingType::FileServer,
                     }))
                 }
             }

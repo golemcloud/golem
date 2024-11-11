@@ -88,7 +88,6 @@ impl WorkerDetail {
 pub struct ResolvedWorkerBinding<Namespace> {
     pub worker_detail: WorkerDetail,
     pub compiled_response_mapping: ResponseMappingCompiled,
-    pub worker_binding_type: GatewayBindingType,
     pub namespace: Namespace,
     pub middlewares: Middlewares,
 }
@@ -281,7 +280,6 @@ mod internal {
         let resolved_binding = ResolvedWorkerBinding {
             worker_detail,
             compiled_response_mapping: binding.response_compiled.clone(),
-            worker_binding_type: binding.worker_binding_type.clone(),
             namespace: namespace.clone(),
             middlewares: binding.middlewares.clone().unwrap_or_default(),
         };

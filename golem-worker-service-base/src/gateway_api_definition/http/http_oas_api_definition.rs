@@ -197,7 +197,7 @@ mod internal {
                         })
                     }
                     (GatewayBindingType::Default, _) => {
-                        let binding = get_worker_binding(worker_gateway_info, &binding_type)?;
+                        let binding = get_worker_binding(worker_gateway_info)?;
 
                         Ok(Route {
                             path: path_pattern.clone(),
@@ -206,7 +206,7 @@ mod internal {
                         })
                     }
                     (GatewayBindingType::FileServer, _) => {
-                        let binding = get_worker_binding(worker_gateway_info, &binding_type)?;
+                        let binding = get_worker_binding(worker_gateway_info)?;
 
                         Ok(Route {
                             path: path_pattern.clone(),
@@ -242,7 +242,6 @@ mod internal {
 
     pub(crate) fn get_worker_binding(
         worker_gateway_info: &Value,
-        gateway_binding_type: &GatewayBindingType,
     ) -> Result<WorkerBinding, String> {
         let http_middlewares = get_middleware(worker_gateway_info)?;
         let middlewares = http_middlewares
@@ -262,7 +261,6 @@ mod internal {
             idempotency_key: get_idempotency_key(worker_gateway_info)?,
             response_mapping: get_response_mapping(worker_gateway_info)?,
             middleware: binding_middleware,
-            worker_binding_type: gateway_binding_type.clone(),
         };
 
         Ok(binding)

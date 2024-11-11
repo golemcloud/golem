@@ -13,7 +13,6 @@ pub struct WorkerBinding {
     pub worker_name: Option<Expr>,
     pub idempotency_key: Option<Expr>,
     pub response_mapping: ResponseMapping,
-    pub worker_binding_type: GatewayBindingType,
     pub middleware: Option<Middlewares>,
 }
 
@@ -50,7 +49,6 @@ impl From<WorkerBindingCompiled> for WorkerBinding {
             response_mapping: ResponseMapping(
                 worker_binding.response_compiled.response_mapping_expr,
             ),
-            worker_binding_type: worker_binding.worker_binding_type,
             middleware: value.middlewares,
         }
     }

@@ -13,7 +13,6 @@ pub struct WorkerBindingCompiled {
     pub worker_name_compiled: Option<WorkerNameCompiled>,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub response_compiled: ResponseMappingCompiled,
-    pub worker_binding_type: GatewayBindingType,
     pub middlewares: Option<Middlewares>,
 }
 
@@ -49,7 +48,6 @@ impl WorkerBindingCompiled {
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
-            worker_binding_type: gateway_worker_binding.worker_binding_type.clone(),
             middlewares: middleware,
         })
     }

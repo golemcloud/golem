@@ -478,10 +478,14 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                     } else {
                         Some(crate::gateway_middleware::Middlewares(middlewares))
                     },
-                    worker_binding_type: v.unwrap_or(GatewayBindingType::Default), // TODO; Remove this field from here
                 };
 
-                Ok(GatewayBinding::Default(worker_binding))
+                if v == Some(GatewayBindingType::FileServer) {
+                    Ok(GatewayBinding::FileServer(worker_binding))
+                } else {
+                    Ok(GatewayBinding::Default(worker_binding))
+                }
+
             }
 
             Some(GatewayBindingType::CorsPreflight) => {
