@@ -6,7 +6,9 @@ use anyhow::{anyhow, bail, Context};
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use wit_parser::{Package, PackageId, PackageName, PackageSourceMap, Resolve};
+use wit_parser::{
+    Package, PackageId, PackageName, PackageSourceMap, Resolve, UnresolvedPackageGroup,
+};
 
 pub struct PackageSource {
     pub dir: PathBuf,
@@ -144,11 +146,13 @@ fn collect_package_sources(
 
 pub struct ResolvedWitComponent {
     pub main_package_name: PackageName,
-    pub resolved_input_wit_dir: ResolvedWitDir,
+    pub unresolved_input_package_group: UnresolvedPackageGroup,
     pub resolved_output_wit_dir: Option<ResolvedWitDir>,
-    pub app_deps: HashSet<String>,
-    pub input_deps: HashSet<String>,
-    pub output_deps: Option<HashSet<String>>,
+    pub app_component_deps: HashSet<String>,
+    pub input_referenced_package_deps: HashSet<PackageName>,
+    pub input_contained_package_deps: HashSet<PackageName>,
+    pub input_component_deps: HashSet<String>,
+    pub output_component_deps: Option<HashSet<String>>,
 }
 
 pub struct ResolvedWitApplication {
@@ -174,7 +178,7 @@ impl ResolvedWitApplication {
         // TODO: validate conflicting package names
 
         if !validation.has_any_errors() {
-            resolved_app.collect_package_deps();
+            resolved_app.collect_component_deps();
         }
 
         validation.build(resolved_app)
@@ -221,34 +225,86 @@ impl ResolvedWitApplication {
             );
 
             let resolved_component = (|| -> anyhow::Result<ResolvedWitComponent> {
-                let resolved_input_wit_dir =
-                    ResolvedWitDir::new(&input_wit).with_context(|| {
+                let unresolved_input_package_group = UnresolvedPackageGroup::parse_dir(&input_wit)
+                    .with_context(|| {
                         anyhow!(
-                            "Failed to resolve component {} input wit dir {}",
+                            "Failed to parse component {} main package in input wit dir {}",
                             component_name,
                             input_wit.display()
                         )
                     })?;
 
-                let main_package = resolved_input_wit_dir.main_package()?;
+                let input_referenced_package_deps = unresolved_input_package_group
+                    .main
+                    .foreign_deps
+                    .keys()
+                    .cloned()
+                    .collect();
+
+                let input_contained_package_deps = {
+                    let deps_path = component.input_wit.join("deps");
+                    if !deps_path.exists() {
+                        HashSet::new()
+                    } else {
+                        let mut entries = deps_path
+                            .read_dir()
+                            .and_then(|read_dir| read_dir.collect::<std::io::Result<Vec<_>>>())
+                            .with_context(|| {
+                                anyhow!(
+                                    "Failed to read component {} wit dependencies from {}",
+                                    component_name,
+                                    deps_path.display(),
+                                )
+                            })?;
+                        entries.sort_by_key(|e| e.file_name());
+                        entries
+                            .iter()
+                            .filter_map(|entry| {
+                                let path = entry.path();
+                                // NOTE: unlike wit_resolve - for now - we do not support:
+                                //         - symlinks
+                                //         - single file deps
+                                //         - wasm or wat deps
+                                path.is_dir().then(|| {
+                                    UnresolvedPackageGroup::parse_dir(&path)
+                                        .with_context(|| {
+                                            anyhow!(
+                                                "Failed to parse component {} wit dependency {}",
+                                                component_name,
+                                                path.display()
+                                            )
+                                        })
+                                        .map(|package_group| package_group.main.name)
+                                })
+                            })
+                            .collect::<Result<HashSet<_>, _>>()?
+                    }
+                };
+
+                let main_package_name = unresolved_input_package_group.main.name.clone();
 
                 let resolved_output_wit_dir = ResolvedWitDir::new(&output_wit).ok();
                 let output_has_same_main_package_name = resolved_output_wit_dir
                     .as_ref()
                     .map(|wit| wit.main_package())
                     .transpose()?
-                    .map(|output_main_package| main_package.name == output_main_package.name)
+                    .map(|output_main_package| main_package_name == output_main_package.name)
                     .unwrap_or_default();
+                let resolved_output_wit_dir = output_has_same_main_package_name
+                    .then_some(resolved_output_wit_dir)
+                    .flatten();
+
+                let app_component_deps = component.wasm_rpc_dependencies.iter().cloned().collect();
 
                 Ok(ResolvedWitComponent {
-                    main_package_name: main_package.name.clone(),
-                    resolved_input_wit_dir,
-                    resolved_output_wit_dir: output_has_same_main_package_name
-                        .then_some(resolved_output_wit_dir)
-                        .flatten(),
-                    app_deps: component.wasm_rpc_dependencies.iter().cloned().collect(),
-                    input_deps: Default::default(),
-                    output_deps: Default::default(),
+                    main_package_name,
+                    unresolved_input_package_group,
+                    resolved_output_wit_dir,
+                    app_component_deps,
+                    input_referenced_package_deps,
+                    input_contained_package_deps,
+                    input_component_deps: Default::default(),
+                    output_component_deps: Default::default(),
                 })
             })();
 
@@ -263,21 +319,14 @@ impl ResolvedWitApplication {
         }
     }
 
-    pub fn collect_package_deps(&mut self) {
-        fn component_deps(
-            resolved_app: &ResolvedWitApplication,
-            resolved_wit_dir: &ResolvedWitDir,
+    pub fn collect_component_deps(&mut self) {
+        fn component_deps<'a, I: IntoIterator<Item = &'a PackageName>>(
+            known_package_deps: &HashMap<PackageName, String>,
+            dep_package_names: I,
         ) -> HashSet<String> {
-            resolved_wit_dir
-                .resolve
-                .package_names
-                .keys()
-                .filter_map(|package_name| {
-                    resolved_app
-                        .stub_package_to_component
-                        .get(package_name)
-                        .cloned()
-                })
+            dep_package_names
+                .into_iter()
+                .filter_map(|package_name| known_package_deps.get(package_name).cloned())
                 .collect()
         }
 
@@ -286,18 +335,23 @@ impl ResolvedWitApplication {
             deps.insert(
                 component_name.clone(),
                 (
-                    component_deps(self, &component.resolved_input_wit_dir),
-                    component
-                        .resolved_output_wit_dir
-                        .as_ref()
-                        .map(|wit_dir| component_deps(self, wit_dir)),
+                    component_deps(
+                        &self.interface_package_to_component,
+                        &component.input_referenced_package_deps,
+                    ),
+                    component.resolved_output_wit_dir.as_ref().map(|wit_dir| {
+                        component_deps(
+                            &self.stub_package_to_component,
+                            wit_dir.resolve.package_names.keys(),
+                        )
+                    }),
                 ),
             );
         }
         for (component_name, (input_deps, output_deps)) in deps {
             let component = self.components.get_mut(&component_name).unwrap();
-            component.input_deps = input_deps;
-            component.output_deps = output_deps;
+            component.input_component_deps = input_deps;
+            component.output_component_deps = output_deps;
         }
     }
 
@@ -306,8 +360,8 @@ impl ResolvedWitApplication {
     //       application model vs in wit dependencies
     pub fn is_dep_graph_up_to_date(&self, component_name: &String) -> bool {
         match self.components.get(component_name) {
-            Some(component) => match &component.output_deps {
-                Some(output_deps) => &component.app_deps == output_deps,
+            Some(component) => match &component.output_component_deps {
+                Some(output_deps) => &component.app_component_deps == output_deps,
                 None => false,
             },
             None => false,
@@ -318,7 +372,7 @@ impl ResolvedWitApplication {
     //       only checks if it is present as wit package dependency
     pub fn has_as_wit_dep(&self, component_name: &String, dep_component_name: &String) -> bool {
         match self.components.get(component_name) {
-            Some(component) => match &component.output_deps {
+            Some(component) => match &component.output_component_deps {
                 Some(output_deps) => output_deps.contains(dep_component_name),
                 None => false,
             },
