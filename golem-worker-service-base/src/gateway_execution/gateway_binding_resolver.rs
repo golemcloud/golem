@@ -48,6 +48,7 @@ pub struct ResolvedGatewayBinding<Namespace> {
 pub enum ResolvedBinding<Namespace> {
     Static(StaticBinding),
     Worker(ResolvedWorkerBinding<Namespace>),
+    FileServer(ResolvedWorkerBinding<Namespace>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -101,7 +102,7 @@ impl<Namespace> ResolvedGatewayBinding<Namespace> {
             _ => None,
         }
     }
-    pub fn from_static(
+    pub fn from_static_binding(
         request_details: &GatewayRequestDetails,
         static_binding: &StaticBinding,
     ) -> ResolvedGatewayBinding<Namespace> {
@@ -111,7 +112,7 @@ impl<Namespace> ResolvedGatewayBinding<Namespace> {
         }
     }
 
-    pub fn from_worker(
+    pub fn from_resolved_worker_binding(
         request_details: &GatewayRequestDetails,
         resolved_worker_binding: ResolvedWorkerBinding<Namespace>,
     ) -> ResolvedGatewayBinding<Namespace> {
@@ -169,94 +170,117 @@ impl<Namespace: Clone + Send + Sync + 'static>
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
         match binding {
-            GatewayBindingCompiled::Worker(binding) => {
-                let worker_name_opt = if let Some(worker_name_compiled) =
-                    &binding.worker_name_compiled
-                {
-                    let resolve_rib_input = http_request_details
-                        .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
-                        .map_err(|err| {
-                            format!(
-                                "Failed to resolve rib input value from http request details {}",
-                                err
-                            )
-                        })?;
-
-                    let worker_name = rib::interpret_pure(
-                        &worker_name_compiled.compiled_worker_name,
-                        &resolve_rib_input,
-                    )
+            GatewayBindingCompiled::FileServer(worker_binding) => {
+                internal::get_resolved_binding(&worker_binding, &http_request_details, namespace, headers)
                     .await
-                    .map_err(|err| {
-                        format!("Failed to evaluate worker name rib expression. {}", err)
-                    })?
-                    .get_literal()
-                    .ok_or(
-                        "Worker name is not a Rib expression that resolves to String".to_string(),
-                    )?
-                    .as_string();
-
-                    Some(worker_name)
-                } else {
-                    None
-                };
-
-                let component_id = &binding.component_id;
-
-                let idempotency_key = if let Some(idempotency_key_compiled) =
-                    &binding.idempotency_key_compiled
-                {
-                    let resolve_rib_input = http_request_details
-                        .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
-                        .map_err(|err| {
-                            format!(
-                                "Failed to resolve rib input value from http request details {} for idemptency key",
-                                err
-                            )
-                        })?;
-
-                    let idempotency_key_value = rib::interpret_pure(
-                        &idempotency_key_compiled.compiled_idempotency_key,
-                        &resolve_rib_input,
-                    )
+                    .map(|resolved_binding| {
+                        ResolvedGatewayBinding {
+                            request_details: http_request_details,
+                            resolved_binding: ResolvedBinding::FileServer(resolved_binding),
+                        }
+                    })
+            }
+            GatewayBindingCompiled::Worker(worker_binding) => {
+                internal::get_resolved_binding(&worker_binding, &http_request_details, namespace, headers)
                     .await
-                    .map_err(|err| err.to_string())?;
-
-                    let idempotency_key = idempotency_key_value
-                        .get_literal()
-                        .ok_or("Idempotency Key is not a string")?
-                        .as_string();
-
-                    Some(IdempotencyKey::new(idempotency_key))
-                } else {
-                    headers
-                        .get("idempotency-key")
-                        .and_then(|h| h.to_str().ok())
-                        .map(|value| IdempotencyKey::new(value.to_string()))
-                };
-
-                let worker_detail = WorkerDetail {
-                    component_id: component_id.clone(),
-                    worker_name: worker_name_opt,
-                    idempotency_key,
-                };
-
-                let resolved_binding = ResolvedWorkerBinding {
-                    worker_detail,
-                    compiled_response_mapping: binding.response_compiled.clone(),
-                    worker_binding_type: binding.worker_binding_type.clone(),
-                    namespace: namespace.clone(),
-                    middlewares: binding.middlewares.clone().unwrap_or_default(),
-                };
-
-                Ok(ResolvedGatewayBinding::from_worker(
-                    &http_request_details,
-                    resolved_binding,
-                ))
+                    .map(|resolved_binding| {
+                        ResolvedGatewayBinding {
+                            request_details: http_request_details,
+                            resolved_binding: ResolvedBinding::Worker(resolved_binding),
+                        }
+                    })
             }
             GatewayBindingCompiled::Static(static_binding) => Ok(
-                ResolvedGatewayBinding::from_static(&http_request_details, static_binding),
+                ResolvedGatewayBinding::from_static_binding(&http_request_details, static_binding),
             ),
         }
+    }
+}
+
+mod internal {
+    use crate::gateway_binding::{GatewayBindingResolverError, GatewayRequestDetails, HttpRequestDetails, ResolvedWorkerBinding, RibInputValueResolver, WorkerBindingCompiled, WorkerDetail};
+    use golem_common::model::IdempotencyKey;
+    use http::HeaderMap;
+
+    pub async fn get_resolved_binding<Namespace: Clone>(
+        binding: &WorkerBindingCompiled,
+        http_request_details: &GatewayRequestDetails,
+        namespace: &Namespace,
+        headers: &HeaderMap,
+    ) -> Result<ResolvedWorkerBinding<Namespace>, GatewayBindingResolverError>{
+        let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
+            let resolve_rib_input = http_request_details
+                .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)
+                .map_err(|err| {
+                    format!(
+                        "Failed to resolve rib input value from http request details {}",
+                        err
+                    )
+                })?;
+
+            let worker_name = rib::interpret_pure(
+                &worker_name_compiled.compiled_worker_name,
+                &resolve_rib_input,
+            )
+            .await
+            .map_err(|err| format!("Failed to evaluate worker name rib expression. {}", err))?
+            .get_literal()
+            .ok_or("Worker name is not a Rib expression that resolves to String".to_string())?
+            .as_string();
+
+            Some(worker_name)
+        } else {
+            None
+        };
+
+        let component_id = &binding.component_id;
+
+        let idempotency_key = if let Some(idempotency_key_compiled) =
+            &binding.idempotency_key_compiled
+        {
+            let resolve_rib_input = http_request_details
+                .resolve_rib_input_value(&idempotency_key_compiled.rib_input)
+                .map_err(|err| {
+                    format!(
+                        "Failed to resolve rib input value from http request details {} for idemptency key",
+                        err
+                    )
+                })?;
+
+            let idempotency_key_value = rib::interpret_pure(
+                &idempotency_key_compiled.compiled_idempotency_key,
+                &resolve_rib_input,
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+
+            let idempotency_key = idempotency_key_value
+                .get_literal()
+                .ok_or("Idempotency Key is not a string")?
+                .as_string();
+
+            Some(IdempotencyKey::new(idempotency_key))
+        } else {
+            headers
+                .get("idempotency-key")
+                .and_then(|h| h.to_str().ok())
+                .map(|value| IdempotencyKey::new(value.to_string()))
+        };
+
+        let worker_detail = WorkerDetail {
+            component_id: component_id.clone(),
+            worker_name: worker_name_opt,
+            idempotency_key,
+        };
+
+        let resolved_binding = ResolvedWorkerBinding {
+            worker_detail,
+            compiled_response_mapping: binding.response_compiled.clone(),
+            worker_binding_type: binding.worker_binding_type.clone(),
+            namespace: namespace.clone(),
+            middlewares: binding.middlewares.clone().unwrap_or_default(),
+        };
+
+        Ok(resolved_binding)
     }
 }

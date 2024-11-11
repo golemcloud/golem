@@ -160,7 +160,7 @@ mod tests {
         Route {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Worker(worker_binding.clone()),
+            binding: GatewayBinding::Default(worker_binding.clone()),
         }
     }
 
@@ -182,7 +182,7 @@ mod tests {
         Route {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Worker(worker_binding.clone()),
+            binding: GatewayBinding::Default(worker_binding.clone()),
         }
     }
 

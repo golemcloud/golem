@@ -22,34 +22,39 @@ mod worker_binding_compiled;
 // from anything dynamic in nature. This implies, there will not be Rib in either pre-compiled or raw form.
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBinding {
-    Worker(WorkerBinding),
+    Default(WorkerBinding),
+    FileServer(WorkerBinding),
     Static(StaticBinding),
 }
 
 impl GatewayBinding {
     pub fn is_http_cors_binding(&self) -> bool {
         match self {
-            Self::Worker(_) => false,
+            Self::Default(_) => false,
             Self::Static(StaticBinding::HttpCorsPreflight(_)) => true,
+            Self::FileServer(_) => false,
         }
     }
     pub fn get_worker_binding(&self) -> Option<WorkerBinding> {
         match self {
-            Self::Worker(worker_binding) => Some(worker_binding.clone()),
+            Self::Default(worker_binding) => Some(worker_binding.clone()),
+            Self::FileServer(worker_binding) => Some(worker_binding.clone()),
             Self::Static(_) => None,
         }
     }
 
     pub fn get_worker_binding_mut(&mut self) -> Option<&mut WorkerBinding> {
         match self {
-            Self::Worker(worker_binding) => Some(worker_binding),
+            Self::Default(worker_binding) => Some(worker_binding),
+            Self::FileServer(worker_binding) => Some(worker_binding),
             Self::Static(_) => None,
         }
     }
 
     pub fn get_http_cors(&self) -> Option<HttpMiddleware> {
         match self {
-            Self::Worker(_) => None,
+            Self::Default(_) => None,
+            Self::FileServer(_) => None,
             Self::Static(static_binding) => static_binding
                 .get_cors_preflight()
                 .map(HttpMiddleware::cors),
@@ -60,7 +65,7 @@ impl GatewayBinding {
 impl From<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
     fn from(value: GatewayBinding) -> Self {
         match value {
-            GatewayBinding::Worker(worker_binding) => {
+            GatewayBinding::Default(worker_binding) => {
                 let middleware = worker_binding.middleware.map(|x| x.into());
 
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
@@ -73,9 +78,22 @@ impl From<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Gatew
                     static_binding: None,
                 }
             }
-            GatewayBinding::Static(static_binding) => {
+            GatewayBinding::FileServer(worker_binding) => {
+                let middleware = worker_binding.middleware.map(|x| x.into());
+
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
                     binding_type: Some(1),
+                    component: Some(worker_binding.component_id.into()),
+                    worker_name: worker_binding.worker_name.map(|x| x.into()),
+                    response: Some(worker_binding.response_mapping.0.into()),
+                    idempotency_key: worker_binding.idempotency_key.map(|x| x.into()),
+                    middleware,
+                    static_binding: None,
+                }
+            }
+            GatewayBinding::Static(static_binding) => {
+                golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
+                    binding_type: Some(2),
                     component: None,
                     worker_name: None,
                     response: None,
@@ -111,7 +129,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let response = Expr::try_from(response_proto)?;
                 let middleware = value.middleware.map(Middlewares::try_from).transpose()?;
 
-                Ok(GatewayBinding::Worker(WorkerBinding {
+                Ok(GatewayBinding::Default(WorkerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,
@@ -130,7 +148,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
                 let response = Expr::try_from(response_proto)?;
                 let middleware = value.middleware.map(Middlewares::try_from).transpose()?;
 
-                Ok(GatewayBinding::Worker(WorkerBinding {
+                Ok(GatewayBinding::FileServer(WorkerBinding {
                     component_id,
                     worker_name,
                     idempotency_key,

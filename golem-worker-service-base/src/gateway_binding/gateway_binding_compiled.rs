@@ -12,6 +12,7 @@ use golem_common::model::GatewayBindingType;
 pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
     Static(StaticBinding),
+    FileServer(WorkerBindingCompiled),
 }
 
 impl From<GatewayBindingCompiled> for GatewayBinding {
@@ -25,7 +26,14 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
 
                 let worker_binding = WorkerBinding::from(worker_binding);
 
-                GatewayBinding::Worker(worker_binding)
+                GatewayBinding::Default(worker_binding)
+            }
+            GatewayBindingCompiled::FileServer(value) => {
+                let worker_binding = value.clone();
+
+                let worker_binding = WorkerBinding::from(worker_binding);
+
+                GatewayBinding::FileServer(worker_binding)
             }
         }
     }
@@ -37,79 +45,13 @@ impl From<GatewayBindingCompiled>
     fn from(value: GatewayBindingCompiled) -> Self {
         match value {
             GatewayBindingCompiled::Worker(worker_binding) => {
-                let component = Some(worker_binding.component_id.into());
-                let worker_name = worker_binding
-                    .worker_name_compiled
-                    .clone()
-                    .map(|w| w.worker_name.into());
-                let compiled_worker_name_expr = worker_binding
-                    .worker_name_compiled
-                    .clone()
-                    .map(|w| w.compiled_worker_name.into());
-                let worker_name_rib_input = worker_binding
-                    .worker_name_compiled
-                    .map(|w| w.rib_input_type_info.into());
-                let (idempotency_key, compiled_idempotency_key_expr, idempotency_key_rib_input) =
-                    match worker_binding.idempotency_key_compiled {
-                        Some(x) => (
-                            Some(x.idempotency_key.into()),
-                            Some(x.compiled_idempotency_key.into()),
-                            Some(x.rib_input.into()),
-                        ),
-                        None => (None, None, None),
-                    };
-
-                let response = Some(
-                    worker_binding
-                        .response_compiled
-                        .response_mapping_expr
-                        .into(),
-                );
-                let compiled_response_expr = Some(
-                    worker_binding
-                        .response_compiled
-                        .response_mapping_compiled
-                        .into(),
-                );
-                let response_rib_input = Some(worker_binding.response_compiled.rib_input.into());
-                let worker_functions_in_response = worker_binding
-                    .response_compiled
-                    .worker_calls
-                    .map(|x| x.into());
-
-                let middleware = worker_binding
-                    .middlewares
-                    .iter()
-                    .map(
-                        |m| golem_api_grpc::proto::golem::apidefinition::Middleware {
-                            cors: m.get_cors().map(|x| x.into()),
-                        },
-                    )
-                    .next();
-
-                let binding_type = match worker_binding.worker_binding_type {
-                    GatewayBindingType::Default => 0,
-                    GatewayBindingType::FileServer => 1,
-                    GatewayBindingType::CorsPreflight => 2,
-                };
-
-                golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
-                    component,
-                    worker_name,
-                    compiled_worker_name_expr,
-                    worker_name_rib_input,
-                    idempotency_key,
-                    compiled_idempotency_key_expr,
-                    idempotency_key_rib_input,
-                    response,
-                    compiled_response_expr,
-                    response_rib_input,
-                    worker_functions_in_response,
-                    binding_type: Some(binding_type),
-                    static_binding: None,
-                    middleware,
-                }
+                internal::to_gateway_binding_compiled_proto(worker_binding, GatewayBindingType::Default)
             }
+
+            GatewayBindingCompiled::FileServer(worker_binding) => {
+                internal::to_gateway_binding_compiled_proto(worker_binding, GatewayBindingType::FileServer)
+            }
+
             GatewayBindingCompiled::Static(static_binding) => {
                 golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
                     component: None,
@@ -204,21 +146,27 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 
                 let middleware = value.middleware.map(Middlewares::try_from).transpose()?;
 
-                //TODO remove
                 let binding_type = value.binding_type.ok_or("Missing binding_type")?;
 
-                Ok(GatewayBindingCompiled::Worker(WorkerBindingCompiled {
-                    component_id,
-                    worker_name_compiled,
-                    idempotency_key_compiled,
-                    response_compiled,
-                    middlewares: middleware,
-                    worker_binding_type: if binding_type == 0 {
-                        GatewayBindingType::Default
-                    } else {
-                        GatewayBindingType::FileServer
-                    },
-                }))
+                if binding_type == 0 {
+                    Ok(GatewayBindingCompiled::Worker(WorkerBindingCompiled {
+                        component_id,
+                        worker_name_compiled,
+                        idempotency_key_compiled,
+                        response_compiled,
+                        middlewares: middleware,
+                        worker_binding_type: GatewayBindingType::Default,
+                    }))
+                } else {
+                    Ok(GatewayBindingCompiled::FileServer(WorkerBindingCompiled {
+                        component_id,
+                        worker_name_compiled,
+                        idempotency_key_compiled,
+                        response_compiled,
+                        middlewares: middleware,
+                        worker_binding_type: GatewayBindingType::FileServer,
+                    }))
+                }
             }
             Some(2) => {
                 let static_binding = value
@@ -228,6 +176,89 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                 Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
             }
             _ => Err("Unknown binding type".to_string()),
+        }
+    }
+}
+
+mod internal {
+    use golem_common::model::GatewayBindingType;
+    use crate::gateway_binding::{WorkerBindingCompiled};
+
+    pub(crate) fn to_gateway_binding_compiled_proto(
+        worker_binding: WorkerBindingCompiled,
+        binding_type: GatewayBindingType
+    ) -> golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+        let component = Some(worker_binding.component_id.into());
+        let worker_name = worker_binding
+            .worker_name_compiled
+            .clone()
+            .map(|w| w.worker_name.into());
+        let compiled_worker_name_expr = worker_binding
+            .worker_name_compiled
+            .clone()
+            .map(|w| w.compiled_worker_name.into());
+        let worker_name_rib_input = worker_binding
+            .worker_name_compiled
+            .map(|w| w.rib_input_type_info.into());
+        let (idempotency_key, compiled_idempotency_key_expr, idempotency_key_rib_input) =
+            match worker_binding.idempotency_key_compiled {
+                Some(x) => (
+                    Some(x.idempotency_key.into()),
+                    Some(x.compiled_idempotency_key.into()),
+                    Some(x.rib_input.into()),
+                ),
+                None => (None, None, None),
+            };
+
+        let response = Some(
+            worker_binding
+                .response_compiled
+                .response_mapping_expr
+                .into(),
+        );
+        let compiled_response_expr = Some(
+            worker_binding
+                .response_compiled
+                .response_mapping_compiled
+                .into(),
+        );
+        let response_rib_input = Some(worker_binding.response_compiled.rib_input.into());
+        let worker_functions_in_response = worker_binding
+            .response_compiled
+            .worker_calls
+            .map(|x| x.into());
+
+        let middleware = worker_binding
+            .middlewares
+            .iter()
+            .map(
+                |m| golem_api_grpc::proto::golem::apidefinition::Middleware {
+                    cors: m.get_cors().map(|x| x.into()),
+                },
+            )
+            .next();
+
+        let binding_type = match binding_type {
+            GatewayBindingType::Default => 0,
+            GatewayBindingType::FileServer => 1,
+            GatewayBindingType::CorsPreflight => 2,
+        };
+
+        golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
+            component,
+            worker_name,
+            compiled_worker_name_expr,
+            worker_name_rib_input,
+            idempotency_key,
+            compiled_idempotency_key_expr,
+            idempotency_key_rib_input,
+            response,
+            compiled_response_expr,
+            response_rib_input,
+            worker_functions_in_response,
+            binding_type: Some(binding_type),
+            static_binding: None,
+            middleware,
         }
     }
 }

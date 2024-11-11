@@ -202,7 +202,7 @@ mod internal {
                         Ok(Route {
                             path: path_pattern.clone(),
                             method,
-                            binding: GatewayBinding::Worker(binding),
+                            binding: GatewayBinding::Default(binding),
                         })
                     }
                     (GatewayBindingType::FileServer, _) => {
@@ -211,7 +211,7 @@ mod internal {
                         Ok(Route {
                             path: path_pattern.clone(),
                             method,
-                            binding: GatewayBinding::Worker(binding),
+                            binding: GatewayBinding::Default(binding),
                         })
                     }
 
@@ -526,7 +526,7 @@ mod tests {
         Route {
             path: path_pattern.clone(),
             method: MethodPattern::Get,
-            binding: GatewayBinding::Worker(WorkerBinding {
+            binding: GatewayBinding::Default(WorkerBinding {
                 worker_name: Some(Expr::expr_block(vec![
                     Expr::let_binding_with_type(
                         "x",

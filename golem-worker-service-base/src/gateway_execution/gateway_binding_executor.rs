@@ -1,7 +1,4 @@
-use crate::gateway_binding::{
-    ResolvedBinding, ResolvedGatewayBinding, RibInputTypeMismatch, RibInputValueResolver,
-    StaticBinding,
-};
+use crate::gateway_binding::{GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding, RibInputTypeMismatch, RibInputValueResolver, StaticBinding};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
@@ -9,8 +6,7 @@ use crate::gateway_execution::to_response::ToResponse;
 use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares};
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use async_trait::async_trait;
-use golem_common::model::GatewayBindingType;
-use rib::RibResult;
+use rib::{RibInput, RibResult};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -30,21 +26,131 @@ pub struct DefaultGatewayBindingExecutor<Namespace> {
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
 }
 
-impl<Namespace> DefaultGatewayBindingExecutor<Namespace> {
+impl<N> DefaultGatewayBindingExecutor<N> {
     pub fn new(
         evaluator: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
-        file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
+        file_server_binding_handler: Arc<dyn FileServerBindingHandler<N> + Sync + Send>,
     ) -> Self {
         Self {
             evaluator,
             file_server_binding_handler,
         }
     }
+
+    async fn resolve_rib_inputs<R>(
+        &self,
+        request_details: &GatewayRequestDetails,
+        resolved_worker_binding: &ResolvedWorkerBinding<N>,
+    ) -> Result<(RibInput, RibInput), R>
+    where
+        RibInputTypeMismatch: ToResponse<R>,
+    {
+        let request_rib_input = request_details
+            .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
+            .map_err(|err| err.to_response(&request_details, &resolved_worker_binding.middlewares))?;
+
+        let worker_rib_input = resolved_worker_binding
+            .worker_detail
+            .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
+            .map_err(|err| err.to_response(&request_details, &resolved_worker_binding.middlewares))?;
+
+        Ok((request_rib_input, worker_rib_input))
+    }
+
+    async fn get_rib_result(
+        &self,
+        request_rib_input: RibInput,
+        worker_rib_input: RibInput,
+        resolved_worker_binding: &ResolvedWorkerBinding<N>,
+    ) -> Result<RibResult, EvaluationError> {
+        let rib_input = request_rib_input.merge(worker_rib_input);
+        self.evaluator
+            .evaluate(
+                resolved_worker_binding.worker_detail.worker_name.as_deref(),
+                &resolved_worker_binding.worker_detail.component_id.component_id,
+                &resolved_worker_binding.worker_detail.idempotency_key,
+                &resolved_worker_binding.compiled_response_mapping.response_mapping_compiled,
+                &rib_input,
+            )
+            .await
+    }
+
+    async fn handle_worker_binding<R>(
+        &self,
+        binding: &ResolvedGatewayBinding<N>,
+        resolved_binding: &ResolvedWorkerBinding<N>,
+    ) -> R
+    where
+        RibResult: ToResponse<R>,
+        EvaluationError: ToResponse<R>,
+        RibInputTypeMismatch: ToResponse<R>,
+    {
+        match self
+            .resolve_rib_inputs(&binding.request_details, resolved_binding)
+            .await
+        {
+            Ok((request_rib_input, worker_rib_input)) => {
+                match self
+                    .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
+                    .await
+                {
+                    Ok(result) => result.to_response(
+                        &binding.request_details,
+                        &resolved_binding.middlewares,
+                    ),
+                    Err(err) => err.to_response(
+                        &binding.request_details,
+                        &resolved_binding.middlewares,
+                    ),
+                }
+            }
+            Err(err_response) => err_response,
+        }
+    }
+
+    async fn handle_file_server_binding<R>(
+        &self,
+        binding: &ResolvedGatewayBinding<N>,
+        resolved_binding: &ResolvedWorkerBinding<N>,
+    ) -> R
+    where
+        FileServerBindingResult: ToResponse<R>,
+        RibResult: ToResponse<R>,
+        EvaluationError: ToResponse<R>,
+        RibInputTypeMismatch: ToResponse<R>,
+    {
+        match self
+            .resolve_rib_inputs(&binding.request_details, resolved_binding)
+            .await
+        {
+            Ok((request_rib_input, worker_rib_input)) => {
+                match self
+                    .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
+                    .await
+                {
+                    Ok(worker_response) => self
+                        .file_server_binding_handler
+                        .handle_file_server_binding_result(
+                            &resolved_binding.namespace,
+                            &resolved_binding.worker_detail,
+                            worker_response,
+                        )
+                        .await
+                        .to_response(&binding.request_details, &resolved_binding.middlewares),
+                    Err(err) => err.to_response(
+                        &binding.request_details,
+                        &resolved_binding.middlewares,
+                    ),
+                }
+            }
+            Err(err_response) => err_response,
+        }
+    }
 }
 
 #[async_trait]
 impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
-    for DefaultGatewayBindingExecutor<N>
+for DefaultGatewayBindingExecutor<N>
 {
     async fn execute_binding(&self, binding: &ResolvedGatewayBinding<N>) -> R
     where
@@ -54,91 +160,18 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
         FileServerBindingResult: ToResponse<R>,
         CorsPreflight: ToResponse<R>,
     {
-        let resolved_binding = &binding.resolved_binding;
-        let request_details = &binding.request_details;
-
-        match resolved_binding {
-            ResolvedBinding::Worker(resolved_worker_binding) => {
-                let request_rib_input = request_details.resolve_rib_input_value(
-                    &resolved_worker_binding.compiled_response_mapping.rib_input,
-                );
-
-                let worker_rib_input = resolved_worker_binding
-                    .worker_detail
-                    .resolve_rib_input_value(
-                        &resolved_worker_binding.compiled_response_mapping.rib_input,
-                    );
-
-                match (request_rib_input, worker_rib_input) {
-                    (Ok(request_rib_input), Ok(worker_rib_input)) => {
-                        let rib_input = request_rib_input.merge(worker_rib_input);
-                        let result = self
-                            .evaluator
-                            .evaluate(
-                                resolved_worker_binding.worker_detail.worker_name.as_deref(),
-                                &resolved_worker_binding
-                                    .worker_detail
-                                    .component_id
-                                    .component_id,
-                                &resolved_worker_binding.worker_detail.idempotency_key,
-                                &resolved_worker_binding
-                                    .compiled_response_mapping
-                                    .response_mapping_compiled
-                                    .clone(),
-                                &rib_input,
-                            )
-                            .await;
-
-                        match result {
-                            Ok(worker_response) => {
-                                match resolved_worker_binding.worker_binding_type {
-                                    GatewayBindingType::Default => worker_response.to_response(
-                                        &binding.request_details,
-                                        &resolved_worker_binding.middlewares,
-                                    ),
-                                    GatewayBindingType::FileServer => self
-                                        .file_server_binding_handler
-                                        .handle_file_server_binding_result(
-                                            &resolved_worker_binding.namespace,
-                                            &resolved_worker_binding.worker_detail,
-                                            worker_response,
-                                        )
-                                        .await
-                                        .to_response(
-                                            &binding.request_details,
-                                            &resolved_worker_binding.middlewares,
-                                        ),
-                                    GatewayBindingType::CorsPreflight => {
-                                        EvaluationError(
-                                            "Cors preflight is not supported".to_string(),
-                                        )
-                                        .to_response(
-                                            &binding.request_details,
-                                            &resolved_worker_binding.middlewares,
-                                        ) //TODO; remove this as it is an invalid state (IFS PR driven changes)
-                                    }
-                                }
-                            }
-                            Err(err) => err.to_response(
-                                &binding.request_details,
-                                &resolved_worker_binding.middlewares,
-                            ),
-                        }
-                    }
-                    (Err(err), _) => err.to_response(
-                        &binding.request_details,
-                        &resolved_worker_binding.middlewares,
-                    ),
-                    (_, Err(err)) => err.to_response(
-                        &binding.request_details,
-                        &resolved_worker_binding.middlewares,
-                    ),
-                }
+        match &binding.resolved_binding {
+            ResolvedBinding::Worker(resolved_binding) => {
+                self.handle_worker_binding::<R>(binding, resolved_binding).await
             }
-
+            ResolvedBinding::FileServer(resolved_binding) => {
+                self.handle_file_server_binding::<R>(binding, resolved_binding).await
+            }
             ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
-                let cors_preflight = cors_preflight.clone();
-                cors_preflight.to_response(&binding.request_details, &Middlewares::default())
+                cors_preflight.clone().to_response(
+                    &binding.request_details,
+                    &Middlewares::default(),
+                )
             }
         }
     }

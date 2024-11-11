@@ -430,7 +430,7 @@ impl CompiledRoute {
         metadata_dictionary: &ComponentMetadataDictionary,
     ) -> Result<CompiledRoute, RouteCompilationErrors> {
         match &route.binding {
-            GatewayBinding::Worker(worker_binding) => {
+            GatewayBinding::Default(worker_binding) => {
                 let metadata = metadata_dictionary
                     .metadata
                     .get(&worker_binding.component_id)
@@ -446,6 +446,25 @@ impl CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
                     binding: GatewayBindingCompiled::Worker(binding),
+                })
+            }
+
+            GatewayBinding::FileServer(worker_binding) => {
+                let metadata = metadata_dictionary
+                    .metadata
+                    .get(&worker_binding.component_id)
+                    .ok_or(RouteCompilationErrors::MetadataNotFoundError(
+                        worker_binding.component_id.clone(),
+                    ))?;
+
+                let binding =
+                    WorkerBindingCompiled::from_raw_worker_binding(worker_binding, metadata)
+                        .map_err(RouteCompilationErrors::RibCompilationError)?;
+
+                Ok(CompiledRoute {
+                    method: route.method.clone(),
+                    path: route.path.clone(),
+                    binding: GatewayBindingCompiled::FileServer(binding),
                 })
             }
 

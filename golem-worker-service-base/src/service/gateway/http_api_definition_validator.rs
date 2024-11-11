@@ -126,7 +126,7 @@ mod tests {
             Route {
                 method,
                 path: crate::gateway_api_definition::http::AllPathPatterns::parse(path).unwrap(),
-                binding: GatewayBinding::Worker(crate::gateway_binding::WorkerBinding {
+                binding: GatewayBinding::Default(crate::gateway_binding::WorkerBinding {
                     component_id: VersionedComponentId {
                         component_id: ComponentId::new_v4(),
                         version: 1,
