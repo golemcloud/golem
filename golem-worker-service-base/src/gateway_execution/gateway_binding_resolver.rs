@@ -11,7 +11,6 @@ use std::collections::HashMap;
 use std::fmt::Display;
 
 use crate::gateway_middleware::Middlewares;
-use golem_common::model::GatewayBindingType;
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // which will resolve the gateway binding equired for that request.

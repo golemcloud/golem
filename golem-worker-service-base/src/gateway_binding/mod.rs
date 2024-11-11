@@ -3,7 +3,6 @@ pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
 use crate::gateway_middleware::{HttpMiddleware, Middlewares};
 pub(crate) use crate::gateway_request::request_details::*;
 pub(crate) use gateway_binding_compiled::*;
-use golem_common::model::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 pub(crate) use static_binding::*;

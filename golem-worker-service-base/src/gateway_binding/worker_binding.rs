@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::gateway_binding::WorkerBindingCompiled;
 use crate::gateway_middleware::{Cors, Middleware, Middlewares};
-use golem_common::model::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 

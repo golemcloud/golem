@@ -2,7 +2,6 @@ use crate::gateway_binding::{ResponseMapping, WorkerBinding};
 use crate::gateway_middleware::Middlewares;
 use crate::gateway_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
 use bincode::{Decode, Encode};
-use golem_common::model::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo, WorkerFunctionsInRib};
