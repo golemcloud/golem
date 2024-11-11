@@ -241,6 +241,7 @@ impl OverwriteSafeActions {
     pub fn run<F>(
         self,
         allow_overwrite: bool,
+        allow_skip_by_content: bool,
         log_action: F,
     ) -> anyhow::Result<Vec<OverwriteSafeAction>>
     where
@@ -253,23 +254,28 @@ impl OverwriteSafeActions {
 
             for action in self.0 {
                 let plan = match &action {
-                    OverwriteSafeAction::CopyFile { source, target } => {
-                        Self::plan_for_action(allow_overwrite, target, || {
-                            has_same_string_content(source, target)
-                        })?
-                    }
+                    OverwriteSafeAction::CopyFile { source, target } => Self::plan_for_action(
+                        allow_overwrite,
+                        allow_skip_by_content,
+                        target,
+                        || has_same_string_content(source, target),
+                    )?,
                     OverwriteSafeAction::CopyFileTransformed {
                         source_content_transformed: source_transformed,
                         target,
                         ..
-                    } => Self::plan_for_action(allow_overwrite, target, || {
-                        has_str_content(target, source_transformed)
-                    })?,
-                    OverwriteSafeAction::WriteFile { content, target } => {
-                        Self::plan_for_action(allow_overwrite, target, || {
-                            has_str_content(target, content)
-                        })?
-                    }
+                    } => Self::plan_for_action(
+                        allow_overwrite,
+                        allow_skip_by_content,
+                        target,
+                        || has_str_content(target, source_transformed),
+                    )?,
+                    OverwriteSafeAction::WriteFile { content, target } => Self::plan_for_action(
+                        allow_overwrite,
+                        allow_skip_by_content,
+                        target,
+                        || has_str_content(target, content),
+                    )?,
                 };
                 match plan {
                     Some(plan) => actions_with_plan.push((action, plan)),
@@ -312,6 +318,7 @@ impl OverwriteSafeActions {
 
     fn plan_for_action<P, F>(
         allow_overwrite: bool,
+        allow_skip_by_content: bool,
         target: P,
         skip_by_content: F,
     ) -> anyhow::Result<Option<OverwriteSafeActionPlan>>
@@ -321,7 +328,7 @@ impl OverwriteSafeActions {
     {
         if !target.as_ref().exists() {
             Ok(Some(OverwriteSafeActionPlan::Create))
-        } else if skip_by_content()? {
+        } else if allow_skip_by_content && skip_by_content()? {
             Ok(Some(OverwriteSafeActionPlan::SkipSameContent))
         } else if allow_overwrite {
             Ok(Some(OverwriteSafeActionPlan::Overwrite))

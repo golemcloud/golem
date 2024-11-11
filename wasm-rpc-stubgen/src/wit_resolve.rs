@@ -171,6 +171,8 @@ impl ResolvedWitApplication {
 
         resolved_app.add_components_from_app(&mut validation, app);
 
+        // TODO: validate conflicting package names
+
         if !validation.has_any_errors() {
             resolved_app.collect_package_deps();
         }
