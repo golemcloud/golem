@@ -170,26 +170,28 @@ impl<Namespace: Clone + Send + Sync + 'static>
         .map_err(|err| format!("Failed to fetch input request details {}", err.join(", ")))?;
 
         match binding {
-            GatewayBindingCompiled::FileServer(worker_binding) => {
-                internal::get_resolved_binding(&worker_binding, &http_request_details, namespace, headers)
-                    .await
-                    .map(|resolved_binding| {
-                        ResolvedGatewayBinding {
-                            request_details: http_request_details,
-                            resolved_binding: ResolvedBinding::FileServer(resolved_binding),
-                        }
-                    })
-            }
-            GatewayBindingCompiled::Worker(worker_binding) => {
-                internal::get_resolved_binding(&worker_binding, &http_request_details, namespace, headers)
-                    .await
-                    .map(|resolved_binding| {
-                        ResolvedGatewayBinding {
-                            request_details: http_request_details,
-                            resolved_binding: ResolvedBinding::Worker(resolved_binding),
-                        }
-                    })
-            }
+            GatewayBindingCompiled::FileServer(worker_binding) => internal::get_resolved_binding(
+                worker_binding,
+                &http_request_details,
+                namespace,
+                headers,
+            )
+            .await
+            .map(|resolved_binding| ResolvedGatewayBinding {
+                request_details: http_request_details,
+                resolved_binding: ResolvedBinding::FileServer(resolved_binding),
+            }),
+            GatewayBindingCompiled::Worker(worker_binding) => internal::get_resolved_binding(
+                worker_binding,
+                &http_request_details,
+                namespace,
+                headers,
+            )
+            .await
+            .map(|resolved_binding| ResolvedGatewayBinding {
+                request_details: http_request_details,
+                resolved_binding: ResolvedBinding::Worker(resolved_binding),
+            }),
             GatewayBindingCompiled::Static(static_binding) => Ok(
                 ResolvedGatewayBinding::from_static_binding(&http_request_details, static_binding),
             ),
@@ -198,7 +200,10 @@ impl<Namespace: Clone + Send + Sync + 'static>
 }
 
 mod internal {
-    use crate::gateway_binding::{GatewayBindingResolverError, GatewayRequestDetails, ResolvedWorkerBinding, RibInputValueResolver, WorkerBindingCompiled, WorkerDetail};
+    use crate::gateway_binding::{
+        GatewayBindingResolverError, GatewayRequestDetails, ResolvedWorkerBinding,
+        RibInputValueResolver, WorkerBindingCompiled, WorkerDetail,
+    };
     use golem_common::model::IdempotencyKey;
     use http::HeaderMap;
 
@@ -207,7 +212,7 @@ mod internal {
         http_request_details: &GatewayRequestDetails,
         namespace: &Namespace,
         headers: &HeaderMap,
-    ) -> Result<ResolvedWorkerBinding<Namespace>, GatewayBindingResolverError>{
+    ) -> Result<ResolvedWorkerBinding<Namespace>, GatewayBindingResolverError> {
         let worker_name_opt = if let Some(worker_name_compiled) = &binding.worker_name_compiled {
             let resolve_rib_input = http_request_details
                 .resolve_rib_input_value(&worker_name_compiled.rib_input_type_info)

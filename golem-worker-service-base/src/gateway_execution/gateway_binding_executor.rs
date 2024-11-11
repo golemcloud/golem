@@ -1,4 +1,7 @@
-use crate::gateway_binding::{GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding, RibInputTypeMismatch, RibInputValueResolver, StaticBinding};
+use crate::gateway_binding::{
+    GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding,
+    RibInputTypeMismatch, RibInputValueResolver, StaticBinding,
+};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
@@ -47,12 +50,16 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     {
         let request_rib_input = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-            .map_err(|err| err.to_response(&request_details, &resolved_worker_binding.middlewares))?;
+            .map_err(|err| {
+                err.to_response(request_details, &resolved_worker_binding.middlewares)
+            })?;
 
         let worker_rib_input = resolved_worker_binding
             .worker_detail
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-            .map_err(|err| err.to_response(&request_details, &resolved_worker_binding.middlewares))?;
+            .map_err(|err| {
+                err.to_response(request_details, &resolved_worker_binding.middlewares)
+            })?;
 
         Ok((request_rib_input, worker_rib_input))
     }
@@ -67,9 +74,14 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         self.evaluator
             .evaluate(
                 resolved_worker_binding.worker_detail.worker_name.as_deref(),
-                &resolved_worker_binding.worker_detail.component_id.component_id,
+                &resolved_worker_binding
+                    .worker_detail
+                    .component_id
+                    .component_id,
                 &resolved_worker_binding.worker_detail.idempotency_key,
-                &resolved_worker_binding.compiled_response_mapping.response_mapping_compiled,
+                &resolved_worker_binding
+                    .compiled_response_mapping
+                    .response_mapping_compiled,
                 &rib_input,
             )
             .await
@@ -94,14 +106,12 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                     .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
                     .await
                 {
-                    Ok(result) => result.to_response(
-                        &binding.request_details,
-                        &resolved_binding.middlewares,
-                    ),
-                    Err(err) => err.to_response(
-                        &binding.request_details,
-                        &resolved_binding.middlewares,
-                    ),
+                    Ok(result) => {
+                        result.to_response(&binding.request_details, &resolved_binding.middlewares)
+                    }
+                    Err(err) => {
+                        err.to_response(&binding.request_details, &resolved_binding.middlewares)
+                    }
                 }
             }
             Err(err_response) => err_response,
@@ -137,10 +147,9 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                         )
                         .await
                         .to_response(&binding.request_details, &resolved_binding.middlewares),
-                    Err(err) => err.to_response(
-                        &binding.request_details,
-                        &resolved_binding.middlewares,
-                    ),
+                    Err(err) => {
+                        err.to_response(&binding.request_details, &resolved_binding.middlewares)
+                    }
                 }
             }
             Err(err_response) => err_response,
@@ -150,7 +159,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 
 #[async_trait]
 impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
-for DefaultGatewayBindingExecutor<N>
+    for DefaultGatewayBindingExecutor<N>
 {
     async fn execute_binding(&self, binding: &ResolvedGatewayBinding<N>) -> R
     where
@@ -162,16 +171,17 @@ for DefaultGatewayBindingExecutor<N>
     {
         match &binding.resolved_binding {
             ResolvedBinding::Worker(resolved_binding) => {
-                self.handle_worker_binding::<R>(binding, resolved_binding).await
+                self.handle_worker_binding::<R>(binding, resolved_binding)
+                    .await
             }
             ResolvedBinding::FileServer(resolved_binding) => {
-                self.handle_file_server_binding::<R>(binding, resolved_binding).await
+                self.handle_file_server_binding::<R>(binding, resolved_binding)
+                    .await
             }
             ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
-                cors_preflight.clone().to_response(
-                    &binding.request_details,
-                    &Middlewares::default(),
-                )
+                cors_preflight
+                    .clone()
+                    .to_response(&binding.request_details, &Middlewares::default())
             }
         }
     }

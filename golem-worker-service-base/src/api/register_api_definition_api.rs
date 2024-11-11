@@ -3,7 +3,9 @@ use crate::gateway_api_definition::http::{
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
-use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled};
+use crate::gateway_binding::{
+    GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
+};
 use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_common::model::GatewayBindingType;
@@ -165,9 +167,12 @@ pub struct GatewayBindingData {
 }
 
 impl GatewayBindingData {
-    pub fn from_worker_binding(worker_binding: WorkerBinding, binding_type: GatewayBindingType) -> Result<Self, String> {
-        let response: String = rib::to_string(&worker_binding.response_mapping.0)
-            .map_err(|e| e.to_string())?;
+    pub fn from_worker_binding(
+        worker_binding: WorkerBinding,
+        binding_type: GatewayBindingType,
+    ) -> Result<Self, String> {
+        let response: String =
+            rib::to_string(&worker_binding.response_mapping.0).map_err(|e| e.to_string())?;
 
         let worker_id = worker_binding
             .worker_name
@@ -187,7 +192,6 @@ impl GatewayBindingData {
                 })
             })
         });
-
 
         Ok(Self {
             binding_type: Some(binding_type),
@@ -233,7 +237,10 @@ pub struct GatewayBindingWithTypeInfo {
 }
 
 impl GatewayBindingWithTypeInfo {
-    pub fn from_worker_binding_compiled(worker_binding: WorkerBindingCompiled, binding_type: GatewayBindingType) -> Self {
+    pub fn from_worker_binding_compiled(
+        worker_binding: WorkerBindingCompiled,
+        binding_type: GatewayBindingType,
+    ) -> Self {
         GatewayBindingWithTypeInfo {
             component_id: Some(worker_binding.component_id),
             worker_name: worker_binding
@@ -268,10 +275,16 @@ impl From<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
 
         match gateway_binding {
             GatewayBindingCompiled::FileServer(worker_binding) => {
-                GatewayBindingWithTypeInfo::from_worker_binding_compiled(worker_binding, GatewayBindingType::FileServer)
+                GatewayBindingWithTypeInfo::from_worker_binding_compiled(
+                    worker_binding,
+                    GatewayBindingType::FileServer,
+                )
             }
             GatewayBindingCompiled::Worker(worker_binding) => {
-                GatewayBindingWithTypeInfo::from_worker_binding_compiled(worker_binding, GatewayBindingType::Default)
+                GatewayBindingWithTypeInfo::from_worker_binding_compiled(
+                    worker_binding,
+                    GatewayBindingType::Default,
+                )
             }
             GatewayBindingCompiled::Static(static_binding) => GatewayBindingWithTypeInfo {
                 component_id: None,
@@ -394,9 +407,10 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 GatewayBindingData::from_worker_binding(worker_binding, GatewayBindingType::Default)
             }
 
-            GatewayBinding::FileServer(worker_binding) => {
-                GatewayBindingData::from_worker_binding(worker_binding, GatewayBindingType::FileServer)
-            }
+            GatewayBinding::FileServer(worker_binding) => GatewayBindingData::from_worker_binding(
+                worker_binding,
+                GatewayBindingType::FileServer,
+            ),
 
             GatewayBinding::Static(StaticBinding::HttpCorsPreflight(cors)) => Ok(Self {
                 binding_type: Some(GatewayBindingType::CorsPreflight),

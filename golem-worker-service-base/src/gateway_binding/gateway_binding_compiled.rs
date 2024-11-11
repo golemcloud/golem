@@ -45,11 +45,17 @@ impl From<GatewayBindingCompiled>
     fn from(value: GatewayBindingCompiled) -> Self {
         match value {
             GatewayBindingCompiled::Worker(worker_binding) => {
-                internal::to_gateway_binding_compiled_proto(worker_binding, GatewayBindingType::Default)
+                internal::to_gateway_binding_compiled_proto(
+                    worker_binding,
+                    GatewayBindingType::Default,
+                )
             }
 
             GatewayBindingCompiled::FileServer(worker_binding) => {
-                internal::to_gateway_binding_compiled_proto(worker_binding, GatewayBindingType::FileServer)
+                internal::to_gateway_binding_compiled_proto(
+                    worker_binding,
+                    GatewayBindingType::FileServer,
+                )
             }
 
             GatewayBindingCompiled::Static(static_binding) => {
@@ -181,12 +187,12 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 }
 
 mod internal {
+    use crate::gateway_binding::WorkerBindingCompiled;
     use golem_common::model::GatewayBindingType;
-    use crate::gateway_binding::{WorkerBindingCompiled};
 
     pub(crate) fn to_gateway_binding_compiled_proto(
         worker_binding: WorkerBindingCompiled,
-        binding_type: GatewayBindingType
+        binding_type: GatewayBindingType,
     ) -> golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding {
         let component = Some(worker_binding.component_id.into());
         let worker_name = worker_binding
