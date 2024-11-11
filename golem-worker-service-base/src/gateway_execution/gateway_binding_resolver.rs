@@ -1,5 +1,5 @@
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
-use crate::gateway_binding::{GatewayBindingCompiled, RibInputValueResolver, StaticBinding};
+use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
 use crate::gateway_execution::router::RouterPattern;
 use crate::gateway_request::http_request::{router, InputHttpRequest};
@@ -198,7 +198,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
 }
 
 mod internal {
-    use crate::gateway_binding::{GatewayBindingResolverError, GatewayRequestDetails, HttpRequestDetails, ResolvedWorkerBinding, RibInputValueResolver, WorkerBindingCompiled, WorkerDetail};
+    use crate::gateway_binding::{GatewayBindingResolverError, GatewayRequestDetails, ResolvedWorkerBinding, RibInputValueResolver, WorkerBindingCompiled, WorkerDetail};
     use golem_common::model::IdempotencyKey;
     use http::HeaderMap;
 

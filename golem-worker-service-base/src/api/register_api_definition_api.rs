@@ -188,10 +188,9 @@ impl GatewayBindingData {
             })
         });
 
-        let binding = worker_binding.worker_binding_type;
 
         Ok(Self {
-            binding_type: Some(binding),
+            binding_type: Some(binding_type),
             component_id: Some(worker_binding.component_id),
             worker_name: worker_id,
             idempotency_key,
