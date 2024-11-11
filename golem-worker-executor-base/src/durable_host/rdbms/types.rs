@@ -125,29 +125,31 @@ impl<Ctx: WorkerCtx> HostDbResultSet for &mut DurableWorkerCtx<Ctx> {
     }
 }
 
-impl From<DbValuePrimitive> for rdbms_types::DbValuePrimitive {
-    fn from(value: DbValuePrimitive) -> Self {
+impl TryFrom<DbValuePrimitive> for rdbms_types::DbValuePrimitive {
+    type Error = String;
+    fn try_from(value: DbValuePrimitive) -> Result<Self, Self::Error> {
         match value {
-            DbValuePrimitive::Int8(i) => Self::Int8(i),
-            DbValuePrimitive::Int16(i) => Self::Int16(i),
-            DbValuePrimitive::Int32(i) => Self::Int32(i),
-            DbValuePrimitive::Int64(i) => Self::Int64(i),
+            DbValuePrimitive::Int8(i) => Ok(Self::Int8(i)),
+            DbValuePrimitive::Int16(i) => Ok(Self::Int16(i)),
+            DbValuePrimitive::Int32(i) => Ok(Self::Int32(i)),
+            DbValuePrimitive::Int64(i) => Ok(Self::Int64(i)),
             DbValuePrimitive::Decimal(s) => {
-                Self::Decimal(bigdecimal::BigDecimal::from_str(&s).unwrap())
-            } // FIXME change to TryFrom
-            DbValuePrimitive::Float(f) => Self::Float(f),
-            DbValuePrimitive::Double(f) => Self::Double(f),
-            DbValuePrimitive::Boolean(b) => Self::Boolean(b),
-            DbValuePrimitive::Timestamp(u) => Self::Timestamp(u),
-            DbValuePrimitive::Time(u) => Self::Time(u),
-            DbValuePrimitive::Interval(u) => Self::Interval(u),
-            DbValuePrimitive::Date(u) => Self::Date(u),
-            DbValuePrimitive::Text(s) => Self::Text(s),
-            DbValuePrimitive::Blob(u) => Self::Blob(u),
-            DbValuePrimitive::Json(s) => Self::Json(s),
-            DbValuePrimitive::Xml(s) => Self::Xml(s),
-            DbValuePrimitive::Uuid((h, l)) => Self::Uuid(Uuid::from_u64_pair(h, l)),
-            DbValuePrimitive::DbNull => Self::DbNull,
+                let v = bigdecimal::BigDecimal::from_str(&s).map_err(|e| e.to_string())?;
+                Ok(Self::Decimal(v))
+            }
+            DbValuePrimitive::Float(f) => Ok(Self::Float(f)),
+            DbValuePrimitive::Double(f) => Ok(Self::Double(f)),
+            DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
+            DbValuePrimitive::Timestamp(u) => Ok(Self::Timestamp(u)),
+            DbValuePrimitive::Time(u) => Ok(Self::Time(u)),
+            DbValuePrimitive::Interval(u) => Ok(Self::Interval(u)),
+            DbValuePrimitive::Date(u) => Ok(Self::Date(u)),
+            DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
+            DbValuePrimitive::Blob(u) => Ok(Self::Blob(u)),
+            DbValuePrimitive::Json(s) => Ok(Self::Json(s)),
+            DbValuePrimitive::Xml(s) => Ok(Self::Xml(s)),
+            DbValuePrimitive::Uuid((h, l)) => Ok(Self::Uuid(Uuid::from_u64_pair(h, l))),
+            DbValuePrimitive::DbNull => Ok(Self::DbNull),
         }
     }
 }
@@ -177,11 +179,21 @@ impl From<rdbms_types::DbValuePrimitive> for DbValuePrimitive {
     }
 }
 
-impl From<DbValue> for rdbms_types::DbValue {
-    fn from(value: DbValue) -> Self {
+impl TryFrom<DbValue> for rdbms_types::DbValue {
+    type Error = String;
+    fn try_from(value: DbValue) -> Result<Self, Self::Error> {
         match value {
-            DbValue::Primitive(p) => Self::Primitive(p.into()),
-            DbValue::Array(vs) => Self::Array(vs.into_iter().map(|v| v.into()).collect()),
+            DbValue::Primitive(p) => {
+                let v = p.try_into()?;
+                Ok(Self::Primitive(v))
+            }
+            DbValue::Array(vs) => {
+                let vs = vs
+                    .into_iter()
+                    .map(|v| v.try_into())
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(Self::Array(vs))
+            }
         }
     }
 }

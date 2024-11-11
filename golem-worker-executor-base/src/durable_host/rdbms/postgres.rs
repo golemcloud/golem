@@ -82,26 +82,29 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .get::<PostgresDbConnection>(&self_)?
             .address
             .clone();
+        match params
+            .into_iter()
+            .map(|v| v.try_into())
+            .collect::<Result<Vec<_>, String>>()
+        {
+            Ok(params) => {
+                let result = self
+                    .state
+                    .rdbms_service
+                    .postgres()
+                    .query(&worker_id, &address, &statement, params)
+                    .await;
 
-        let result = self
-            .state
-            .rdbms_service
-            .postgres()
-            .query(
-                &worker_id,
-                &address,
-                &statement,
-                params.into_iter().map(|v| v.into()).collect(),
-            )
-            .await;
-
-        match result {
-            Ok(result) => {
-                let entry = DbResultSetEntry::new(RdbmsType::Postgres, worker_id, result);
-                let db_result_set = self.as_wasi_view().table().push(entry)?;
-                Ok(Ok(db_result_set))
+                match result {
+                    Ok(result) => {
+                        let entry = DbResultSetEntry::new(RdbmsType::Postgres, worker_id, result);
+                        let db_result_set = self.as_wasi_view().table().push(entry)?;
+                        Ok(Ok(db_result_set))
+                    }
+                    Err(e) => Ok(Err(e.into())),
+                }
             }
-            Err(e) => Ok(Err(e.into())),
+            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
         }
     }
 
@@ -121,20 +124,24 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .address
             .clone();
 
-        let result = self
-            .state
-            .rdbms_service
-            .postgres()
-            .execute(
-                &worker_id,
-                &address,
-                &statement,
-                params.into_iter().map(|v| v.into()).collect(),
-            )
-            .await
-            .map_err(|e| e.into());
+        match params
+            .into_iter()
+            .map(|v| v.try_into())
+            .collect::<Result<Vec<_>, String>>()
+        {
+            Ok(params) => {
+                let result = self
+                    .state
+                    .rdbms_service
+                    .postgres()
+                    .execute(&worker_id, &address, &statement, params)
+                    .await
+                    .map_err(|e| e.into());
 
-        Ok(result)
+                Ok(result)
+            }
+            Err(error) => Ok(Err(Error::QueryParameterFailure(error))),
+        }
     }
 
     fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
