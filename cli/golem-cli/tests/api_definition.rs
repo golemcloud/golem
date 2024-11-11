@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::WorkerBindingType;
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 
 use crate::cli::{Cli, CliLive};
@@ -23,8 +22,8 @@ use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
 use golem_cli::model::ApiDefinitionFileFormat;
 use golem_client::model::{
-    GolemWorkerBinding, GolemWorkerBindingWithTypeInfo, HttpApiDefinitionRequest,
-    HttpApiDefinitionWithTypeInfo, MethodPattern, RibInputTypeInfo, Route, RouteWithTypeInfo,
+    GatewayBindingData, GatewayBindingType, GatewayBindingWithTypeInfo, HttpApiDefinitionRequest,
+    HttpApiDefinitionWithTypeInfo, MethodPattern, RibInputTypeInfo, RouteData, RouteWithTypeInfo,
     VersionedComponentId,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -42,7 +41,7 @@ inherit_test_dep!(Tracing);
 
 #[test_dep]
 fn cli(deps: &EnvBasedTestDependencies) -> CliLive {
-    CliLive::make("api_definition", Arc::new(deps.clone())).unwrap()
+    CliLive::make("gateway_api_definition", Arc::new(deps.clone())).unwrap()
 }
 
 #[test_gen]
@@ -197,18 +196,25 @@ fn golem_def_with_response(
         id: id.to_string(),
         version: "0.1.0".to_string(),
         draft: true,
-        routes: vec![Route {
+        routes: vec![RouteData {
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
-            binding: GolemWorkerBinding {
-                component_id: VersionedComponentId {
+            binding: GatewayBindingData {
+                component_id: Some(VersionedComponentId {
                     component_id: Uuid::parse_str(component_id).unwrap(),
                     version: 0,
-                },
+                }),
                 worker_name: Some("\"foo\"".to_string()),
                 idempotency_key: None,
-                response,
+                response: Some(response),
+                middleware: None,
+                allow_origin: None,
+                allow_methods: None,
+                allow_headers: None,
+                expose_headers: None,
                 binding_type: None,
+                max_age: None,
+                allow_credentials: None,
             },
         }],
     }
@@ -239,15 +245,15 @@ x-golem-api-definition-id: "{id}"
 x-golem-api-definition-version: "0.1.0"
 paths:
   "/{{user-id}}/get-cart-contents":
-    x-golem-worker-bridge:
-      worker-name: "\"foo\""
-      component-id: "{component_id}"
-      component-version: {component_version}
-      response: |
-        let x = golem:it/api.{{checkout}}();
-        let status: u64 = 200;
-        {{headers: {{ContentType: "json", userid: "foo"}}, body: "foo", status: status}}
     get:
+      x-golem-api-gateway-binding:
+        worker-name: "\"foo\""
+        component-id: "{component_id}"
+        component-version: {component_version}
+        response: |
+          let x = golem:it/api.{{checkout}}();
+          let status: u64 = 200;
+          {{headers: {{ContentType: "json", userid: "foo"}}, body: "foo", status: status}}
       summary: "Get Cart Contents"
       description: "Get the contents of a user's cart"
       parameters:
@@ -287,13 +293,14 @@ pub fn make_open_api_json_file(
         "x-golem-api-definition-version": "0.1.0",
         "paths": {
             "/{user-id}/get-cart-contents": {
-              "x-golem-worker-bridge": {
-                "worker-name": "\"foo\"",
-                "component-id": component_id,
-                "component-version": component_version,
-                "response" : "let x = golem:it/api.{checkout}();\nlet status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
-              },
               "get": {
+                  "x-golem-api-gateway-binding": {
+                     "binding-type" : "default",
+                     "worker-name": "\"foo\"",
+                     "component-id": component_id,
+                     "component-version": component_version,
+                     "response" : "let x = golem:it/api.{checkout}();\nlet status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
+                  },
                 "summary": "Get Cart Contents",
                 "description": "Get the contents of a user's cart",
                 "parameters": [
@@ -366,7 +373,7 @@ pub fn to_api_definition_with_type_info(
                 RouteWithTypeInfo {
                     method: v.method,
                     path: v.path,
-                    binding: GolemWorkerBindingWithTypeInfo {
+                    binding: GatewayBindingWithTypeInfo {
                         component_id: v.binding.component_id,
                         worker_name: v.binding.worker_name.clone(),
                         idempotency_key: v.binding.idempotency_key.clone(),
@@ -378,7 +385,8 @@ pub fn to_api_definition_with_type_info(
                             types: HashMap::new(),
                         }),
                         idempotency_key_input: None,
-                        binding_type: Some(WorkerBindingType::Default),
+                        binding_type: Some(GatewayBindingType::Default),
+                        cors_preflight: None,
                     },
                 }
             })
