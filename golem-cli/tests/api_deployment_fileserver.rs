@@ -106,7 +106,7 @@ fn api_deployment_file_server_simple(
 
     let definition: HttpApiDefinitionWithTypeInfo =
         cli.run(&["api-definition", "add", api_path.to_str().unwrap()])?;
-    
+
     let _: ApiDeployment = cli.run(&[
         "api-deployment",
         "deploy",
