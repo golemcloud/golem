@@ -5,6 +5,7 @@ use crate::gateway_binding::{
 };
 use crate::gateway_middleware::Middlewares;
 use golem_common::model::GatewayBindingType;
+
 // A compiled binding is a binding with all existence of Rib Expr
 // get replaced with their compiled form - RibByteCode.
 #[derive(Debug, Clone, PartialEq)]
