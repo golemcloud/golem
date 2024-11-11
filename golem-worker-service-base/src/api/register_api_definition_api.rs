@@ -485,7 +485,6 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                 } else {
                     Ok(GatewayBinding::Default(worker_binding))
                 }
-
             }
 
             Some(GatewayBindingType::CorsPreflight) => {

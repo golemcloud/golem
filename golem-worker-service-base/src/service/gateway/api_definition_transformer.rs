@@ -124,7 +124,7 @@ mod tests {
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware, Middlewares};
     use crate::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
-    use golem_common::model::{ComponentId, GatewayBindingType};
+    use golem_common::model::ComponentId;
     use golem_service_base::model::VersionedComponentId;
     use rib::Expr;
 
@@ -154,7 +154,6 @@ mod tests {
             idempotency_key: None,
             response_mapping: ResponseMapping(Expr::literal("")),
             middleware: None,
-            worker_binding_type: GatewayBindingType::CorsPreflight,
         };
 
         Route {
@@ -176,7 +175,6 @@ mod tests {
             middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::Cors(
                 cors(),
             ))])),
-            worker_binding_type: GatewayBindingType::CorsPreflight,
         };
 
         Route {

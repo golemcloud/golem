@@ -240,9 +240,7 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_worker_binding(
-        worker_gateway_info: &Value,
-    ) -> Result<WorkerBinding, String> {
+    pub(crate) fn get_worker_binding(worker_gateway_info: &Value) -> Result<WorkerBinding, String> {
         let http_middlewares = get_middleware(worker_gateway_info)?;
         let middlewares = http_middlewares
             .into_iter()
@@ -408,7 +406,7 @@ mod tests {
     use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware, Middlewares};
-    use golem_common::model::{ComponentId, GatewayBindingType};
+    use golem_common::model::ComponentId;
     use openapiv3::Operation;
     use rib::Expr;
     use serde_json::json;
@@ -570,7 +568,6 @@ mod tests {
                     )
                     .unwrap(),
                 ))])),
-                worker_binding_type: GatewayBindingType::Default,
             }),
         }
     }
