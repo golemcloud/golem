@@ -23,6 +23,7 @@ use crate::services::rdbms::{RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey};
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use golem_common::model::OwnedWorkerId;
+use sqlx::postgres::PgTypeKind;
 use sqlx::{Column, Pool, Row, TypeInfo};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -396,6 +397,28 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::DbNull),
             }
         }
+        // _ => match column.type_info().kind() {
+        //     PgTypeKind::Enum(_) => {
+        //         let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+        //         match v {
+        //             Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
+        //             None => DbValue::Primitive(DbValuePrimitive::DbNull),
+        //         }
+        //     }
+        //     PgTypeKind::Array(element) => match element.kind() {
+        //         PgTypeKind::Enum(_) => {
+        //             let vs: Option<Vec<String>> = row.try_get(index).map_err(|e| e.to_string())?;
+        //             match vs {
+        //                 Some(vs) => {
+        //                     DbValue::Array(vs.into_iter().map(DbValuePrimitive::Text).collect())
+        //                 }
+        //                 None => DbValue::Array(vec![]),
+        //             }
+        //         }
+        //         _ => Err(format!("Unsupported type: {:?}", type_name))?,
+        //     },
+        //     _ => Err(format!("Unsupported type: {:?}", type_name))?,
+        // },
         _ => Err(format!("Unsupported type: {:?}", type_name))?,
     };
     Ok(value)
@@ -423,6 +446,7 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
 
     fn try_from(value: &sqlx::postgres::PgTypeInfo) -> Result<Self, Self::Error> {
         let type_name = value.name();
+        let type_kind: &PgTypeKind = value.kind();
 
         match type_name {
             pg_type_name::BOOL => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Boolean)),
@@ -467,7 +491,10 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
                 Ok(DbColumnType::Array(DbColumnTypePrimitive::Interval))
             }
             pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Blob)),
-            _ => Err(format!("Unsupported type: {:?}", value)),
+            _ => match *type_kind {
+                PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
+                _ => Err(format!("Unsupported type: {:?}", value)),
+            },
         }
     }
 }

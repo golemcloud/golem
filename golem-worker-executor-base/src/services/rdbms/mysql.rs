@@ -284,6 +284,13 @@ fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::DbNull),
             }
         }
+        mysql_type_name::ENUM => {
+            let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Text(v)),
+                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+            }
+        }
         mysql_type_name::VARBINARY | mysql_type_name::BINARY | mysql_type_name::BLOB => {
             let v: Option<Vec<u8>> = row.try_get(index).map_err(|e| e.to_string())?;
             match v {
@@ -357,6 +364,7 @@ impl TryFrom<&sqlx::mysql::MySqlTypeInfo> for DbColumnType {
             mysql_type_name::VARBINARY | mysql_type_name::BINARY | mysql_type_name::BLOB => {
                 Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Blob))
             }
+            mysql_type_name::ENUM => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
             _ => Err(format!("Unsupported type: {:?}", value)),
         }
     }
