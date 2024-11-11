@@ -42,7 +42,6 @@ cap-time-ext = "3.4.2"                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
 drop-stream = { workspace = true }
-deadpool-postgres = { workspace = true }
 evicting_cache_map = "0.4.0"
 figment = { workspace = true }
 flume = "0.11.1"
