@@ -15,6 +15,7 @@ use golem_worker_service_base::gateway_execution::gateway_binding_executor::{
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::GatewayBindingResolver;
 use golem_worker_service_base::gateway_middleware::Cors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
+use golem_worker_service_base::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::{HeaderMap, HeaderValue, Method};
 use serde_json::Value;
@@ -26,12 +27,16 @@ use serde_json::Value;
 // Similar to types having ToResponse<poem::Response>
 // there are instances of ToResponse<TestResponse> for them in the internal module of tests.
 // Example: RibResult has an instance of `ToResponse<TestResponse>`.
+// The tests skips validation and transformations done at the service side.
 async fn execute(
     api_request: &InputHttpRequest,
     api_specification: &HttpApiDefinition,
 ) -> TestResponse {
+    let mut api_specification = api_specification.clone();
+    api_specification.transform().unwrap();
+
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
-        api_specification,
+        &api_specification,
         &internal::get_component_metadata(),
         &DefaultNamespace::default(),
     )
@@ -109,10 +114,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     let test_response = execute(&api_request, &api_specification).await;
 
     let result = test_response.get_cors_preflight().unwrap();
-
-    let expected = Cors::default();
-
-    assert_eq!(result, expected);
+    assert_eq!(result, cors);
 }
 
 #[test]
@@ -131,6 +133,107 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
     let expected = Cors::default();
 
     assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_request() {
+    let empty_headers = HeaderMap::new();
+    let preflight_request =
+        get_preflight_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let worker_name = r#"
+      let id: u64 = request.path.user-id;
+      "shopping-cart-${id}"
+    "#;
+
+    let response_mapping = r#"
+      let response = golem:it/api.{get-cart-contents}("a", "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_spec_for_cors_preflight_default_and_actual_endpoint(
+            "foo/{user-id}",
+            worker_name,
+            response_mapping,
+        );
+
+    let preflight_response = execute(&preflight_request, &api_specification).await;
+    let actual_response = execute(&api_request, &api_specification).await;
+
+    let pre_flight_response = preflight_response.get_cors_preflight().unwrap();
+
+    let expected_cors_preflight = Cors::default();
+
+    let allow_origin_in_actual_response = actual_response.get_cors_allow_origin().unwrap();
+
+    assert_eq!(pre_flight_response, expected_cors_preflight);
+    assert_eq!(
+        allow_origin_in_actual_response,
+        expected_cors_preflight.get_allow_origin()
+    );
+}
+
+#[test]
+async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
+    let empty_headers = HeaderMap::new();
+    let preflight_request =
+        get_preflight_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let cors = Cors::from_parameters(
+        Some("http://example.com".to_string()),
+        Some("GET, POST, PUT, DELETE, OPTIONS".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some("Content-Type, Authorization".to_string()),
+        Some(true),
+        Some(3600),
+    )
+    .unwrap();
+
+    let worker_name = r#"
+      let id: u64 = request.path.user-id;
+      "shopping-cart-${id}"
+    "#;
+
+    let response_mapping = r#"
+      let response = golem:it/api.{get-cart-contents}("a", "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition = get_api_spec_for_cors_preflight_and_actual_endpoint(
+        "foo/{user-id}",
+        worker_name,
+        response_mapping,
+        &cors,
+    );
+
+    let preflight_response = execute(&preflight_request, &api_specification).await;
+    let actual_response = execute(&api_request, &api_specification).await;
+
+    let pre_flight_response = preflight_response.get_cors_preflight().unwrap();
+
+    let allow_origin_in_actual_response = actual_response.get_cors_allow_origin().unwrap();
+
+    let expose_headers_in_actual_response = actual_response.get_expose_headers().unwrap();
+
+    let allow_credentials_in_actual_response = actual_response.get_allow_credentials().unwrap();
+
+    assert_eq!(pre_flight_response, cors);
+
+    // In the actual response other than preflight we expect only allow_origin, expose_headers, and allow_credentials
+    assert_eq!(allow_origin_in_actual_response, cors.get_allow_origin());
+    assert_eq!(
+        expose_headers_in_actual_response,
+        cors.get_expose_headers().unwrap()
+    );
+    assert_eq!(
+        allow_credentials_in_actual_response,
+        cors.get_allow_credentials().unwrap()
+    );
 }
 
 #[test]
@@ -589,11 +692,12 @@ fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) -> HttpA
               bindingType: cors-preflight
               response: |
                 {{
-                  Access-Control-Allow-Origin: {}
-                  Access-Control-Allow-Methods:{}
-                  Access-Control-Allow-Headers: {}
-                  Access-Control-Expose-Headers: {}
-                  Access-Control-Max-Age: {}
+                  Access-Control-Allow-Origin: "{}",
+                  Access-Control-Allow-Methods: "{}",
+                  Access-Control-Allow-Headers: "{}",
+                  Access-Control-Expose-Headers: "{}",
+                  Access-Control-Allow-Credentials: {},
+                  Access-Control-Max-Age: {}u64
                 }}
         "#,
         path_pattern,
@@ -601,7 +705,107 @@ fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) -> HttpA
         cors.get_allow_methods(),
         cors.get_allow_headers(),
         cors.get_expose_headers().clone().unwrap_or_default(),
+        cors.get_allow_credentials().unwrap_or_default(),
         cors.get_max_age().unwrap_or_default()
+    );
+
+    // Serde is available only for user facing HttpApiDefinition
+    let http_api_definition_request: api::HttpApiDefinitionRequest =
+        serde_yaml::from_str(yaml_string.as_str()).unwrap();
+
+    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+        { http_api_definition_request.try_into().unwrap() };
+
+    let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+    HttpApiDefinition::new(core_request, create_at)
+}
+
+fn get_api_spec_for_cors_preflight_and_actual_endpoint(
+    path_pattern: &str,
+    worker_name: &str,
+    rib_expression: &str,
+    cors: &Cors,
+) -> HttpApiDefinition {
+    let yaml_string = format!(
+        r#"
+          id: users-api
+          version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
+          routes:
+          - method: Options
+            path: {}
+            binding:
+              bindingType: cors-preflight
+              response: |
+                {{
+                  Access-Control-Allow-Origin: "{}",
+                  Access-Control-Allow-Methods: "{}",
+                  Access-Control-Allow-Headers: "{}",
+                  Access-Control-Expose-Headers: "{}",
+                  Access-Control-Allow-Credentials: {},
+                  Access-Control-Max-Age: {}u64
+                }}
+          - method: Get
+            path: {}
+            binding:
+              type: wit-worker
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              workerName: '{}'
+              response: '${{{}}}'
+
+        "#,
+        path_pattern,
+        cors.get_allow_origin(),
+        cors.get_allow_methods(),
+        cors.get_allow_headers(),
+        cors.get_expose_headers().clone().unwrap_or_default(),
+        cors.get_allow_credentials().unwrap_or_default(),
+        cors.get_max_age().unwrap_or_default(),
+        path_pattern,
+        worker_name,
+        rib_expression
+    );
+
+    // Serde is available only for user facing HttpApiDefinition
+    let http_api_definition_request: api::HttpApiDefinitionRequest =
+        serde_yaml::from_str(yaml_string.as_str()).unwrap();
+
+    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+        http_api_definition_request.try_into().unwrap();
+
+    let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+    HttpApiDefinition::new(core_request, create_at)
+}
+
+fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
+    path_pattern: &str,
+    worker_name: &str,
+    rib_expression: &str,
+) -> HttpApiDefinition {
+    let yaml_string = format!(
+        r#"
+          id: users-api
+          version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
+          routes:
+          - method: Options
+            path: {}
+            binding:
+              bindingType: cors-preflight
+          - method: Get
+            path: {}
+            binding:
+              type: wit-worker
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              workerName: '{}'
+              response: '${{{}}}'
+
+        "#,
+        path_pattern, path_pattern, worker_name, rib_expression
     );
 
     // Serde is available only for user facing HttpApiDefinition
@@ -678,7 +882,7 @@ mod internal {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub(crate) struct TestResponse {
         // test function execution simply propagates these details in response body
         worker_name: Option<String>,
@@ -775,6 +979,18 @@ mod internal {
                 self.cors_header_max_age,
             )
             .ok()
+        }
+
+        pub fn get_cors_allow_origin(&self) -> Option<String> {
+            self.cors_header_allow_origin.clone()
+        }
+
+        pub fn get_allow_credentials(&self) -> Option<bool> {
+            self.cors_header_allow_credentials
+        }
+
+        pub fn get_expose_headers(&self) -> Option<String> {
+            self.cors_header_expose_headers.clone()
         }
 
         pub fn get_worker_name(&self) -> Option<String> {

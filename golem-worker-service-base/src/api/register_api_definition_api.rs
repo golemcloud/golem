@@ -6,7 +6,7 @@ use crate::gateway_api_deployment::ApiSite;
 use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
 };
-use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware};
+use crate::gateway_middleware::{Cors, CorsPreflightExpr, HttpMiddleware, Middleware};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_common::model::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
@@ -352,8 +352,8 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
     ) -> Result<crate::gateway_api_definition::http::HttpApiDefinitionRequest, Self::Error> {
         let mut routes = Vec::new();
 
-        for route in self.routes {
-            let v = route.try_into()?;
+        for route_data in self.routes {
+            let v = route_data.try_into()?;
             routes.push(v);
         }
 
@@ -388,7 +388,7 @@ impl TryInto<crate::gateway_api_definition::http::Route> for RouteData {
 
     fn try_into(self) -> Result<crate::gateway_api_definition::http::Route, Self::Error> {
         let path = AllPathPatterns::parse(self.path.as_str()).map_err(|e| e.to_string())?;
-        let binding = self.binding.try_into()?;
+        let binding = GatewayBinding::try_from(self.binding.clone())?;
 
         Ok(crate::gateway_api_definition::http::Route {
             method: self.method,
@@ -434,7 +434,7 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
     type Error = String;
 
     fn try_from(gateway_binding_data: GatewayBindingData) -> Result<Self, Self::Error> {
-        let v = gateway_binding_data.binding_type;
+        let v = gateway_binding_data.clone().binding_type;
 
         match v {
             Some(GatewayBindingType::Default) | Some(GatewayBindingType::FileServer) | None => {
@@ -488,18 +488,20 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
             }
 
             Some(GatewayBindingType::CorsPreflight) => {
-                let cors_preflight = Cors::from_parameters(
-                    gateway_binding_data.allow_origin,
-                    gateway_binding_data.allow_methods,
-                    gateway_binding_data.allow_headers,
-                    gateway_binding_data.expose_headers,
-                    gateway_binding_data.allow_credentials,
-                    gateway_binding_data.max_age,
-                )?;
+                let response_mapping = gateway_binding_data.response;
 
-                Ok(GatewayBinding::Static(StaticBinding::from_http_cors(
-                    cors_preflight,
-                )))
+                match response_mapping {
+                    Some(expr_str) => {
+                        let expr = rib::from_string(expr_str).map_err(|e| e.to_string())?;
+                        let cors_preflight_expr = CorsPreflightExpr(expr);
+                        let cors = Cors::from_cors_preflight_expr(&cors_preflight_expr)?;
+                        Ok(GatewayBinding::Static(StaticBinding::from_http_cors(cors)))
+                    }
+                    None => {
+                        let cors = Cors::default();
+                        Ok(GatewayBinding::Static(StaticBinding::from_http_cors(cors)))
+                    }
+                }
             }
         }
     }
