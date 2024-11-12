@@ -303,7 +303,7 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
         owner: &Owner::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
-        new_priority: i16,
+        new_priority: i32,
         new_parameters: Vec<u8>,
     ) -> Result<(), RepoError>;
 }
@@ -520,7 +520,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
         owner: &Owner::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
-        new_priority: i16,
+        new_priority: i32,
         new_parameters: Vec<u8>,
     ) -> Result<(), RepoError> {
         let result = self
@@ -1549,7 +1549,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         owner: &Owner::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
-        new_priority: i16,
+        new_priority: i32,
         new_parameters: Vec<u8>,
     ) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;

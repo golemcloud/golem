@@ -32,7 +32,7 @@ pub struct PluginInstallationRecord<Owner: ComponentOwner, Target: PluginInstall
     pub installation_id: Uuid,
     pub plugin_name: String,
     pub plugin_version: String,
-    pub priority: i16,
+    pub priority: i32,
     pub parameters: Vec<u8>,
     #[sqlx(flatten)]
     pub target: Target::Row,

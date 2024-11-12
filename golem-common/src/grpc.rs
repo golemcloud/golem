@@ -17,7 +17,10 @@ use golem_api_grpc::proto::golem::common;
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::worker;
 
-use crate::model::{AccountId, ComponentId, IdempotencyKey, PromiseId, TargetWorkerId, WorkerId};
+use crate::model::{
+    AccountId, ComponentId, IdempotencyKey, PluginInstallationId, PromiseId, TargetWorkerId,
+    WorkerId,
+};
 
 pub fn proto_component_id_string(component_id: &Option<component::ComponentId>) -> Option<String> {
     component_id
@@ -58,6 +61,15 @@ pub fn proto_promise_id_string(promise_id: &Option<worker::PromiseId>) -> Option
     promise_id
         .clone()
         .and_then(|v| TryInto::<PromiseId>::try_into(v).ok())
+        .map(|v| v.to_string())
+}
+
+pub fn proto_plugin_installation_id_string(
+    component_id: &Option<common::PluginInstallationId>,
+) -> Option<String> {
+    component_id
+        .clone()
+        .and_then(|v| TryInto::<PluginInstallationId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
 

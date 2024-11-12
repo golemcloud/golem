@@ -489,7 +489,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let target_version = *description.target_version();
                 let public_description = match description {
                     UpdateDescription::Automatic { .. } => {
-                        PublicUpdateDescription::Automatic(Empty)
+                        PublicUpdateDescription::Automatic(Empty {})
                     }
                     UpdateDescription::SnapshotBased { payload, .. } => {
                         let bytes = oplog_service

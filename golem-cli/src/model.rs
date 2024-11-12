@@ -744,7 +744,7 @@ impl PluginScopeArgs for OssPluginScopeArgs {
         resolver: impl ComponentIdResolver<ComponentUriArg> + Send,
     ) -> Result<Option<DefaultPluginScope>, GolemError> {
         if self.global {
-            Ok(Some(DefaultPluginScope::Global(Empty)))
+            Ok(Some(DefaultPluginScope::Global(Empty {})))
         } else if let Some(uri) = self.component {
             let component_id = resolver
                 .resolve(ComponentUriArg {

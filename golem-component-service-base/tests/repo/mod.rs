@@ -440,7 +440,7 @@ async fn test_default_plugin_repo(
             validate_url: "https://plugin1.com/validate".to_string(),
             transform_url: "https://plugin1.com/transform".to_string(),
         }),
-        scope: DefaultPluginScope::Global(Empty),
+        scope: DefaultPluginScope::Global(Empty {}),
         owner: DefaultComponentOwner,
     };
     let plugin1_row = plugin1.clone().into();
@@ -549,7 +549,7 @@ async fn test_default_component_plugin_installation(
             validate_url: "https://plugin2.com/validate".to_string(),
             transform_url: "https://plugin2.com/transform".to_string(),
         }),
-        scope: DefaultPluginScope::Global(Empty),
+        scope: DefaultPluginScope::Global(Empty {}),
         owner: owner.clone(),
     };
     let plugin1_row = plugin1.clone().into();

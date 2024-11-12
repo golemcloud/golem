@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use async_trait::async_trait;
 use std::pin::Pin;
 use std::sync::Arc;
 use tracing::Instrument;
@@ -19,39 +20,46 @@ use tracing::Instrument;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use futures_util::TryStreamExt;
-use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService;
 use golem_api_grpc::proto::golem::component::v1::{
     component_error, create_component_constraints_response, create_component_request,
     create_component_response, download_component_response,
     get_component_metadata_all_versions_response, get_component_metadata_response,
-    get_components_response, update_component_request, update_component_response, ComponentError,
-    CreateComponentConstraintsRequest, CreateComponentConstraintsResponse,
-    CreateComponentConstraintsSuccessResponse, CreateComponentRequest,
-    CreateComponentRequestHeader, CreateComponentResponse, DownloadComponentRequest,
-    DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
+    get_components_response, get_installed_plugins_response, install_plugin_response,
+    uninstall_plugin_response, update_component_request, update_component_response,
+    update_installed_plugin_response, ComponentError, CreateComponentConstraintsRequest,
+    CreateComponentConstraintsResponse, CreateComponentConstraintsSuccessResponse,
+    CreateComponentRequest, CreateComponentRequestHeader, CreateComponentResponse,
+    DownloadComponentRequest, DownloadComponentResponse, GetComponentMetadataAllVersionsResponse,
     GetComponentMetadataResponse, GetComponentMetadataSuccessResponse, GetComponentRequest,
     GetComponentSuccessResponse, GetComponentsRequest, GetComponentsResponse,
     GetComponentsSuccessResponse, GetInstalledPluginsRequest, GetInstalledPluginsResponse,
-    GetLatestComponentRequest, GetVersionedComponentRequest, InstallPluginRequest,
-    InstallPluginResponse, UninstallPluginRequest, UninstallPluginResponse, UpdateComponentRequest,
+    GetInstalledPluginsSuccessResponse, GetLatestComponentRequest, GetVersionedComponentRequest,
+    InstallPluginRequest, InstallPluginResponse, InstallPluginSuccessResponse,
+    UninstallPluginRequest, UninstallPluginResponse, UpdateComponentRequest,
     UpdateComponentRequestHeader, UpdateComponentResponse, UpdateInstalledPluginRequest,
     UpdateInstalledPluginResponse,
 };
-use golem_api_grpc::proto::golem::component::Component;
 use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentConstraintsProto;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
-use golem_common::grpc::proto_component_id_string;
+use golem_api_grpc::proto::golem::component::{Component, PluginInstallation};
+use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id_string};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
-use golem_component_service_base::model::{ComponentConstraints, DefaultComponentOwner};
+use golem_component_service_base::model::{
+    ComponentConstraints, DefaultComponentOwner, PluginInstallationCreation,
+    PluginInstallationUpdate,
+};
 use golem_component_service_base::service::component;
+use golem_component_service_base::service::plugin::PluginService;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
-fn bad_request_error(error: &str) -> ComponentError {
+pub(crate) fn bad_request_error(error: &str) -> ComponentError {
     ComponentError {
         error: Some(component_error::Error::BadRequest(ErrorsBody {
             errors: vec![error.to_string()],
@@ -70,14 +78,25 @@ fn internal_error(error: &str) -> ComponentError {
 pub struct ComponentGrpcApi {
     pub component_service:
         Arc<dyn component::ComponentService<DefaultComponentOwner> + Sync + Send>,
+    pub plugin_service:
+        Arc<dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 impl ComponentGrpcApi {
+    fn require_component_id(
+        source: &Option<golem_api_grpc::proto::golem::component::ComponentId>,
+    ) -> Result<ComponentId, ComponentError> {
+        match source {
+            Some(id) => id
+                .clone()
+                .try_into()
+                .map_err(|err| bad_request_error(&format!("Invalid component id: {err}"))),
+            None => Err(bad_request_error("Missing component id")),
+        }
+    }
+
     async fn get(&self, request: GetComponentRequest) -> Result<Vec<Component>, ComponentError> {
-        let id: ComponentId = request
-            .component_id
-            .and_then(|id| id.try_into().ok())
-            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let id = Self::require_component_id(&request.component_id)?;
         let result = self
             .component_service
             .get(&id, &DefaultComponentOwner)
@@ -89,10 +108,7 @@ impl ComponentGrpcApi {
         &self,
         request: GetVersionedComponentRequest,
     ) -> Result<Option<Component>, ComponentError> {
-        let id: ComponentId = request
-            .component_id
-            .and_then(|id| id.try_into().ok())
-            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let id = Self::require_component_id(&request.component_id)?;
 
         let version = request.version;
 
@@ -126,10 +142,7 @@ impl ComponentGrpcApi {
         &self,
         request: GetLatestComponentRequest,
     ) -> Result<Component, ComponentError> {
-        let id: ComponentId = request
-            .component_id
-            .and_then(|id| id.try_into().ok())
-            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let id = Self::require_component_id(&request.component_id)?;
         let result = self
             .component_service
             .get_latest_version(&id, &DefaultComponentOwner)
@@ -151,10 +164,7 @@ impl ComponentGrpcApi {
         Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
         ComponentError,
     > {
-        let id: ComponentId = request
-            .component_id
-            .and_then(|id| id.try_into().ok())
-            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let id = Self::require_component_id(&request.component_id)?;
         let version = request.version;
         let result = self
             .component_service
@@ -195,10 +205,7 @@ impl ComponentGrpcApi {
         request: UpdateComponentRequestHeader,
         data: Vec<u8>,
     ) -> Result<Component, ComponentError> {
-        let id: ComponentId = request
-            .component_id
-            .and_then(|id| id.try_into().ok())
-            .ok_or_else(|| bad_request_error("Missing component id"))?;
+        let id = Self::require_component_id(&request.component_id)?;
 
         let component_type = match request.component_type {
             Some(n) => Some(
@@ -242,9 +249,110 @@ impl ComponentGrpcApi {
 
         Ok(response)
     }
+
+    async fn get_installed_plugins(
+        &self,
+        request: &GetInstalledPluginsRequest,
+    ) -> Result<Vec<PluginInstallation>, ComponentError> {
+        let component_id = Self::require_component_id(&request.component_id)?;
+
+        let version = match &request.version {
+            Some(version) => *version,
+            None => self
+                .component_service
+                .get_latest_version(&component_id, &DefaultComponentOwner)
+                .await?
+                .map(|v| v.versioned_component_id.version)
+                .ok_or_else(|| bad_request_error("Component not found"))?,
+        };
+
+        let response = self
+            .plugin_service
+            .get_plugin_installations_for_component(&DefaultComponentOwner, &component_id, version)
+            .await?;
+
+        Ok(response.into_iter().map(|v| v.into()).collect())
+    }
+
+    async fn install_plugin(
+        &self,
+        request: &InstallPluginRequest,
+    ) -> Result<PluginInstallation, ComponentError> {
+        let component_id = Self::require_component_id(&request.component_id)?;
+
+        let plugin_installation_creation: PluginInstallationCreation = PluginInstallationCreation {
+            name: request.name.clone(),
+            version: request.version.clone(),
+            priority: request.priority,
+            parameters: request.parameters.clone(),
+        };
+
+        let response = self
+            .plugin_service
+            .create_plugin_installation_for_component(
+                &DefaultComponentOwner,
+                &component_id,
+                plugin_installation_creation,
+            )
+            .await?;
+
+        Ok(response.into())
+    }
+
+    async fn update_installed_plugin(
+        &self,
+        request: &UpdateInstalledPluginRequest,
+    ) -> Result<(), ComponentError> {
+        let component_id = Self::require_component_id(&request.component_id)?;
+
+        let installation_id = request
+            .installation_id
+            .clone()
+            .and_then(|id| id.try_into().ok())
+            .ok_or_else(|| bad_request_error("Missing installation id"))?;
+
+        let update = PluginInstallationUpdate {
+            priority: request.updated_priority,
+            parameters: request.updated_parameters.clone(),
+        };
+
+        self.plugin_service
+            .update_plugin_installation_for_component(
+                &DefaultComponentOwner,
+                &installation_id,
+                &component_id,
+                update,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn uninstall_plugin(
+        &self,
+        request: &UninstallPluginRequest,
+    ) -> Result<(), ComponentError> {
+        let component_id = Self::require_component_id(&request.component_id)?;
+
+        let installation_id = request
+            .installation_id
+            .clone()
+            .and_then(|id| id.try_into().ok())
+            .ok_or_else(|| bad_request_error("Missing installation id"))?;
+
+        self.plugin_service
+            .delete_plugin_installation_for_component(
+                &DefaultComponentOwner,
+                &installation_id,
+                &component_id,
+            )
+            .await?;
+
+        Ok(())
+    }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl ComponentService for ComponentGrpcApi {
     async fn get_components(
         &self,
@@ -611,27 +719,117 @@ impl ComponentService for ComponentGrpcApi {
         &self,
         request: Request<GetInstalledPluginsRequest>,
     ) -> Result<Response<GetInstalledPluginsResponse>, Status> {
-        todo!()
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "get_installed_plugins",
+            component_id = proto_component_id_string(&request.component_id)
+        );
+
+        let response = match self
+            .get_installed_plugins(&request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(installations) => record.succeed(get_installed_plugins_response::Result::Success(
+                GetInstalledPluginsSuccessResponse { installations },
+            )),
+            Err(error) => record.fail(
+                get_installed_plugins_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetInstalledPluginsResponse {
+            result: Some(response),
+        }))
     }
 
     async fn install_plugin(
         &self,
         request: Request<InstallPluginRequest>,
     ) -> Result<Response<InstallPluginResponse>, Status> {
-        todo!()
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "install_plugin",
+            component_id = proto_component_id_string(&request.component_id),
+            plugin_name = request.name.clone(),
+            plugin_version = request.version.clone()
+        );
+
+        let response = match self
+            .install_plugin(&request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(installation) => record.succeed(install_plugin_response::Result::Success(
+                InstallPluginSuccessResponse {
+                    installation: Some(installation),
+                },
+            )),
+            Err(error) => record.fail(
+                install_plugin_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(InstallPluginResponse {
+            result: Some(response),
+        }))
     }
 
     async fn update_installed_plugin(
         &self,
         request: Request<UpdateInstalledPluginRequest>,
     ) -> Result<Response<UpdateInstalledPluginResponse>, Status> {
-        todo!()
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "update_installed_plugin",
+            component_id = proto_component_id_string(&request.component_id),
+            installation_id = proto_plugin_installation_id_string(&request.installation_id)
+        );
+
+        let response = match self
+            .update_installed_plugin(&request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(update_installed_plugin_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                update_installed_plugin_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(UpdateInstalledPluginResponse {
+            result: Some(response),
+        }))
     }
 
     async fn uninstall_plugin(
         &self,
         request: Request<UninstallPluginRequest>,
     ) -> Result<Response<UninstallPluginResponse>, Status> {
-        todo!()
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "uninstall_plugin",
+            component_id = proto_component_id_string(&request.component_id),
+            installation_id = proto_plugin_installation_id_string(&request.installation_id)
+        );
+
+        let response = match self
+            .uninstall_plugin(&request)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(uninstall_plugin_response::Result::Success(Empty {})),
+            Err(error) => record.fail(
+                uninstall_plugin_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(UninstallPluginResponse {
+            result: Some(response),
+        }))
     }
 }

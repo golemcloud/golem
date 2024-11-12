@@ -21,6 +21,8 @@ use crate::repo::plugin::{PluginRecord, PluginRepo};
 use crate::repo::plugin_installation::PluginInstallationRecord;
 use crate::service::component::ComponentError;
 use async_trait::async_trait;
+use golem_api_grpc::proto::golem::common::ErrorBody;
+use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::{ComponentId, ComponentVersion, PluginInstallationId};
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
@@ -55,6 +57,29 @@ impl SafeDisplay for PluginError {
             Self::InternalConversionError { .. } => self.to_string(),
             Self::InternalComponentError(inner) => inner.to_safe_string(),
             Self::ComponentNotFound { .. } => self.to_string(),
+        }
+    }
+}
+
+impl From<PluginError> for golem_api_grpc::proto::golem::component::v1::ComponentError {
+    fn from(value: PluginError) -> Self {
+        match value {
+            PluginError::InternalRepoError(_) => Self {
+                error: Some(component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })),
+            },
+            PluginError::InternalConversionError { .. } => Self {
+                error: Some(component_error::Error::InternalError(ErrorBody {
+                    error: value.to_safe_string(),
+                })),
+            },
+            PluginError::InternalComponentError(component_error) => component_error.into(),
+            PluginError::ComponentNotFound { .. } => Self {
+                error: Some(component_error::Error::NotFound(ErrorBody {
+                    error: value.to_safe_string(),
+                })),
+            },
         }
     }
 }

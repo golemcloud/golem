@@ -2499,7 +2499,7 @@ impl FromStr for ComponentType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-pub struct Empty;
+pub struct Empty {}
 
 /// Key that can be used to identify a component file.
 /// All files with the same content will have the same key.
@@ -2917,12 +2917,14 @@ mod tests {
     use std::vec;
 
     use crate::model::oplog::OplogIndex;
+
     use crate::model::{
-        AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ShardId,
-        StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
-        WorkerStatus, WorkerStatusRecord,
+        AccountId, ComponentFilePath, ComponentId, Empty, FilterComparator, IdempotencyKey,
+        ShardId, StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId,
+        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
+
     use poem_openapi::types::ToJSON;
     use rand::{thread_rng, Rng};
     use serde::{Deserialize, Serialize};
@@ -3269,5 +3271,12 @@ mod tests {
     fn initial_component_file_path_from_relative() {
         let path = ComponentFilePath::from_abs_str("a/b/c");
         assert!(path.is_err());
+    }
+
+    #[test]
+    fn empty_poem_serde_equivalence() {
+        let serialized = Empty {}.to_json_string();
+        let deserialized: Empty = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(Empty {}, deserialized);
     }
 }

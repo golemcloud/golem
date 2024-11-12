@@ -59,3 +59,47 @@ impl ParseFromParameter for DefaultPluginScope {
         }
     }
 }
+
+impl From<DefaultPluginScope> for golem_api_grpc::proto::golem::component::DefaultPluginScope {
+    fn from(scope: DefaultPluginScope) -> Self {
+        match scope {
+            DefaultPluginScope::Global(_) => golem_api_grpc::proto::golem::component::DefaultPluginScope {
+                scope: Some(golem_api_grpc::proto::golem::component::default_plugin_scope::Scope::Global(
+                    golem_api_grpc::proto::golem::common::Empty {},
+                )),
+            },
+            DefaultPluginScope::Component(scope) => golem_api_grpc::proto::golem::component::DefaultPluginScope {
+                scope: Some(golem_api_grpc::proto::golem::component::default_plugin_scope::Scope::Component(
+                    golem_api_grpc::proto::golem::component::ComponentPluginScope {
+                        component_id: Some(scope.component_id.into()),
+                    },
+                )),
+            },
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::DefaultPluginScope> for DefaultPluginScope {
+    type Error = String;
+
+    fn try_from(
+        proto: golem_api_grpc::proto::golem::component::DefaultPluginScope,
+    ) -> Result<Self, Self::Error> {
+        match proto.scope {
+            Some(golem_api_grpc::proto::golem::component::default_plugin_scope::Scope::Global(
+                _,
+            )) => Ok(Self::global()),
+            Some(
+                golem_api_grpc::proto::golem::component::default_plugin_scope::Scope::Component(
+                    proto,
+                ),
+            ) => Ok(Self::component(
+                proto
+                    .component_id
+                    .ok_or("Missing component_id".to_string())?
+                    .try_into()?,
+            )),
+            None => Err("Missing scope".to_string()),
+        }
+    }
+}

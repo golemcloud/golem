@@ -72,10 +72,10 @@ pub enum PublicWrappedFunctionType {
 impl From<WrappedFunctionType> for PublicWrappedFunctionType {
     fn from(wrapped_function_type: WrappedFunctionType) -> Self {
         match wrapped_function_type {
-            WrappedFunctionType::ReadLocal => PublicWrappedFunctionType::ReadLocal(Empty),
-            WrappedFunctionType::WriteLocal => PublicWrappedFunctionType::WriteLocal(Empty),
-            WrappedFunctionType::ReadRemote => PublicWrappedFunctionType::ReadRemote(Empty),
-            WrappedFunctionType::WriteRemote => PublicWrappedFunctionType::WriteRemote(Empty),
+            WrappedFunctionType::ReadLocal => PublicWrappedFunctionType::ReadLocal(Empty {}),
+            WrappedFunctionType::WriteLocal => PublicWrappedFunctionType::WriteLocal(Empty {}),
+            WrappedFunctionType::ReadRemote => PublicWrappedFunctionType::ReadRemote(Empty {}),
+            WrappedFunctionType::WriteRemote => PublicWrappedFunctionType::WriteRemote(Empty {}),
             WrappedFunctionType::WriteRemoteBatched(index) => {
                 PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                     index,
@@ -1276,16 +1276,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
     ) -> Result<Self, Self::Error> {
         match value.r#type() {
             wrapped_function_type::Type::ReadLocal => {
-                Ok(PublicWrappedFunctionType::ReadLocal(Empty))
+                Ok(PublicWrappedFunctionType::ReadLocal(Empty {}))
             }
             wrapped_function_type::Type::WriteLocal => {
-                Ok(PublicWrappedFunctionType::WriteLocal(Empty))
+                Ok(PublicWrappedFunctionType::WriteLocal(Empty {}))
             }
             wrapped_function_type::Type::ReadRemote => {
-                Ok(PublicWrappedFunctionType::ReadRemote(Empty))
+                Ok(PublicWrappedFunctionType::ReadRemote(Empty {}))
             }
             wrapped_function_type::Type::WriteRemote => {
-                Ok(PublicWrappedFunctionType::WriteRemote(Empty))
+                Ok(PublicWrappedFunctionType::WriteRemote(Empty {}))
             }
             wrapped_function_type::Type::WriteRemoteBatched => Ok(
                 PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
@@ -1475,7 +1475,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for Public
     ) -> Result<Self, Self::Error> {
         match value.description.ok_or("Missing description field")? {
             golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(_) => {
-                Ok(PublicUpdateDescription::Automatic(Empty))
+                Ok(PublicUpdateDescription::Automatic(Empty {}))
             }
             golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
                 snapshot_based,
@@ -1635,7 +1635,7 @@ mod tests {
                 value: Value::List(vec![Value::U64(1)]),
                 typ: list(u64()),
             },
-            wrapped_function_type: PublicWrappedFunctionType::ReadRemote(Empty),
+            wrapped_function_type: PublicWrappedFunctionType::ReadRemote(Empty {}),
         });
         let serialized = entry.to_json_string();
         let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1847,7 +1847,7 @@ mod tests {
         let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
             target_version: 1,
-            description: PublicUpdateDescription::Automatic(Empty),
+            description: PublicUpdateDescription::Automatic(Empty {}),
         });
         let serialized = entry.to_json_string();
         let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

@@ -67,7 +67,7 @@ impl HasConfigExamples<ComponentServiceConfig> for ComponentServiceConfig {
                     bucket_name: "bucket".to_string(),
                     object_prefix: "object_prefix".to_string(),
                 }),
-                compilation: ComponentCompilationConfig::Disabled(Empty),
+                compilation: ComponentCompilationConfig::Disabled(Empty {}),
                 blob_storage: BlobStorageConfig::default_s3(),
                 ..ComponentServiceConfig::default()
             },

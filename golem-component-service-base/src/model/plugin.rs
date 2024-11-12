@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::ComponentOwner;
+use crate::model::{ComponentOwner, DefaultComponentOwner};
 use crate::repo::plugin_installation::PluginInstallationRecord;
 use crate::repo::RowMeta;
 use golem_common::model::plugin::DefaultPluginScope;
@@ -39,6 +39,43 @@ pub struct PluginDefinition<Owner: ComponentOwner, Scope: PluginScope> {
     pub specs: PluginTypeSpecificDefinition,
     pub scope: Scope,
     pub owner: Owner,
+}
+
+impl From<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>
+    for golem_api_grpc::proto::golem::component::PluginDefinition
+{
+    fn from(value: PluginDefinition<DefaultComponentOwner, DefaultPluginScope>) -> Self {
+        golem_api_grpc::proto::golem::component::PluginDefinition {
+            name: value.name,
+            version: value.version,
+            description: value.description,
+            icon: value.icon,
+            homepage: value.homepage,
+            specs: Some(value.specs.into()),
+            scope: Some(value.scope.into()),
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PluginDefinition>
+    for PluginDefinition<DefaultComponentOwner, DefaultPluginScope>
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PluginDefinition,
+    ) -> Result<Self, Self::Error> {
+        Ok(PluginDefinition {
+            name: value.name,
+            version: value.version,
+            description: value.description,
+            icon: value.icon,
+            homepage: value.homepage,
+            specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
+            scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
+            owner: DefaultComponentOwner,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Object)]
@@ -95,6 +132,36 @@ impl PluginTypeSpecificDefinition {
     }
 }
 
+impl From<PluginTypeSpecificDefinition>
+    for golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition
+{
+    fn from(value: PluginTypeSpecificDefinition) -> Self {
+        match value {
+            PluginTypeSpecificDefinition::ComponentTransformer(value) => golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition {
+                definition: Some(golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::ComponentTransformer(value.into()))
+            },
+            PluginTypeSpecificDefinition::OplogProcessor(value) => golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition {
+                definition: Some(golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::OplogProcessor(value.into()))
+            }
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition>
+    for PluginTypeSpecificDefinition
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition,
+    ) -> Result<Self, Self::Error> {
+        match value.definition.ok_or("Missing plugin type specific definition")? {
+            golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::ComponentTransformer(value) => Ok(PluginTypeSpecificDefinition::ComponentTransformer(value.try_into()?)),
+            golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::OplogProcessor(value) => Ok(PluginTypeSpecificDefinition::OplogProcessor(value.try_into()?)),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
@@ -103,6 +170,36 @@ pub struct ComponentTransformerDefinition {
     pub json_schema: Option<String>,
     pub validate_url: String,
     pub transform_url: String,
+}
+
+impl From<ComponentTransformerDefinition>
+    for golem_api_grpc::proto::golem::component::ComponentTransformerDefinition
+{
+    fn from(value: ComponentTransformerDefinition) -> Self {
+        golem_api_grpc::proto::golem::component::ComponentTransformerDefinition {
+            provided_wit_package: value.provided_wit_package,
+            json_schema: value.json_schema,
+            validate_url: value.validate_url,
+            transform_url: value.transform_url,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::ComponentTransformerDefinition>
+    for ComponentTransformerDefinition
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::ComponentTransformerDefinition,
+    ) -> Result<Self, Self::Error> {
+        Ok(ComponentTransformerDefinition {
+            provided_wit_package: value.provided_wit_package,
+            json_schema: value.json_schema,
+            validate_url: value.validate_url,
+            transform_url: value.transform_url,
+        })
+    }
 }
 
 impl ComponentTransformerDefinition {
@@ -121,6 +218,35 @@ impl ComponentTransformerDefinition {
 pub struct OplogProcessorDefinition {
     pub component_id: ComponentId,
     pub component_version: ComponentVersion,
+}
+
+impl From<OplogProcessorDefinition>
+    for golem_api_grpc::proto::golem::component::OplogProcessorDefinition
+{
+    fn from(value: OplogProcessorDefinition) -> Self {
+        golem_api_grpc::proto::golem::component::OplogProcessorDefinition {
+            component_id: Some(value.component_id.into()),
+            component_version: value.component_version,
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::OplogProcessorDefinition>
+    for OplogProcessorDefinition
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::component::OplogProcessorDefinition,
+    ) -> Result<Self, Self::Error> {
+        Ok(OplogProcessorDefinition {
+            component_id: value
+                .component_id
+                .ok_or("Missing component_id")?
+                .try_into()?,
+            component_version: value.component_version,
+        })
+    }
 }
 
 pub trait PluginScope:
@@ -169,7 +295,7 @@ pub struct PluginInstallation {
     pub id: PluginInstallationId,
     pub name: String,
     pub version: String,
-    pub priority: i16,
+    pub priority: i32,
     pub parameters: HashMap<String, String>,
 }
 
@@ -183,13 +309,25 @@ impl PluginInstallation {
     }
 }
 
+impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::PluginInstallation {
+    fn from(plugin_installation: PluginInstallation) -> Self {
+        golem_api_grpc::proto::golem::component::PluginInstallation {
+            id: Some(plugin_installation.id.into()),
+            name: plugin_installation.name,
+            version: plugin_installation.version,
+            priority: plugin_installation.priority,
+            parameters: plugin_installation.parameters,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct PluginInstallationCreation {
     pub name: String,
     pub version: String,
-    pub priority: i16,
+    pub priority: i32,
     pub parameters: HashMap<String, String>,
 }
 
@@ -207,7 +345,7 @@ impl PluginInstallationCreation {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct PluginInstallationUpdate {
-    pub priority: i16,
+    pub priority: i32,
     pub parameters: HashMap<String, String>,
 }
 
