@@ -899,7 +899,7 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
     );
     let _indent = LogIndent::new();
 
-    let dir_content = fs_extra::dir::get_dir_content(&source).with_context(|| {
+    let dir_content = fs_extra::dir::get_dir_content(source).with_context(|| {
         anyhow!(
             "Failed to read component input wit directory entries for {}",
             source.display()
@@ -909,7 +909,7 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
     for file in dir_content.files {
         let from = PathBuf::from(&file);
         let to = target.join(
-            from.strip_prefix(&source)
+            from.strip_prefix(source)
                 .with_context(|| anyhow!("Failed to strip prefix for source {}", &file))?,
         );
 
