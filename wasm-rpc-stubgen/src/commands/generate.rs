@@ -21,7 +21,7 @@ use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
 use crate::wit_generate::{add_dependencies_to_stub_wit_dir, generate_stub_wit_to_target};
 use crate::wit_resolve::ResolvedWitDir;
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use fs_extra::dir::CopyOptions;
 use heck::ToSnakeCase;
 use std::fs;
@@ -60,9 +60,21 @@ pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Resul
     generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(stub_def).context("Failed to generate the stub Rust source")?;
 
-    compile(&stub_def.config.target_root)
-        .await
-        .context("Failed to compile the generated stub")?;
+    // TODO: search for canonicalize on call site, as it is not needed anymore
+    compile(
+        &stub_def
+            .config
+            .target_root
+            .canonicalize()
+            .with_context(|| {
+                anyhow!(
+                    "Failed to canonicalize stub target root {}",
+                    stub_def.config.target_root.display()
+                )
+            })?,
+    )
+    .await
+    .context("Failed to compile the generated stub")?;
 
     let wasm_path = stub_def
         .config

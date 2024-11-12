@@ -298,9 +298,38 @@ impl StubDefinition {
         self.stub_dep_package_ids.get_or_init(|| {
             self.stub_used_type_defs()
                 .iter()
-                .filter_map(|type_def| type_def.package_id)
+                .flat_map(|type_def| {
+                    let mut package_ids = Vec::<PackageId>::new();
+                    self.type_def_owner_package_ids(&type_def.type_def, &mut package_ids);
+                    package_ids
+                })
                 .collect()
         })
+    }
+
+    fn type_def_owner_package_ids(&self, type_def: &TypeDef, package_ids: &mut Vec<PackageId>) {
+        let package_id = match type_def.owner {
+            TypeOwner::World(_) => None,
+            TypeOwner::Interface(interface) => self
+                .resolve
+                .interfaces
+                .get(interface)
+                .and_then(|interface| interface.package),
+            TypeOwner::None => None,
+        };
+
+        if let Some(package_id) = package_id {
+            package_ids.push(package_id);
+        }
+
+        if let TypeDefKind::Type(Type::Id(type_id)) = type_def.kind {
+            self.type_def_owner_package_ids(
+                self.resolve.types.get(type_id).unwrap_or_else(|| {
+                    panic!("Type alias target not found, type id: {:?}", type_id)
+                }),
+                package_ids,
+            );
+        }
     }
 
     fn partition_world_items<'a>(

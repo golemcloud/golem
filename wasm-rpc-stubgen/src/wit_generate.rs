@@ -212,9 +212,9 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
     log_action(
         "Adding",
         format!(
-            "WIT dependencies to {} from {}",
-            def.config.target_root.log_color_highlight(),
+            "WIT dependencies from {} to {}",
             def.config.source_wit_root.log_color_highlight(),
+            def.config.target_root.log_color_highlight(),
         ),
     );
 
@@ -665,7 +665,7 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
     log_action(
         "Extracting",
         format!(
-            "interface package from main component in wit directory {}",
+            "interface package from main package in wit directory {}",
             wit_dir.log_color_highlight()
         ),
     );
