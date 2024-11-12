@@ -310,6 +310,8 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
             let _indent = LogIndent::new();
 
             delete_path("wit output dir", &app.component_output_wit(component_name))?;
+            delete_path("wasm input", &app.component_input_wasm(component_name))?;
+            delete_path("wasm output", &app.component_output_wasm(component_name))?;
 
             for build_step in &component.build_steps {
                 let build_dir = build_step
