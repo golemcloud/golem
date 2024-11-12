@@ -38,6 +38,7 @@ fn all_wit_types() {
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
         extract_source_interface_package: true,
+        seal_cargo_workspace: false,
     })
     .unwrap();
     let resolve = generate_stub_wit_dir(&def).unwrap().resolve;
@@ -128,6 +129,7 @@ fn many_ways_to_export() {
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
         extract_source_interface_package: true,
+        seal_cargo_workspace: false,
     })
     .unwrap();
     let resolve = generate_stub_wit_dir(&def).unwrap().resolve;

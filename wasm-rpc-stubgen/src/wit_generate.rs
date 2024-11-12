@@ -421,7 +421,7 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
                 cargo::is_cargo_component_toml(&target_cargo_toml).context(format!(
                     "The file {target_cargo_toml:?} is not a valid cargo-component project"
                 ))?;
-                cargo::add_dependencies_to_cargo_toml(
+                cargo::add_cargo_package_component_deps(
                     &target_cargo_toml,
                     package_names_to_package_path,
                 )?;

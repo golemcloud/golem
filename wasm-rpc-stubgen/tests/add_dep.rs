@@ -582,6 +582,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
         extract_source_interface_package: true,
+        seal_cargo_workspace: false,
     })
     .unwrap();
     let _ = generate_stub_wit_dir(&def).unwrap();
@@ -596,6 +597,7 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: WasmRpcOverride::default(),
         extract_source_interface_package: true,
+        seal_cargo_workspace: false,
     })
     .unwrap();
     let _ = generate_stub_wit_dir(&def).unwrap();

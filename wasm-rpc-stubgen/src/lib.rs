@@ -229,6 +229,7 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
             stub_crate_version: args.stub_crate_version,
             wasm_rpc_override: args.wasm_rpc_override,
             extract_source_interface_package: true,
+            seal_cargo_workspace: false,
         }
     )
         .context("Failed to gather information for the stub generator. Make sure source_wit_root has a valid WIT file.")?;
@@ -246,6 +247,7 @@ pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
         stub_crate_version: args.stub_crate_version,
         wasm_rpc_override: args.wasm_rpc_override,
         extract_source_interface_package: true,
+        seal_cargo_workspace: false,
     })
     .context("Failed to gather information for the stub generator")?;
 

@@ -1,3 +1,4 @@
+use crate::cargo::regenerate_cargo_package_component;
 use crate::commands::log::{
     log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action, LogColorize,
     LogIndent,
@@ -105,7 +106,11 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
     {
         let mut any_changed = false;
         for component_name in ctx.application.wasm_components_by_name.keys() {
-            any_changed |= create_output_wit(ctx, component_name)?;
+            let changed = create_output_wit(ctx, component_name)?;
+            if changed {
+                update_cargo_toml(ctx, component_name)?;
+            }
+            any_changed |= changed;
         }
         if any_changed {
             ctx.update_wit_context()?;
@@ -789,6 +794,28 @@ fn create_output_wit(ctx: &ApplicationContext, component_name: &str) -> Result<b
     }
 }
 
+fn update_cargo_toml(ctx: &ApplicationContext, component_name: &str) -> anyhow::Result<()> {
+    let component_input_wit = ctx.application.component_input_wit(component_name);
+    let component_input_wit_parent = component_input_wit.parent().ok_or_else(|| {
+        anyhow!(
+            "Failed to get parent for component {} input wit dir: {}",
+            component_name.log_color_highlight(),
+            component_input_wit.log_color_highlight()
+        )
+    })?;
+    let cargo_toml = component_input_wit_parent.join("Cargo.toml");
+
+    if cargo_toml.exists() {
+        regenerate_cargo_package_component(
+            &cargo_toml,
+            &ctx.application.component_output_wit(component_name),
+            ctx.application.stub_world(component_name),
+        )?
+    }
+
+    Ok(())
+}
+
 async fn build_stub(ctx: &ApplicationContext, component_name: &str) -> anyhow::Result<bool> {
     let target_root = ctx.application.stub_temp_build_dir(component_name);
 
@@ -802,6 +829,7 @@ async fn build_stub(ctx: &ApplicationContext, component_name: &str) -> anyhow::R
             wasm_rpc_version_override: ctx.application.stub_wasm_rpc_version(component_name),
         },
         extract_source_interface_package: false,
+        seal_cargo_workspace: true,
     })
     .context("Failed to gather information for the stub generator")?;
 
@@ -882,7 +910,7 @@ fn add_stub_deps(ctx: &ApplicationContext, component_name: &str) -> Result<bool,
             add_stub_as_dependency_to_wit_dir(AddStubAsDepConfig {
                 stub_wit_root: ctx.application.stub_wit(dep_component_name),
                 dest_wit_root: ctx.application.component_output_wit(component_name),
-                update_cargo_toml: UpdateCargoToml::UpdateIfExists,
+                update_cargo_toml: UpdateCargoToml::NoUpdate,
             })?
         }
 
