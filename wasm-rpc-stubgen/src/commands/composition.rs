@@ -42,6 +42,7 @@ pub async fn compose(
 
     let bytes = graph.encode(EncodeOptions::default())?;
 
+    std::fs::create_dir_all(dest_wasm.parent().unwrap())?; // TODO: unwrap / context
     std::fs::write(dest_wasm, bytes).context(format!(
         "failed to write output file `{path}`",
         path = dest_wasm.display()
