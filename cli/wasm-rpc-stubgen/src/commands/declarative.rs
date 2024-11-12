@@ -15,7 +15,7 @@ use crate::wit_generate::{
 };
 use crate::wit_resolve::ResolvedWitApplication;
 use crate::{commands, WasmRpcOverride};
-use anyhow::{anyhow, Context, Error};
+use anyhow::{anyhow, bail, Context, Error};
 use colored::Colorize;
 use glob::glob;
 use itertools::Itertools;
@@ -24,7 +24,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
-use tempfile::TempDir;
 use walkdir::WalkDir;
 
 pub struct Config {
@@ -44,6 +43,30 @@ struct ApplicationContext {
     wit: ResolvedWitApplication,
 }
 
+impl ApplicationContext {
+    fn new(config: Config) -> anyhow::Result<ApplicationContext> {
+        to_anyhow(
+            "Failed to create application context, see problems above",
+            load_app_validated(&config).and_then(|application| {
+                ResolvedWitApplication::new(&application).map(|wit| ApplicationContext {
+                    config,
+                    application,
+                    wit,
+                })
+            }),
+        )
+    }
+
+    fn update_wit_context(&mut self) -> anyhow::Result<()> {
+        to_anyhow(
+            "Failed to update application wit context, see problems above",
+            ResolvedWitApplication::new(&self.application).map(|wit| {
+                self.wit = wit;
+            }),
+        )
+    }
+}
+
 pub fn init(component_name: String) -> anyhow::Result<()> {
     let file_name = DEFAULT_CONFIG_FILE_NAME;
 
@@ -58,7 +81,7 @@ pub fn init(component_name: String) -> anyhow::Result<()> {
 }
 
 pub async fn pre_component_build(config: Config) -> anyhow::Result<()> {
-    let mut ctx = create_context(config)?;
+    let mut ctx = ApplicationContext::new(config)?;
     pre_component_build_ctx(&mut ctx).await
 }
 
@@ -66,19 +89,34 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
     log_action("Executing", "pre-component-build steps");
     let _indent = LogIndent::new();
 
-    if extract_interface_packages(ctx)? {
-        update_wit_context(ctx)?;
+    {
+        let mut any_changed = false;
+        for component_name in &ctx.wit.component_order {
+            any_changed |= create_base_output_wit(ctx, component_name)?;
+        }
+        for component_name in &ctx.application.all_wasm_rpc_dependencies() {
+            any_changed |= build_stub(ctx, component_name).await?;
+        }
+        if any_changed {
+            ctx.update_wit_context()?;
+        }
     }
-    build_stubs(ctx).await?;
-    if add_stub_deps(ctx)? {
-        update_wit_context(ctx)?;
+
+    {
+        let mut any_changed = false;
+        for component_name in ctx.application.wasm_components_by_name.keys() {
+            any_changed |= create_output_wit(ctx, component_name)?;
+        }
+        if any_changed {
+            ctx.update_wit_context()?;
+        }
     }
 
     Ok(())
 }
 
 pub fn component_build(config: Config) -> anyhow::Result<()> {
-    let ctx = create_context(config)?;
+    let ctx = ApplicationContext::new(config)?;
     component_build_ctx(&ctx)
 }
 
@@ -167,7 +205,7 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
 }
 
 pub async fn post_component_build(config: Config) -> anyhow::Result<()> {
-    let ctx = create_context(config)?;
+    let ctx = ApplicationContext::new(config)?;
     post_component_build_ctx(&ctx).await
 }
 
@@ -245,7 +283,7 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
 }
 
 pub async fn build(config: Config) -> anyhow::Result<()> {
-    let mut ctx = create_context(config)?;
+    let mut ctx = ApplicationContext::new(config)?;
 
     pre_component_build_ctx(&mut ctx).await?;
     component_build_ctx(&ctx)?;
@@ -329,28 +367,6 @@ fn delete_path(context: &str, path: &Path) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-fn create_context(config: Config) -> anyhow::Result<ApplicationContext> {
-    to_anyhow(
-        "Failed to create application context, see problems above",
-        load_app_validated(&config).and_then(|application| {
-            ResolvedWitApplication::new(&application).map(|wit| ApplicationContext {
-                config,
-                application,
-                wit,
-            })
-        }),
-    )
-}
-
-fn update_wit_context(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
-    to_anyhow(
-        "Failed to update application wit context, see problems above",
-        ResolvedWitApplication::new(&ctx.application).map(|wit| {
-            ctx.wit = wit;
-        }),
-    )
 }
 
 fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
@@ -602,191 +618,217 @@ fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<Pa
         })
 }
 
-fn extract_interface_packages(ctx: &ApplicationContext) -> Result<bool, Error> {
-    let mut changed_any_component = false;
-    for component_name in ctx.application.wasm_components_by_name.keys() {
-        let component_input_wit = ctx.application.component_input_wit(component_name);
-        let component_output_wit = ctx.application.component_output_wit(component_name);
+fn create_base_output_wit(ctx: &ApplicationContext, component_name: &str) -> Result<bool, Error> {
+    let component_input_wit = ctx.application.component_input_wit(component_name);
+    let component_base_output_wit = ctx.application.component_base_output_wit(component_name);
 
-        if is_up_to_date(
-            ctx.config.skip_up_to_date_checks || !ctx.wit.is_dep_graph_up_to_date(component_name),
-            || [component_input_wit.clone()],
-            || [component_output_wit.clone()],
-        ) {
-            log_skipping_up_to_date(format!(
-                "extracting main interface package from {}",
-                component_name.log_color_highlight()
-            ));
-        } else {
+    if is_up_to_date(
+        ctx.config.skip_up_to_date_checks || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
+        || [component_input_wit.clone()],
+        || [component_base_output_wit.clone()],
+    ) {
+        log_skipping_up_to_date(format!(
+            "creating base output wit directory for {}",
+            component_name.log_color_highlight()
+        ));
+        Ok(false)
+    } else {
+        log_action(
+            "Creating",
+            format!(
+                "base output wit directory for {}",
+                component_name.log_color_highlight(),
+            ),
+        );
+        let _indent = LogIndent::new();
+
+        delete_path("base output wit directory", &component_base_output_wit)?;
+        copy_wit_sources(&component_input_wit, &component_base_output_wit)?;
+
+        {
+            let missing_package_deps =
+                ctx.wit.missing_generic_input_package_deps(component_name)?;
+            if !missing_package_deps.is_empty() {
+                bail!(
+                    "TODO: implement adding package deps: {}",
+                    missing_package_deps
+                        .iter()
+                        .map(|s| s.to_string())
+                        .join(", ")
+                );
+            }
+        }
+
+        {
+            let component_interface_package_deps =
+                ctx.wit.component_interface_package_deps(component_name)?;
+            if !component_interface_package_deps.is_empty() {
+                log_action("Adding", "interface package deps");
+                let _indent = LogIndent::new();
+
+                for (dep_interface_package_name, dep_component_name) in
+                    &component_interface_package_deps
+                {
+                    let source = ctx
+                        .application
+                        .component_base_output_wit_interface_package_dir(
+                            dep_component_name,
+                            dep_interface_package_name,
+                        );
+                    let target = ctx
+                        .application
+                        .component_base_output_wit_interface_package_dir(
+                            component_name,
+                            dep_interface_package_name,
+                        );
+                    log_action(
+                        "Copying",
+                        format!(
+                            "interface package dependency from {} to {}",
+                            source.log_color_highlight(),
+                            target.log_color_highlight()
+                        ),
+                    );
+                    copy(source, target)?;
+                }
+            }
+        }
+
+        {
             log_action(
                 "Extracting",
                 format!(
                     "main interface package from {} to {}",
                     component_input_wit.log_color_highlight(),
-                    component_output_wit.log_color_highlight()
+                    component_base_output_wit.log_color_highlight()
                 ),
             );
             let _indent = LogIndent::new();
 
-            changed_any_component = true;
-
-            if component_output_wit.exists() {
-                log_warn_action(
-                    "Deleting",
-                    format!(
-                        "output wit directory {}",
-                        component_output_wit.log_color_highlight()
-                    ),
-                );
-                std::fs::remove_dir_all(&component_output_wit)?;
-            }
-
-            {
-                log_action(
-                    "Copying",
-                    format!(
-                        "wit sources from {} to {}",
-                        component_input_wit.log_color_highlight(),
-                        component_output_wit.log_color_highlight()
-                    ),
-                );
-                let _indent = LogIndent::new();
-
-                let dir_content = fs_extra::dir::get_dir_content(&component_input_wit)
-                    .with_context(|| {
-                        anyhow!(
-                            "Failed to read component input directory entries for {}",
-                            component_input_wit.display()
-                        )
-                    })?;
-
-                for file in dir_content.files {
-                    let from = PathBuf::from(&file);
-                    let to = component_output_wit.join(
-                        from.strip_prefix(&component_input_wit).with_context(|| {
-                            anyhow!("Failed to strip prefix for source {}", &file)
-                        })?,
-                    );
-
-                    log_action(
-                        "Copying",
-                        format!("wit source {} to {}", from.display(), to.display()),
-                    );
-                    copy(from, to)?;
-                }
-            }
-
-            extract_main_interface_as_wit_dep(&component_output_wit)?;
+            extract_main_interface_as_wit_dep(&component_base_output_wit)?;
         }
+
+        Ok(true)
     }
-    Ok(changed_any_component)
 }
 
-async fn build_stubs(ctx: &ApplicationContext) -> Result<(), Error> {
-    if ctx.application.all_wasm_rpc_dependencies().is_empty() {
-        log_warn_action("Skipping", "building wasm rpc stubs, no dependency found");
+fn create_output_wit(ctx: &ApplicationContext, component_name: &str) -> Result<bool, Error> {
+    let component_base_output_wit = ctx.application.component_base_output_wit(component_name);
+    let component_output_wit = ctx.application.component_output_wit(component_name);
+
+    if is_up_to_date(
+        ctx.config.skip_up_to_date_checks || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
+        || [component_base_output_wit.clone()],
+        || [component_output_wit.clone()],
+    ) {
+        log_skipping_up_to_date(format!(
+            "creating output wit directory for {}",
+            component_name.log_color_highlight()
+        ));
+        Ok(false)
     } else {
-        log_action("Building", "wasm rpc stubs");
+        log_action(
+            "Creating",
+            format!(
+                "output wit directory for {}",
+                component_name.log_color_highlight(),
+            ),
+        );
         let _indent = LogIndent::new();
 
-        for component_name in ctx.application.all_wasm_rpc_dependencies() {
-            // TODO: let's try to skip this temp dir creation if possible
-            let target_root = TempDir::new()?;
-            let canonical_target_root = target_root.path().canonicalize()?;
+        delete_path("output wit directory", &component_output_wit)?;
+        copy_wit_sources(&component_base_output_wit, &component_output_wit)?;
+        add_stub_deps(ctx, component_name)?;
 
-            let stub_def = StubDefinition::new(StubConfig {
-                source_wit_root: ctx.application.component_output_wit(&component_name),
-                target_root: canonical_target_root,
-                selected_world: ctx.application.stub_world(&component_name),
-                stub_crate_version: ctx.application.stub_crate_version(&component_name),
-                wasm_rpc_override: WasmRpcOverride {
-                    wasm_rpc_path_override: ctx.application.stub_wasm_rpc_path(&component_name),
-                    wasm_rpc_version_override: ctx
-                        .application
-                        .stub_wasm_rpc_version(&component_name),
-                },
-                extract_source_interface_package: false,
-            })
-            .context("Failed to gather information for the stub generator")?;
-
-            let stub_dep_package_ids = stub_def.stub_dep_package_ids();
-            let stub_inputs: Vec<PathBuf> = stub_def
-                .packages_with_wit_sources()
-                .flat_map(|(package_id, _, sources)| {
-                    (stub_dep_package_ids.contains(&package_id)
-                        || package_id == stub_def.source_package_id)
-                        .then(|| sources.files.iter().cloned())
-                        .unwrap_or_default()
-                })
-                .collect();
-
-            if is_up_to_date(
-                ctx.config.skip_up_to_date_checks,
-                || stub_inputs,
-                || {
-                    [
-                        ctx.application.stub_wasm(&component_name),
-                        ctx.application.stub_wit(&component_name),
-                    ]
-                },
-            ) {
-                log_skipping_up_to_date(format!(
-                    "building wasm rpc stub for {}",
-                    component_name.log_color_highlight()
-                ));
-                continue;
-            }
-
-            log_action(
-                "Building",
-                format!("wasm rpc stub: {}", component_name.log_color_highlight()),
-            );
-            let _indent = LogIndent::new();
-
-            commands::generate::build(
-                &stub_def,
-                &ctx.application.stub_wasm(&component_name),
-                &ctx.application.stub_wit(&component_name),
-            )
-            .await?
-        }
+        Ok(true)
     }
-    Ok(())
 }
 
-fn add_stub_deps(ctx: &ApplicationContext) -> Result<bool, Error> {
-    let mut changed_any_components = false;
+async fn build_stub(ctx: &ApplicationContext, component_name: &str) -> anyhow::Result<bool> {
+    let target_root = ctx.application.stub_temp_build_dir(component_name);
 
-    for (component_name, component) in &ctx.application.wasm_components_by_name {
-        if !component.wasm_rpc_dependencies.is_empty() {
-            log_action(
-                "Adding",
-                format!(
-                    "stub wit dependencies to {}",
-                    component_name.log_color_highlight()
-                ),
-            )
-        }
+    let stub_def = StubDefinition::new(StubConfig {
+        source_wit_root: ctx.application.component_base_output_wit(component_name),
+        target_root: target_root.clone(),
+        selected_world: ctx.application.stub_world(component_name),
+        stub_crate_version: ctx.application.stub_crate_version(component_name),
+        wasm_rpc_override: WasmRpcOverride {
+            wasm_rpc_path_override: ctx.application.stub_wasm_rpc_path(component_name),
+            wasm_rpc_version_override: ctx.application.stub_wasm_rpc_version(component_name),
+        },
+        extract_source_interface_package: false,
+    })
+    .context("Failed to gather information for the stub generator")?;
+
+    let stub_dep_package_ids = stub_def.stub_dep_package_ids();
+    let stub_inputs: Vec<PathBuf> = stub_def
+        .packages_with_wit_sources()
+        .flat_map(|(package_id, _, sources)| {
+            (stub_dep_package_ids.contains(&package_id) || package_id == stub_def.source_package_id)
+                .then(|| sources.files.iter().cloned())
+                .unwrap_or_default()
+        })
+        .collect();
+
+    if is_up_to_date(
+        ctx.config.skip_up_to_date_checks,
+        || stub_inputs,
+        || {
+            [
+                ctx.application.stub_wasm(component_name),
+                ctx.application.stub_wit(component_name),
+            ]
+        },
+    ) {
+        log_skipping_up_to_date(format!(
+            "building wasm rpc stub for {}",
+            component_name.log_color_highlight()
+        ));
+        Ok(false)
+    } else {
+        log_action(
+            "Building",
+            format!("wasm rpc stub: {}", component_name.log_color_highlight()),
+        );
+        let _indent = LogIndent::new();
+
+        delete_path("stub temp build dir", &target_root)?;
+
+        log_action(
+            "Creating",
+            format!("stub temp build dir {}", target_root.log_color_highlight()),
+        );
+        std::fs::create_dir_all(&target_root)?;
+
+        commands::generate::build(
+            &stub_def,
+            &ctx.application.stub_wasm(component_name),
+            &ctx.application.stub_wit(component_name),
+        )
+        .await?;
+
+        delete_path("stub temp build dir", &target_root)?;
+
+        Ok(true)
+    }
+}
+
+fn add_stub_deps(ctx: &ApplicationContext, component_name: &str) -> Result<bool, Error> {
+    let component = ctx.application.component(component_name);
+    if component.wasm_rpc_dependencies.is_empty() {
+        Ok(false)
+    } else {
+        log_action(
+            "Adding",
+            format!(
+                "stub wit dependencies to {}",
+                component_name.log_color_highlight()
+            ),
+        );
+
         let _indent = LogIndent::new();
 
         for dep_component_name in &component.wasm_rpc_dependencies {
-            // TODO: this should check into the wit deps for the specific stubs or do folder diffs
-            if is_up_to_date(
-                ctx.config.skip_up_to_date_checks
-                    || !ctx.wit.has_as_wit_dep(component_name, dep_component_name),
-                || [ctx.application.stub_wit(dep_component_name)],
-                || [ctx.application.component_output_wit(component_name)],
-            ) {
-                log_skipping_up_to_date(format!(
-                    "adding {} stub wit dependency to {}",
-                    dep_component_name.log_color_highlight(),
-                    component_name.log_color_highlight()
-                ));
-                continue;
-            }
-
-            changed_any_components = true;
-
             log_action(
                 "Adding",
                 format!(
@@ -803,7 +845,46 @@ fn add_stub_deps(ctx: &ApplicationContext) -> Result<bool, Error> {
                 update_cargo_toml: UpdateCargoToml::UpdateIfExists,
             })?
         }
+
+        Ok(true)
+    }
+}
+
+fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
+    log_action(
+        "Copying",
+        format!(
+            "wit sources from {} to {}",
+            source.log_color_highlight(),
+            target.log_color_highlight()
+        ),
+    );
+    let _indent = LogIndent::new();
+
+    let dir_content = fs_extra::dir::get_dir_content(&source).with_context(|| {
+        anyhow!(
+            "Failed to read component input wit directory entries for {}",
+            source.display()
+        )
+    })?;
+
+    for file in dir_content.files {
+        let from = PathBuf::from(&file);
+        let to = target.join(
+            from.strip_prefix(&source)
+                .with_context(|| anyhow!("Failed to strip prefix for source {}", &file))?,
+        );
+
+        log_action(
+            "Copying",
+            format!(
+                "wit source {} to {}",
+                from.log_color_highlight(),
+                to.log_color_highlight()
+            ),
+        );
+        copy(from, to)?;
     }
 
-    Ok(changed_any_components)
+    Ok(())
 }

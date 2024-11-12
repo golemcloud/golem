@@ -2,9 +2,9 @@ use crate::commands::log::{log_action, LogColorize, LogIndent};
 use crate::model::validation::{ValidatedResult, ValidationBuilder};
 use crate::model::wasm_rpc::Application;
 use crate::naming;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{anyhow, bail, Context, Error};
 use indexmap::IndexMap;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use wit_parser::{
     Package, PackageId, PackageName, PackageSourceMap, Resolve, UnresolvedPackageGroup,
@@ -151,15 +151,16 @@ pub struct ResolvedWitComponent {
     pub app_component_deps: HashSet<String>,
     pub input_referenced_package_deps: HashSet<PackageName>,
     pub input_contained_package_deps: HashSet<PackageName>,
-    pub input_component_deps: HashSet<String>,
+    pub input_component_deps: BTreeSet<String>, // NOTE: BTree for making dep sorting deterministic
     pub output_component_deps: Option<HashSet<String>>,
 }
 
 pub struct ResolvedWitApplication {
-    pub components: HashMap<String, ResolvedWitComponent>,
+    pub components: BTreeMap<String, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
     pub package_to_component: HashMap<PackageName, String>,
     pub stub_package_to_component: HashMap<PackageName, String>,
     pub interface_package_to_component: HashMap<PackageName, String>,
+    pub component_order: Vec<String>,
 }
 
 impl ResolvedWitApplication {
@@ -169,6 +170,7 @@ impl ResolvedWitApplication {
             package_to_component: Default::default(),
             stub_package_to_component: Default::default(),
             interface_package_to_component: Default::default(),
+            component_order: Default::default(),
         };
 
         let mut validation = ValidationBuilder::new();
@@ -179,6 +181,7 @@ impl ResolvedWitApplication {
 
         if !validation.has_any_errors() {
             resolved_app.collect_component_deps();
+            resolved_app.sort_components_by_input_deps(&mut validation);
         }
 
         validation.build(resolved_app)
@@ -319,18 +322,18 @@ impl ResolvedWitApplication {
         }
     }
 
-    pub fn collect_component_deps(&mut self) {
-        fn component_deps<'a, I: IntoIterator<Item = &'a PackageName>>(
+    fn collect_component_deps(&mut self) {
+        fn component_deps<'a, I: IntoIterator<Item = &'a PackageName>, O: FromIterator<String>>(
             known_package_deps: &HashMap<PackageName, String>,
             dep_package_names: I,
-        ) -> HashSet<String> {
+        ) -> O {
             dep_package_names
                 .into_iter()
                 .filter_map(|package_name| known_package_deps.get(package_name).cloned())
                 .collect()
         }
 
-        let mut deps = HashMap::<String, (HashSet<String>, Option<HashSet<String>>)>::new();
+        let mut deps = HashMap::<String, (BTreeSet<String>, Option<HashSet<String>>)>::new();
         for (component_name, component) in &self.components {
             deps.insert(
                 component_name.clone(),
@@ -355,28 +358,148 @@ impl ResolvedWitApplication {
         }
     }
 
+    fn sort_components_by_input_deps(&mut self, validation: &mut ValidationBuilder) {
+        let mut component_order = Vec::with_capacity(self.components.len());
+
+        // TODO: use some id instead of Strings?
+        let mut visited = HashSet::<String>::new();
+        let mut visiting = HashSet::<String>::new();
+
+        fn visit(
+            resolved_app: &ResolvedWitApplication,
+            visited: &mut HashSet<String>,
+            visiting: &mut HashSet<String>,
+            component_order: &mut Vec<String>,
+            component_name: &str,
+            input_deps: &BTreeSet<String>,
+        ) -> bool {
+            if visited.contains(component_name) {
+                true
+            } else if visiting.contains(component_name) {
+                false
+            } else {
+                visiting.insert(component_name.to_string());
+
+                for dep_component_name in input_deps {
+                    if !visit(
+                        resolved_app,
+                        visited,
+                        visiting,
+                        component_order,
+                        dep_component_name,
+                        &resolved_app
+                            .components
+                            .get(dep_component_name)
+                            .unwrap()
+                            .input_component_deps,
+                    ) {
+                        return false;
+                    }
+                }
+
+                visiting.remove(component_name);
+                visited.insert(component_name.to_string());
+
+                component_order.push(component_name.to_string());
+
+                true
+            }
+        }
+
+        for (component_name, component) in &self.components {
+            if !visited.contains(component_name)
+                && !visit(
+                    self,
+                    &mut visited,
+                    &mut visiting,
+                    &mut component_order,
+                    component_name,
+                    &component.input_component_deps,
+                )
+            {
+                // TODO: better error message, collect full path
+                component_order.push(component_name.to_string());
+                validation.add_error(format!(
+                    "Found component cycle: {}",
+                    component_order.join(", ")
+                ));
+                break;
+            }
+        }
+
+        self.component_order = component_order;
+    }
+
+    fn component(&self, component_name: &str) -> Result<&ResolvedWitComponent, Error> {
+        self.components
+            .get(component_name)
+            .ok_or_else(|| anyhow!("Component not found: {}", component_name))
+    }
+
+    // NOTE: Intended to be used for non-component wit package deps, so it does not include
+    //       component interface packages, as those are added from stubs
+    pub fn missing_generic_input_package_deps(
+        &self,
+        component_name: &str,
+    ) -> anyhow::Result<Vec<PackageName>> {
+        let component = self.component(component_name)?;
+        Ok(component
+            .input_referenced_package_deps
+            .iter()
+            .filter(|&package_name| {
+                !component
+                    .input_contained_package_deps
+                    .contains(&package_name)
+                    && !self
+                        .interface_package_to_component
+                        .contains_key(&package_name)
+            })
+            .cloned()
+            .collect::<Vec<_>>())
+    }
+
+    pub fn component_interface_package_deps(
+        &self,
+        component_name: &str,
+    ) -> anyhow::Result<Vec<(PackageName, String)>> {
+        let component = self.component(component_name)?;
+        Ok(component
+            .input_referenced_package_deps
+            .iter()
+            .filter_map(|package_name| {
+                match self.interface_package_to_component.get(package_name) {
+                    Some(dep_component_name) if dep_component_name != component_name => {
+                        Some((package_name.clone(), dep_component_name.clone()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect())
+    }
+
     // NOTE: this does not mean that the dependencies themselves are up-to-date, rather
     //       only checks if there are difference in set of dependencies specified in the
     //       application model vs in wit dependencies
-    pub fn is_dep_graph_up_to_date(&self, component_name: &String) -> bool {
-        match self.components.get(component_name) {
-            Some(component) => match &component.output_component_deps {
-                Some(output_deps) => &component.app_component_deps == output_deps,
-                None => false,
-            },
+    pub fn is_dep_graph_up_to_date(&self, component_name: &str) -> anyhow::Result<bool> {
+        let component = self.component(component_name)?;
+        Ok(match &component.output_component_deps {
+            Some(output_deps) => &component.app_component_deps == output_deps,
             None => false,
-        }
+        })
     }
 
     // NOTE: this does not mean that the dependency itself is up-to-date, rather
     //       only checks if it is present as wit package dependency
-    pub fn has_as_wit_dep(&self, component_name: &String, dep_component_name: &String) -> bool {
-        match self.components.get(component_name) {
-            Some(component) => match &component.output_component_deps {
-                Some(output_deps) => output_deps.contains(dep_component_name),
-                None => false,
-            },
+    pub fn has_as_wit_dep(
+        &self,
+        component_name: &str,
+        dep_component_name: &str,
+    ) -> anyhow::Result<bool> {
+        let component = self.component(component_name)?;
+
+        Ok(match &component.output_component_deps {
+            Some(output_deps) => output_deps.contains(dep_component_name),
             None => false,
-        }
+        })
     }
 }

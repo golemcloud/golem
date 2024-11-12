@@ -3,12 +3,14 @@ use crate::model::oam::TypedTraitProperties;
 use crate::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
 use crate::model::validation::{ValidatedResult, ValidationBuilder};
 use crate::naming;
+use crate::naming::wit::package_dep_dir_name_from_parser;
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use wit_parser::PackageName;
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
 
@@ -297,6 +299,7 @@ impl Application {
                     source: source.to_path_buf(),
                     name: component.name,
                     build_dir: properties.build_dir.map(|s| s.into()),
+                    wit_deps: properties.wit_deps.into_iter().map(|s| s.into()).collect(),
                 };
 
                 Some(wasm_rpc_stub_build)
@@ -582,6 +585,23 @@ impl Application {
         component.source_dir().join(component.input_wit.clone())
     }
 
+    pub fn component_base_output_wit(&self, component_name: &str) -> PathBuf {
+        self.build_dir()
+            .join("base_output_wit")
+            .join(component_name)
+    }
+
+    pub fn component_base_output_wit_interface_package_dir(
+        &self,
+        component_name: &str,
+        interface_package_name: &PackageName,
+    ) -> PathBuf {
+        self.component_base_output_wit(component_name)
+            .join(naming::wit::DEPS_DIR)
+            .join(package_dep_dir_name_from_parser(interface_package_name))
+            .join(naming::wit::INTERFACE_WIT_FILE_NAME)
+    }
+
     pub fn component_output_wit(&self, component_name: &str) -> PathBuf {
         let component = self.component(component_name);
         component.source_dir().join(component.output_wit.clone())
@@ -628,6 +648,12 @@ impl Application {
         .flatten()
         .unwrap_or_else(|| self.build_dir())
         .join("stub")
+    }
+
+    pub fn stub_temp_build_dir(&self, component_name: &str) -> PathBuf {
+        self.stub_build_dir(component_name)
+            .join(component_name)
+            .join("temp-build")
     }
 
     pub fn stub_wasm(&self, component_name: &str) -> PathBuf {
@@ -753,6 +779,8 @@ impl oam::TypedTraitProperties for WasmRpcTraitProperties {
 pub struct ComponentBuildProperties {
     include: Option<String>,
     build_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    wit_deps: Vec<String>,
     #[serde(flatten)]
     unknown_properties: UnknownProperties,
 }
@@ -774,6 +802,7 @@ pub struct WasmBuild {
     source: PathBuf,
     name: String,
     build_dir: Option<PathBuf>,
+    wit_deps: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
