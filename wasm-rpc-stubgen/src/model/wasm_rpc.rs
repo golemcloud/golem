@@ -299,7 +299,7 @@ impl Application {
                     source: source.to_path_buf(),
                     name: component.name,
                     build_dir: properties.build_dir.map(|s| s.into()),
-                    wit_deps: properties.wit_deps.into_iter().map(|s| s.into()).collect(),
+                    _wit_deps: properties.wit_deps.into_iter().map(|s| s.into()).collect(),
                 };
 
                 Some(wasm_rpc_stub_build)
@@ -802,7 +802,7 @@ pub struct WasmBuild {
     source: PathBuf,
     name: String,
     build_dir: Option<PathBuf>,
-    wit_deps: Vec<PathBuf>,
+    _wit_deps: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

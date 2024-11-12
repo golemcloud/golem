@@ -421,10 +421,10 @@ impl ResolvedWitApplication {
             .filter(|&package_name| {
                 !component
                     .input_contained_package_deps
-                    .contains(&package_name)
+                    .contains(package_name)
                     && !self
                         .interface_package_to_component
-                        .contains_key(&package_name)
+                        .contains_key(package_name)
             })
             .cloned()
             .collect::<Vec<_>>())
