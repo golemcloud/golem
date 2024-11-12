@@ -249,38 +249,10 @@ impl ResolvedWitApplication {
                     if !deps_path.exists() {
                         HashSet::new()
                     } else {
-                        let mut entries = deps_path
-                            .read_dir()
-                            .and_then(|read_dir| read_dir.collect::<std::io::Result<Vec<_>>>())
-                            .with_context(|| {
-                                anyhow!(
-                                    "Failed to read component {} wit dependencies from {}",
-                                    component_name,
-                                    deps_path.display(),
-                                )
-                            })?;
-                        entries.sort_by_key(|e| e.file_name());
-                        entries
-                            .iter()
-                            .filter_map(|entry| {
-                                let path = entry.path();
-                                // NOTE: unlike wit_resolve - for now - we do not support:
-                                //         - symlinks
-                                //         - single file deps
-                                //         - wasm or wat deps
-                                path.is_dir().then(|| {
-                                    UnresolvedPackageGroup::parse_dir(&path)
-                                        .with_context(|| {
-                                            anyhow!(
-                                                "Failed to parse component {} wit dependency {}",
-                                                component_name,
-                                                path.display()
-                                            )
-                                        })
-                                        .map(|package_group| package_group.main.name)
-                                })
-                            })
-                            .collect::<Result<HashSet<_>, _>>()?
+                        parse_wit_deps_dir(&deps_path)?
+                            .into_iter()
+                            .map(|package_group| package_group.main.name)
+                            .collect::<HashSet<_>>()
                     }
                 };
 
@@ -502,4 +474,27 @@ impl ResolvedWitApplication {
             None => false,
         })
     }
+}
+
+pub fn parse_wit_deps_dir(path: &Path) -> Result<Vec<UnresolvedPackageGroup>, Error> {
+    let mut entries = path
+        .read_dir()
+        .and_then(|read_dir| read_dir.collect::<std::io::Result<Vec<_>>>())
+        .with_context(|| anyhow!("Failed to read wit dependencies from {}", path.display(),))?;
+    entries.sort_by_key(|e| e.file_name());
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let path = entry.path();
+            // NOTE: unlike wit_resolve - for now - we do not support:
+            //         - symlinks
+            //         - single file deps
+            //         - wasm or wat deps
+            path.is_dir().then(|| {
+                UnresolvedPackageGroup::parse_dir(&path).with_context(|| {
+                    anyhow!("Failed to parse wit dependency package {}", path.display())
+                })
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
 }

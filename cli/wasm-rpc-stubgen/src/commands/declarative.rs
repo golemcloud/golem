@@ -13,9 +13,9 @@ use crate::wit_generate::{
     add_stub_as_dependency_to_wit_dir, extract_main_interface_as_wit_dep, AddStubAsDepConfig,
     UpdateCargoToml,
 };
-use crate::wit_resolve::ResolvedWitApplication;
-use crate::{commands, WasmRpcOverride};
-use anyhow::{anyhow, bail, Context, Error};
+use crate::wit_resolve::{parse_wit_deps_dir, ResolvedWitApplication};
+use crate::{commands, naming, WasmRpcOverride};
+use anyhow::{anyhow, Context, Error};
 use colored::Colorize;
 use glob::glob;
 use itertools::Itertools;
@@ -648,14 +648,55 @@ fn create_base_output_wit(ctx: &ApplicationContext, component_name: &str) -> Res
         {
             let missing_package_deps =
                 ctx.wit.missing_generic_input_package_deps(component_name)?;
+
             if !missing_package_deps.is_empty() {
-                bail!(
-                    "TODO: implement adding package deps: {}",
-                    missing_package_deps
+                log_action("Adding", "common package deps");
+                let _indent = LogIndent::new();
+
+                // TODO: transitive deps?
+                // TODO: use wit dep from app manifest
+                // TODO: extract dep management, with preferring higher versions
+
+                let wit_deps = parse_wit_deps_dir(Path::new("wit-deps"))?;
+
+                for package_name in missing_package_deps {
+                    log_action(
+                        "Adding",
+                        format!(
+                            "package dependency {}",
+                            package_name.to_string().log_color_highlight()
+                        ),
+                    );
+                    let dep = wit_deps
                         .iter()
-                        .map(|s| s.to_string())
-                        .join(", ")
-                );
+                        .find(|package| package.main.name == package_name)
+                        .ok_or_else(|| anyhow!("Package dependency {} not found", package_name))?;
+                    for source in dep.source_map.source_files() {
+                        let parent = source.parent().ok_or_else(|| {
+                            anyhow!(
+                                "Failed to get dependency source parent for {}",
+                                source.display()
+                            )
+                        })?;
+                        // TODO: un-unwrap
+                        let target = ctx
+                            .application
+                            .component_base_output_wit(component_name)
+                            .join(naming::wit::DEPS_DIR)
+                            .join(parent.file_name().unwrap())
+                            .join(source.file_name().unwrap());
+
+                        log_action(
+                            "Copying",
+                            format!(
+                                "package dependency from {} to {}",
+                                source.log_color_highlight(),
+                                target.log_color_highlight()
+                            ),
+                        );
+                        copy(source, target)?;
+                    }
+                }
             }
         }
 
@@ -663,8 +704,10 @@ fn create_base_output_wit(ctx: &ApplicationContext, component_name: &str) -> Res
             let component_interface_package_deps =
                 ctx.wit.component_interface_package_deps(component_name)?;
             if !component_interface_package_deps.is_empty() {
-                log_action("Adding", "interface package deps");
+                log_action("Adding", "component interface package dependencies");
                 let _indent = LogIndent::new();
+
+                // TODO: transitive deps?
 
                 for (dep_interface_package_name, dep_component_name) in
                     &component_interface_package_deps
