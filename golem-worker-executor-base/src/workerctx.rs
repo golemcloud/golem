@@ -22,17 +22,19 @@ use wasmtime::{AsContextMut, ResourceLimiterAsync};
 
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    AccountId, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 
 use crate::error::GolemError;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
@@ -60,6 +62,7 @@ pub trait WorkerCtx:
     + ResourceStore
     + IndexedResourceStore
     + UpdateManagement
+    + FileSystemReading
     + Send
     + Sync
     + Sized
@@ -90,6 +93,7 @@ pub trait WorkerCtx:
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
     /// - `execution_status`: Lock created to store the execution status
+    /// - `file_loader`: The service for loading files and making them available to workers
     #[allow(clippy::too_many_arguments)]
     async fn create(
         owned_worker_id: OwnedWorkerId,
@@ -114,6 +118,7 @@ pub trait WorkerCtx:
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        file_loader: Arc<FileLoader>,
     ) -> Result<Self, GolemError>;
 
     /// Get the public part of the worker context
@@ -370,4 +375,16 @@ pub trait PublicWorkerIo {
     /// Gets the event service created for the worker, which can be used to
     /// subscribe to worker events.
     fn event_service(&self) -> Arc<dyn WorkerEventService + Send + Sync>;
+}
+
+/// Trait used for reading worker filesystem. The worker will not be running any invocations when methods of this trait are called,
+/// so not locking is needed in the implementation.
+#[async_trait]
+pub trait FileSystemReading {
+    // List the contents of a directory. Will return an error if the path is not a directory.
+    async fn list_directory(
+        &self,
+        path: &ComponentFilePath,
+    ) -> Result<ListDirectoryResult, GolemError>;
+    async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError>;
 }

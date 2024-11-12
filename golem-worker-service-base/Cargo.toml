@@ -37,6 +37,7 @@ http_02 = { workspace = true }
 humantime-serde = { workspace = true }
 hyper = { workspace = true }
 lazy_static = { workspace = true }
+mime_guess = "2.0.5"
 nom = { workspace = true }
 openapiv3 = { workspace = true }
 opentelemetry = { workspace = true }

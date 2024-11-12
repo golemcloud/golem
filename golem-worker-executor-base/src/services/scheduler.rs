@@ -309,13 +309,13 @@ mod tests {
     use crate::services::shard::{ShardService, ShardServiceDefault};
     use crate::services::worker::{DefaultWorkerService, WorkerService};
     use crate::services::worker_activator::{WorkerActivator, WorkerActivatorMock};
-    use crate::storage::blob::memory::InMemoryBlobStorage;
     use crate::storage::indexed::memory::InMemoryIndexedStorage;
     use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
     use golem_common::model::oplog::OplogIndex;
     use golem_common::model::{
         AccountId, ComponentId, PromiseId, ScheduledAction, ShardId, WorkerId,
     };
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 
     fn serialized_bytes<T: Encode>(entry: &T) -> Vec<u8> {
         golem_common::serialization::serialize(entry)

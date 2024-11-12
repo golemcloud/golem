@@ -271,6 +271,7 @@ checksum = "0cb8f1d480b0ea3783ab015936d2a55c87e219676f0c0b7dec61494043f21857"
 dependencies = [
  "flate2",
  "futures-core",
+ "futures-io",
  "memchr",
  "pin-project-lite",
  "tokio",
@@ -523,6 +524,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.85",
+]
+
+[[package]]
+name = "async_zip"
+version = "0.0.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00b9f7252833d5ed4b00aa9604b563529dd5e11de9c23615de2dcdf91eb87b52"
+dependencies = [
+ "async-compression",
+ "crc32fast",
+ "futures-lite 2.3.0",
+ "pin-project 1.1.7",
+ "thiserror",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2563,6 +2579,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
+name = "drop-stream"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf3ad5e2193e855cdd101d6d4ad09f0b3fa9aa5bd5169f483b4accd6eef96cfe"
+dependencies = [
+ "futures-core",
+ "pin-project 1.1.7",
+]
+
+[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3469,6 +3495,7 @@ dependencies = [
  "assert2",
  "async-recursion",
  "async-trait",
+ "async_zip",
  "base64 0.22.1",
  "chrono",
  "clap 4.5.20",
@@ -3480,6 +3507,7 @@ dependencies = [
  "dirs 5.0.1",
  "env_logger 0.11.5",
  "futures-util",
+ "glob",
  "golem-client",
  "golem-common",
  "golem-examples",
@@ -3513,12 +3541,14 @@ dependencies = [
  "strip-ansi-escapes",
  "strum",
  "strum_macros",
+ "tempfile",
  "test-r",
  "testcontainers",
  "testcontainers-modules",
  "textwrap 0.16.1",
  "tokio",
  "tokio-postgres",
+ "tokio-stream",
  "tokio-tungstenite 0.20.1",
  "tonic",
  "tonic-health",
@@ -3550,6 +3580,7 @@ dependencies = [
  "reqwest",
  "serde 1.0.213",
  "serde_json",
+ "serde_yaml",
  "test-r",
  "tracing",
  "uuid",
@@ -3591,6 +3622,7 @@ dependencies = [
  "regex",
  "serde 1.0.213",
  "serde_json",
+ "serde_yaml",
  "test-r",
  "thiserror",
  "tokio",
@@ -3600,6 +3632,7 @@ dependencies = [
  "tracing-serde",
  "tracing-subscriber",
  "tracing-test",
+ "typed-path",
  "url",
  "uuid",
  "wasm-wave",
@@ -3616,6 +3649,7 @@ dependencies = [
  "futures-util",
  "golem-api-grpc",
  "golem-common",
+ "golem-service-base",
  "golem-worker-executor-base",
  "http 0.2.12",
  "http 1.1.0",
@@ -3682,6 +3716,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "async_zip",
  "aws-config",
  "aws-sdk-s3",
  "bincode",
@@ -3701,7 +3736,9 @@ dependencies = [
  "poem-openapi",
  "prost",
  "prost-types",
+ "sanitize-filename",
  "serde 1.0.213",
+ "serde_json",
  "sqlx",
  "tap",
  "test-r",
@@ -3743,7 +3780,9 @@ dependencies = [
 
 [[package]]
 name = "golem-openapi-client-generator"
-version = "0.0.0"
+version = "0.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b33e98f6cc141902ffcc13d027d0bb9a4d3310e51ff182f67236384e8dfeb3ac"
 dependencies = [
  "clap 4.5.20",
  "convert_case 0.6.0",
@@ -3780,17 +3819,23 @@ name = "golem-service-base"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert2",
+ "async-fs 2.1.2",
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
  "bigdecimal",
  "bincode",
+ "bytes 1.8.0",
  "chrono",
+ "dashmap",
  "futures",
  "golem-api-grpc",
  "golem-common",
+ "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "hex",
  "http 0.2.12",
  "http 1.1.0",
  "humantime-serde",
@@ -3803,14 +3848,20 @@ dependencies = [
  "rand",
  "serde 1.0.213",
  "serde_json",
+ "sha2",
  "sqlx",
+ "tempfile",
  "test-r",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror",
  "tokio",
+ "tokio-stream",
  "tonic",
  "tracing",
  "tracing-futures",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3860,6 +3911,7 @@ dependencies = [
  "async-dropper-simple",
  "async-scoped",
  "async-trait",
+ "bytes 1.8.0",
  "chrono",
  "clap 4.5.20",
  "cli-table",
@@ -3993,9 +4045,11 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytes 1.8.0",
  "cap-std",
  "console-subscriber",
  "figment",
+ "futures",
  "golem-api-grpc",
  "golem-common",
  "golem-wasm-rpc",
@@ -4041,6 +4095,7 @@ dependencies = [
  "chrono",
  "console-subscriber",
  "dashmap",
+ "drop-stream",
  "evicting_cache_map",
  "figment",
  "flume",
@@ -4053,6 +4108,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-rib",
+ "golem-service-base",
  "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
@@ -4092,6 +4148,7 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.0",
  "tokio-stream",
+ "tokio-util",
  "tonic",
  "tonic-health",
  "tonic-reflection",
@@ -4187,6 +4244,7 @@ dependencies = [
  "humantime-serde",
  "hyper 1.5.0",
  "lazy_static 1.5.0",
+ "mime_guess",
  "nom 7.1.3",
  "openapiv3",
  "opentelemetry",
@@ -7350,6 +7408,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes 1.8.0",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2 0.4.6",
@@ -7697,6 +7756,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "sanitize-filename"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ed72fbaf78e6f2d41744923916966c4fbe3d7c74e3037a8ee482f1115572603"
+dependencies = [
+ "lazy_static 1.5.0",
+ "regex",
 ]
 
 [[package]]
@@ -9504,6 +9573,12 @@ dependencies = [
  "thiserror",
  "utf-8",
 ]
+
+[[package]]
+name = "typed-path"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82205ffd44a9697e34fc145491aa47310f9871540bb7909eaa9365e0a9a46607"
 
 [[package]]
 name = "typenum"

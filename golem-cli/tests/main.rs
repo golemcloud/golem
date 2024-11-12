@@ -26,6 +26,7 @@ pub mod cli;
 
 mod api_definition;
 mod api_deployment;
+mod api_deployment_fileserver;
 mod component;
 mod get;
 mod profile;

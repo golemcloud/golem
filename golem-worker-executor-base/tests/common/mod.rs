@@ -1,8 +1,11 @@
 use anyhow::Error;
 use async_trait::async_trait;
 
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::BlobStorage;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
+use golem_worker_executor_base::services::file_loader::FileLoader;
 use prometheus::Registry;
 
 use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
@@ -13,22 +16,23 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    ScanCursor, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
+use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_worker_executor_base::error::GolemError;
 use golem_worker_executor_base::services::golem_config::{
-    BlobStorageConfig, CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
-    ComponentServiceConfig, ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    KeyValueStorageConfig, LocalFileSystemBlobStorageConfig, MemoryConfig,
-    ShardManagerServiceConfig, WorkerServiceGrpcConfig,
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
+    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
+    MemoryConfig, ShardManagerServiceConfig, WorkerServiceGrpcConfig,
 };
 
 use golem_worker_executor_base::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor_base::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
+    ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
@@ -45,7 +49,7 @@ use golem_worker_executor_base::services::worker_event::WorkerEventService;
 use golem_worker_executor_base::services::{All, HasAll, HasConfig, HasOplogService};
 use golem_worker_executor_base::wasi_host::create_linker;
 use golem_worker_executor_base::workerctx::{
-    ExternalOperations, FuelManagement, IndexedResourceStore, InvocationHooks,
+    ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore, InvocationHooks,
     InvocationManagement, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor_base::Bootstrap;
@@ -233,6 +237,14 @@ impl TestDependencies for TestWorkerExecutor {
     fn worker_executor_cluster(&self) -> Arc<dyn WorkerExecutorCluster + Send + Sync + 'static> {
         self.deps.worker_executor_cluster()
     }
+
+    fn blob_storage(&self) -> Arc<dyn BlobStorage + Send + Sync + 'static> {
+        self.deps.blob_storage()
+    }
+
+    fn initial_component_files_service(&self) -> Arc<InitialComponentFilesService> {
+        self.deps.initial_component_files_service()
+    }
 }
 
 impl Drop for TestWorkerExecutor {
@@ -297,7 +309,7 @@ pub async fn start_limited(
         }),
         indexed_storage: IndexedStorageConfig::KVStoreRedis,
         blob_storage: BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
-            root: Path::new("data").to_path_buf(),
+            root: Path::new("data/blobs").to_path_buf(),
         }),
         port: context.grpc_port(),
         http_port: context.http_port(),
@@ -640,6 +652,7 @@ impl WorkerCtx for TestWorkerCtx {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        file_loader: Arc<FileLoader>,
     ) -> Result<Self, GolemError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -660,6 +673,7 @@ impl WorkerCtx for TestWorkerCtx {
             config,
             worker_config,
             execution_status,
+            file_loader,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -735,6 +749,20 @@ impl ResourceLimiterAsync for TestWorkerCtx {
 }
 
 #[async_trait]
+impl FileSystemReading for TestWorkerCtx {
+    async fn list_directory(
+        &self,
+        path: &ComponentFilePath,
+    ) -> Result<ListDirectoryResult, GolemError> {
+        self.durable_ctx.list_directory(path).await
+    }
+
+    async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
+        self.durable_ctx.read_file(path).await
+    }
+}
+
+#[async_trait]
 impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     fn create_active_workers(
         &self,
@@ -764,6 +792,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
+        file_loader: Arc<FileLoader>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let rpc = Arc::new(DirectWorkerInvocationRpc::new(
             Arc::new(RemoteInvocationRpc::new(
@@ -788,6 +817,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             scheduler_service.clone(),
             worker_activator.clone(),
             events.clone(),
+            file_loader.clone(),
             (),
         ));
         Ok(All::new(
@@ -811,6 +841,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             worker_activator,
             worker_proxy,
             events.clone(),
+            file_loader,
             (),
         ))
     }

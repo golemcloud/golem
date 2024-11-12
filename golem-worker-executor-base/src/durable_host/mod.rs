@@ -15,68 +15,88 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
-use std::collections::HashMap;
-use std::error::Error;
-use std::fmt::{Debug, Display, Formatter};
-use std::ops::Add;
-use std::sync::{Arc, Mutex, RwLock, Weak};
-use std::time::{Duration, Instant};
-
+use crate::durable_host::http::serialized::SerializableHttpRequest;
+use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
+use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
+use crate::durable_host::wasm_rpc::UrnExtensions;
 use crate::error::GolemError;
+use crate::function_result_interpreter::interpret_function_results;
 use crate::invocation::{invoke_worker, InvokeResult};
+use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, PersistenceLevel, TrapType,
-    WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InterruptKind, LastError, ListDirectoryResult,
+    PersistenceLevel, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::blob_store::BlobStoreService;
+use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
+use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::promise::PromiseService;
+use crate::services::rpc::Rpc;
+use crate::services::scheduler::SchedulerService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
+use crate::services::worker_proxy::WorkerProxy;
+use crate::services::HasOplogService;
 use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
+use crate::wasi_host;
+use crate::worker::{calculate_last_known_status, is_worker_error_retriable};
+use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, IndexedResourceStore, InvocationHooks, InvocationManagement,
-    PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationHooks,
+    InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
+use bytes::BytesMut;
 use chrono::{DateTime, Utc};
+pub use durability::*;
+use futures::future::try_join_all;
+use futures_util::TryFutureExt;
+use futures_util::TryStreamExt;
 use golem_common::config::RetryConfig;
+use golem_common::model::exports;
 use golem_common::model::oplog::{
     IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, UpdateDescription, WorkerError,
     WorkerResourceId, WrappedFunctionType,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AccountId, ComponentId, ComponentType, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
-    OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
-    WorkerStatusRecord,
+    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
+    ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
+    FailedUpdateRecord, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
+    ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerEvent, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
+use golem_common::retries::get_delay;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Uri, Value};
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::fmt::{Debug, Display, Formatter};
+use std::ops::Add;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::time::{Duration, Instant, SystemTime};
+use std::vec;
 use tempfile::TempDir;
+use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
-use wasmtime::component::{Instance, ResourceAny};
+use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
-use wasmtime_wasi::{I32Exit, ResourceTable, Stderr, Stdout, WasiCtx, WasiView};
+use wasmtime_wasi::bindings::filesystem::preopens::Descriptor;
+use wasmtime_wasi::{
+    FsResult, I32Exit, ResourceTable, ResourceTableError, Stderr, Stdout, WasiCtx, WasiView,
+};
 use wasmtime_wasi_http::body::HyperOutgoingBody;
 use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpView};
-
-use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::wasm_rpc::UrnExtensions;
-use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
-use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
-use crate::services::rpc::Rpc;
-use crate::services::scheduler::SchedulerService;
-use crate::services::HasOplogService;
-use crate::wasi_host;
-use crate::worker::{calculate_last_known_status, is_worker_error_retriable};
 
 pub mod blobstore;
 mod cli;
@@ -96,17 +116,6 @@ mod durability;
 mod replay_state;
 mod sync_helper;
 
-use crate::durable_host::http::serialized::SerializableHttpRequest;
-use crate::durable_host::replay_state::ReplayState;
-use crate::durable_host::sync_helper::{SyncHelper, SyncHelperPermit};
-use crate::function_result_interpreter::interpret_function_results;
-use crate::services::component::{ComponentMetadata, ComponentService};
-use crate::services::worker_proxy::WorkerProxy;
-use crate::worker::{RetryDecision, Worker};
-pub use durability::*;
-use golem_common::model::exports;
-use golem_common::retries::get_delay;
-
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     table: Arc<Mutex<ResourceTable>>, // Required because of the dropped Sync constraints in https://github.com/bytecodealliance/wasmtime/pull/7802
@@ -116,6 +125,8 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     _temp_dir: Arc<TempDir>,
+    _used_files: Vec<FileUseToken>,
+    read_only_paths: Arc<RwLock<HashSet<PathBuf>>>,
     execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
@@ -141,6 +152,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
+        file_loader: Arc<FileLoader>,
     ) -> Result<Self, GolemError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| GolemError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -154,6 +166,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             "Worker {} initialized with deleted regions {}",
             owned_worker_id.worker_id, worker_config.deleted_regions
         );
+
+        let (file_use_tokens, read_only_paths) = prepare_filesystem(
+            file_loader,
+            &owned_worker_id.account_id,
+            temp_dir.path(),
+            &component_metadata.files,
+        )
+        .await?;
 
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(Stdout);
@@ -205,6 +225,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             )
             .await,
             _temp_dir: temp_dir,
+            _used_files: file_use_tokens,
+            read_only_paths: Arc::new(RwLock::new(read_only_paths)),
             execution_status,
         })
     }
@@ -214,6 +236,33 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
             .expect("ResourceTable mutex must never fail")
+    }
+
+    fn is_read_only(&mut self, fd: &Resource<Descriptor>) -> Result<bool, ResourceTableError> {
+        let table = Arc::get_mut(&mut self.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail");
+
+        match table.get(fd)? {
+            Descriptor::File(f) => {
+                let read_only = self
+                    .read_only_paths
+                    .read()
+                    .expect("There should be no writers to read_only_paths")
+                    .contains(&f.path);
+                Ok(read_only)
+            }
+            Descriptor::Dir(_) => Ok(false),
+        }
+    }
+
+    fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
+        if self.is_read_only(fd)? {
+            Err(wasmtime_wasi::bindings::filesystem::types::ErrorCode::NotPermitted.into())
+        } else {
+            Ok(())
+        }
     }
 
     fn ctx(&mut self) -> &mut WasiCtx {
@@ -1387,6 +1436,141 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 }
 
+#[async_trait]
+impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWorkerCtx<Ctx> {
+    async fn list_directory(
+        &self,
+        path: &ComponentFilePath,
+    ) -> Result<ListDirectoryResult, GolemError> {
+        let root = self._temp_dir.path();
+        let target = root.join(PathBuf::from(path.to_rel_string()));
+
+        {
+            let exists =
+                tokio::fs::try_exists(&target)
+                    .await
+                    .map_err(|e| GolemError::FileSystemError {
+                        path: path.to_string(),
+                        reason: format!("Failed to check whether file exists: {e}"),
+                    })?;
+            if !exists {
+                return Ok(ListDirectoryResult::NotFound);
+            };
+        }
+
+        {
+            let metadata =
+                tokio::fs::metadata(&target)
+                    .await
+                    .map_err(|e| GolemError::FileSystemError {
+                        path: path.to_string(),
+                        reason: format!("Failed to get metadata: {e}"),
+                    })?;
+            if !metadata.is_dir() {
+                return Ok(ListDirectoryResult::NotADirectory);
+            };
+        }
+
+        let mut entries =
+            tokio::fs::read_dir(target)
+                .await
+                .map_err(|e| GolemError::FileSystemError {
+                    path: path.to_string(),
+                    reason: format!("Failed to list directory: {e}"),
+                })?;
+
+        let mut result = Vec::new();
+        while let Some(entry) = entries.next_entry().await? {
+            let metadata = entry
+                .metadata()
+                .await
+                .map_err(|e| GolemError::FileSystemError {
+                    path: path.to_string(),
+                    reason: format!("Failed to get file metadata {e}"),
+                })?;
+
+            let entry_name = entry.file_name().to_string_lossy().to_string();
+
+            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
+
+            if metadata.is_file() {
+                let is_readonly_by_host = metadata.permissions().readonly();
+                // additionally consider permissions we maintain ourselves
+                let is_readonly_by_us = self
+                    .read_only_paths
+                    .read()
+                    .expect("There should be no writers to read_only_paths")
+                    .contains(&entry.path());
+
+                let permissions = if is_readonly_by_host || is_readonly_by_us {
+                    ComponentFilePermissions::ReadOnly
+                } else {
+                    ComponentFilePermissions::ReadWrite
+                };
+
+                result.push(ComponentFileSystemNode {
+                    name: entry_name,
+                    last_modified,
+                    details: ComponentFileSystemNodeDetails::File {
+                        size: metadata.len(),
+                        permissions,
+                    },
+                });
+            } else {
+                result.push(ComponentFileSystemNode {
+                    name: entry_name,
+                    last_modified,
+                    details: ComponentFileSystemNodeDetails::Directory,
+                });
+            };
+        }
+        Ok(ListDirectoryResult::Ok(result))
+    }
+
+    async fn read_file(&self, path: &ComponentFilePath) -> Result<ReadFileResult, GolemError> {
+        let root = self._temp_dir.path();
+        let target = root.join(PathBuf::from(path.to_rel_string()));
+
+        {
+            let exists =
+                tokio::fs::try_exists(&target)
+                    .await
+                    .map_err(|e| GolemError::FileSystemError {
+                        path: path.to_string(),
+                        reason: format!("Failed to check whether file exists: {e}"),
+                    })?;
+            if !exists {
+                return Ok(ReadFileResult::NotFound);
+            };
+        }
+
+        {
+            let metadata =
+                tokio::fs::metadata(&target)
+                    .await
+                    .map_err(|e| GolemError::FileSystemError {
+                        path: path.to_string(),
+                        reason: format!("Failed to get metadata: {e}"),
+                    })?;
+            if !metadata.is_file() {
+                return Ok(ReadFileResult::NotAFile);
+            };
+        }
+
+        let path_clone = path.clone();
+
+        let stream = tokio::fs::File::open(target)
+            .map_ok(|file| FramedRead::new(file, BytesCodec::new()).map_ok(BytesMut::freeze))
+            .try_flatten_stream()
+            .map_err(move |e| GolemError::FileSystemError {
+                path: path_clone.to_string(),
+                reason: format!("Failed to open file: {e}"),
+            });
+
+        Ok(ReadFileResult::Ok(Box::pin(stream)))
+    }
+}
+
 async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
@@ -1979,6 +2163,49 @@ impl<'a, Ctx: WorkerCtx> WasiHttpView for DurableWorkerCtxWasiHttpView<'a, Ctx> 
             Ok(default_send_request(request, config))
         }
     }
+}
+
+async fn prepare_filesystem(
+    file_loader: Arc<FileLoader>,
+    account_id: &AccountId,
+    root: &Path,
+    files: &[InitialComponentFile],
+) -> Result<(Vec<FileUseToken>, HashSet<PathBuf>), GolemError> {
+    let futures = files.iter().map(|file| {
+        let path = root.join(PathBuf::from(file.path.to_rel_string()));
+        let key = file.key.clone();
+        let permissions = file.permissions;
+        let file_loader = file_loader.clone();
+        async move {
+            match permissions {
+                ComponentFilePermissions::ReadOnly => {
+                    debug!("Loading read-only file {}", path.display());
+                    let token = file_loader
+                        .get_read_only_to(account_id, &key, &path)
+                        .await?;
+                    Ok::<_, GolemError>(Some((token, path)))
+                }
+                ComponentFilePermissions::ReadWrite => {
+                    debug!("Loading read-write file {}", path.display());
+                    file_loader
+                        .get_read_write_to(account_id, &key, &path)
+                        .await?;
+                    Ok(None)
+                }
+            }
+        }
+    });
+
+    let results = try_join_all(futures).await?;
+
+    let mut read_only_files = HashSet::with_capacity(files.len());
+    let mut file_use_tokens = Vec::new();
+
+    for (token, path) in results.into_iter().flatten() {
+        read_only_files.insert(path);
+        file_use_tokens.push(token);
+    }
+    Ok((file_use_tokens, read_only_files))
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

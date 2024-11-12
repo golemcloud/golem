@@ -15,14 +15,14 @@
 use crate::error::GolemError;
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService};
-use crate::storage::blob::{
-    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
-};
 use async_lock::RwLockUpgradableReadGuard;
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerId};
+use golem_service_base::storage::blob::{
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
+};
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

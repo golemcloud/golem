@@ -97,6 +97,14 @@ pub enum GolemError {
         details: String,
     },
     ShardingNotReady,
+    InitialComponentFileDownloadFailed {
+        path: String,
+        reason: String,
+    },
+    FileSystemError {
+        path: String,
+        reason: String,
+    },
 }
 
 impl GolemError {
@@ -132,6 +140,10 @@ impl GolemError {
             component_version,
             reason: reason.into(),
         }
+    }
+
+    pub fn initial_file_download_failed(path: String, reason: String) -> Self {
+        GolemError::InitialComponentFileDownloadFailed { path, reason }
     }
 
     pub fn invalid_request(details: impl Into<String>) -> Self {
@@ -214,6 +226,12 @@ impl Display for GolemError {
                     "Failed to get latest version of component {component_id}: {reason}"
                 )
             }
+            GolemError::InitialComponentFileDownloadFailed { path, reason } => {
+                write!(
+                    f,
+                    "Failed to download initial file for component to {path}: {reason}"
+                )
+            }
             GolemError::PromiseNotFound { promise_id } => {
                 write!(f, "Promise not found: {promise_id}")
             }
@@ -262,6 +280,12 @@ impl Display for GolemError {
             GolemError::ShardingNotReady => {
                 write!(f, "Sharding not ready")
             }
+            GolemError::FileSystemError { path, reason } => {
+                write!(
+                    f,
+                    "Failed to access file in worker filesystem {path}: {reason}"
+                )
+            }
         }
     }
 }
@@ -283,6 +307,9 @@ impl Error for GolemError {
             GolemError::PromiseDropped { .. } => "Promise dropped",
             GolemError::PromiseAlreadyCompleted { .. } => "Promise already completed",
             GolemError::Interrupted { .. } => "Interrupted",
+            GolemError::InitialComponentFileDownloadFailed { .. } => {
+                "Failed to download initial file"
+            }
             GolemError::ParamTypeMismatch { .. } => "Parameter type mismatch",
             GolemError::NoValueInMessage => "No value in message",
             GolemError::ValueMismatch { .. } => "Value mismatch",
@@ -294,6 +321,7 @@ impl Error for GolemError {
             GolemError::PreviousInvocationExited => "The previously invoked function exited",
             GolemError::Unknown { .. } => "Unknown error",
             GolemError::ShardingNotReady => "Sharding not ready",
+            GolemError::FileSystemError { .. } => "File system error",
         }
     }
 }
@@ -311,6 +339,9 @@ impl TraceErrorKind for GolemError {
             GolemError::GetLatestVersionOfComponentFailed { .. } => {
                 "GetLatestVersionOfComponentFailed"
             }
+            GolemError::InitialComponentFileDownloadFailed { .. } => {
+                "InitialComponentFileDownloadFailed"
+            }
             GolemError::PromiseNotFound { .. } => "PromiseNotFound",
             GolemError::PromiseDropped { .. } => "PromiseDropped",
             GolemError::PromiseAlreadyCompleted { .. } => "PromiseAlreadyCompleted",
@@ -326,6 +357,7 @@ impl TraceErrorKind for GolemError {
             GolemError::PreviousInvocationExited => "PreviousInvocationExited",
             GolemError::Unknown { .. } => "Unknown",
             GolemError::ShardingNotReady => "ShardingNotReady",
+            GolemError::FileSystemError { .. } => "FileSystemError",
         }
     }
 }
@@ -467,6 +499,15 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                     ),
                 ),
             },
+            GolemError::InitialComponentFileDownloadFailed { path, reason } => {
+                golem::worker::v1::WorkerExecutionError {
+                    error: Some(
+                        golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(
+                            golem::worker::v1::InitialComponentFileDownloadFailed { path, reason },
+                        ),
+                    ),
+                }
+            }
             GolemError::PromiseNotFound { promise_id } => golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PromiseNotFound(
@@ -584,6 +625,13 @@ impl From<GolemError> for golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::ShardingNotReady(
                         golem::worker::v1::ShardingNotReady {},
+                    ),
+                ),
+            },
+            GolemError::FileSystemError { path, reason } => golem::worker::v1::WorkerExecutionError {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::FileSystemError(
+                        golem::worker::v1::FileSystemError { path, reason },
                     ),
                 ),
             },
@@ -755,6 +803,18 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for GolemError {
             Some(golem::worker::v1::worker_execution_error::Error::ShardingNotReady(_)) => {
                 Ok(GolemError::ShardingNotReady)
             }
+            Some(golem::worker::v1::worker_execution_error::Error::InitialComponentFileDownloadFailed(
+                initial_file_download_failed,
+            )) => Ok(GolemError::InitialComponentFileDownloadFailed {
+                path: initial_file_download_failed.path,
+                reason: initial_file_download_failed.reason,
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::FileSystemError(
+                file_system_error,
+            )) => Ok(GolemError::FileSystemError {
+                path: file_system_error.path,
+                reason: file_system_error.reason,
+            }),
         }
     }
 }

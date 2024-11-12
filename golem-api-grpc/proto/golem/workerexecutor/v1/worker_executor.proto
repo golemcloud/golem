@@ -19,6 +19,7 @@ import public "golem/worker/worker_metadata.proto";
 import public "golem/worker/worker_status.proto";
 import public "golem/worker/worker_filter.proto";
 import public "golem/worker/v1/worker_execution_error.proto";
+import public "golem/worker/filesystem.proto";
 
 import public "wasm/rpc/val.proto";
 import public "wasm/rpc/type_annotated_value.proto";
@@ -43,6 +44,9 @@ service WorkerExecutor {
   rpc UpdateWorker(UpdateWorkerRequest) returns (UpdateWorkerResponse);
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
+
+  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+  rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
 }
 
 message InvokeWorkerResponse {
@@ -300,4 +304,48 @@ message SearchOplogSuccessResponse {
   repeated golem.worker.OplogEntryWithIndex entries = 1;
   optional golem.worker.OplogCursor next = 2;
   uint64 last_index = 5;
+}
+
+message ListDirectoryRequest {
+  golem.worker.TargetWorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  golem.common.ResourceLimits account_limits = 3;
+  string path = 4;
+}
+
+message ListDirectoryResponse {
+  oneof result {
+    ListDirectorySuccessResponse success = 1;
+    golem.common.Empty not_found = 2;
+    golem.common.Empty not_a_directory = 3;
+    golem.worker.v1.WorkerExecutionError failure = 4;
+  }
+}
+
+message ListDirectorySuccessResponse {
+  repeated golem.worker.FileSystemNode nodes = 1;
+}
+
+message GetFileContentsRequest {
+  golem.worker.TargetWorkerId worker_id = 1;
+  golem.common.AccountId account_id = 2;
+  golem.common.ResourceLimits account_limits = 3;
+  string file_path = 4;
+}
+
+message GetFileContentsResponse {
+  oneof result {
+    // must always be the first chunk (except if failure) and will never be sent again.
+    GetFileContentsResponseHeader header = 1;
+    bytes success = 2;
+    golem.worker.v1.WorkerExecutionError failure = 3;
+  }
+}
+
+message GetFileContentsResponseHeader {
+  oneof result {
+    golem.common.Empty success = 1;
+    golem.common.Empty not_found = 2;
+    golem.common.Empty not_a_file = 3;
+  }
 }

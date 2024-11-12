@@ -25,6 +25,7 @@ http = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 
@@ -32,6 +33,5 @@ uuid = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
-# golem-openapi-client-generator = "0.0.10"
-golem-openapi-client-generator = { path = "../../../oss/golem-openapi-client-generator", version = "0.0.0" }
+golem-openapi-client-generator = "0.0.12"
 relative-path = "1.9.2"

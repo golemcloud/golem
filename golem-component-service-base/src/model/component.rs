@@ -16,10 +16,12 @@ use crate::model::ComponentOwner;
 use chrono::Utc;
 use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::InitialComponentFile;
+use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use rib::WorkerFunctionsInRib;
 use std::time::SystemTime;
+use tokio::fs::File;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Component<Owner: ComponentOwner> {
@@ -31,6 +33,7 @@ pub struct Component<Owner: ComponentOwner> {
     pub created_at: chrono::DateTime<Utc>,
     pub component_type: ComponentType,
     pub object_store_key: Option<String>,
+    pub files: Vec<InitialComponentFile>,
 }
 
 impl<Owner: ComponentOwner> Component<Owner> {
@@ -39,6 +42,7 @@ impl<Owner: ComponentOwner> Component<Owner> {
         component_name: ComponentName,
         component_type: ComponentType,
         data: &[u8],
+        files: Vec<InitialComponentFile>,
         owner: Owner,
     ) -> Result<Component<Owner>, ComponentProcessingError> {
         let metadata = ComponentMetadata::analyse_component(data)?;
@@ -57,6 +61,7 @@ impl<Owner: ComponentOwner> Component<Owner> {
             object_store_key: Some(versioned_component_id.to_string()),
             versioned_component_id,
             component_type,
+            files,
         })
     }
 
@@ -92,6 +97,7 @@ impl<Owner: ComponentOwner> From<Component<Owner>> for golem_service_base::model
             metadata: value.metadata,
             created_at: Some(value.created_at),
             component_type: Some(value.component_type),
+            files: value.files,
         }
     }
 }
@@ -112,6 +118,7 @@ impl<Owner: ComponentOwner> From<Component<Owner>>
                 value.created_at,
             ))),
             component_type: Some(component_type.into()),
+            files: value.files.into_iter().map(|file| file.into()).collect(),
         }
     }
 }
@@ -158,4 +165,10 @@ impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
 
         Ok(component_constraints)
     }
+}
+
+#[derive(Debug)]
+pub struct InitialComponentFilesArchiveAndPermissions {
+    pub archive: File,
+    pub files: Vec<ComponentFilePathWithPermissions>,
 }

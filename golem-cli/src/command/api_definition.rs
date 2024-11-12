@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::model::{
-    ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult, PathBufOrStdin,
+    ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, GolemError, GolemResult,
+    PathBufOrStdin,
 };
 use crate::service::api_definition::ApiDefinitionService;
 use crate::service::project::ProjectResolver;
@@ -46,6 +47,10 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         /// The Golem API definition file
         #[arg(value_hint = clap::ValueHint::FilePath)]
         definition: PathBufOrStdin, // TODO: validate exists
+
+        /// Api Definition format
+        #[arg(short, long)]
+        def_format: Option<ApiDefinitionFileFormat>,
     },
 
     /// Updates an api definition
@@ -60,6 +65,10 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         /// The Golem API definition file
         #[arg(value_hint = clap::ValueHint::FilePath)]
         definition: PathBufOrStdin, // TODO: validate exists
+
+        /// Api Definition format
+        #[arg(short, long)]
+        def_format: Option<ApiDefinitionFileFormat>,
     },
 
     /// Import OpenAPI file as api definition
@@ -74,6 +83,10 @@ pub enum ApiDefinitionSubcommand<ProjectRef: clap::Args> {
         /// Json format expected unless file name ends up in `.yaml`
         #[arg(value_hint = clap::ValueHint::FilePath)]
         definition: PathBufOrStdin, // TODO: validate exists
+
+        /// Api Definition format
+        #[arg(short, long)]
+        def_format: Option<ApiDefinitionFileFormat>,
     },
 
     /// Retrieves metadata about an existing api definition
@@ -115,6 +128,9 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<Pro
         service: &(dyn ApiDefinitionService<ProjectContext = ProjectContext> + Send + Sync),
         projects: &(dyn ProjectResolver<ProjectRef, ProjectContext> + Send + Sync),
     ) -> Result<GolemResult, GolemError> {
+        let with_default: fn(Option<ApiDefinitionFileFormat>) -> ApiDefinitionFileFormat =
+            |format| format.unwrap_or(ApiDefinitionFileFormat::Json);
+
         match self {
             ApiDefinitionSubcommand::Get {
                 project_ref,
@@ -127,23 +143,32 @@ impl<ProjectRef: clap::Args + Send + Sync + 'static> ApiDefinitionSubcommand<Pro
             ApiDefinitionSubcommand::Add {
                 project_ref,
                 definition,
+                def_format: format,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
-                service.add(definition, &project_id).await
+                service
+                    .add(definition, &project_id, &with_default(format))
+                    .await
             }
             ApiDefinitionSubcommand::Update {
                 project_ref,
                 definition,
+                def_format: format,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
-                service.update(definition, &project_id).await
+                service
+                    .update(definition, &project_id, &with_default(format))
+                    .await
             }
             ApiDefinitionSubcommand::Import {
                 project_ref,
                 definition,
+                def_format: format,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
-                service.import(definition, &project_id).await
+                service
+                    .import(definition, &project_id, &with_default(format))
+                    .await
             }
             ApiDefinitionSubcommand::List { project_ref, id } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;

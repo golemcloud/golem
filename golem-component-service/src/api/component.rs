@@ -15,8 +15,10 @@
 use crate::api::{ComponentError, Result};
 use futures_util::TryStreamExt;
 use golem_common::model::plugin::DefaultPluginScope;
+use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
+use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
 use golem_component_service_base::model::{
     DefaultComponentOwner, PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
 };
@@ -54,6 +56,17 @@ impl ComponentApi {
         );
         let response = {
             let data = payload.component.into_vec().await?;
+            let files_file = payload.files.map(|f| f.into_file());
+
+            let files = files_file
+                .zip(payload.files_permissions)
+                .map(
+                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                        archive,
+                        files: permissions.values,
+                    },
+                );
+
             let component_name = payload.name;
             self.component_service
                 .create(
@@ -61,6 +74,7 @@ impl ComponentApi {
                     &component_name,
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
+                    files,
                     &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
@@ -75,9 +89,9 @@ impl ComponentApi {
     #[oai(
         path = "/:component_id/upload",
         method = "put",
-        operation_id = "update_component"
+        operation_id = "upload_component"
     )]
-    async fn update_component(
+    async fn upload_component(
         &self,
         component_id: Path<ComponentId>,
         wasm: Binary<Body>,
@@ -86,9 +100,10 @@ impl ComponentApi {
         component_type: Query<Option<ComponentType>>,
     ) -> Result<Json<Component>> {
         let record = recorded_http_api_request!(
-            "update_component",
+            "upload_component",
             component_id = component_id.0.to_string()
         );
+
         let response = {
             let data = wasm.0.into_vec().await?;
             self.component_service
@@ -96,6 +111,51 @@ impl ComponentApi {
                     &component_id.0,
                     data,
                     component_type.0,
+                    None,
+                    &DefaultComponentOwner,
+                )
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(|response| Json(response.into()))
+        };
+        record.result(response)
+    }
+
+    /// Update a component
+    #[oai(
+        path = "/:component_id/updates",
+        method = "post",
+        operation_id = "update_component"
+    )]
+    async fn update_component(
+        &self,
+        component_id: Path<ComponentId>,
+        payload: UpdatePayload,
+    ) -> Result<Json<Component>> {
+        let record = recorded_http_api_request!(
+            "update_component",
+            component_id = component_id.0.to_string()
+        );
+        let response = {
+            let data = payload.component.into_vec().await?;
+            let files_file = payload.files.map(|f| f.into_file());
+
+            let files = files_file
+                .zip(payload.files_permissions)
+                .map(
+                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                        archive,
+                        files: permissions.values,
+                    },
+                );
+
+            self.component_service
+                .update(
+                    &component_id.0,
+                    data,
+                    payload.component_type,
+                    files,
                     &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
@@ -413,8 +473,20 @@ impl ComponentApi {
 }
 
 #[derive(Multipart)]
+#[oai(rename_all = "camelCase")]
 pub struct UploadPayload {
     name: ComponentName,
     component_type: Option<ComponentType>,
     component: Upload,
+    files_permissions: Option<ComponentFilePathWithPermissionsList>,
+    files: Option<Upload>,
+}
+
+#[derive(Multipart)]
+#[oai(rename_all = "camelCase")]
+pub struct UpdatePayload {
+    component_type: Option<ComponentType>,
+    component: Upload,
+    files_permissions: Option<ComponentFilePathWithPermissionsList>,
+    files: Option<Upload>,
 }

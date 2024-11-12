@@ -20,6 +20,7 @@ import public "golem/worker/worker_id.proto";
 import public "golem/component/component_id.proto";
 import public "golem/worker/update_mode.proto";
 import public "golem/worker/target_worker_id.proto";
+import public "golem/worker/filesystem.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
@@ -41,6 +42,9 @@ service WorkerService {
 
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
+
+  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+  rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
 }
 
 message LaunchNewWorkerRequest {
@@ -258,4 +262,32 @@ message SearchOplogSuccessResponse {
   repeated golem.worker.OplogEntryWithIndex entries = 1;
   optional golem.worker.OplogCursor next = 2;
   uint64 last_index = 5;
+}
+
+message ListDirectoryRequest {
+  golem.worker.TargetWorkerId worker_id = 1;
+  string path = 2;
+}
+
+message ListDirectoryResponse {
+  oneof result {
+    ListDirectorySuccessResponse success = 1;
+    WorkerError error = 2;
+  }
+}
+
+message ListDirectorySuccessResponse {
+  repeated golem.worker.FileSystemNode nodes = 1;
+}
+
+message GetFileContentsRequest {
+  golem.worker.TargetWorkerId worker_id = 1;
+  string file_path = 2;
+}
+
+message GetFileContentsResponse {
+  oneof result {
+    bytes success = 1;
+    WorkerError error = 2;
+  }
 }

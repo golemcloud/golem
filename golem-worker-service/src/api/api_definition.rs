@@ -1,22 +1,23 @@
-use std::result::Result;
-use std::sync::Arc;
-
+use golem_common::json_yaml::JsonOrYaml;
 use golem_common::{recorded_http_api_request, safe};
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionWithTypeInfo;
-use golem_worker_service_base::api_definition::http::get_api_definition;
 use golem_worker_service_base::api_definition::http::CompiledHttpApiDefinition;
 use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::api_definition::http::JsonOpenApiDefinition;
+use golem_worker_service_base::api_definition::http::{
+    get_api_definition, OpenApiDefinitionRequest,
+};
 use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::service::api_definition::ApiDefinitionService;
 use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
+use std::result::Result;
+use std::sync::Arc;
 use tracing::{error, Instrument};
 
 pub struct RegisterApiDefinitionApi {
@@ -46,12 +47,12 @@ impl RegisterApiDefinitionApi {
     #[oai(path = "/import", method = "put", operation_id = "import_open_api")]
     async fn create_or_update_open_api(
         &self,
-        Json(openapi): Json<JsonOpenApiDefinition>,
+        payload: JsonOrYaml<OpenApiDefinitionRequest>,
     ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let record = recorded_http_api_request!("import_open_api",);
 
         let response = {
-            let definition = get_api_definition(openapi.0).map_err(|e| {
+            let definition = get_api_definition(payload.0 .0).map_err(|e| {
                 error!("Invalid Spec {}", e);
                 ApiEndpointError::bad_request(safe(e))
             })?;
@@ -74,7 +75,7 @@ impl RegisterApiDefinitionApi {
     #[oai(path = "/", method = "post", operation_id = "create_definition")]
     async fn create(
         &self,
-        payload: Json<HttpApiDefinitionRequest>,
+        payload: JsonOrYaml<HttpApiDefinitionRequest>,
     ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "create_definition",
@@ -112,7 +113,7 @@ impl RegisterApiDefinitionApi {
         &self,
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
-        payload: Json<HttpApiDefinitionRequest>,
+        payload: JsonOrYaml<HttpApiDefinitionRequest>,
     ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "update_definition",
@@ -279,7 +280,7 @@ impl RegisterApiDefinitionApi {
     async fn create_api(
         &self,
         definition: &CoreHttpApiDefinitionRequest,
-    ) -> Result<CompiledHttpApiDefinition, ApiEndpointError> {
+    ) -> Result<CompiledHttpApiDefinition<DefaultNamespace>, ApiEndpointError> {
         let result = self
             .definition_service
             .create(
@@ -444,6 +445,50 @@ mod test {
     }
 
     #[test]
+    async fn create_api_definition_yaml() {
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+                id: ApiDefinitionId("sample".to_string()),
+                version: ApiVersion("42.0".to_string()),
+                routes: vec![],
+                draft: false,
+            };
+
+        let response = client
+            .post("/v1/api/definitions")
+            .body_yaml(&definition)
+            .send()
+            .await;
+
+        response.assert_status(http::StatusCode::OK);
+    }
+
+    #[test]
+    async fn create_api_definition_json() {
+        let (api, _db) = make_route().await;
+        let client = TestClient::new(api);
+
+        let definition =
+            golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest {
+                id: ApiDefinitionId("sample".to_string()),
+                version: ApiVersion("42.0".to_string()),
+                routes: vec![],
+                draft: false,
+            };
+
+        let response = client
+            .post("/v1/api/definitions")
+            .body_json(&definition)
+            .send()
+            .await;
+
+        response.assert_status(http::StatusCode::OK);
+    }
+
+    #[test]
     async fn update_non_existant() {
         let (api, _db) = make_route().await;
         let client = TestClient::new(api);
@@ -571,7 +616,7 @@ mod test {
                               "$ref": "#/components/schemas/CartItem"
                             }
                           }
-            
+
                         }
                       },
                       "404": {

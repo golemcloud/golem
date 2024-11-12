@@ -89,8 +89,8 @@ The `cargo make run` command will start all the services and show a unified view
 To spin up services using the latest code
 
 ```bash
-# Clone golem-services
-cd golem-services
+# Clone golem
+cd golem
 
 # Find more info below if you are having issues running this command(example: Running from MAC may fail)
 # Target has to be x86_64-unknown-linux-gnu or aarch64-unknown-linux-gnu-gcc
@@ -123,7 +123,7 @@ docker compose -f docker-compose-sqlite.yaml down -v
 
 ```
 
-Note that, if you are using MAC, the persistene volumes may be present in the Linux VM. You can inspect this using the following command:
+Note that, if you are using MAC, the persistence volumes may be present in the Linux VM. You can inspect this using the following command:
 
 ```bash
 
@@ -194,7 +194,7 @@ export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-g
 From the root of the project
 
 ```bash
-rustup target add aarch64-unknown-linux-gnu-gcc
+rustup target add aarch64-unknown-linux-gnu
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-shard-manager
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-component-service
 cargo build --release --target aarch64-unknown-linux-gnu --package golem-worker-service

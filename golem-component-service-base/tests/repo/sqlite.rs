@@ -104,22 +104,6 @@ mod tests {
 
     #[test]
     #[tracing::instrument]
-    async fn component_constraint_incompatible_updates(
-        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-    ) {
-        crate::repo::test_component_constraint_incompatible_updates(component_repo.clone()).await
-    }
-
-    #[test]
-    #[tracing::instrument]
-    async fn services(
-        component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-    ) {
-        crate::repo::test_services(component_repo.clone()).await
-    }
-
-    #[test]
-    #[tracing::instrument]
     async fn default_plugin_repo(
         component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
         plugin_repo: &Arc<dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Send + Sync>,
@@ -141,7 +125,7 @@ mod tests {
     }
 }
 
-struct SqliteDb {
+pub struct SqliteDb {
     db_path: String,
     pub pool: Arc<Pool<sqlx::Sqlite>>,
 }

@@ -1157,6 +1157,157 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/files/{file_name}:
+    get:
+      tags:
+      - Worker
+      summary: List files in a worker
+      operationId: get_files
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: file_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GetFilesResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
+  /v1/components/{component_id}/workers/{worker_name}/file-contents/{file_name}:
+    get:
+      tags:
+      - Worker
+      summary: Get contents of a file in a worker
+      operationId: get_file_content
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: file_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/GolemErrorBody'
   /v1/api/definitions/import:
     put:
       tags:
@@ -1168,8 +1319,16 @@ paths:
       operationId: import_open_api
       requestBody:
         content:
-          application/json; charset=utf-8:
-            schema: {}
+          application/json:
+            schema:
+              title: API definition in OpenAPI format
+              description: API definition in OpenAPI format with required custom extensions
+              type: OpenAPI+WorkerBridgeCustomExtension
+          application/x-yaml:
+            schema:
+              title: API definition in OpenAPI format
+              description: API definition in OpenAPI format with required custom extensions
+              type: OpenAPI+WorkerBridgeCustomExtension
         required: true
       responses:
         '200':
@@ -1286,7 +1445,10 @@ paths:
       operationId: create_definition
       requestBody:
         content:
-          application/json; charset=utf-8:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HttpApiDefinitionRequest'
+          application/x-yaml:
             schema:
               $ref: '#/components/schemas/HttpApiDefinitionRequest'
         required: true
@@ -1425,7 +1587,10 @@ paths:
         style: simple
       requestBody:
         content:
-          application/json; charset=utf-8:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HttpApiDefinitionRequest'
+          application/x-yaml:
             schema:
               $ref: '#/components/schemas/HttpApiDefinitionRequest'
         required: true
@@ -1874,9 +2039,14 @@ paths:
               properties:
                 name:
                   type: string
-                component_type:
+                componentType:
                   $ref: '#/components/schemas/ComponentType'
                 component:
+                  type: string
+                  format: binary
+                filesPermissions:
+                  $ref: '#/components/schemas/ComponentFilePathWithPermissionsList'
+                files:
                   type: string
                   format: binary
               required:
@@ -1931,7 +2101,7 @@ paths:
       tags:
       - Component
       summary: Update a component
-      operationId: update_component
+      operationId: upload_component
       parameters:
       - in: path
         name: component_id
@@ -1958,6 +2128,84 @@ paths:
             schema:
               type: string
               format: binary
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Component'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/updates:
+    post:
+      tags:
+      - Component
+      summary: Update a component
+      operationId: update_component
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                componentType:
+                  $ref: '#/components/schemas/ComponentType'
+                component:
+                  type: string
+                  format: binary
+                filesPermissions:
+                  $ref: '#/components/schemas/ComponentFilePathWithPermissionsList'
+                files:
+                  type: string
+                  format: binary
+              required:
+              - component
         required: true
       responses:
         '200':
@@ -3242,6 +3490,11 @@ components:
       required:
       - oplogIdx
       - data
+    ComponentFilePermissions:
+      type: string
+      enum:
+      - ReadOnly
+      - ReadWrite
     CreateParameters:
       type: object
       properties:
@@ -3428,6 +3681,39 @@ components:
       - Greater
       - LessEqual
       - Less
+    FlatComponentFileSystemNode:
+      type: object
+      properties:
+        name:
+          type: string
+        lastModified:
+          type: integer
+          format: uint64
+        kind:
+          $ref: '#/components/schemas/FlatComponentFileSystemNodeKind'
+        permissions:
+          $ref: '#/components/schemas/ComponentFilePermissions'
+        size:
+          type: integer
+          format: uint64
+      required:
+      - name
+      - lastModified
+      - kind
+    FlatComponentFileSystemNodeKind:
+      type: string
+      enum:
+      - directory
+      - file
+    GetFilesResponse:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlatComponentFileSystemNode'
+      required:
+      - nodes
     GetOplogResponse:
       type: object
       properties:
@@ -3474,6 +3760,8 @@ components:
           Unknown: '#/components/schemas/GolemError_GolemErrorUnknown'
           InvalidAccount: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
           ShardingNotReady: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
+          InitialComponentFileDownloadFailed: '#/components/schemas/GolemError_GolemErrorInitialComponentFileDownloadFailed'
+          FileSystemError: '#/components/schemas/GolemError_GolemErrorFileSystemError'
       type: object
       oneOf:
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidRequest'
@@ -3499,6 +3787,8 @@ components:
       - $ref: '#/components/schemas/GolemError_GolemErrorUnknown'
       - $ref: '#/components/schemas/GolemError_GolemErrorInvalidAccount'
       - $ref: '#/components/schemas/GolemError_GolemErrorShardingNotReady'
+      - $ref: '#/components/schemas/GolemError_GolemErrorInitialComponentFileDownloadFailed'
+      - $ref: '#/components/schemas/GolemError_GolemErrorFileSystemError'
     GolemErrorBody:
       type: object
       properties:
@@ -3536,6 +3826,16 @@ components:
       required:
       - workerId
       - reason
+    GolemErrorFileSystemError:
+      type: object
+      properties:
+        path:
+          type: string
+        reason:
+          type: string
+      required:
+      - path
+      - reason
     GolemErrorGetLatestVersionOfComponentFailed:
       type: object
       properties:
@@ -3546,6 +3846,16 @@ components:
           type: string
       required:
       - componentId
+      - reason
+    GolemErrorInitialComponentFileDownloadFailed:
+      type: object
+      properties:
+        path:
+          type: string
+        reason:
+          type: string
+      required:
+      - path
       - reason
     GolemErrorInterrupted:
       type: object
@@ -3707,6 +4017,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorFailedToResumeWorker'
+    GolemError_GolemErrorFileSystemError:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FileSystemError
+            type: string
+            enum:
+            - FileSystemError
+        required:
+        - type
+      - $ref: '#/components/schemas/GolemErrorFileSystemError'
     GolemError_GolemErrorGetLatestVersionOfComponentFailed:
       allOf:
       - type: object
@@ -3719,6 +4041,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/GolemErrorGetLatestVersionOfComponentFailed'
+    GolemError_GolemErrorInitialComponentFileDownloadFailed:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: InitialComponentFileDownloadFailed
+            type: string
+            enum:
+            - InitialComponentFileDownloadFailed
+        required:
+        - type
+      - $ref: '#/components/schemas/GolemErrorInitialComponentFileDownloadFailed'
     GolemError_GolemErrorInterrupted:
       allOf:
       - type: object
@@ -3958,6 +4292,8 @@ components:
           type: string
         response:
           type: string
+        bindingType:
+          $ref: '#/components/schemas/WorkerBindingType'
       required:
       - componentId
       - response
@@ -3972,6 +4308,8 @@ components:
           type: string
         response:
           type: string
+        bindingType:
+          $ref: '#/components/schemas/WorkerBindingType'
         responseMappingInput:
           $ref: '#/components/schemas/RibInputTypeInfo'
         workerNameInput:
@@ -5025,6 +5363,11 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
       required:
       - filters
+    WorkerBindingType:
+      type: string
+      enum:
+      - default
+      - file-server
     WorkerCreatedAtFilter:
       type: object
       properties:
@@ -5491,11 +5834,36 @@ components:
           format: date-time
         componentType:
           $ref: '#/components/schemas/ComponentType'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/InitialComponentFile'
       required:
       - versionedComponentId
       - componentName
       - componentSize
       - metadata
+      - files
+    ComponentFilePathWithPermissions:
+      type: object
+      properties:
+        path:
+          description: Path inside a component filesystem. Must be absolute.
+          type: string
+        permissions:
+          $ref: '#/components/schemas/ComponentFilePermissions'
+      required:
+      - path
+      - permissions
+    ComponentFilePathWithPermissionsList:
+      type: object
+      properties:
+        values:
+          type: array
+          items:
+            $ref: '#/components/schemas/ComponentFilePathWithPermissions'
+      required:
+      - values
     ComponentMetadata:
       type: object
       properties:
@@ -5578,6 +5946,23 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/Empty'
+    InitialComponentFile:
+      type: object
+      properties:
+        key:
+          title: |-
+            Key that can be used to identify a component file.
+            All files with the same content will have the same key.
+          type: string
+        path:
+          description: Path inside a component filesystem. Must be absolute.
+          type: string
+        permissions:
+          $ref: '#/components/schemas/ComponentFilePermissions'
+      required:
+      - key
+      - path
+      - permissions
     LinearMemory:
       type: object
       properties:

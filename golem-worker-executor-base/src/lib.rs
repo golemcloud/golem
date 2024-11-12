@@ -37,9 +37,7 @@ use crate::services::active_workers::ActiveWorkers;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
-use crate::services::golem_config::{
-    BlobStorageConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
-};
+use crate::services::golem_config::{GolemConfig, IndexedStorageConfig, KeyValueStorageConfig};
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
@@ -57,9 +55,6 @@ use crate::services::worker_enumeration::{
 };
 use crate::services::worker_proxy::{RemoteWorkerProxy, WorkerProxy};
 use crate::services::{component, shard_manager, All};
-use crate::storage::blob::s3::S3BlobStorage;
-use crate::storage::blob::sqlite::SqliteBlobStorage;
-use crate::storage::blob::BlobStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::IndexedStorage;
@@ -73,12 +68,18 @@ use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_server::WorkerExecutorServer;
 use golem_common::golem_version;
 use golem_common::redis::RedisPool;
+use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::s3::S3BlobStorage;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::sqlite::SqlitePool;
 use humansize::{ISizeFormatter, BINARY};
 use nonempty_collections::NEVec;
 use prometheus::Registry;
+use services::file_loader::FileLoader;
 use std::sync::Arc;
 use storage::keyvalue::sqlite::SqliteKeyValueStorage;
-use storage::sqlite::SqlitePool;
 use tokio::runtime::Handle;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Server;
@@ -100,6 +101,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     /// Allows customizing the `All` service.
     /// This is the place to initialize additional services and store them in `All`'s `extra_deps`
     /// field.
+    #[allow(clippy::too_many_arguments)]
     async fn create_services(
         &self,
         active_workers: Arc<ActiveWorkers<Ctx>>,
@@ -121,6 +123,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
+        file_loader: Arc<FileLoader>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -259,7 +262,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                     config.root
                 );
                 Arc::new(
-                    storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                    golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
                         .await
                         .map_err(|err| anyhow!(err))?,
                 )
@@ -288,9 +291,14 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
             }
             BlobStorageConfig::InMemory => {
                 info!("Using in-memory blob storage");
-                Arc::new(storage::blob::memory::InMemoryBlobStorage::new())
+                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
             }
         };
+
+        let initial_files_service =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
+        let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
 
         let component_service = component::configured(
             &golem_config.component_service,
@@ -432,6 +440,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
                 scheduler_service,
                 worker_proxy,
                 events,
+                file_loader,
             )
             .await?;
 

@@ -1,21 +1,24 @@
-use crate::empty_worker_metadata;
 use crate::service::{component::ComponentService, worker::WorkerService};
+use futures_util::TryStreamExt;
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::{
-    ComponentId, IdempotencyKey, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
+    ComponentFilePath, ComponentId, IdempotencyKey, ScanCursor, TargetWorkerId, WorkerFilter,
+    WorkerId,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::*;
 use golem_worker_service_base::api::WorkerApiBaseError;
+use golem_worker_service_base::empty_worker_metadata;
+use payload::Binary;
+use poem::Body;
 use poem_openapi::param::{Header, Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
 use std::str::FromStr;
 use tap::TapFallible;
-
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::public_oplog::OplogCursor;
 use tracing::Instrument;
 
 pub struct WorkerApi {
@@ -690,6 +693,78 @@ impl WorkerApi {
             }
         }
     }
+
+    /// List files in a worker
+    #[oai(
+        path = "/:component_id/workers/:worker_name/files/:file_name",
+        method = "get",
+        operation_id = "get_files"
+    )]
+    async fn get_file(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        file_name: Path<String>,
+    ) -> Result<Json<GetFilesResponse>> {
+        let worker_id = make_target_worker_id(component_id.0, Some(worker_name.0))?;
+        let path = make_component_file_path(file_name.0)?;
+        let record = recorded_http_api_request!("get_file", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .list_directory(
+                &worker_id,
+                path,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map(|s| {
+                Json(GetFilesResponse {
+                    nodes: s.into_iter().map(|n| n.into()).collect(),
+                })
+            })
+            .map_err(|e| e.into());
+
+        record.result(response)
+    }
+
+    /// Get contents of a file in a worker
+    #[oai(
+        path = "/:component_id/workers/:worker_name/file-contents/:file_name",
+        method = "get",
+        operation_id = "get_file_content"
+    )]
+    async fn get_file_content(
+        &self,
+        component_id: Path<ComponentId>,
+        worker_name: Path<String>,
+        file_name: Path<String>,
+    ) -> Result<Binary<Body>> {
+        let worker_id = make_target_worker_id(component_id.0, Some(worker_name.0))?;
+        let path = make_component_file_path(file_name.0)?;
+        let record = recorded_http_api_request!("get_files", worker_id = worker_id.to_string());
+
+        let response = self
+            .worker_service
+            .get_file_contents(
+                &worker_id,
+                path,
+                empty_worker_metadata(),
+                &EmptyAuthCtx::default(),
+            )
+            .instrument(record.span.clone())
+            .await
+            .map_err(|e| e.into())
+            .map(|bytes| {
+                Binary(Body::from_bytes_stream(bytes.map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                })))
+            });
+
+        record.result(response)
+    }
 }
 
 fn make_worker_id(
@@ -722,5 +797,15 @@ fn make_target_worker_id(
     Ok(TargetWorkerId {
         component_id,
         worker_name,
+    })
+}
+
+fn make_component_file_path(
+    name: String,
+) -> std::result::Result<ComponentFilePath, WorkerApiBaseError> {
+    ComponentFilePath::from_rel_str(&name).map_err(|error| {
+        WorkerApiBaseError::BadRequest(Json(ErrorsBody {
+            errors: vec![format!("Invalid file name: {error}")],
+        }))
     })
 }

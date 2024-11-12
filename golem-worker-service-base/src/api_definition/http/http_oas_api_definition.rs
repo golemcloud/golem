@@ -1,11 +1,11 @@
-use async_trait::async_trait;
-use openapiv3::OpenAPI;
-use poem_openapi::types::ParseFromJSON;
-use poem_openapi::{registry, types};
-
 use crate::api_definition::http::HttpApiDefinitionRequest;
 use crate::api_definition::{ApiDefinitionId, ApiVersion};
 use internal::*;
+use openapiv3::OpenAPI;
+use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
+use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult};
+use serde_json::Value;
+use std::borrow::Cow;
 
 pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinitionRequest, String> {
     let api_definition_id = ApiDefinitionId(get_root_extension(
@@ -26,22 +26,61 @@ pub fn get_api_definition(openapi: OpenAPI) -> Result<HttpApiDefinitionRequest, 
     })
 }
 
-// Used to extract the OpenAPI spec from JSON Body in Poem OpenAPI endpoints.
-pub struct JsonOpenApiDefinition(pub openapiv3::OpenAPI);
+pub struct OpenApiDefinitionRequest(pub OpenAPI);
 
-impl types::Type for JsonOpenApiDefinition {
+impl ParseFromJSON for OpenApiDefinitionRequest {
+    fn parse_from_json(value: Option<serde_json::Value>) -> ParseResult<Self> {
+        match value {
+            Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
+                Ok(openapi) => Ok(OpenApiDefinitionRequest(openapi)),
+                Err(e) => Err(ParseError::<Self>::custom(format!(
+                    "Failed to parse OpenAPI: {}",
+                    e
+                ))),
+            },
+
+            _ => Err(ParseError::<Self>::custom(
+                "OpenAPI spec missing".to_string(),
+            )),
+        }
+    }
+}
+
+impl ParseFromYAML for OpenApiDefinitionRequest {
+    fn parse_from_yaml(value: Option<Value>) -> ParseResult<Self> {
+        match value {
+            Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
+                Ok(openapi) => Ok(OpenApiDefinitionRequest(openapi)),
+                Err(e) => Err(ParseError::<Self>::custom(format!(
+                    "Failed to parse OpenAPI: {}",
+                    e
+                ))),
+            },
+
+            _ => Err(ParseError::<Self>::custom(
+                "OpenAPI spec missing".to_string(),
+            )),
+        }
+    }
+}
+
+impl poem_openapi::types::Type for OpenApiDefinitionRequest {
     const IS_REQUIRED: bool = true;
 
     type RawValueType = Self;
 
     type RawElementValueType = Self;
 
-    fn name() -> std::borrow::Cow<'static, str> {
+    fn name() -> Cow<'static, str> {
         "OpenApiDefinition".into()
     }
 
-    fn schema_ref() -> registry::MetaSchemaRef {
-        registry::MetaSchemaRef::Inline(Box::new(registry::MetaSchema::ANY))
+    fn schema_ref() -> MetaSchemaRef {
+        MetaSchemaRef::Inline(Box::new(MetaSchema {
+            title: Some("API definition in OpenAPI format".to_string()),
+            description: Some("API definition in OpenAPI format with required custom extensions"),
+            ..MetaSchema::new("OpenAPI+WorkerBridgeCustomExtension")
+        }))
     }
 
     fn as_raw_value(&self) -> Option<&Self::RawValueType> {
@@ -55,29 +94,11 @@ impl types::Type for JsonOpenApiDefinition {
     }
 }
 
-#[async_trait]
-impl ParseFromJSON for JsonOpenApiDefinition {
-    fn parse_from_json(value: Option<serde_json::Value>) -> types::ParseResult<Self> {
-        match value {
-            Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
-                Ok(openapi) => Ok(JsonOpenApiDefinition(openapi)),
-                Err(e) => Err(types::ParseError::<Self>::custom(format!(
-                    "Failed to parse OpenAPI: {}",
-                    e
-                ))),
-            },
-
-            _ => Err(poem_openapi::types::ParseError::<Self>::custom(
-                "OpenAPI spec missing".to_string(),
-            )),
-        }
-    }
-}
-
 mod internal {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
+    use golem_common::model::WorkerBindingType;
     use openapiv3::{OpenAPI, PathItem, Paths, ReferenceOr};
     use rib::Expr;
     use serde_json::Value;
@@ -158,6 +179,7 @@ mod internal {
             component_id: get_component_id(worker_bridge_info)?,
             idempotency_key: get_idempotency_key(worker_bridge_info)?,
             response: get_response_mapping(worker_bridge_info)?,
+            worker_binding_type: get_binding_type(worker_bridge_info)?,
         };
 
         Ok(Route {
@@ -239,6 +261,19 @@ mod internal {
     pub(crate) fn get_path_pattern(path: &str) -> Result<AllPathPatterns, String> {
         AllPathPatterns::parse(path).map_err(|err| err.to_string())
     }
+
+    pub(crate) fn get_binding_type(
+        worker_bridge_info: &Value,
+    ) -> Result<WorkerBindingType, String> {
+        let binding_type = worker_bridge_info
+            .get("type")
+            .map(|v| serde_json::from_value(v.clone()))
+            .transpose()
+            .map_err(|e| format!("Failed to parse binding type: {}", e))?
+            .unwrap_or_default();
+
+        Ok(binding_type)
+    }
 }
 
 #[cfg(test)]
@@ -249,6 +284,7 @@ mod tests {
     use crate::api_definition::http::{AllPathPatterns, MethodPattern, Route};
     use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
     use golem_common::model::ComponentId;
+    use golem_common::model::WorkerBindingType;
     use openapiv3::PathItem;
     use rib::Expr;
     use serde_json::json;
@@ -262,6 +298,7 @@ mod tests {
                 "component-id": "00000000-0000-0000-0000-000000000000",
                 "component-version": 0,
                 "idempotency-key": "\"test-key\"",
+                "type": "file-server",
                 "response": "${{headers : {ContentType: \"json\", user-id: \"foo\"}, body: worker.response, status: 200}}"
             }))]
                 .into_iter()
@@ -311,7 +348,8 @@ mod tests {
                         ]
                         .into_iter()
                         .collect()
-                    ))
+                    )),
+                    worker_binding_type: WorkerBindingType::FileServer
                 }
             })
         );

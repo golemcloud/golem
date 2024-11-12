@@ -143,6 +143,21 @@ impl From<ComponentServiceError> for ComponentError {
                     error: error.to_safe_string(),
                 }))
             }
+            ComponentServiceError::MalformedComponentArchiveError { .. } => {
+                ComponentError::BadRequest(Json(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                }))
+            }
+            ComponentServiceError::InitialComponentFileUploadError { .. } => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
+            ComponentServiceError::InitialComponentFileNotFound { .. } => {
+                ComponentError::NotFound(Json(ErrorBody {
+                    error: error.to_safe_string(),
+                }))
+            }
         }
     }
 }

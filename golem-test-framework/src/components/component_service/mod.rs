@@ -36,7 +36,7 @@ use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
-use golem_common::model::{ComponentId, ComponentType};
+use golem_common::model::{ComponentId, ComponentType, InitialComponentFile};
 
 use crate::components::rdb::Rdb;
 use crate::components::{wait_for_startup_grpc, EnvVarBuilder, GolemEnvVars};
@@ -132,6 +132,16 @@ pub trait ComponentService {
         }
     }
 
+    // Forward to get_or_add_component. This method is only used in tests for adding a 'broken' component using the
+    // filesystem component service, which will skip verification here.
+    async fn get_or_add_component_unverified(
+        &self,
+        local_path: &Path,
+        component_type: ComponentType,
+    ) -> ComponentId {
+        self.get_or_add_component(local_path, component_type).await
+    }
+
     async fn add_component_with_id(
         &self,
         _local_path: &Path,
@@ -159,6 +169,17 @@ pub trait ComponentService {
         name: &str,
         component_type: ComponentType,
     ) -> Result<ComponentId, AddComponentError> {
+        self.add_component_with_files(local_path, name, component_type, &[])
+            .await
+    }
+
+    async fn add_component_with_files(
+        &self,
+        local_path: &Path,
+        name: &str,
+        component_type: ComponentType,
+        files: &[InitialComponentFile],
+    ) -> Result<ComponentId, AddComponentError> {
         let mut client = self.client().await;
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
@@ -166,11 +187,15 @@ pub trait ComponentService {
 
         let component_type: golem_api_grpc::proto::golem::component::ComponentType =
             component_type.into();
+
+        let files = files.iter().map(|f| f.clone().into()).collect();
+
         let mut chunks: Vec<CreateComponentRequest> = vec![CreateComponentRequest {
             data: Some(Data::Header(CreateComponentRequestHeader {
                 project_id: None,
                 component_name: name.to_string(),
                 component_type: Some(component_type as i32),
+                files,
             })),
         }];
 
@@ -237,6 +262,17 @@ pub trait ComponentService {
         local_path: &Path,
         component_type: ComponentType,
     ) -> u64 {
+        self.update_component_with_files(component_id, local_path, component_type, &None)
+            .await
+    }
+
+    async fn update_component_with_files(
+        &self,
+        component_id: &ComponentId,
+        local_path: &Path,
+        component_type: ComponentType,
+        files: &Option<Vec<InitialComponentFile>>,
+    ) -> u64 {
         let mut client = self.client().await;
         let mut file = File::open(local_path)
             .await
@@ -244,11 +280,22 @@ pub trait ComponentService {
 
         let component_type: golem_api_grpc::proto::golem::component::ComponentType =
             component_type.into();
+
+        let update_files = files.is_some();
+
+        let files: Vec<golem_api_grpc::proto::golem::component::InitialComponentFile> = files
+            .iter()
+            .flatten()
+            .map(|f| f.clone().into())
+            .collect::<Vec<_>>();
+
         let mut chunks: Vec<UpdateComponentRequest> = vec![UpdateComponentRequest {
             data: Some(update_component_request::Data::Header(
                 UpdateComponentRequestHeader {
                     component_id: Some(component_id.clone().into()),
                     component_type: Some(component_type as i32),
+                    update_files,
+                    files,
                 },
             )),
         }];
@@ -378,6 +425,11 @@ impl ComponentServiceEnvVars for GolemEnvVars {
             .with_str("GOLEM__COMPONENT_STORE__CONFIG__OBJECT_PREFIX", "")
             .with_str(
                 "GOLEM__COMPONENT_STORE__CONFIG__ROOT_PATH",
+                "/tmp/ittest-local-object-store/golem",
+            )
+            .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
+            .with_str(
+                "GOLEM__BLOB_STORAGE__CONFIG__ROOT",
                 "/tmp/ittest-local-object-store/golem",
             )
             .with("GOLEM__GRPC_PORT", grpc_port.to_string())

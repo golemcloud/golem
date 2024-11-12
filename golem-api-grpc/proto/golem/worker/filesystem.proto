@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package golem.worker;
+
+import "golem/component/component_files.proto";
+
+message FileFileSystemNode {
+  string name = 1;
+  uint64 last_modified = 2; // Unix timestamp
+  uint64 size = 3; // Size in bytes, applicable for files
+  golem.component.ComponentFilePermissions permissions = 4;
+}
+
+message DirectoryFileSystemNode {
+  string name = 1;
+  uint64 last_modified = 2; // Unix timestamp
+}
+
+message FileSystemNode {
+  oneof value {
+    DirectoryFileSystemNode directory = 1;
+    FileFileSystemNode file = 2;
+  }
+}

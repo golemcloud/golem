@@ -1,6 +1,7 @@
 use std::fmt::{Display, Formatter};
 
-use serde::Deserialize;
+use golem_common::model::{AccountId, HasAccountId};
+use serde::{Deserialize, Serialize};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EmptyAuthCtx();
@@ -21,9 +22,24 @@ impl IntoIterator for EmptyAuthCtx {
 }
 
 #[derive(
-    Default, Debug, Clone, PartialEq, Eq, Hash, bincode::Encode, bincode::Decode, Deserialize,
+    Default,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    bincode::Encode,
+    bincode::Decode,
+    Serialize,
+    Deserialize,
 )]
 pub struct DefaultNamespace();
+
+impl HasAccountId for DefaultNamespace {
+    fn account_id(&self) -> AccountId {
+        AccountId::placeholder()
+    }
+}
 
 impl Display for DefaultNamespace {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

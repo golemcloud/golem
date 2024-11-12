@@ -15,9 +15,11 @@
 mod component;
 mod plugin;
 
-use crate::repo::RowMeta;
-pub use component::{Component, ComponentConstraints};
+pub use component::{Component, ComponentConstraints, InitialComponentFilesArchiveAndPermissions};
 pub use plugin::*;
+
+use crate::repo::RowMeta;
+use golem_common::model::{AccountId, HasAccountId};
 use poem_openapi::types::{ParseFromJSON, ToJSON, Type};
 use poem_openapi::Object;
 use serde::{Deserialize, Serialize};
@@ -31,6 +33,7 @@ pub trait ComponentOwner:
     Debug
     + Display
     + FromStr<Err = String>
+    + HasAccountId
     + Clone
     + PartialEq
     + Serialize
@@ -76,6 +79,12 @@ impl FromStr for DefaultComponentOwner {
         } else {
             Err("Failed to parse empty namespace".to_string())
         }
+    }
+}
+
+impl HasAccountId for DefaultComponentOwner {
+    fn account_id(&self) -> AccountId {
+        AccountId::placeholder()
     }
 }
 

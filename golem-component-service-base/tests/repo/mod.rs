@@ -15,9 +15,9 @@
 use crate::Tracing;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope};
-use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
-use golem_common::SafeDisplay;
-use golem_component_service_base::config::ComponentStoreLocalConfig;
+use golem_common::model::{
+    AccountId, ComponentId, ComponentType, Empty, HasAccountId, PluginInstallationId,
+};
 use golem_component_service_base::model::{
     Component, ComponentOwner, ComponentPluginInstallationTarget, ComponentTransformerDefinition,
     DefaultComponentOwner, OplogProcessorDefinition, PluginDefinition, PluginInstallation,
@@ -29,19 +29,11 @@ use golem_component_service_base::repo::plugin::{
 };
 use golem_component_service_base::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_component_service_base::repo::RowMeta;
-use golem_component_service_base::service::component::{
-    ComponentError, ComponentService, ComponentServiceDefault, ConflictReport, ConflictingFunction,
-};
-use golem_component_service_base::service::component_compilation::{
-    ComponentCompilationService, ComponentCompilationServiceDisabled,
-};
-use golem_component_service_base::service::component_object_store;
+use golem_component_service_base::service::component::ComponentService;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
-use golem_wasm_ast::analysis::analysed_type::{str, u64};
 use poem_openapi::NewType;
 use poem_openapi::__private::serde_json;
-use rib::RegistryKey;
 use serde::{Deserialize, Serialize};
 use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, QueryBuilder};
@@ -52,9 +44,9 @@ use std::sync::Arc;
 use test_r::inherit_test_dep;
 use uuid::Uuid;
 
-mod constraint_data;
-mod postgres;
-mod sqlite;
+pub mod constraint_data;
+pub mod postgres;
+pub mod sqlite;
 
 inherit_test_dep!(Tracing);
 
@@ -72,6 +64,14 @@ impl FromStr for UuidOwner {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(UuidOwner(Uuid::parse_str(s).map_err(|e| e.to_string())?))
+    }
+}
+
+impl HasAccountId for UuidOwner {
+    fn account_id(&self) -> AccountId {
+        AccountId {
+            value: self.0.to_string(),
+        }
     }
 }
 
@@ -122,381 +122,9 @@ where
     }
 }
 
-fn get_component_data(name: &str) -> Vec<u8> {
+pub(crate) fn get_component_data(name: &str) -> Vec<u8> {
     let path = format!("../test-components/{}.wasm", name);
     std::fs::read(path).unwrap()
-}
-
-async fn test_component_constraint_incompatible_updates(
-    component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-) {
-    let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
-        Arc::new(
-            component_object_store::FsComponentObjectStore::new(&ComponentStoreLocalConfig {
-                root_path: "/tmp/component".to_string(),
-                object_prefix: Uuid::new_v4().to_string(),
-            })
-            .unwrap(),
-        );
-
-    let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
-        Arc::new(ComponentCompilationServiceDisabled);
-
-    let component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send> =
-        Arc::new(ComponentServiceDefault::new(
-            component_repo.clone(),
-            object_store.clone(),
-            compilation_service.clone(),
-        ));
-
-    let component_name = ComponentName("shopping-cart-constraint-incompatible-updates".to_string());
-
-    // Create a shopping cart
-    component_service
-        .create(
-            &ComponentId::new_v4(),
-            &component_name,
-            ComponentType::Durable,
-            get_component_data("shopping-cart"),
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-
-    let component_id = ComponentId::new_v4();
-
-    let missing_function_constraint =
-        constraint_data::get_random_constraint(&DefaultComponentOwner, &component_id);
-
-    let incompatible_constraint =
-        constraint_data::get_incompatible_constraint(&DefaultComponentOwner, &component_id);
-
-    // Create a constraint with an unknown function (for the purpose of test), and this will act as an existing constraint of component
-    component_service
-        .create_or_update_constraint(&missing_function_constraint)
-        .await
-        .unwrap();
-
-    // Create a constraint with an unknown function (for the purpose of test), and this will get added to the existing constraints of component
-    component_service
-        .create_or_update_constraint(&incompatible_constraint)
-        .await
-        .unwrap();
-
-    // Update the component of shopping cart that has functions that are incompatible with the existing constraints
-    let component_update_error = component_service
-        .update(
-            &component_id,
-            get_component_data("shopping-cart"),
-            None,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap_err()
-        .to_safe_string();
-
-    let expected_error = ComponentError::ComponentConstraintConflictError(ConflictReport {
-        missing_functions: vec![RegistryKey::FunctionName("foo".to_string())],
-        conflicting_functions: vec![ConflictingFunction {
-            function: RegistryKey::FunctionNameWithInterface {
-                interface_name: "golem:it/api".to_string(),
-                function_name: "initialize-cart".to_string(),
-            },
-            existing_parameter_types: vec![u64()],
-            new_parameter_types: vec![str()],
-            existing_result_types: vec![str()],
-            new_result_types: vec![],
-        }],
-    })
-    .to_safe_string();
-
-    assert_eq!(component_update_error, expected_error)
-}
-
-async fn test_services(
-    component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-) {
-    let object_store: Arc<dyn component_object_store::ComponentObjectStore + Sync + Send> =
-        Arc::new(
-            component_object_store::FsComponentObjectStore::new(&ComponentStoreLocalConfig {
-                root_path: "/tmp/component".to_string(),
-                object_prefix: Uuid::new_v4().to_string(),
-            })
-            .unwrap(),
-        );
-
-    let compilation_service: Arc<dyn ComponentCompilationService + Sync + Send> =
-        Arc::new(ComponentCompilationServiceDisabled);
-
-    let component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send> =
-        Arc::new(ComponentServiceDefault::new(
-            component_repo.clone(),
-            object_store.clone(),
-            compilation_service.clone(),
-        ));
-
-    let component_name1 = ComponentName("shopping-cart-services".to_string());
-    let component_name2 = ComponentName("rust-echo-services".to_string());
-
-    let component1 = component_service
-        .create(
-            &ComponentId::new_v4(),
-            &component_name1,
-            ComponentType::Durable,
-            get_component_data("shopping-cart"),
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-
-    let component2 = component_service
-        .create(
-            &ComponentId::new_v4(),
-            &component_name2,
-            ComponentType::Durable,
-            get_component_data("rust-echo"),
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-
-    let component1_result = component_service
-        .get_by_version(&component1.versioned_component_id, &DefaultComponentOwner)
-        .await
-        .unwrap();
-    assert!(component1_result.is_some());
-
-    let component2_result = component_service
-        .get_by_version(&component2.versioned_component_id, &DefaultComponentOwner)
-        .await
-        .unwrap();
-    assert!(component2_result.is_some());
-    assert_eq!(component2_result.unwrap(), component2);
-
-    let component1_result = component_service
-        .get_latest_version(
-            &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-    assert!(component1_result.is_some());
-    assert_eq!(component1_result.unwrap(), component1);
-
-    let component1_result = component_service
-        .get(
-            &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-    assert_eq!(component1_result.len(), 1);
-
-    // Create constraints
-    let component_constraints = constraint_data::get_shopping_cart_component_constraint1(
-        &DefaultComponentOwner,
-        &component1.versioned_component_id.component_id,
-    );
-
-    let component1_constrained = component_service
-        .create_or_update_constraint(&component_constraints)
-        .await;
-
-    assert!(component1_constrained.is_ok());
-
-    // Get Constraint
-    let component1_constrained = component_service
-        .get_component_constraint(
-            &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-
-    assert!(component1_constrained.is_some());
-
-    // Update Constraint
-    let component_constraints = constraint_data::get_shopping_cart_component_constraint2(
-        &DefaultComponentOwner,
-        &component1.versioned_component_id.component_id,
-    );
-
-    let component1_constrained = component_service
-        .create_or_update_constraint(&component_constraints)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        component1_constrained
-            .constraints
-            .function_constraints
-            .len(),
-        2
-    );
-
-    let component1v2 = component_service
-        .update(
-            &component1.versioned_component_id.component_id,
-            get_component_data("shopping-cart"),
-            None,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-
-    let component1_result = component_service
-        .get_latest_version(
-            &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-    assert!(component1_result.is_some());
-    assert_eq!(component1_result.unwrap(), component1v2);
-
-    let component1_result = component_service
-        .get(
-            &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-    assert_eq!(component1_result.len(), 2);
-
-    let component1_result = component_service
-        .get_owner(&component1.versioned_component_id.component_id)
-        .await
-        .unwrap();
-    assert!(component1_result.is_some());
-    assert_eq!(component1_result.unwrap(), DefaultComponentOwner);
-
-    let component2_result = component_service
-        .get_owner(&component2.versioned_component_id.component_id)
-        .await
-        .unwrap();
-    assert!(component2_result.is_some());
-    assert_eq!(component2_result.unwrap(), DefaultComponentOwner);
-
-    let component1_result = component_service
-        .download(
-            &component1v2.versioned_component_id.component_id,
-            Some(component1v2.versioned_component_id.version),
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-    assert!(!component1_result.is_empty());
-
-    let component2_result = component_service
-        .download(
-            &component2.versioned_component_id.component_id,
-            None,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-    assert!(!component2_result.is_empty());
-
-    let component1_result = component_service
-        .download(
-            &component1v2.versioned_component_id.component_id,
-            Some(component1v2.versioned_component_id.version),
-            &DefaultComponentOwner,
-        )
-        .await;
-    assert!(component1_result.is_ok());
-
-    let component1_result = component_service
-        .download(
-            &component1v2.versioned_component_id.component_id,
-            Some(10000000),
-            &DefaultComponentOwner,
-        )
-        .await;
-    assert!(component1_result.is_err());
-
-    let component2_result = component_service
-        .download(
-            &component1v2.versioned_component_id.component_id,
-            None,
-            &DefaultComponentOwner,
-        )
-        .await;
-    assert!(component2_result.is_ok());
-
-    let component1_result = component_service
-        .find_id_by_name(&component1.component_name, &DefaultComponentOwner)
-        .await
-        .unwrap();
-    assert_eq!(
-        component1_result,
-        Some(component1.versioned_component_id.component_id.clone())
-    );
-
-    let component2_result = component_service
-        .find_id_by_name(&component2.component_name, &DefaultComponentOwner)
-        .await
-        .unwrap();
-    assert_eq!(
-        component2_result,
-        Some(component2.versioned_component_id.component_id.clone())
-    );
-
-    let component1_result = component_service
-        .find_by_name(
-            Some(component1.component_name.clone()),
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        component1_result,
-        vec![component1.clone(), component1v2.clone()]
-    );
-
-    let component2_result = component_service
-        .find_by_name(
-            Some(component2.component_name.clone()),
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-    assert_eq!(component2_result, vec![component2.clone()]);
-
-    let component_result = component_service
-        .find_by_name(None, &DefaultComponentOwner)
-        .await
-        .unwrap();
-
-    assert!(component_result.contains(&component1));
-    assert!(component_result.contains(&component1v2));
-    assert!(component_result.contains(&component2));
-
-    component_service
-        .delete(
-            &component1v2.versioned_component_id.component_id,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-
-    let component1_result = component_service
-        .get(
-            &component1.versioned_component_id.component_id,
-            &DefaultComponentOwner,
-        )
-        .await
-        .unwrap();
-    assert!(component1_result.is_empty());
-
-    let component1_result = component_service
-        .download(
-            &component1v2.versioned_component_id.component_id,
-            Some(component1v2.versioned_component_id.version),
-            &DefaultComponentOwner,
-        )
-        .await;
-    assert!(component1_result.is_err());
 }
 
 async fn test_repo_component_id_unique(
@@ -513,6 +141,7 @@ async fn test_repo_component_id_unique(
         component_name1,
         ComponentType::Durable,
         &data,
+        vec![],
         owner1.clone(),
     )
     .unwrap();
@@ -559,6 +188,7 @@ async fn test_repo_component_name_unique_in_namespace(
         component_name1.clone(),
         ComponentType::Durable,
         &data,
+        vec![],
         owner1.clone(),
     )
     .unwrap();
@@ -567,6 +197,7 @@ async fn test_repo_component_name_unique_in_namespace(
         component_name1,
         ComponentType::Durable,
         &data,
+        vec![],
         owner2.clone(),
     )
     .unwrap();
@@ -620,6 +251,7 @@ async fn test_repo_component_delete(
         component_name1,
         ComponentType::Durable,
         &data,
+        vec![],
         owner1.clone(),
     )
     .unwrap();
@@ -677,6 +309,7 @@ async fn test_repo_component_constraints(
         component_name1,
         ComponentType::Durable,
         &data,
+        vec![],
         owner1.clone(),
     )
     .unwrap();
@@ -768,6 +401,7 @@ async fn test_default_plugin_repo(
         ComponentName("default-plugin-repo-component1".to_string()),
         ComponentType::Ephemeral,
         &get_component_data("shopping-cart"),
+        vec![],
         owner.clone(),
     )
     .unwrap();
@@ -776,6 +410,7 @@ async fn test_default_plugin_repo(
         ComponentName("default-plugin-repo-component2".to_string()),
         ComponentType::Durable,
         &get_component_data("shopping-cart"),
+        vec![],
         owner.clone(),
     )
     .unwrap();
@@ -897,6 +532,7 @@ async fn test_default_component_plugin_installation(
         ComponentName("default-component-plugin-installation-component1".to_string()),
         ComponentType::Ephemeral,
         &get_component_data("shopping-cart"),
+        vec![],
         owner.clone(),
     )
     .unwrap();

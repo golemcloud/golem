@@ -1,6 +1,7 @@
 use crate::worker_binding::{GolemWorkerBinding, ResponseMapping};
 use crate::worker_service_rib_compiler::{DefaultRibCompiler, WorkerServiceRibCompiler};
 use bincode::{Decode, Encode};
+use golem_common::model::WorkerBindingType;
 use golem_service_base::model::VersionedComponentId;
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{Expr, RibByteCode, RibInputTypeInfo, WorkerFunctionsInRib};
@@ -11,6 +12,7 @@ pub struct CompiledGolemWorkerBinding {
     pub worker_name_compiled: Option<WorkerNameCompiled>,
     pub idempotency_key_compiled: Option<IdempotencyKeyCompiled>,
     pub response_compiled: ResponseMappingCompiled,
+    pub worker_binding_type: WorkerBindingType,
 }
 
 impl CompiledGolemWorkerBinding {
@@ -43,6 +45,7 @@ impl CompiledGolemWorkerBinding {
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
+            worker_binding_type: golem_worker_binding.worker_binding_type.clone(),
         })
     }
 }
@@ -199,11 +202,19 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding>
             worker_calls,
         };
 
+        let worker_binding_type = value
+            .r#type
+            .map(golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::try_from)
+            .transpose()
+            .map_err(|_| "Invalid worker binding type".to_string())?
+            .map_or(WorkerBindingType::default(), WorkerBindingType::from);
+
         Ok(CompiledGolemWorkerBinding {
             component_id,
             worker_name_compiled,
             idempotency_key_compiled,
             response_compiled,
+            worker_binding_type,
         })
     }
 }
@@ -241,6 +252,9 @@ impl TryFrom<CompiledGolemWorkerBinding>
         let response_rib_input = Some(value.response_compiled.rib_input.into());
         let worker_functions_in_response = value.response_compiled.worker_calls.map(|x| x.into());
 
+        let r#type: golem_api_grpc::proto::golem::apidefinition::WorkerBindingType =
+            value.worker_binding_type.into();
+
         Ok(
             golem_api_grpc::proto::golem::apidefinition::CompiledWorkerBinding {
                 component,
@@ -254,6 +268,7 @@ impl TryFrom<CompiledGolemWorkerBinding>
                 compiled_response_expr,
                 response_rib_input,
                 worker_functions_in_response,
+                r#type: Some(r#type.into()),
             },
         )
     }

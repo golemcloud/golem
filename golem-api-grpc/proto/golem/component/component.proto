@@ -3,6 +3,7 @@ syntax = "proto3";
 package golem.component;
 
 import "golem/common/project_id.proto";
+import "golem/component/component_files.proto";
 import "golem/component/component_metadata.proto";
 import "golem/component/component_type.proto";
 import "golem/component/versioned_component_id.proto";
@@ -16,4 +17,5 @@ message Component {
   golem.common.ProjectId project_id = 7;
   google.protobuf.Timestamp created_at = 8;
   optional ComponentType component_type = 9;
+  repeated golem.component.InitialComponentFile files = 10;
 }

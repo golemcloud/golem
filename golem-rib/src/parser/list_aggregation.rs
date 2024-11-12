@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::parser::block_without_return::block_without_return;
 use crate::parser::errors::RibParseError;
 use crate::parser::identifier::identifier_text;
-use crate::parser::partial_block_expr::partial_block;
 use crate::parser::rib_expr::rib_expr as expr;
 use crate::{Expr, VariableId};
 use combine::parser::char::{alpha_num, char, spaces, string};
@@ -49,7 +49,7 @@ where
         string("from").skip(spaces()),
         expr().skip(spaces()),
         char('{').skip(spaces()),
-        optional(partial_block().skip(spaces())),
+        optional(block_without_return().skip(spaces())),
         string("yield").skip(spaces()),
         expr().skip(spaces()),
         char(';').skip(spaces()),

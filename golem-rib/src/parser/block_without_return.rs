@@ -18,8 +18,11 @@ use crate::Expr;
 use combine::parser::char::{char, spaces};
 use combine::{attempt, sep_end_by, ParseError, Parser};
 
-// A block expr without the return type
-pub fn partial_block<Input>() -> impl Parser<Input, Output = Vec<Expr>>
+// Get all expressions in a block
+// that doesn't have a return type
+// It is not a valid rib by itself, unless we resolve the return collection type
+// aligning to Rib grammar spec
+pub fn block_without_return<Input>() -> impl Parser<Input, Output = Vec<Expr>>
 where
     Input: combine::Stream<Token = char>,
     RibParseError: Into<
@@ -32,4 +35,29 @@ where
             char(';').skip(spaces()),
         ))
         .map(|block: Vec<Expr>| block)
+}
+
+#[cfg(test)]
+mod tests {
+    use test_r::test;
+
+    use super::*;
+    use combine::EasyParser;
+
+    #[test]
+    fn test_block_without_return() {
+        let input = r#"
+        let x = 1;
+        let y = 2;
+        x + y;
+        "#;
+        let expr = block_without_return().easy_parse(input).unwrap().0;
+
+        let expected = vec![
+            Expr::let_binding("x", Expr::untyped_number(1f64)),
+            Expr::let_binding("y", Expr::untyped_number(2f64)),
+            Expr::plus(Expr::identifier("x"), Expr::identifier("y")),
+        ];
+        assert_eq!(expr, expected);
+    }
 }

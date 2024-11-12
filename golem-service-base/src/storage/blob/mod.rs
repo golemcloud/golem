@@ -328,6 +328,9 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BlobStorageNamespace {
     CompilationCache,
+    InitialComponentFiles {
+        account_id: AccountId,
+    },
     CustomStorage(AccountId),
     OplogPayload {
         account_id: AccountId,

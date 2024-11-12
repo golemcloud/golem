@@ -2,6 +2,12 @@
 grpc_port = 9090
 http_port = 8083
 
+[blob_storage]
+type = "LocalFileSystem"
+
+[blob_storage.config]
+root = "../data/blob_storage"
+
 [compilation]
 type = "Enabled"
 
@@ -55,58 +61,3 @@ without_time = false
 
 
 ## Generated from example config: with postgres, s3 and disabled compilation
-# grpc_port = 9090
-# http_port = 8083
-# 
-# [compilation]
-# type = "Disabled"
-# 
-# [compilation.config]
-# 
-# [component_store]
-# type = "S3"
-# 
-# [component_store.config]
-# bucket_name = "bucket"
-# object_prefix = "object_prefix"
-# 
-# [db]
-# type = "Postgres"
-# 
-# [db.config]
-# database = "postgres"
-# host = "localhost"
-# max_connections = 10
-# password = "postgres"
-# port = 5432
-# username = "postgres"
-# 
-# [tracing]
-# console = false
-# dtor_friendly = false
-# file_name = "component-service.log"
-# file_truncate = true
-# 
-# [tracing.file]
-# ansi = false
-# compact = false
-# enabled = false
-# json = true
-# json_flatten = true
-# json_flatten_span = true
-# pretty = false
-# span_events_active = false
-# span_events_full = false
-# without_time = false
-# 
-# [tracing.stdout]
-# ansi = true
-# compact = false
-# enabled = true
-# json = false
-# json_flatten = true
-# json_flatten_span = true
-# pretty = false
-# span_events_active = false
-# span_events_full = false
-# without_time = false

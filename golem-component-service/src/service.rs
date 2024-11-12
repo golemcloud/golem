@@ -32,7 +32,12 @@ use golem_component_service_base::service::component_object_store::{
     ComponentObjectStore, LoggedComponentObjectStore,
 };
 use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
+use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db;
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
+use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::sqlite::SqlitePool;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -79,6 +84,31 @@ impl Services {
             }
         };
 
+        let blob_storage: Arc<dyn BlobStorage + Sync + Send> = match &config.blob_storage {
+            BlobStorageConfig::S3(config) => Arc::new(
+                golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await,
+            ),
+            BlobStorageConfig::LocalFileSystem(config) => Arc::new(
+                golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                    .await?,
+            ),
+            BlobStorageConfig::Sqlite(sqlite) => {
+                let pool = SqlitePool::configured(sqlite)
+                    .await
+                    .map_err(|e| format!("Failed to create sqlite pool: {}", e))?;
+                Arc::new(SqliteBlobStorage::new(pool.clone()).await?)
+            }
+            BlobStorageConfig::InMemory => {
+                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
+            }
+            _ => {
+                return Err("Unsupported blob storage configuration".to_string());
+            }
+        };
+
+        let initial_component_files_service: Arc<InitialComponentFilesService> =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+
         let object_store: Arc<dyn ComponentObjectStore + Sync + Send> =
             match &config.component_store {
                 ComponentStoreConfig::S3(c) => {
@@ -112,6 +142,7 @@ impl Services {
                 component_repo.clone(),
                 object_store.clone(),
                 compilation_service.clone(),
+                initial_component_files_service.clone(),
             ));
 
         let plugin_service: Arc<

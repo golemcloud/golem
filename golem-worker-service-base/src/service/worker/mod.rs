@@ -13,13 +13,13 @@
 // limitations under the License.
 
 pub use connect_proxy::*;
-pub use connect_stream::*;
 pub use default::*;
 pub use error::*;
 pub use routing_logic::*;
+pub use worker_stream::*;
 
 mod connect_proxy;
-mod connect_stream;
 mod default;
 mod error;
 mod routing_logic;
+mod worker_stream;

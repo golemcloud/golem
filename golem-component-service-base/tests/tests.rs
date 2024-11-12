@@ -15,7 +15,8 @@
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use test_r::test_dep;
 
-mod repo;
+pub mod repo;
+pub mod service;
 
 test_r::enable!();
 

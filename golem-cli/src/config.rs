@@ -316,6 +316,16 @@ impl HttpClientConfig {
         .with_env_overrides("GOLEM_HEALTHCHECK")
     }
 
+    pub fn new_for_file_download(allow_insecure: bool) -> Self {
+        Self {
+            allow_insecure,
+            timeout: Some(Duration::from_secs(60)),
+            connect_timeout: Some(Duration::from_secs(10)),
+            read_timeout: Some(Duration::from_secs(60)),
+        }
+        .with_env_overrides("GOLEM_FILE_DOWNLOAD")
+    }
+
     fn with_env_overrides(mut self, prefix: &str) -> Self {
         fn env_duration(name: &str) -> Option<Duration> {
             let duration_str = std::env::var(name).ok()?;

@@ -82,6 +82,10 @@ impl FileSystemBlobStorage {
                 result.push(component_id.to_string());
                 result.push(level.to_string());
             }
+            BlobStorageNamespace::InitialComponentFiles { account_id } => {
+                result.push("initial_component_files");
+                result.push(account_id.to_string());
+            }
         }
 
         result.push(path);

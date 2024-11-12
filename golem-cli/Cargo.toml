@@ -30,6 +30,7 @@ golem-rib = { path = "../golem-rib", version = "0.0.0" }
 anyhow.workspace = true
 assert2 = { workspace = true }
 async-trait = { workspace = true }
+async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 base64 = "0.22.1"
 chrono = { workspace = true }
 clap = { workspace = true }
@@ -40,6 +41,7 @@ colored = "2.1.0"
 derive_more = { workspace = true }
 dirs = "5.0.1"
 futures-util = { workspace = true }
+glob = "0.3.1"
 golem-examples = "1.0.6"
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
@@ -65,9 +67,11 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
+tempfile = { workspace = true }
 testcontainers-modules = { workspace = true }
 textwrap = "0.16.1"
 tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["fs"] }
 tokio-tungstenite = { version = "0.20.1", features = ["native-tls"] }
 tower = "0.4.13"
 tracing = { workspace = true }
@@ -88,6 +92,7 @@ log = "0.4.20"
 postgres = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
 serde_json_path = "0.6.5"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }

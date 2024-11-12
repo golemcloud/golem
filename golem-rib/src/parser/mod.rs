@@ -13,6 +13,8 @@
 // limitations under the License.
 
 mod binary_op;
+pub(crate) mod block;
+mod block_without_return;
 mod boolean;
 pub(crate) mod call;
 mod cond;
@@ -27,7 +29,6 @@ mod multi_line_code_block;
 mod not;
 mod number;
 mod optional;
-mod partial_block_expr;
 mod pattern_match;
 mod record;
 mod result;

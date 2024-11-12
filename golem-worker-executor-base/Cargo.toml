@@ -20,11 +20,12 @@ harness = false
 golem-api-grpc = { path = "../golem-api-grpc", version = "0.0.0" }
 golem-common = { path = "../golem-common", version = "0.0.0" }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
 anyhow = { workspace = true }
-async-fs = "2.1.0"
+async-fs = { workspace = true }
 async-lock = "3.4.0"
 async-mutex = "1.4.0"
 async-stream = { version = "0.3", optional = true }
@@ -39,6 +40,7 @@ cap-std = { workspace = true }
 cap-time-ext = "3.0.0"                              # keep in sync with wasmtime
 chrono = { workspace = true }
 dashmap = { workspace = true }
+drop-stream = { workspace = true }
 evicting_cache_map = "0.4.0"
 figment = { workspace = true }
 flume = "0.11.0"
@@ -48,7 +50,7 @@ futures = { workspace = true }
 futures-util = { workspace = true }
 gethostname = "0.4.3"
 golem-wit = { version = "=1.0.3" }
-hex = "0.4.3"
+hex = { workspace = true }
 http = { workspace = true }
 http_02 = { workspace = true }
 http-body = "1.0.0"                                 # keep in sync with wasmtime
@@ -76,6 +78,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-rustls = { workspace = true }
 tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 tonic = { workspace = true }
 tonic-health = { workspace = true }
 tonic-reflection = { workspace = true }

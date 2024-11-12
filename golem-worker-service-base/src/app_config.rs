@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::time::Duration;
 
+use golem_service_base::config::BlobStorageConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -25,6 +26,7 @@ pub struct WorkerServiceBaseConfig {
     pub worker_grpc_port: u16,
     pub routing_table: RoutingTableConfig,
     pub worker_executor_retries: RetryConfig,
+    pub blob_storage: BlobStorageConfig,
 }
 
 impl WorkerServiceBaseConfig {
@@ -54,19 +56,30 @@ impl Default for WorkerServiceBaseConfig {
                 multiplier: 10.0,
                 max_jitter_factor: Some(0.15),
             },
+            blob_storage: BlobStorageConfig::default(),
         }
     }
 }
 
 impl HasConfigExamples<WorkerServiceBaseConfig> for WorkerServiceBaseConfig {
     fn examples() -> Vec<ConfigExample<WorkerServiceBaseConfig>> {
-        vec![(
-            "with postgres",
-            Self {
-                db: DbConfig::postgres_example(),
-                ..Self::default()
-            },
-        )]
+        vec![
+            (
+                "with postgres",
+                Self {
+                    db: DbConfig::postgres_example(),
+                    ..Self::default()
+                },
+            ),
+            (
+                "with postgres and s3",
+                Self {
+                    db: DbConfig::postgres_example(),
+                    blob_storage: BlobStorageConfig::default_s3(),
+                    ..Self::default()
+                },
+            ),
+        ]
     }
 }
 
