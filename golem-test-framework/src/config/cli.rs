@@ -346,7 +346,7 @@ impl CliTestDependencies {
 
         let rdb_and_component_service_join = tokio::spawn(async move {
             let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                Arc::new(DockerPostgresRdb::new(true, params.keep_containers).await);
+                Arc::new(DockerPostgresRdb::new(true, params.keep_containers, None).await);
 
             let component_compilation_service = if !compilation_service_disabled {
                 Some((
@@ -490,7 +490,7 @@ impl CliTestDependencies {
 
             tokio::spawn(async move {
                 let rdb: Arc<dyn Rdb + Send + Sync + 'static> =
-                    Arc::new(DockerPostgresRdb::new(true, params.keep_containers).await);
+                    Arc::new(DockerPostgresRdb::new(true, params.keep_containers, None).await);
 
                 let component_compilation_service_port = if !compilation_service_disabled {
                     Some(component_compilation_service_grpc_port)

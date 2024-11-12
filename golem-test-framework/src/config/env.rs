@@ -187,6 +187,7 @@ impl EnvBasedTestDependencies {
                 DockerPostgresRdb::new(
                     !config.golem_docker_services,
                     config.keep_docker_containers,
+                    None,
                 )
                 .await,
             ),

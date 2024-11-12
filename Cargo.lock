@@ -4386,6 +4386,7 @@ dependencies = [
  "serde 1.0.216",
  "serde_json",
  "serde_yaml",
+ "sqlx",
  "test-r",
  "testcontainers",
  "testcontainers-modules",

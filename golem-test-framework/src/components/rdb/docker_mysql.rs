@@ -23,34 +23,36 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::components::docker::KillContainer;
-use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb};
 use crate::components::NETWORK;
 
-pub struct DockerPostgresRdb {
-    container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::postgres::Postgres>>>>,
+pub struct DockerMysqlRdb {
+    container: Arc<Mutex<Option<ContainerAsync<testcontainers_modules::mysql::Mysql>>>>,
     keep_container: bool,
-    info: PostgresInfo,
+    info: MysqlInfo,
 }
 
-impl DockerPostgresRdb {
-    const DEFAULT_PORT: u16 = 5432;
-    const DEFAULT_USERNAME: &'static str = "postgres";
-    const DEFAULT_PASSWORD: &'static str = "postgres";
-    const DEFAULT_DATABASE: &'static str = "postgres";
+impl DockerMysqlRdb {
+    const DEFAULT_PORT: u16 = 3306;
+    const DEFAULT_USERNAME: &'static str = "mysql";
+    const DEFAULT_PASSWORD: &'static str = "mysql";
+    const DEFAULT_DATABASE: &'static str = "mysql";
 
     // TODO: can we simplify this and get rid of local_env (and always use localhost and exposed ports)?
     pub async fn new(local_env: bool, keep_container: bool, port: Option<u16>) -> Self {
-        info!("Starting Postgres container");
+        info!("Starting Mysql container");
+
         let database = Self::DEFAULT_DATABASE;
         let password = Self::DEFAULT_PASSWORD;
         let username = Self::DEFAULT_USERNAME;
 
-        let name = "golem_postgres";
-        let image = testcontainers_modules::postgres::Postgres::default()
-            .with_tag("12")
-            .with_env_var("POSTGRES_DB", database)
-            .with_env_var("POSTGRES_PASSWORD", password)
-            .with_env_var("POSTGRES_USER", username);
+        let name = "golem_mysql";
+
+        let image = testcontainers_modules::mysql::Mysql::default()
+            .with_tag("8")
+            .with_env_var("MYSQL_PASSWORD", password)
+            .with_env_var("MYSQL_USER", username)
+            .with_env_var("MYSQL_DATABASE", database);
 
         let mut image = if local_env {
             image
@@ -65,7 +67,7 @@ impl DockerPostgresRdb {
         let container = image
             .start()
             .await
-            .expect("Failed to start Postgres container");
+            .expect("Failed to start Mysql container");
 
         let host = if local_env { "localhost" } else { name };
         let port = if local_env {
@@ -82,7 +84,7 @@ impl DockerPostgresRdb {
             .await
             .expect("Failed to get host port");
 
-        let info = PostgresInfo {
+        let info = MysqlInfo {
             host: host.to_string(),
             port,
             host_port,
@@ -91,7 +93,7 @@ impl DockerPostgresRdb {
             password: password.to_string(),
         };
 
-        postgres_wait_for_startup(&info, Duration::from_secs(30)).await;
+        mysql_wait_for_startup(&info, Duration::from_secs(30)).await;
 
         Self {
             container: Arc::new(Mutex::new(Some(container))),
@@ -100,25 +102,25 @@ impl DockerPostgresRdb {
         }
     }
 
-    pub fn postgres_info(&self) -> PostgresInfo {
+    pub fn mysql_info(&self) -> MysqlInfo {
         self.info.clone()
     }
 }
 
 #[async_trait]
-impl Rdb for DockerPostgresRdb {
+impl Rdb for DockerMysqlRdb {
     fn info(&self) -> DbInfo {
-        DbInfo::Postgres(self.postgres_info())
+        DbInfo::Mysql(self.mysql_info())
     }
 
     async fn kill(&self) {
-        info!("Stopping Postgres container");
+        info!("Stopping Mysql container");
         self.container.kill(self.keep_container).await;
     }
 }
 
-impl Debug for DockerPostgresRdb {
+impl Debug for DockerMysqlRdb {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DockerPostgresRdb")
+        write!(f, "DockerMysqlRdb")
     }
 }

@@ -12,60 +12,72 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(test)]
-mod tests {
-    use crate::services::rdbms::types::{DbRow, DbValue, DbValuePrimitive};
-    use crate::services::rdbms::RdbmsService;
-    use crate::services::rdbms::RdbmsServiceDefault;
-    use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
-    use test_r::test;
-    use uuid::Uuid;
+use crate::services::rdbms::types::{DbRow, DbValue, DbValuePrimitive};
+use crate::services::rdbms::RdbmsService;
+use crate::services::rdbms::RdbmsServiceDefault;
+use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
+use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use golem_test_framework::components::rdb::{DbInfo, Rdb};
+use test_r::{test, test_dep};
+use uuid::Uuid;
 
-    #[test]
-    async fn postgres_test() {
-        let rdbms_service = RdbmsServiceDefault::default();
+#[test_dep]
+async fn postgres() -> DockerPostgresRdb {
+    DockerPostgresRdb::new(true, false, Some(5444)).await
+}
 
-        let address = "postgresql://postgres:postgres@localhost:5444/postgres";
+#[test_dep]
+async fn mysql() -> DockerMysqlRdb {
+    DockerMysqlRdb::new(true, false, Some(3307)).await
+}
 
-        let worker_id = OwnedWorkerId::new(
-            &AccountId::generate(),
-            &WorkerId {
-                component_id: ComponentId::new_v4(),
-                worker_name: "test".to_string(),
-            },
-        );
+#[test]
+async fn postgres_test(postgres: &DockerPostgresRdb) {
+    let rdbms_service = RdbmsServiceDefault::default();
 
-        let connection = rdbms_service.postgres().create(&worker_id, address).await;
+    let address = postgres.postgres_info().host_connection_string();
+    println!("address: {}", address);
 
-        assert!(connection.is_ok());
+    let worker_id = OwnedWorkerId::new(
+        &AccountId::generate(),
+        &WorkerId {
+            component_id: ComponentId::new_v4(),
+            worker_name: "test".to_string(),
+        },
+    );
 
-        let result = rdbms_service
-            .postgres()
-            .execute(&worker_id, address, "SELECT 1", vec![])
-            .await;
+    let connection = rdbms_service.postgres().create(&worker_id, &address).await;
 
-        assert!(result.is_ok());
+    assert!(connection.is_ok());
 
-        let connection = rdbms_service.postgres().create(&worker_id, address).await;
+    let result = rdbms_service
+        .postgres()
+        .execute(&worker_id, &address, "SELECT 1", vec![])
+        .await;
 
-        assert!(connection.is_ok());
+    assert!(result.is_ok());
 
-        let exists = rdbms_service.postgres().exists(&worker_id, address);
+    let connection = rdbms_service.postgres().create(&worker_id, &address).await;
 
-        assert!(exists);
+    assert!(connection.is_ok());
 
-        let result = rdbms_service
-            .postgres()
-            .query(&worker_id, address, "SELECT 1", vec![])
-            .await;
+    let exists = rdbms_service.postgres().exists(&worker_id, &address);
 
-        assert!(result.is_ok());
+    assert!(exists);
 
-        let columns = result.unwrap().get_columns().await.unwrap();
-        // println!("columns: {columns:?}");
-        assert!(!columns.is_empty());
+    let result = rdbms_service
+        .postgres()
+        .query(&worker_id, &address, "SELECT 1", vec![])
+        .await;
 
-        let create_table_statement = r#"
+    assert!(result.is_ok());
+
+    let columns = result.unwrap().get_columns().await.unwrap();
+    // println!("columns: {columns:?}");
+    assert!(!columns.is_empty());
+
+    let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
             (
                 component_id        uuid    NOT NULL PRIMARY KEY,
@@ -74,111 +86,112 @@ mod tests {
             );
         "#;
 
-        let insert_statement = r#"
+    let insert_statement = r#"
             INSERT INTO components
             (component_id, namespace, name)
             VALUES
             ($1, $2, $3)
         "#;
 
-        let result = rdbms_service
-            .postgres()
-            .execute(&worker_id, address, create_table_statement, vec![])
-            .await;
+    let result = rdbms_service
+        .postgres()
+        .execute(&worker_id, &address, create_table_statement, vec![])
+        .await;
 
-        assert!(result.is_ok());
+    assert!(result.is_ok());
 
-        for _ in 0..100 {
-            let params: Vec<DbValue> = vec![
-                DbValue::Primitive(DbValuePrimitive::Uuid(Uuid::new_v4())),
-                DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
-                DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
-            ];
-
-            let result = rdbms_service
-                .postgres()
-                .execute(&worker_id, address, insert_statement, params)
-                .await;
-
-            assert!(result.is_ok_and(|v| v == 1));
-        }
+    for _ in 0..100 {
+        let params: Vec<DbValue> = vec![
+            DbValue::Primitive(DbValuePrimitive::Uuid(Uuid::new_v4())),
+            DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
+            DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
+        ];
 
         let result = rdbms_service
             .postgres()
-            .query(&worker_id, address, "SELECT * from components", vec![])
+            .execute(&worker_id, &address, insert_statement, params)
             .await;
 
-        assert!(result.is_ok());
-
-        let result = result.unwrap();
-
-        let columns = result.get_columns().await.unwrap();
-        // println!("columns: {columns:?}");
-        assert!(!columns.is_empty());
-
-        let mut rows: Vec<DbRow> = vec![];
-
-        while let Some(vs) = result.get_next().await.unwrap() {
-            rows.extend(vs);
-        }
-        // println!("rows: {rows:?}");
-        assert!(rows.len() >= 100);
-        println!("rows: {}", rows.len());
-
-        let removed = rdbms_service.postgres().remove(&worker_id, address);
-
-        assert!(removed);
-
-        let exists = rdbms_service.postgres().exists(&worker_id, address);
-
-        assert!(!exists);
+        assert!(result.is_ok_and(|v| v == 1));
     }
 
-    #[test]
-    async fn mysql_test() {
-        let rdbms_service = RdbmsServiceDefault::default();
+    let result = rdbms_service
+        .postgres()
+        .query(&worker_id, &address, "SELECT * from components", vec![])
+        .await;
 
-        let address = "mysql://root:mysql@localhost:3307/mysql";
+    assert!(result.is_ok());
 
-        let worker_id = OwnedWorkerId::new(
-            &AccountId::generate(),
-            &WorkerId {
-                component_id: ComponentId::new_v4(),
-                worker_name: "test".to_string(),
-            },
-        );
+    let result = result.unwrap();
 
-        let connection = rdbms_service.mysql().create(&worker_id, address).await;
+    let columns = result.get_columns().await.unwrap();
+    // println!("columns: {columns:?}");
+    assert!(!columns.is_empty());
 
-        assert!(connection.is_ok());
+    let mut rows: Vec<DbRow> = vec![];
 
-        let result = rdbms_service
-            .mysql()
-            .execute(&worker_id, address, "SELECT 1", vec![])
-            .await;
+    while let Some(vs) = result.get_next().await.unwrap() {
+        rows.extend(vs);
+    }
+    // println!("rows: {rows:?}");
+    assert!(rows.len() >= 100);
+    println!("rows: {}", rows.len());
 
-        assert!(result.is_ok());
+    let removed = rdbms_service.postgres().remove(&worker_id, &address);
 
-        let connection = rdbms_service.mysql().create(&worker_id, address).await;
+    assert!(removed);
 
-        assert!(connection.is_ok());
+    let exists = rdbms_service.postgres().exists(&worker_id, &address);
 
-        let exists = rdbms_service.mysql().exists(&worker_id, address);
+    assert!(!exists);
+}
 
-        assert!(exists);
+#[test]
+async fn mysql_test(mysql: &DockerMysqlRdb) {
+    let rdbms_service = RdbmsServiceDefault::default();
 
-        let result = rdbms_service
-            .mysql()
-            .query(&worker_id, address, "SELECT 1", vec![])
-            .await;
+    let address = mysql.mysql_info().host_connection_string();
+    println!("address: {}", address);
 
-        assert!(result.is_ok());
+    let worker_id = OwnedWorkerId::new(
+        &AccountId::generate(),
+        &WorkerId {
+            component_id: ComponentId::new_v4(),
+            worker_name: "test".to_string(),
+        },
+    );
 
-        let columns = result.unwrap().get_columns().await.unwrap();
-        // println!("columns: {columns:?}");
-        assert!(!columns.is_empty());
+    let connection = rdbms_service.mysql().create(&worker_id, &address).await;
 
-        let create_table_statement = r#"
+    assert!(connection.is_ok());
+
+    let result = rdbms_service
+        .mysql()
+        .execute(&worker_id, &address, "SELECT 1", vec![])
+        .await;
+
+    assert!(result.is_ok());
+
+    let connection = rdbms_service.mysql().create(&worker_id, &address).await;
+
+    assert!(connection.is_ok());
+
+    let exists = rdbms_service.mysql().exists(&worker_id, &address);
+
+    assert!(exists);
+
+    let result = rdbms_service
+        .mysql()
+        .query(&worker_id, &address, "SELECT 1", vec![])
+        .await;
+
+    assert!(result.is_ok());
+
+    let columns = result.unwrap().get_columns().await.unwrap();
+    // println!("columns: {columns:?}");
+    assert!(!columns.is_empty());
+
+    let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
             (
                 component_id        varchar(255)    NOT NULL,
@@ -188,64 +201,63 @@ mod tests {
             );
         "#;
 
-        let insert_statement = r#"
+    let insert_statement = r#"
             INSERT INTO components
             (component_id, namespace, name)
             VALUES
             (?, ?, ?)
         "#;
 
-        let result = rdbms_service
-            .mysql()
-            .execute(&worker_id, address, create_table_statement, vec![])
-            .await;
+    let result = rdbms_service
+        .mysql()
+        .execute(&worker_id, &address, create_table_statement, vec![])
+        .await;
 
-        assert!(result.is_ok());
+    assert!(result.is_ok());
 
-        for _ in 0..100 {
-            let params: Vec<DbValue> = vec![
-                DbValue::Primitive(DbValuePrimitive::Text(Uuid::new_v4().to_string())),
-                DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
-                DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
-            ];
-
-            let result = rdbms_service
-                .mysql()
-                .execute(&worker_id, address, insert_statement, params)
-                .await;
-
-            assert!(result.is_ok_and(|v| v == 1));
-        }
+    for _ in 0..100 {
+        let params: Vec<DbValue> = vec![
+            DbValue::Primitive(DbValuePrimitive::Text(Uuid::new_v4().to_string())),
+            DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
+            DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
+        ];
 
         let result = rdbms_service
             .mysql()
-            .query(&worker_id, address, "SELECT * from components", vec![])
+            .execute(&worker_id, &address, insert_statement, params)
             .await;
 
-        assert!(result.is_ok());
-
-        let result = result.unwrap();
-
-        let columns = result.get_columns().await.unwrap();
-        // println!("columns: {columns:?}");
-        assert!(!columns.is_empty());
-
-        let mut rows: Vec<DbRow> = vec![];
-
-        while let Some(vs) = result.get_next().await.unwrap() {
-            rows.extend(vs);
-        }
-
-        // println!("rows: {rows:?}");
-        assert!(rows.len() >= 100);
-        println!("rows: {}", rows.len());
-
-        let removed = rdbms_service.mysql().remove(&worker_id, address);
-
-        assert!(removed);
-
-        let exists = rdbms_service.mysql().exists(&worker_id, address);
-
-        assert!(!exists);
+        assert!(result.is_ok_and(|v| v == 1));
     }
+
+    let result = rdbms_service
+        .mysql()
+        .query(&worker_id, &address, "SELECT * from components", vec![])
+        .await;
+
+    assert!(result.is_ok());
+
+    let result = result.unwrap();
+
+    let columns = result.get_columns().await.unwrap();
+    // println!("columns: {columns:?}");
+    assert!(!columns.is_empty());
+
+    let mut rows: Vec<DbRow> = vec![];
+
+    while let Some(vs) = result.get_next().await.unwrap() {
+        rows.extend(vs);
+    }
+
+    // println!("rows: {rows:?}");
+    assert!(rows.len() >= 100);
+    println!("rows: {}", rows.len());
+
+    let removed = rdbms_service.mysql().remove(&worker_id, &address);
+
+    assert!(removed);
+
+    let exists = rdbms_service.mysql().exists(&worker_id, &address);
+
+    assert!(!exists);
 }

@@ -212,6 +212,7 @@ pub(crate) trait QueryExecutor {
 }
 
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct StreamDbResultSet<'q, DB: Database> {
     columns: Vec<DbColumn>,
     first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow>>>>,
@@ -249,9 +250,8 @@ where
             Some(rows) if !rows.is_empty() => {
                 let rows: Vec<DB::Row> = rows
                     .into_iter()
-                    .map(|r| r.map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, String>>()
-                    .map_err(Error::QueryResponseFailure)?;
+                    .collect::<Result<Vec<_>, sqlx::Error>>()
+                    .map_err(|e| Error::QueryResponseFailure(e.to_string()))?;
 
                 let columns = rows[0]
                     .columns()

@@ -13,11 +13,13 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use test_r::{inherit_test_dep, test};
+use test_r::{inherit_test_dep, test, test_dep};
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
+use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
 
@@ -25,24 +27,34 @@ inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
 
+#[test_dep]
+async fn postgres() -> DockerPostgresRdb {
+    DockerPostgresRdb::new(true, false, Some(5445)).await
+}
+
+#[test_dep]
+async fn mysql() -> DockerMysqlRdb {
+    DockerMysqlRdb::new(true, false, Some(3308)).await
+}
+
 #[test]
 #[tracing::instrument]
 async fn rdbms_postgres_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
 
+    let db_address = postgres.postgres_info().host_connection_string();
+
     let component_id = executor.store_component("rdbms-service").await;
     let worker_name = "rdbms-service-1";
 
     let mut env = HashMap::new();
-    env.insert(
-        "DB_POSTGRES_URL".to_string(),
-        "postgresql://postgres:postgres@localhost:5444/postgres".to_string(),
-    );
+    env.insert("DB_POSTGRES_URL".to_string(), db_address);
 
     let worker_id = executor
         .start_worker_with(&component_id, worker_name, vec![], env)
@@ -83,19 +95,18 @@ async fn rdbms_postgres_select1(
 async fn rdbms_mysql_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
+    let db_address = mysql.mysql_info().host_connection_string();
 
     let component_id = executor.store_component("rdbms-service").await;
     let worker_name = "rdbms-service-2";
 
     let mut env = HashMap::new();
-    env.insert(
-        "DB_MYSQL_URL".to_string(),
-        "mysql://root:mysql@localhost:3307/mysql".to_string(),
-    );
+    env.insert("DB_MYSQL_URL".to_string(), db_address);
 
     let worker_id = executor
         .start_worker_with(&component_id, worker_name, vec![], env)

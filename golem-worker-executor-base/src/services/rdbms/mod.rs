@@ -15,8 +15,10 @@
 pub mod mysql;
 pub mod postgres;
 pub(crate) mod sqlx_common;
-mod tests;
 pub mod types;
+
+#[cfg(test)]
+mod tests;
 
 use crate::services::rdbms::mysql::{Mysql, MysqlDefault};
 use crate::services::rdbms::postgres::{Postgres, PostgresDefault};

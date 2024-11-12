@@ -16,7 +16,7 @@ use crate::components::k8s::{
     K8sNamespace, K8sPod, K8sRouting, K8sRoutingType, K8sService, ManagedPod, ManagedService,
     Routing,
 };
-use crate::components::rdb::{wait_for_startup, DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use async_dropper_simple::AsyncDropper;
 use async_trait::async_trait;
 use k8s_openapi::api::core::v1::{Pod, Service};
@@ -130,7 +130,16 @@ impl K8sPostgresRdb {
         let host = format!("golem-postgres.{}.svc.cluster.local", &namespace.0);
         let port = 5432;
 
-        wait_for_startup(&local_host, local_port, timeout).await;
+        let info = PostgresInfo {
+            host: local_host.to_string(),
+            port,
+            host_port: local_port,
+            database_name: "postgres".to_string(),
+            username: "postgres".to_string(),
+            password: "postgres".to_string(),
+        };
+
+        postgres_wait_for_startup(&info, timeout).await;
 
         info!("Test Postgres started on private host {host}:{port}, accessible from localhost as {local_host}:{local_port}");
 
