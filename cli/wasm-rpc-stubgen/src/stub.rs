@@ -35,6 +35,7 @@ pub struct StubConfig {
     pub stub_crate_version: String,
     pub wasm_rpc_override: WasmRpcOverride,
     pub extract_source_interface_package: bool,
+    pub seal_cargo_workspace: bool,
 }
 
 pub struct StubDefinition {

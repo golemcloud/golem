@@ -45,6 +45,7 @@ async fn all_wit_types() {
         stub_crate_version: "1.0.0".to_string(),
         wasm_rpc_override: wasm_rpc_override(),
         extract_source_interface_package: true,
+        seal_cargo_workspace: false,
     })
     .unwrap();
 

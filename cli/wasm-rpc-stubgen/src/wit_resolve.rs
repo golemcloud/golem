@@ -37,6 +37,16 @@ impl ResolvedWitDir {
         })
     }
 
+    pub fn package_sources(&self, package_id: PackageId) -> Result<&PackageSource, Error> {
+        self.package_sources.get(&package_id).with_context(|| {
+            anyhow!(
+                "Failed to get package sources by id: {:?}, wit dir: {}",
+                package_id,
+                self.path.display()
+            )
+        })
+    }
+
     pub fn main_package(&self) -> anyhow::Result<&Package> {
         self.package(self.package_id)
     }
