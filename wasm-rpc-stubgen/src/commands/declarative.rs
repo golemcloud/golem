@@ -770,15 +770,13 @@ async fn build_stub(ctx: &ApplicationContext, component_name: &str) -> anyhow::R
         })
         .collect();
 
+    let stub_wasm = ctx.application.stub_wasm(component_name);
+    let stub_wit = ctx.application.stub_wit(component_name);
+
     if is_up_to_date(
         ctx.config.skip_up_to_date_checks,
         || stub_inputs,
-        || {
-            [
-                ctx.application.stub_wasm(component_name),
-                ctx.application.stub_wit(component_name),
-            ]
-        },
+        || [stub_wit.clone(), stub_wasm.clone()],
     ) {
         log_skipping_up_to_date(format!(
             "building wasm rpc stub for {}",
@@ -793,6 +791,8 @@ async fn build_stub(ctx: &ApplicationContext, component_name: &str) -> anyhow::R
         let _indent = LogIndent::new();
 
         delete_path("stub temp build dir", &target_root)?;
+        delete_path("stub wit", &stub_wit)?;
+        delete_path("stub wasm", &stub_wasm)?;
 
         log_action(
             "Creating",
@@ -800,12 +800,7 @@ async fn build_stub(ctx: &ApplicationContext, component_name: &str) -> anyhow::R
         );
         std::fs::create_dir_all(&target_root)?;
 
-        commands::generate::build(
-            &stub_def,
-            &ctx.application.stub_wasm(component_name),
-            &ctx.application.stub_wit(component_name),
-        )
-        .await?;
+        commands::generate::build(&stub_def, &stub_wasm, &stub_wit).await?;
 
         delete_path("stub temp build dir", &target_root)?;
 
