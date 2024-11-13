@@ -356,7 +356,7 @@ pub fn regenerate_cargo_package_component(
 
     package.metadata = Some(MetadataRoot {
         component: Some(ComponentMetadata {
-            package: None, // TODO: do we need this?
+            package: None,
             target: Some(ComponentTarget {
                 world,
                 path: relative_wit_path.to_string_lossy().to_string(),
