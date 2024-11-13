@@ -1848,19 +1848,6 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
     }
 }
 
-impl Component {
-    pub fn next_version(self) -> Self {
-        let new_version = VersionedComponentId {
-            component_id: self.versioned_component_id.component_id,
-            version: self.versioned_component_id.version + 1,
-        };
-        Self {
-            versioned_component_id: new_version.clone(),
-            ..self
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]

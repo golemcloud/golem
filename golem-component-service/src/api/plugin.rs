@@ -45,7 +45,7 @@ impl PluginApi {
 
         let response = if let Some(scope) = scope.0 {
             self.plugin_service
-                .list_plugins_for_scope(&DefaultPluginOwner, &scope)
+                .list_plugins_for_scope(&DefaultPluginOwner, &scope, ())
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())

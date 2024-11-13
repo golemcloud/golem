@@ -50,7 +50,7 @@ impl PluginGrpcApi {
                     .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
 
                 self.plugin_service
-                    .list_plugins_for_scope(&DefaultPluginOwner, &scope)
+                    .list_plugins_for_scope(&DefaultPluginOwner, &scope, ())
                     .await?
             }
             None => {

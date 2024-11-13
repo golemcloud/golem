@@ -15,6 +15,7 @@
 use crate::model::ComponentOwner;
 use crate::repo::plugin_installation::PluginInstallationRecord;
 use crate::repo::RowMeta;
+use crate::service::plugin::PluginError;
 use async_trait::async_trait;
 use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::{
@@ -282,7 +283,10 @@ pub trait PluginScope:
     type RequestContext: Send + Sync + 'static;
 
     /// Gets all the plugin scopes valid for this given scope
-    async fn accessible_scopes(&self, context: &Self::RequestContext) -> Vec<Self>;
+    async fn accessible_scopes(
+        &self,
+        context: Self::RequestContext,
+    ) -> Result<Vec<Self>, PluginError>;
 }
 
 #[async_trait]
@@ -291,11 +295,11 @@ impl PluginScope for DefaultPluginScope {
 
     type RequestContext = ();
 
-    async fn accessible_scopes(&self, _context: &()) -> Vec<Self> {
-        match self {
+    async fn accessible_scopes(&self, _context: ()) -> Result<Vec<Self>, PluginError> {
+        Ok(match self {
             DefaultPluginScope::Global(_) => vec![self.clone()],
             DefaultPluginScope::Component(_) => vec![Self::global(), self.clone()],
-        }
+        })
     }
 }
 

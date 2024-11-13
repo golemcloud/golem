@@ -91,6 +91,7 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope> {
         &self,
         owner: &Owner,
         scope: &Scope,
+        request_context: Scope::RequestContext,
     ) -> Result<Vec<PluginDefinition<Owner, Scope>>, PluginError>;
 
     /// Gets all the registered versions of a plugin owned by `owner` and having the name `name`
@@ -120,18 +121,11 @@ pub trait PluginService<Owner: PluginOwner, Scope: PluginScope> {
 
 pub struct PluginServiceDefault<Owner: PluginOwner, Scope: PluginScope> {
     plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
-    plugin_scope_request_context: Scope::RequestContext,
 }
 
 impl<Owner: PluginOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> {
-    pub fn new(
-        plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
-        plugin_scope_request_context: Scope::RequestContext,
-    ) -> Self {
-        Self {
-            plugin_repo,
-            plugin_scope_request_context,
-        }
+    pub fn new(plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>) -> Self {
+        Self { plugin_repo }
     }
 
     fn decode_plugin_definitions(
@@ -162,12 +156,13 @@ impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
         &self,
         owner: &Owner,
         scope: &Scope,
+        request_context: Scope::RequestContext,
     ) -> Result<Vec<PluginDefinition<Owner, Scope>>, PluginError> {
         let owner_record: Owner::Row = owner.clone().into();
 
         let valid_scopes = scope
-            .accessible_scopes(&self.plugin_scope_request_context)
-            .await
+            .accessible_scopes(request_context)
+            .await?
             .into_iter()
             .map(|scope| scope.into())
             .collect::<Vec<Scope::Row>>();
