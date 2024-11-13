@@ -4595,6 +4595,7 @@ dependencies = [
  "prost 0.13.4",
  "rand",
  "redis",
+ "regex",
  "ringbuf",
  "rustls 0.23.20",
  "serde 1.0.216",

@@ -40,7 +40,8 @@ impl DockerPostgresRdb {
 
     // TODO: can we simplify this and get rid of local_env (and always use localhost and exposed ports)?
     pub async fn new(local_env: bool, keep_container: bool, port: Option<u16>) -> Self {
-        info!("Starting Postgres container");
+        let host_port = port.unwrap_or(Self::DEFAULT_PORT);
+        info!("Starting Postgres container, host port {}", host_port);
         let database = Self::DEFAULT_DATABASE;
         let password = Self::DEFAULT_PASSWORD;
         let username = Self::DEFAULT_USERNAME;
@@ -62,10 +63,12 @@ impl DockerPostgresRdb {
             image = image.with_mapped_port(port, Self::DEFAULT_PORT.tcp());
         };
 
-        let container = image
-            .start()
-            .await
-            .expect("Failed to start Postgres container");
+        let container = image.start().await.unwrap_or_else(|_| {
+            panic!(
+                "Failed to start Postgres container, host port {}",
+                host_port
+            )
+        });
 
         let host = if local_env { "localhost" } else { name };
         let port = if local_env {
@@ -120,5 +123,36 @@ impl Rdb for DockerPostgresRdb {
 impl Debug for DockerPostgresRdb {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "DockerPostgresRdb")
+    }
+}
+
+pub struct DockerPostgresRdbs {
+    pub rdbs: Vec<Arc<DockerPostgresRdb>>,
+}
+
+impl DockerPostgresRdbs {
+    pub async fn make(local_env: bool, keep_container: bool, port: u16) -> Arc<DockerPostgresRdb> {
+        Arc::new(DockerPostgresRdb::new(local_env, keep_container, Some(port)).await)
+    }
+
+    pub async fn new(size: usize, base_port: u16, local_env: bool, keep_container: bool) -> Self {
+        info!("Starting multiple Postgres containers of size {size}");
+        let mut rdbs_joins = Vec::new();
+
+        for i in 0..size {
+            let port = base_port + i as u16;
+
+            let db = tokio::spawn(Self::make(local_env, keep_container, port));
+
+            rdbs_joins.push(db);
+        }
+
+        let mut rdbs = Vec::new();
+
+        for join in rdbs_joins {
+            rdbs.push(join.await.expect("Failed to join"));
+        }
+
+        Self { rdbs }
     }
 }

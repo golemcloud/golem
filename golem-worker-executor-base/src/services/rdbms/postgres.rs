@@ -30,16 +30,17 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait Postgres {
-    async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error>;
+    async fn create(&self, worker_id: &OwnedWorkerId, address: &str)
+        -> Result<RdbmsPoolKey, Error>;
 
-    fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
+    fn exists(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool;
 
-    fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
+    fn remove(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool;
 
     async fn execute(
         &self,
         worker_id: &OwnedWorkerId,
-        address: &str,
+        key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<u64, Error>;
@@ -47,7 +48,7 @@ pub trait Postgres {
     async fn query(
         &self,
         worker_id: &OwnedWorkerId,
-        address: &str,
+        key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
@@ -67,40 +68,40 @@ impl PostgresDefault {
 
 #[async_trait]
 impl Postgres for PostgresDefault {
-    async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error> {
+    async fn create(
+        &self,
+        worker_id: &OwnedWorkerId,
+        address: &str,
+    ) -> Result<RdbmsPoolKey, Error> {
         self.rdbms.create(worker_id, address).await
     }
 
-    fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
-        self.rdbms.exists(worker_id, address)
+    fn exists(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+        self.rdbms.exists(worker_id, key)
     }
 
-    fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
-        self.rdbms.remove(worker_id, address)
+    fn remove(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+        self.rdbms.remove(worker_id, key)
     }
 
     async fn execute(
         &self,
         worker_id: &OwnedWorkerId,
-        address: &str,
+        key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<u64, Error> {
-        self.rdbms
-            .execute(worker_id, address, statement, params)
-            .await
+        self.rdbms.execute(worker_id, key, statement, params).await
     }
 
     async fn query(
         &self,
         worker_id: &OwnedWorkerId,
-        address: &str,
+        key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
-        self.rdbms
-            .query(worker_id, address, statement, params)
-            .await
+        self.rdbms.query(worker_id, key, statement, params).await
     }
 }
 
@@ -116,11 +117,9 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
         &self,
         config: &RdbmsPoolConfig,
     ) -> Result<Pool<sqlx::Postgres>, sqlx::Error> {
-        let address = self.address.clone();
-
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(config.max_connections)
-            .connect(&address)
+            .connect(&self.address)
             .await
     }
 }
@@ -596,3 +595,45 @@ pub(crate) mod pg_type_name {
     pub(crate) const XML: &str = "XML";
     pub(crate) const XML_ARRAY: &str = "XML_ARRAY";
 }
+
+
+// pub mod types {
+//     use sqlx::{Decode, Encode, Type};
+//     use sqlx::error::BoxDynError;
+//     use sqlx::postgres::{PgArgumentBuffer, PgHasArrayType, PgTypeInfo, PgValueFormat, PgValueRef, Postgres};
+//     use tokio_postgres::types::IsNull;
+//
+//     struct PgEnum(String);
+//
+//
+//     impl Type<Postgres> for PgEnum {
+//         fn type_info() -> PgTypeInfo {
+//             PgTypeInfo::UUID
+//         }
+//     }
+//
+//     impl PgHasArrayType for PgEnum {
+//         fn array_type_info() -> PgTypeInfo {
+//             PgTypeInfo::UUID_ARRAY
+//         }
+//     }
+//
+//     impl Encode<'_, Postgres> for PgEnum {
+//         fn encode_by_ref(&self, buf: &mut PgArgumentBuffer) -> IsNull {
+//             buf.extend_from_slice(self.as_bytes());
+//
+//             IsNull::No
+//         }
+//     }
+//
+//     impl Decode<'_, Postgres> for PgEnum {
+//         fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
+//             match value.format() {
+//                 PgValueFormat::Binary => Uuid::from_slice(value.as_bytes()?),
+//                 PgValueFormat::Text => value.as_str()?.parse(),
+//             }
+//                 .map_err(Into::into)
+//         }
+//     }
+//
+// }

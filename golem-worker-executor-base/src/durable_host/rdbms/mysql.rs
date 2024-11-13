@@ -19,6 +19,7 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::mysql::Host;
 use crate::preview2::wasi::rdbms::mysql::HostDbConnection;
 use crate::preview2::wasi::rdbms::types::{DbValue, Error};
+use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use wasmtime::component::Resource;
@@ -31,12 +32,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct MysqlDbConnection {
-    pub address: String,
+    pub pool_key: RdbmsPoolKey,
 }
 
 impl MysqlDbConnection {
-    pub fn new(address: String) -> Self {
-        Self { address }
+    pub fn new(pool_key: RdbmsPoolKey) -> Self {
+        Self { pool_key }
     }
 }
 
@@ -58,8 +59,8 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .await;
 
         match result {
-            Ok(_) => {
-                let entry = MysqlDbConnection::new(address);
+            Ok(key) => {
+                let entry = MysqlDbConnection::new(key);
                 let resource = self.as_wasi_view().table().push(entry)?;
                 Ok(Ok(resource))
             }
@@ -80,7 +81,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .as_wasi_view()
             .table()
             .get::<MysqlDbConnection>(&self_)?
-            .address
+            .pool_key
             .clone();
         match params
             .into_iter()
@@ -121,7 +122,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .as_wasi_view()
             .table()
             .get::<MysqlDbConnection>(&self_)?
-            .address
+            .pool_key
             .clone();
 
         match params
@@ -152,7 +153,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .as_wasi_view()
             .table()
             .get::<MysqlDbConnection>(&rep)?
-            .address
+            .pool_key
             .clone();
 
         let _ = self

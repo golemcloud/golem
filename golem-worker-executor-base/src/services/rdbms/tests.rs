@@ -16,27 +16,51 @@ use crate::services::rdbms::types::{DbRow, DbValue, DbValuePrimitive};
 use crate::services::rdbms::RdbmsService;
 use crate::services::rdbms::RdbmsServiceDefault;
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
-use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
-use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
-use golem_test_framework::components::rdb::{DbInfo, Rdb};
+use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use test_r::{test, test_dep};
 use uuid::Uuid;
 
 #[test_dep]
-async fn postgres() -> DockerPostgresRdb {
-    DockerPostgresRdb::new(true, false, Some(5444)).await
+async fn postgres() -> DockerPostgresRdbs {
+    DockerPostgresRdbs::new(3, 5444, true, false).await
 }
 
 #[test_dep]
-async fn mysql() -> DockerMysqlRdb {
-    DockerMysqlRdb::new(true, false, Some(3307)).await
+async fn mysql() -> DockerMysqlRdbs {
+    DockerMysqlRdbs::new(3, 3307, true, false).await
 }
 
 #[test]
-async fn postgres_test(postgres: &DockerPostgresRdb) {
+async fn postgres_test(postgres: &DockerPostgresRdbs) {
     let rdbms_service = RdbmsServiceDefault::default();
 
-    let address = postgres.postgres_info().host_connection_string();
+    for rdb in postgres.rdbs.iter() {
+        let address = rdb.postgres_info().host_connection_string();
+        println!("address: {}", address);
+        let worker_id = OwnedWorkerId::new(
+            &AccountId::generate(),
+            &WorkerId {
+                component_id: ComponentId::new_v4(),
+                worker_name: "test".to_string(),
+            },
+        );
+
+        let connection = rdbms_service.postgres().create(&worker_id, &address).await;
+
+        assert!(connection.is_ok());
+
+        let pool_key = connection.unwrap();
+        println!("pool_key: {}", pool_key);
+        let result = rdbms_service
+            .postgres()
+            .execute(&worker_id, &pool_key, "SELECT 1", vec![])
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    let address = postgres.rdbs[0].postgres_info().host_connection_string();
     println!("address: {}", address);
 
     let worker_id = OwnedWorkerId::new(
@@ -51,9 +75,11 @@ async fn postgres_test(postgres: &DockerPostgresRdb) {
 
     assert!(connection.is_ok());
 
+    let pool_key = connection.unwrap();
+
     let result = rdbms_service
         .postgres()
-        .execute(&worker_id, &address, "SELECT 1", vec![])
+        .execute(&worker_id, &pool_key, "SELECT 1", vec![])
         .await;
 
     assert!(result.is_ok());
@@ -62,13 +88,13 @@ async fn postgres_test(postgres: &DockerPostgresRdb) {
 
     assert!(connection.is_ok());
 
-    let exists = rdbms_service.postgres().exists(&worker_id, &address);
+    let exists = rdbms_service.postgres().exists(&worker_id, &pool_key);
 
     assert!(exists);
 
     let result = rdbms_service
         .postgres()
-        .query(&worker_id, &address, "SELECT 1", vec![])
+        .query(&worker_id, &pool_key, "SELECT 1", vec![])
         .await;
 
     assert!(result.is_ok());
@@ -95,7 +121,7 @@ async fn postgres_test(postgres: &DockerPostgresRdb) {
 
     let result = rdbms_service
         .postgres()
-        .execute(&worker_id, &address, create_table_statement, vec![])
+        .execute(&worker_id, &pool_key, create_table_statement, vec![])
         .await;
 
     assert!(result.is_ok());
@@ -109,7 +135,7 @@ async fn postgres_test(postgres: &DockerPostgresRdb) {
 
         let result = rdbms_service
             .postgres()
-            .execute(&worker_id, &address, insert_statement, params)
+            .execute(&worker_id, &pool_key, insert_statement, params)
             .await;
 
         assert!(result.is_ok_and(|v| v == 1));
@@ -117,7 +143,7 @@ async fn postgres_test(postgres: &DockerPostgresRdb) {
 
     let result = rdbms_service
         .postgres()
-        .query(&worker_id, &address, "SELECT * from components", vec![])
+        .query(&worker_id, &pool_key, "SELECT * from components", vec![])
         .await;
 
     assert!(result.is_ok());
@@ -137,20 +163,45 @@ async fn postgres_test(postgres: &DockerPostgresRdb) {
     assert!(rows.len() >= 100);
     println!("rows: {}", rows.len());
 
-    let removed = rdbms_service.postgres().remove(&worker_id, &address);
+    let removed = rdbms_service.postgres().remove(&worker_id, &pool_key);
 
     assert!(removed);
 
-    let exists = rdbms_service.postgres().exists(&worker_id, &address);
+    let exists = rdbms_service.postgres().exists(&worker_id, &pool_key);
 
     assert!(!exists);
 }
 
 #[test]
-async fn mysql_test(mysql: &DockerMysqlRdb) {
+async fn mysql_test(mysql: &DockerMysqlRdbs) {
     let rdbms_service = RdbmsServiceDefault::default();
 
-    let address = mysql.mysql_info().host_connection_string();
+    for rdb in mysql.rdbs.iter() {
+        let address = rdb.mysql_info().host_connection_string();
+        println!("address: {}", address);
+        let worker_id = OwnedWorkerId::new(
+            &AccountId::generate(),
+            &WorkerId {
+                component_id: ComponentId::new_v4(),
+                worker_name: "test".to_string(),
+            },
+        );
+
+        let connection = rdbms_service.mysql().create(&worker_id, &address).await;
+
+        assert!(connection.is_ok());
+
+        let pool_key = connection.unwrap();
+        println!("pool_key: {}", pool_key);
+        let result = rdbms_service
+            .mysql()
+            .execute(&worker_id, &pool_key, "SELECT 1", vec![])
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    let address = mysql.rdbs[0].mysql_info().host_connection_string();
     println!("address: {}", address);
 
     let worker_id = OwnedWorkerId::new(
@@ -164,10 +215,11 @@ async fn mysql_test(mysql: &DockerMysqlRdb) {
     let connection = rdbms_service.mysql().create(&worker_id, &address).await;
 
     assert!(connection.is_ok());
+    let pool_key = connection.unwrap();
 
     let result = rdbms_service
         .mysql()
-        .execute(&worker_id, &address, "SELECT 1", vec![])
+        .execute(&worker_id, &pool_key, "SELECT 1", vec![])
         .await;
 
     assert!(result.is_ok());
@@ -176,13 +228,13 @@ async fn mysql_test(mysql: &DockerMysqlRdb) {
 
     assert!(connection.is_ok());
 
-    let exists = rdbms_service.mysql().exists(&worker_id, &address);
+    let exists = rdbms_service.mysql().exists(&worker_id, &pool_key);
 
     assert!(exists);
 
     let result = rdbms_service
         .mysql()
-        .query(&worker_id, &address, "SELECT 1", vec![])
+        .query(&worker_id, &pool_key, "SELECT 1", vec![])
         .await;
 
     assert!(result.is_ok());
@@ -210,7 +262,7 @@ async fn mysql_test(mysql: &DockerMysqlRdb) {
 
     let result = rdbms_service
         .mysql()
-        .execute(&worker_id, &address, create_table_statement, vec![])
+        .execute(&worker_id, &pool_key, create_table_statement, vec![])
         .await;
 
     assert!(result.is_ok());
@@ -224,7 +276,7 @@ async fn mysql_test(mysql: &DockerMysqlRdb) {
 
         let result = rdbms_service
             .mysql()
-            .execute(&worker_id, &address, insert_statement, params)
+            .execute(&worker_id, &pool_key, insert_statement, params)
             .await;
 
         assert!(result.is_ok_and(|v| v == 1));
@@ -232,7 +284,7 @@ async fn mysql_test(mysql: &DockerMysqlRdb) {
 
     let result = rdbms_service
         .mysql()
-        .query(&worker_id, &address, "SELECT * from components", vec![])
+        .query(&worker_id, &pool_key, "SELECT * from components", vec![])
         .await;
 
     assert!(result.is_ok());
@@ -253,11 +305,11 @@ async fn mysql_test(mysql: &DockerMysqlRdb) {
     assert!(rows.len() >= 100);
     println!("rows: {}", rows.len());
 
-    let removed = rdbms_service.mysql().remove(&worker_id, &address);
+    let removed = rdbms_service.mysql().remove(&worker_id, &pool_key);
 
     assert!(removed);
 
-    let exists = rdbms_service.mysql().exists(&worker_id, &address);
+    let exists = rdbms_service.mysql().exists(&worker_id, &pool_key);
 
     assert!(!exists);
 }

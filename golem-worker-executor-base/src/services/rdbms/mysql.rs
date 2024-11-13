@@ -28,16 +28,17 @@ use std::sync::Arc;
 
 #[async_trait]
 pub trait Mysql {
-    async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error>;
+    async fn create(&self, worker_id: &OwnedWorkerId, address: &str)
+        -> Result<RdbmsPoolKey, Error>;
 
-    fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
+    fn exists(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool;
 
-    fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> bool;
+    fn remove(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool;
 
     async fn execute(
         &self,
         worker_id: &OwnedWorkerId,
-        address: &str,
+        key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<u64, Error>;
@@ -45,7 +46,7 @@ pub trait Mysql {
     async fn query(
         &self,
         worker_id: &OwnedWorkerId,
-        address: &str,
+        key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
@@ -65,40 +66,40 @@ impl MysqlDefault {
 
 #[async_trait]
 impl Mysql for MysqlDefault {
-    async fn create(&self, worker_id: &OwnedWorkerId, address: &str) -> Result<(), Error> {
+    async fn create(
+        &self,
+        worker_id: &OwnedWorkerId,
+        address: &str,
+    ) -> Result<RdbmsPoolKey, Error> {
         self.rdbms.create(worker_id, address).await
     }
 
-    fn exists(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
-        self.rdbms.exists(worker_id, address)
+    fn exists(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+        self.rdbms.exists(worker_id, key)
     }
 
-    fn remove(&self, worker_id: &OwnedWorkerId, address: &str) -> bool {
-        self.rdbms.remove(worker_id, address)
+    fn remove(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+        self.rdbms.remove(worker_id, key)
     }
 
     async fn execute(
         &self,
         worker_id: &OwnedWorkerId,
-        address: &str,
+        key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<u64, Error> {
-        self.rdbms
-            .execute(worker_id, address, statement, params)
-            .await
+        self.rdbms.execute(worker_id, key, statement, params).await
     }
 
     async fn query(
         &self,
         worker_id: &OwnedWorkerId,
-        address: &str,
+        key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
-        self.rdbms
-            .query(worker_id, address, statement, params)
-            .await
+        self.rdbms.query(worker_id, key, statement, params).await
     }
 }
 
@@ -114,11 +115,9 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
         &self,
         config: &RdbmsPoolConfig,
     ) -> Result<Pool<sqlx::MySql>, sqlx::Error> {
-        let address = self.address.clone();
-
         sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(config.max_connections)
-            .connect(&address)
+            .connect(&self.address)
             .await
     }
 }

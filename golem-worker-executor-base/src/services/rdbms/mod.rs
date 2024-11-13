@@ -22,6 +22,8 @@ mod tests;
 
 use crate::services::rdbms::mysql::{Mysql, MysqlDefault};
 use crate::services::rdbms::postgres::{Postgres, PostgresDefault};
+use regex::Regex;
+use std::fmt::Display;
 use std::sync::Arc;
 
 pub trait RdbmsService {
@@ -105,5 +107,18 @@ pub struct RdbmsPoolKey {
 impl RdbmsPoolKey {
     pub fn new(address: String) -> Self {
         Self { address }
+    }
+
+    fn masked_address(&self) -> String {
+        let re = Regex::new(r"(?i)([a-z]+)://([^:]+):([^@]+)@").expect("Failed to compile regex");
+
+        re.replace_all(self.address.as_str(), "$1://$2:*****@")
+            .to_string()
+    }
+}
+
+impl Display for RdbmsPoolKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.masked_address())
     }
 }
