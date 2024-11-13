@@ -157,16 +157,19 @@ pub trait PluginService<Owner: ComponentOwner, Scope: PluginScope> {
 pub struct PluginServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
     plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
     component_repo: Arc<dyn ComponentRepo<Owner> + Send + Sync>,
+    plugin_scope_request_context: Scope::RequestContext
 }
 
 impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> {
     pub fn new(
         plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
         component_repo: Arc<dyn ComponentRepo<Owner> + Send + Sync>,
+        plugin_scope_request_context: Scope::RequestContext
     ) -> Self {
         Self {
             plugin_repo,
             component_repo,
+            plugin_scope_request_context
         }
     }
 
@@ -202,7 +205,8 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner, Scope>
         let owner_record: Owner::Row = owner.clone().into();
 
         let valid_scopes = scope
-            .accessible_scopes()
+            .accessible_scopes(&self.plugin_scope_request_context)
+            .await
             .into_iter()
             .map(|scope| scope.into())
             .collect::<Vec<Scope::Row>>();

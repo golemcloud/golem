@@ -147,7 +147,7 @@ impl Services {
 
         let plugin_service: Arc<
             dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send,
-        > = Arc::new(PluginServiceDefault::new(plugin_repo, component_repo));
+        > = Arc::new(PluginServiceDefault::new(plugin_repo, component_repo, ()));
 
         Ok(Services {
             component_service,

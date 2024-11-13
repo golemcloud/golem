@@ -26,6 +26,7 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Postgres, Sqlite};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
+use async_trait::async_trait;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -249,6 +250,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::OplogProcessorDefinition>
     }
 }
 
+#[async_trait]
 pub trait PluginScope:
     Debug
     + Clone
@@ -273,14 +275,20 @@ pub trait PluginScope:
         + Unpin
         + 'static;
 
+    /// Context required to calculate the set of `accessible_scopes`
+    type RequestContext: Send + Sync + 'static;
+
     /// Gets all the plugin scopes valid for this given scope
-    fn accessible_scopes(&self) -> Vec<Self>;
+    async fn accessible_scopes(&self, context: &Self::RequestContext) -> Vec<Self>;
 }
 
+#[async_trait]
 impl PluginScope for DefaultPluginScope {
     type Row = crate::repo::plugin::DefaultPluginScopeRow;
 
-    fn accessible_scopes(&self) -> Vec<Self> {
+    type RequestContext = ();
+
+    async fn accessible_scopes(&self, _context: &()) -> Vec<Self> {
         match self {
             DefaultPluginScope::Global(_) => vec![self.clone()],
             DefaultPluginScope::Component(_) => vec![Self::global(), self.clone()],

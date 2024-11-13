@@ -6,7 +6,7 @@ CREATE TABLE plugins
     icon                 blob     NOT NULL,
     homepage             text     NOT NULL,
     plugin_type          smallint NOT NULL,
-    scope_component_id   uuid,
+    scope_component_id   uuid REFERENCES components (component_id),
     provided_wit_package text,
     json_schema          text,
     validate_url         text,
