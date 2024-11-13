@@ -13,6 +13,10 @@ path = "src/lib.rs"
 harness = false
 
 [[test]]
+name = "app"
+harness = false
+
+[[test]]
 name = "compose"
 harness = false
 
