@@ -22,7 +22,6 @@ use crate::preview2::wasi::rdbms::types::{
 use crate::services::rdbms::types as rdbms_types;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::OwnedWorkerId;
 use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -36,19 +35,16 @@ impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct DbResultSetEntry {
     pub rdbms_type: RdbmsType,
-    pub worker_id: OwnedWorkerId,
     pub internal: Arc<dyn rdbms_types::DbResultSet + Send + Sync>,
 }
 
 impl DbResultSetEntry {
     pub fn new(
         rdbms_type: RdbmsType,
-        worker_id: OwnedWorkerId,
         internal: Arc<dyn rdbms_types::DbResultSet + Send + Sync>,
     ) -> Self {
         Self {
             rdbms_type,
-            worker_id,
             internal,
         }
     }

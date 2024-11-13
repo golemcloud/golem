@@ -22,7 +22,7 @@ use crate::services::rdbms::types::{
 use crate::services::rdbms::{RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey};
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
-use golem_common::model::OwnedWorkerId;
+use golem_common::model::WorkerId;
 use sqlx::postgres::PgTypeKind;
 use sqlx::{Column, Pool, Row, TypeInfo};
 use std::sync::Arc;
@@ -30,16 +30,15 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait Postgres {
-    async fn create(&self, worker_id: &OwnedWorkerId, address: &str)
-        -> Result<RdbmsPoolKey, Error>;
+    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error>;
 
-    fn exists(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool;
+    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
 
-    fn remove(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool;
+    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
 
     async fn execute(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
@@ -47,7 +46,7 @@ pub trait Postgres {
 
     async fn query(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
@@ -68,25 +67,21 @@ impl PostgresDefault {
 
 #[async_trait]
 impl Postgres for PostgresDefault {
-    async fn create(
-        &self,
-        worker_id: &OwnedWorkerId,
-        address: &str,
-    ) -> Result<RdbmsPoolKey, Error> {
+    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error> {
         self.rdbms.create(worker_id, address).await
     }
 
-    fn exists(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
         self.rdbms.exists(worker_id, key)
     }
 
-    fn remove(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
         self.rdbms.remove(worker_id, key)
     }
 
     async fn execute(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
@@ -96,7 +91,7 @@ impl Postgres for PostgresDefault {
 
     async fn query(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
@@ -596,7 +591,6 @@ pub(crate) mod pg_type_name {
     pub(crate) const XML_ARRAY: &str = "XML_ARRAY";
 }
 
-
 // pub mod types {
 //     use sqlx::{Decode, Encode, Type};
 //     use sqlx::error::BoxDynError;
@@ -608,13 +602,17 @@ pub(crate) mod pg_type_name {
 //
 //     impl Type<Postgres> for PgEnum {
 //         fn type_info() -> PgTypeInfo {
-//             PgTypeInfo::UUID
+//             PgTypeInfo::with_name()
+//         }
+//
+//         fn compatible(ty: &PgTypeInfo) -> bool {
+//
 //         }
 //     }
 //
 //     impl PgHasArrayType for PgEnum {
 //         fn array_type_info() -> PgTypeInfo {
-//             PgTypeInfo::UUID_ARRAY
+//             PgTypeInfo::TEXT
 //         }
 //     }
 //

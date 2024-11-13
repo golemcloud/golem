@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::services::rdbms::types::{DbRow, DbValue, DbValuePrimitive};
-use crate::services::rdbms::RdbmsService;
 use crate::services::rdbms::RdbmsServiceDefault;
+use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
@@ -38,13 +38,10 @@ async fn postgres_test(postgres: &DockerPostgresRdbs) {
     for rdb in postgres.rdbs.iter() {
         let address = rdb.postgres_info().host_connection_string();
         println!("address: {}", address);
-        let worker_id = OwnedWorkerId::new(
-            &AccountId::generate(),
-            &WorkerId {
-                component_id: ComponentId::new_v4(),
-                worker_name: "test".to_string(),
-            },
-        );
+        let worker_id = WorkerId {
+            component_id: ComponentId::new_v4(),
+            worker_name: "test".to_string(),
+        };
 
         let connection = rdbms_service.postgres().create(&worker_id, &address).await;
 
@@ -63,13 +60,10 @@ async fn postgres_test(postgres: &DockerPostgresRdbs) {
     let address = postgres.rdbs[0].postgres_info().host_connection_string();
     println!("address: {}", address);
 
-    let worker_id = OwnedWorkerId::new(
-        &AccountId::generate(),
-        &WorkerId {
-            component_id: ComponentId::new_v4(),
-            worker_name: "test".to_string(),
-        },
-    );
+    let worker_id = WorkerId {
+        component_id: ComponentId::new_v4(),
+        worker_name: "test".to_string(),
+    };
 
     let connection = rdbms_service.postgres().create(&worker_id, &address).await;
 
@@ -179,14 +173,10 @@ async fn mysql_test(mysql: &DockerMysqlRdbs) {
     for rdb in mysql.rdbs.iter() {
         let address = rdb.mysql_info().host_connection_string();
         println!("address: {}", address);
-        let worker_id = OwnedWorkerId::new(
-            &AccountId::generate(),
-            &WorkerId {
-                component_id: ComponentId::new_v4(),
-                worker_name: "test".to_string(),
-            },
-        );
-
+        let worker_id = WorkerId {
+            component_id: ComponentId::new_v4(),
+            worker_name: "test".to_string(),
+        };
         let connection = rdbms_service.mysql().create(&worker_id, &address).await;
 
         assert!(connection.is_ok());
@@ -204,13 +194,10 @@ async fn mysql_test(mysql: &DockerMysqlRdbs) {
     let address = mysql.rdbs[0].mysql_info().host_connection_string();
     println!("address: {}", address);
 
-    let worker_id = OwnedWorkerId::new(
-        &AccountId::generate(),
-        &WorkerId {
-            component_id: ComponentId::new_v4(),
-            worker_name: "test".to_string(),
-        },
-    );
+    let worker_id = WorkerId {
+        component_id: ComponentId::new_v4(),
+        worker_name: "test".to_string(),
+    };
 
     let connection = rdbms_service.mysql().create(&worker_id, &address).await;
 
@@ -312,4 +299,26 @@ async fn mysql_test(mysql: &DockerMysqlRdbs) {
     let exists = rdbms_service.mysql().exists(&worker_id, &pool_key);
 
     assert!(!exists);
+}
+
+#[test]
+fn test_rdbms_pool_key_masked_address() {
+    let key = RdbmsPoolKey::new("mysql://user:password@localhost:3306".to_string());
+    assert_eq!(
+        key.masked_address(),
+        "mysql://user:*****@localhost:3306".to_string()
+    );
+    let key = RdbmsPoolKey::new("mysql://user@localhost:3306".to_string());
+    assert_eq!(
+        key.masked_address(),
+        "mysql://user@localhost:3306".to_string()
+    );
+    let key = RdbmsPoolKey::new("mysql://localhost:3306".to_string());
+    assert_eq!(key.masked_address(), "mysql://localhost:3306".to_string());
+    let key =
+        RdbmsPoolKey::new("postgres://user:password@localhost:5432?abc=xyz&def=xyz".to_string());
+    assert_eq!(
+        key.masked_address(),
+        "postgres://user:*****@localhost:5432?abc=xyz&def=xyz".to_string()
+    );
 }

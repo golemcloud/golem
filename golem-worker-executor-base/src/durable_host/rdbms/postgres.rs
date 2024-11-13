@@ -50,7 +50,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "open");
 
-        let worker_id = self.state.owned_worker_id.clone();
+        let worker_id = self.state.owned_worker_id.worker_id.clone();
         let result = self
             .state
             .rdbms_service
@@ -76,8 +76,8 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<Resource<DbResultSetEntry>, Error>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "query");
-        let worker_id = self.state.owned_worker_id.clone();
-        let address = self
+        let worker_id = self.state.owned_worker_id.worker_id.clone();
+        let pool_key = self
             .as_wasi_view()
             .table()
             .get::<PostgresDbConnection>(&self_)?
@@ -93,12 +93,12 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                     .state
                     .rdbms_service
                     .postgres()
-                    .query(&worker_id, &address, &statement, params)
+                    .query(&worker_id, &pool_key, &statement, params)
                     .await;
 
                 match result {
                     Ok(result) => {
-                        let entry = DbResultSetEntry::new(RdbmsType::Postgres, worker_id, result);
+                        let entry = DbResultSetEntry::new(RdbmsType::Postgres, result);
                         let db_result_set = self.as_wasi_view().table().push(entry)?;
                         Ok(Ok(db_result_set))
                     }
@@ -117,8 +117,8 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<u64, Error>> {
         let _permit = self.begin_async_host_function().await?;
         record_host_function_call("rdbms::postgres::db-connection", "execute");
-        let worker_id = self.state.owned_worker_id.clone();
-        let address = self
+        let worker_id = self.state.owned_worker_id.worker_id.clone();
+        let pool_key = self
             .as_wasi_view()
             .table()
             .get::<PostgresDbConnection>(&self_)?
@@ -135,7 +135,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                     .state
                     .rdbms_service
                     .postgres()
-                    .execute(&worker_id, &address, &statement, params)
+                    .execute(&worker_id, &pool_key, &statement, params)
                     .await
                     .map_err(|e| e.into());
 
@@ -148,8 +148,8 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
     fn drop(&mut self, rep: Resource<PostgresDbConnection>) -> anyhow::Result<()> {
         record_host_function_call("rdbms::postgres::db-connection", "drop");
 
-        let worker_id = self.state.owned_worker_id.clone();
-        let address = self
+        let worker_id = self.state.owned_worker_id.worker_id.clone();
+        let pool_key = self
             .as_wasi_view()
             .table()
             .get::<PostgresDbConnection>(&rep)?
@@ -160,7 +160,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .state
             .rdbms_service
             .postgres()
-            .remove(&worker_id, &address);
+            .remove(&worker_id, &pool_key);
 
         self.as_wasi_view()
             .table()

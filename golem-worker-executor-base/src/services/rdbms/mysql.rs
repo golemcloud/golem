@@ -22,22 +22,21 @@ use crate::services::rdbms::types::{
 use crate::services::rdbms::{RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey};
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
-use golem_common::model::OwnedWorkerId;
+use golem_common::model::WorkerId;
 use sqlx::{Column, Pool, Row, TypeInfo};
 use std::sync::Arc;
 
 #[async_trait]
 pub trait Mysql {
-    async fn create(&self, worker_id: &OwnedWorkerId, address: &str)
-        -> Result<RdbmsPoolKey, Error>;
+    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error>;
 
-    fn exists(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool;
+    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
 
-    fn remove(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool;
+    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
 
     async fn execute(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
@@ -45,7 +44,7 @@ pub trait Mysql {
 
     async fn query(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
@@ -66,25 +65,21 @@ impl MysqlDefault {
 
 #[async_trait]
 impl Mysql for MysqlDefault {
-    async fn create(
-        &self,
-        worker_id: &OwnedWorkerId,
-        address: &str,
-    ) -> Result<RdbmsPoolKey, Error> {
+    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error> {
         self.rdbms.create(worker_id, address).await
     }
 
-    fn exists(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
         self.rdbms.exists(worker_id, key)
     }
 
-    fn remove(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
         self.rdbms.remove(worker_id, key)
     }
 
     async fn execute(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
@@ -94,7 +89,7 @@ impl Mysql for MysqlDefault {
 
     async fn query(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,

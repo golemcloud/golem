@@ -19,7 +19,7 @@ use dashmap::DashMap;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::OwnedWorkerId;
+use golem_common::model::WorkerId;
 use sqlx::database::HasArguments;
 use sqlx::{Database, Pool, Row};
 use std::collections::HashSet;
@@ -35,7 +35,7 @@ where
     name: &'static str,
     config: RdbmsConfig,
     pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, Error>,
-    pool_workers_cache: DashMap<RdbmsPoolKey, HashSet<OwnedWorkerId>>,
+    pool_workers_cache: DashMap<RdbmsPoolKey, HashSet<WorkerId>>,
 }
 
 impl<DB> SqlxRdbms<DB>
@@ -66,7 +66,7 @@ where
 
     async fn get_or_create(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
     ) -> Result<Arc<Pool<DB>>, Error> {
         let key_clone = key.clone();
@@ -77,12 +77,12 @@ where
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     info!(
-                        "{} DB Pool: {}, connections: {}",
+                        "{}  pool: {}, connections: {}",
                         name, key_clone, pool_config.max_connections
                     );
                     let result = key_clone.create_pool(&pool_config).await.map_err(|e| {
                         error!(
-                            "{} DB Pool: {}, connections: {} - error {}",
+                            "{} pool: {}, connections: {} - error {}",
                             name, key_clone, pool_config.max_connections, e
                         );
                         Error::ConnectionFailure(e.to_string())
@@ -102,7 +102,7 @@ where
 
     pub(crate) async fn create(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         address: &str,
     ) -> Result<RdbmsPoolKey, Error> {
         let key = RdbmsPoolKey::new(address.to_string());
@@ -123,14 +123,14 @@ where
         }
     }
 
-    pub(crate) fn remove(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+    pub(crate) fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
         match self.pool_workers_cache.get_mut(key) {
             Some(mut workers) => (*workers).remove(worker_id),
             None => false,
         }
     }
 
-    pub(crate) fn exists(&self, worker_id: &OwnedWorkerId, key: &RdbmsPoolKey) -> bool {
+    pub(crate) fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
         self.pool_workers_cache
             .get(key)
             .is_some_and(|workers| workers.contains(worker_id))
@@ -138,7 +138,7 @@ where
 
     pub(crate) async fn execute(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,
@@ -164,7 +164,7 @@ where
 
     pub(crate) async fn query(
         &self,
-        worker_id: &OwnedWorkerId,
+        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
         statement: &str,
         params: Vec<DbValue>,

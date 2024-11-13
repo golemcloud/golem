@@ -22,9 +22,15 @@ mod tests;
 
 use crate::services::rdbms::mysql::{Mysql, MysqlDefault};
 use crate::services::rdbms::postgres::{Postgres, PostgresDefault};
+use lazy_static::lazy_static;
 use regex::Regex;
 use std::fmt::Display;
 use std::sync::Arc;
+
+lazy_static! {
+    static ref MASK_ADDRESS_REGEX: Regex = Regex::new(r"(?i)([a-z]+)://([^:]+):([^@]+)@")
+        .expect("Failed to compile mask address regex");
+}
 
 pub trait RdbmsService {
     fn mysql(&self) -> Arc<dyn Mysql + Send + Sync>;
@@ -109,10 +115,9 @@ impl RdbmsPoolKey {
         Self { address }
     }
 
-    fn masked_address(&self) -> String {
-        let re = Regex::new(r"(?i)([a-z]+)://([^:]+):([^@]+)@").expect("Failed to compile regex");
-
-        re.replace_all(self.address.as_str(), "$1://$2:*****@")
+    pub fn masked_address(&self) -> String {
+        MASK_ADDRESS_REGEX
+            .replace_all(self.address.as_str(), "$1://$2:*****@")
             .to_string()
     }
 }
