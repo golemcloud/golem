@@ -161,7 +161,7 @@ fn many_ways_to_export_no_collision() {
     assert_has_same_wit_package(
         &PackageName::new("test", "sub", None),
         &dest_wit_root,
-        &Path::new("test-data").join("many-ways-to-export/deps/sub/sub.wit"),
+        Path::new("test-data/wit/many-ways-to-export/deps/sub/sub.wit"),
     );
 }
 
@@ -566,7 +566,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
     let canonical_source = source.path().canonicalize().unwrap();
 
     fs_extra::dir::copy(
-        Path::new("test-data").join(name),
+        Path::new("test-data/wit").join(name),
         &canonical_source,
         &CopyOptions::new().content_only(true),
     )
@@ -605,7 +605,7 @@ fn regenerate_stub(stub_dir: &Path, source_wit_root: &Path) {
 
 fn init_caller(name: &str) -> TempDir {
     let temp_dir = TempDir::new().unwrap();
-    let source = Path::new("test-data").join(name);
+    let source = Path::new("test-data/wit").join(name);
 
     fs_extra::dir::copy(
         source,

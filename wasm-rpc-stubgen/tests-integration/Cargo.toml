@@ -21,6 +21,7 @@ name = "stub_wasm"
 harness = false
 
 [dependencies]
+assert2  = { workspace = true}
 fs_extra = { workspace = true }
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc-stubgen = { path = "../../wasm-rpc-stubgen", version = "0.0.0" }

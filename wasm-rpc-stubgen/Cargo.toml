@@ -30,7 +30,7 @@ harness = false
 
 [dependencies]
 anyhow = "1.0.79"
-assert2 = "0.3.15"
+assert2 = { workspace = true }
 cargo_toml = "0.20.2"
 clap = { version = "4.5.7", features = ["derive"] }
 colored = "2.1.0"

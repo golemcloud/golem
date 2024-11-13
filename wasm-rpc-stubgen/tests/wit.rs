@@ -317,7 +317,7 @@ fn is_owned_by_interface(
 
 fn init_source(name: &str) -> TempDir {
     let temp_dir = TempDir::new().unwrap();
-    let source = Path::new("test-data").join(name);
+    let source = Path::new("test-data/wit").join(name);
 
     fs_extra::dir::copy(
         source,
