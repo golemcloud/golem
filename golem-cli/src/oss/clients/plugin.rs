@@ -28,7 +28,7 @@ pub struct PluginClientLive<C: golem_client::api::PluginClient + Sync + Send> {
 impl<C: golem_client::api::PluginClient + Sync + Send> PluginClient for PluginClientLive<C> {
     type ProjectContext = OssContext;
     type PluginDefinition =
-        golem_client::model::PluginDefinitionDefaultComponentOwnerDefaultPluginScope;
+        golem_client::model::PluginDefinitionDefaultPluginOwnerDefaultPluginScope;
     type PluginDefinitionWithoutOwner =
         golem_client::model::PluginDefinitionWithoutOwnerDefaultPluginScope;
     type PluginScope = DefaultPluginScope;

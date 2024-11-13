@@ -67,7 +67,7 @@ pub trait ComponentClient {
         urn: &ComponentUrn,
         plugin_name: &str,
         plugin_version: &str,
-        priority: i16,
+        priority: i32,
         parameters: HashMap<String, String>,
     ) -> Result<PluginInstallation, GolemError>;
 

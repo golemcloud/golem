@@ -12,11 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ComponentOwner, DefaultComponentOwner};
+use crate::model::ComponentOwner;
 use crate::repo::plugin_installation::PluginInstallationRecord;
 use crate::repo::RowMeta;
+use async_trait::async_trait;
 use golem_common::model::plugin::DefaultPluginScope;
-use golem_common::model::{ComponentId, ComponentVersion, PluginInstallationId};
+use golem_common::model::{
+    AccountId, ComponentId, ComponentVersion, HasAccountId, PluginInstallationId,
+};
 use http::Uri;
 use poem_openapi::types::{ParseFromJSON, ToJSON, Type};
 use poem_openapi::{Enum, Object, Union};
@@ -26,12 +29,12 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Postgres, Sqlite};
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
-use async_trait::async_trait;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct PluginDefinition<Owner: ComponentOwner, Scope: PluginScope> {
+pub struct PluginDefinition<Owner: PluginOwner, Scope: PluginScope> {
     pub name: String,
     pub version: String,
     pub description: String,
@@ -42,10 +45,10 @@ pub struct PluginDefinition<Owner: ComponentOwner, Scope: PluginScope> {
     pub owner: Owner,
 }
 
-impl From<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>
+impl From<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>
     for golem_api_grpc::proto::golem::component::PluginDefinition
 {
-    fn from(value: PluginDefinition<DefaultComponentOwner, DefaultPluginScope>) -> Self {
+    fn from(value: PluginDefinition<DefaultPluginOwner, DefaultPluginScope>) -> Self {
         golem_api_grpc::proto::golem::component::PluginDefinition {
             name: value.name,
             version: value.version,
@@ -59,7 +62,7 @@ impl From<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::component::PluginDefinition>
-    for PluginDefinition<DefaultComponentOwner, DefaultPluginScope>
+    for PluginDefinition<DefaultPluginOwner, DefaultPluginScope>
 {
     type Error = String;
 
@@ -74,7 +77,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::PluginDefinition>
             homepage: value.homepage,
             specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
             scope: value.scope.ok_or("Missing plugin scope")?.try_into()?,
-            owner: DefaultComponentOwner,
+            owner: DefaultPluginOwner,
         })
     }
 }
@@ -93,7 +96,7 @@ pub struct PluginDefinitionWithoutOwner<Scope: PluginScope> {
 }
 
 impl<Scope: PluginScope> PluginDefinitionWithoutOwner<Scope> {
-    pub fn with_owner<Owner: ComponentOwner>(self, owner: Owner) -> PluginDefinition<Owner, Scope> {
+    pub fn with_owner<Owner: PluginOwner>(self, owner: Owner) -> PluginDefinition<Owner, Scope> {
         PluginDefinition {
             name: self.name,
             version: self.version,
@@ -407,4 +410,67 @@ impl PluginInstallationTarget for ComponentPluginInstallationTarget {
     fn table_name() -> &'static str {
         "component_plugin_installation"
     }
+}
+
+pub trait PluginOwner:
+    Debug
+    + Display
+    + FromStr<Err = String>
+    + HasAccountId
+    + Clone
+    + PartialEq
+    + Serialize
+    + for<'de> Deserialize<'de>
+    + Type
+    + ParseFromJSON
+    + ToJSON
+    + Send
+    + Sync
+    + 'static
+{
+    type Row: RowMeta<Sqlite>
+        + RowMeta<Postgres>
+        + for<'r> sqlx::FromRow<'r, SqliteRow>
+        + for<'r> sqlx::FromRow<'r, PgRow>
+        + From<Self>
+        + TryInto<Self, Error = String>
+        + Clone
+        + Display
+        + Send
+        + Sync
+        + Unpin
+        + 'static;
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct DefaultPluginOwner;
+
+impl Display for DefaultPluginOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "default")
+    }
+}
+
+impl FromStr for DefaultPluginOwner {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "default" {
+            Ok(DefaultPluginOwner)
+        } else {
+            Err("Failed to parse empty namespace".to_string())
+        }
+    }
+}
+
+impl HasAccountId for DefaultPluginOwner {
+    fn account_id(&self) -> AccountId {
+        AccountId::placeholder()
+    }
+}
+
+impl PluginOwner for DefaultPluginOwner {
+    type Row = crate::repo::plugin::DefaultPluginOwnerRow;
 }

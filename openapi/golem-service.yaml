@@ -2816,7 +2816,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition<DefaultComponentOwner, DefaultPluginScope>'
+                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
         '400':
           description: ''
           content:
@@ -2930,7 +2930,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/PluginDefinition<DefaultComponentOwner, DefaultPluginScope>'
+                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
         '400':
           description: ''
           content:
@@ -2996,7 +2996,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/PluginDefinition<DefaultComponentOwner, DefaultPluginScope>'
+                $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
         '400':
           description: ''
           content:
@@ -5910,7 +5910,7 @@ components:
       enum:
       - Durable
       - Ephemeral
-    DefaultComponentOwner:
+    DefaultPluginOwner:
       type: object
     DefaultPluginScope:
       discriminator:
@@ -5988,7 +5988,7 @@ components:
       required:
       - componentId
       - componentVersion
-    PluginDefinition<DefaultComponentOwner, DefaultPluginScope>:
+    PluginDefinition<DefaultPluginOwner, DefaultPluginScope>:
       type: object
       properties:
         name:
@@ -6009,7 +6009,7 @@ components:
         scope:
           $ref: '#/components/schemas/DefaultPluginScope'
         owner:
-          $ref: '#/components/schemas/DefaultComponentOwner'
+          $ref: '#/components/schemas/DefaultPluginOwner'
       required:
       - name
       - version
@@ -6059,7 +6059,7 @@ components:
           type: string
         priority:
           type: integer
-          format: int16
+          format: int32
         parameters:
           type: object
           additionalProperties:
@@ -6079,7 +6079,7 @@ components:
           type: string
         priority:
           type: integer
-          format: int16
+          format: int32
         parameters:
           type: object
           additionalProperties:
@@ -6094,7 +6094,7 @@ components:
       properties:
         priority:
           type: integer
-          format: int16
+          format: int32
         parameters:
           type: object
           additionalProperties:

@@ -12,21 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{
-    ComponentOwner, ComponentPluginInstallationTarget, PluginDefinition, PluginInstallation,
-    PluginInstallationCreation, PluginInstallationUpdate, PluginScope,
-};
-use crate::repo::component::ComponentRepo;
+use crate::model::{PluginDefinition, PluginOwner, PluginScope};
 use crate::repo::plugin::{PluginRecord, PluginRepo};
-use crate::repo::plugin_installation::PluginInstallationRecord;
 use crate::service::component::ComponentError;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::component::v1::component_error;
-use golem_common::model::{ComponentId, ComponentVersion, PluginInstallationId};
+use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;
-use poem_openapi::__private::serde_json;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -85,7 +79,7 @@ impl From<PluginError> for golem_api_grpc::proto::golem::component::v1::Componen
 }
 
 #[async_trait]
-pub trait PluginService<Owner: ComponentOwner, Scope: PluginScope> {
+pub trait PluginService<Owner: PluginOwner, Scope: PluginScope> {
     /// Get all the registered plugins owned by `owner`, regardless of their scope
     async fn list_plugins(
         &self,
@@ -122,54 +116,21 @@ pub trait PluginService<Owner: ComponentOwner, Scope: PluginScope> {
 
     /// Deletes a registered plugin belonging to a given `owner`, identified by its `name` and `version`
     async fn delete(&self, owner: &Owner, name: &str, version: &str) -> Result<(), PluginError>;
-
-    /// Gets the list of installed plugins for a given component version belonging to `owner`
-    async fn get_plugin_installations_for_component(
-        &self,
-        owner: &Owner,
-        component_id: &ComponentId,
-        component_version: ComponentVersion,
-    ) -> Result<Vec<PluginInstallation>, PluginError>;
-
-    async fn create_plugin_installation_for_component(
-        &self,
-        owner: &Owner,
-        component_id: &ComponentId,
-        installation: PluginInstallationCreation,
-    ) -> Result<PluginInstallation, PluginError>;
-
-    async fn update_plugin_installation_for_component(
-        &self,
-        owner: &Owner,
-        installation_id: &PluginInstallationId,
-        component_id: &ComponentId,
-        update: PluginInstallationUpdate,
-    ) -> Result<(), PluginError>;
-
-    async fn delete_plugin_installation_for_component(
-        &self,
-        owner: &Owner,
-        installation_id: &PluginInstallationId,
-        component_id: &ComponentId,
-    ) -> Result<(), PluginError>;
 }
 
-pub struct PluginServiceDefault<Owner: ComponentOwner, Scope: PluginScope> {
+pub struct PluginServiceDefault<Owner: PluginOwner, Scope: PluginScope> {
     plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
-    component_repo: Arc<dyn ComponentRepo<Owner> + Send + Sync>,
-    plugin_scope_request_context: Scope::RequestContext
+    plugin_scope_request_context: Scope::RequestContext,
 }
 
-impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> {
+impl<Owner: PluginOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scope> {
     pub fn new(
         plugin_repo: Arc<dyn PluginRepo<Owner, Scope> + Send + Sync>,
-        component_repo: Arc<dyn ComponentRepo<Owner> + Send + Sync>,
-        plugin_scope_request_context: Scope::RequestContext
+        plugin_scope_request_context: Scope::RequestContext,
     ) -> Self {
         Self {
             plugin_repo,
-            component_repo,
-            plugin_scope_request_context
+            plugin_scope_request_context,
         }
     }
 
@@ -185,7 +146,7 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginServiceDefault<Owner, Scop
 }
 
 #[async_trait]
-impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner, Scope>
+impl<Owner: PluginOwner, Scope: PluginScope> PluginService<Owner, Scope>
     for PluginServiceDefault<Owner, Scope>
 {
     async fn list_plugins(
@@ -260,128 +221,5 @@ impl<Owner: ComponentOwner, Scope: PluginScope> PluginService<Owner, Scope>
             .delete(&owner_record, name, version)
             .await?;
         Ok(())
-    }
-
-    async fn get_plugin_installations_for_component(
-        &self,
-        owner: &Owner,
-        component_id: &ComponentId,
-        component_version: ComponentVersion,
-    ) -> Result<Vec<PluginInstallation>, PluginError> {
-        let owner_record: Owner::Row = owner.clone().into();
-        let records = self
-            .component_repo
-            .get_installed_plugins(&owner_record, &component_id.0, component_version)
-            .await?;
-
-        records
-            .into_iter()
-            .map(PluginInstallation::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| PluginError::conversion_error("plugin installation", e))
-    }
-
-    async fn create_plugin_installation_for_component(
-        &self,
-        owner: &Owner,
-        component_id: &ComponentId,
-        installation: PluginInstallationCreation,
-    ) -> Result<PluginInstallation, PluginError> {
-        let owner: Owner::Row = owner.clone().into();
-
-        let latest = self
-            .component_repo
-            .get_latest_version(&owner.to_string(), &component_id.0)
-            .await?;
-
-        if let Some(latest) = latest {
-            let installation = installation.with_generated_id();
-            let record = PluginInstallationRecord {
-                installation_id: installation.id.0,
-                plugin_name: installation.name.clone(),
-                plugin_version: installation.version.clone(),
-                priority: installation.priority,
-                parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
-                    PluginError::conversion_error("plugin installation parameters", e.to_string())
-                })?,
-                target: ComponentPluginInstallationTarget {
-                    component_id: component_id.clone(),
-                    component_version: latest.version as u64,
-                }
-                .into(),
-                owner,
-            };
-
-            self.component_repo.install_plugin(&record).await?;
-
-            Ok(installation)
-        } else {
-            Err(PluginError::ComponentNotFound {
-                component_id: component_id.clone(),
-            })
-        }
-    }
-
-    async fn update_plugin_installation_for_component(
-        &self,
-        owner: &Owner,
-        installation_id: &PluginInstallationId,
-        component_id: &ComponentId,
-        update: PluginInstallationUpdate,
-    ) -> Result<(), PluginError> {
-        let owner_record = owner.clone().into();
-
-        let latest = self
-            .component_repo
-            .get_latest_version(&owner.to_string(), &component_id.0)
-            .await?;
-
-        if latest.is_some() {
-            self.component_repo
-                .update_plugin_installation(
-                    &owner_record,
-                    &component_id.0,
-                    &installation_id.0,
-                    update.priority,
-                    serde_json::to_vec(&update.parameters).map_err(|e| {
-                        PluginError::conversion_error(
-                            "plugin installation parameters",
-                            e.to_string(),
-                        )
-                    })?,
-                )
-                .await?;
-
-            Ok(())
-        } else {
-            Err(PluginError::ComponentNotFound {
-                component_id: component_id.clone(),
-            })
-        }
-    }
-
-    async fn delete_plugin_installation_for_component(
-        &self,
-        owner: &Owner,
-        installation_id: &PluginInstallationId,
-        component_id: &ComponentId,
-    ) -> Result<(), PluginError> {
-        let owner_record = owner.clone().into();
-        let latest = self
-            .component_repo
-            .get_latest_version(&owner.to_string(), &component_id.0)
-            .await?;
-
-        if latest.is_some() {
-            self.component_repo
-                .uninstall_plugin(&owner_record, &component_id.0, &installation_id.0)
-                .await?;
-
-            Ok(())
-        } else {
-            Err(PluginError::ComponentNotFound {
-                component_id: component_id.clone(),
-            })
-        }
     }
 }

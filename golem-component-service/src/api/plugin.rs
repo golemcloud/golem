@@ -17,7 +17,7 @@ use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
 use golem_component_service_base::model::{
-    DefaultComponentOwner, PluginDefinition, PluginDefinitionWithoutOwner,
+    DefaultPluginOwner, PluginDefinition, PluginDefinitionWithoutOwner,
 };
 use golem_component_service_base::service::plugin::PluginService;
 use golem_service_base::api_tags::ApiTags;
@@ -30,7 +30,7 @@ use tracing::Instrument;
 
 pub struct PluginApi {
     pub plugin_service:
-        Arc<dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send>,
+        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/plugins", tag = ApiTags::Plugin)]
@@ -40,19 +40,19 @@ impl PluginApi {
     pub async fn list_plugins(
         &self,
         scope: Query<Option<DefaultPluginScope>>,
-    ) -> Result<Json<Vec<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>>> {
+    ) -> Result<Json<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>>> {
         let record = recorded_http_api_request!("list_plugins",);
 
         let response = if let Some(scope) = scope.0 {
             self.plugin_service
-                .list_plugins_for_scope(&DefaultComponentOwner, &scope)
+                .list_plugins_for_scope(&DefaultPluginOwner, &scope)
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
                 .map(|response| Json(response.into_iter().collect()))
         } else {
             self.plugin_service
-                .list_plugins(&DefaultComponentOwner)
+                .list_plugins(&DefaultPluginOwner)
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
@@ -67,12 +67,12 @@ impl PluginApi {
     pub async fn list_plugin_versions(
         &self,
         name: Path<String>,
-    ) -> Result<Json<Vec<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>>> {
+    ) -> Result<Json<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>>> {
         let record = recorded_http_api_request!("list_plugin_versions", plugin_name = name.0);
 
         let response = self
             .plugin_service
-            .list_plugin_versions(&DefaultComponentOwner, &name)
+            .list_plugin_versions(&DefaultPluginOwner, &name)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -95,7 +95,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .create_plugin(plugin.0.with_owner(DefaultComponentOwner))
+            .create_plugin(plugin.0.with_owner(DefaultPluginOwner))
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -110,7 +110,7 @@ impl PluginApi {
         &self,
         name: Path<String>,
         version: Path<String>,
-    ) -> Result<Json<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>> {
+    ) -> Result<Json<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>> {
         let record = recorded_http_api_request!(
             "get_plugin",
             plugin_name = name.0,
@@ -119,7 +119,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .get(&DefaultComponentOwner, &name, &version)
+            .get(&DefaultPluginOwner, &name, &version)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -152,7 +152,7 @@ impl PluginApi {
 
         let response = self
             .plugin_service
-            .delete(&DefaultComponentOwner, &name, &version)
+            .delete(&DefaultPluginOwner, &name, &version)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

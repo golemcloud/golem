@@ -181,7 +181,7 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
 
         /// Priority of the plugin - largest priority is applied first
         #[arg(long)]
-        priority: i16,
+        priority: i32,
 
         /// List of parameters (key-value pairs) passed to the plugin
         #[arg(short, long, value_parser = parse_key_val, value_name = "KEY=VAL")]

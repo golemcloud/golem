@@ -25,7 +25,7 @@ use crate::oss::model::OssContext;
 use crate::stubgen::handle_stubgen;
 use crate::{check_for_newer_server_version, examples, ConfiguredMainArgs, MainArgs, VERSION};
 use golem_client::model::{
-    PluginDefinitionDefaultComponentOwnerDefaultPluginScope,
+    PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
     PluginDefinitionWithoutOwnerDefaultPluginScope,
 };
 use golem_client::DefaultComponentOwner;
@@ -139,7 +139,7 @@ pub async fn async_main<ProfileAdd: Into<UniversalProfileAdd> + clap::Args>(
             let factory = factory().await?;
 
             subcommand
-                .handle::<PluginDefinitionDefaultComponentOwnerDefaultPluginScope, PluginDefinitionWithoutOwnerDefaultPluginScope, OssContext, DefaultPluginScope, DefaultComponentOwner, OssContext>(
+                .handle::<PluginDefinitionDefaultPluginOwnerDefaultPluginScope, PluginDefinitionWithoutOwnerDefaultPluginScope, OssContext, DefaultPluginScope, DefaultComponentOwner, OssContext>(
                     format,
                     factory.plugin_client(),
                     factory.project_resolver(),

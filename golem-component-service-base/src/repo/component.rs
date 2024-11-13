@@ -14,11 +14,13 @@
 
 use crate::model::{
     Component, ComponentConstraints, ComponentOwner, ComponentPluginInstallationTarget,
+    DefaultComponentOwner,
 };
 use crate::repo::plugin_installation::{
     ComponentPluginInstallationRow, DbPluginInstallationRepoQueries, PluginInstallationRecord,
     PluginInstallationRepoQueries,
 };
+use crate::repo::RowMeta;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
@@ -31,8 +33,9 @@ use golem_common::model::{
 };
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
-use sqlx::{Database, Pool, Row};
-use std::fmt::{Debug, Formatter};
+use sqlx::query_builder::Separated;
+use sqlx::{Database, Pool, QueryBuilder, Row};
+use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::result::Result;
@@ -202,6 +205,39 @@ impl TryFrom<FileRecord> for InitialComponentFile {
             permissions: ComponentFilePermissions::from_compact_str(&value.file_permissions)?,
         })
     }
+}
+
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct DefaultComponentOwnerRow {}
+
+impl Display for DefaultComponentOwnerRow {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "default")
+    }
+}
+
+impl From<DefaultComponentOwner> for DefaultComponentOwnerRow {
+    fn from(_: DefaultComponentOwner) -> Self {
+        Self {}
+    }
+}
+
+impl TryFrom<DefaultComponentOwnerRow> for DefaultComponentOwner {
+    type Error = String;
+
+    fn try_from(_: DefaultComponentOwnerRow) -> Result<Self, Self::Error> {
+        Ok(DefaultComponentOwner {})
+    }
+}
+
+impl<DB: Database> RowMeta<DB> for DefaultComponentOwnerRow {
+    fn add_column_list<Sep: Display>(_builder: &mut Separated<DB, Sep>) {}
+
+    fn add_where_clause(&self, builder: &mut QueryBuilder<DB>) {
+        builder.push("1 = 1");
+    }
+
+    fn push_bind<'a, Sep: Display>(&'a self, _builder: &mut Separated<'_, 'a, DB, Sep>) {}
 }
 
 #[async_trait]

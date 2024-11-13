@@ -112,7 +112,7 @@ pub trait ComponentService {
         project: Option<Self::ProjectContext>,
         plugin_name: &str,
         plugin_version: &str,
-        priority: i16,
+        priority: i32,
         parameters: HashMap<String, String>,
     ) -> Result<GolemResult, GolemError>;
 
@@ -520,7 +520,7 @@ impl<ProjectContext: Display + Send + Sync> ComponentService
         project: Option<Self::ProjectContext>,
         plugin_name: &str,
         plugin_version: &str,
-        priority: i16,
+        priority: i32,
         parameters: HashMap<String, String>,
     ) -> Result<GolemResult, GolemError> {
         let urn = self.resolve_uri(component_uri, &project).await?;

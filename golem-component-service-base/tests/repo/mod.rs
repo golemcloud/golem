@@ -20,16 +20,17 @@ use golem_common::model::{
 };
 use golem_component_service_base::model::{
     Component, ComponentOwner, ComponentPluginInstallationTarget, ComponentTransformerDefinition,
-    DefaultComponentOwner, OplogProcessorDefinition, PluginDefinition, PluginInstallation,
-    PluginTypeSpecificDefinition,
+    DefaultComponentOwner, DefaultPluginOwner, OplogProcessorDefinition, PluginDefinition,
+    PluginInstallation, PluginTypeSpecificDefinition,
 };
-use golem_component_service_base::repo::component::{ComponentRecord, ComponentRepo};
+use golem_component_service_base::repo::component::{
+    ComponentRecord, ComponentRepo, DefaultComponentOwnerRow,
+};
 use golem_component_service_base::repo::plugin::{
-    DefaultComponentOwnerRow, DefaultPluginScopeRow, PluginRepo,
+    DefaultPluginOwnerRow, DefaultPluginScopeRow, PluginRepo,
 };
 use golem_component_service_base::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_component_service_base::repo::RowMeta;
-use golem_component_service_base::service::component::ComponentService;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use poem_openapi::NewType;
@@ -384,10 +385,10 @@ async fn test_repo_component_constraints(
 
 async fn test_default_plugin_repo(
     component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-    plugin_repo: Arc<dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Send + Sync>,
+    plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
 ) -> Result<(), RepoError> {
     let owner: DefaultComponentOwner = DefaultComponentOwner;
-    let owner_row: DefaultComponentOwnerRow = owner.clone().into();
+    let plugin_owner_row: DefaultPluginOwnerRow = DefaultPluginOwner.into();
 
     let component_id = ComponentId::new_v4();
     let component_id2 = ComponentId::new_v4();
@@ -422,11 +423,13 @@ async fn test_default_plugin_repo(
         .create(&ComponentRecord::try_from_model(component2.clone(), true).unwrap())
         .await?;
 
-    let all1 = plugin_repo.get_all(&owner_row).await?;
+    let all1 = plugin_repo.get_all(&plugin_owner_row).await?;
     let scoped1 = plugin_repo
-        .get_for_scope(&owner_row, &[scope1.clone()])
+        .get_for_scope(&plugin_owner_row, &[scope1.clone()])
         .await?;
-    let named1 = plugin_repo.get_all_with_name(&owner_row, "plugin1").await?;
+    let named1 = plugin_repo
+        .get_all_with_name(&plugin_owner_row, "plugin1")
+        .await?;
 
     let plugin1 = PluginDefinition {
         name: "plugin1".to_string(),
@@ -441,7 +444,7 @@ async fn test_default_plugin_repo(
             transform_url: "https://plugin1.com/transform".to_string(),
         }),
         scope: DefaultPluginScope::Global(Empty {}),
-        owner: DefaultComponentOwner,
+        owner: DefaultPluginOwner,
     };
     let plugin1_row = plugin1.clone().into();
 
@@ -458,46 +461,50 @@ async fn test_default_plugin_repo(
         scope: DefaultPluginScope::Component(ComponentPluginScope {
             component_id: component_id.clone(),
         }),
-        owner: DefaultComponentOwner,
+        owner: DefaultPluginOwner,
     };
     let plugin2_row = plugin2.clone().into();
 
     plugin_repo.create(&plugin1_row).await?;
     plugin_repo.create(&plugin2_row).await?;
 
-    let all2 = plugin_repo.get_all(&owner_row).await?;
+    let all2 = plugin_repo.get_all(&plugin_owner_row).await?;
     let scoped2 = plugin_repo
-        .get_for_scope(&owner_row, &[scope1.clone()])
+        .get_for_scope(&plugin_owner_row, &[scope1.clone()])
         .await?;
-    let named2 = plugin_repo.get_all_with_name(&owner_row, "plugin1").await?;
+    let named2 = plugin_repo
+        .get_all_with_name(&plugin_owner_row, "plugin1")
+        .await?;
 
-    plugin_repo.delete(&owner_row, "plugin1", "v1").await?;
+    plugin_repo
+        .delete(&plugin_owner_row, "plugin1", "v1")
+        .await?;
 
-    let all3 = plugin_repo.get_all(&owner_row).await?;
+    let all3 = plugin_repo.get_all(&plugin_owner_row).await?;
 
     let mut defs = all2
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
         .unwrap();
     defs.sort_by_key(|def| def.name.clone());
 
     let scoped = scoped2
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
         .unwrap();
 
     let named = named2
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
         .unwrap();
 
     let after_delete = all3
         .into_iter()
         .map(|p| p.try_into())
-        .collect::<Result<Vec<PluginDefinition<DefaultComponentOwner, DefaultPluginScope>>, String>>()
+        .collect::<Result<Vec<PluginDefinition<DefaultPluginOwner, DefaultPluginScope>>, String>>()
         .unwrap();
 
     assert!(scoped1.is_empty());
@@ -521,10 +528,13 @@ async fn test_default_plugin_repo(
 
 async fn test_default_component_plugin_installation(
     component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-    plugin_repo: Arc<dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Send + Sync>,
+    plugin_repo: Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
 ) -> Result<(), RepoError> {
-    let owner: DefaultComponentOwner = DefaultComponentOwner;
-    let owner_row: DefaultComponentOwnerRow = owner.clone().into();
+    let component_owner: DefaultComponentOwner = DefaultComponentOwner;
+    let component_owner_row: DefaultComponentOwnerRow = component_owner.clone().into();
+
+    let plugin_owner: DefaultPluginOwner = DefaultPluginOwner;
+
     let component_id = ComponentId::new_v4();
 
     let component1 = Component::new(
@@ -533,7 +543,7 @@ async fn test_default_component_plugin_installation(
         ComponentType::Ephemeral,
         &get_component_data("shopping-cart"),
         vec![],
-        owner.clone(),
+        component_owner.clone(),
     )
     .unwrap();
 
@@ -550,7 +560,7 @@ async fn test_default_component_plugin_installation(
             transform_url: "https://plugin2.com/transform".to_string(),
         }),
         scope: DefaultPluginScope::Global(Empty {}),
-        owner: owner.clone(),
+        owner: plugin_owner.clone(),
     };
     let plugin1_row = plugin1.clone().into();
 
@@ -566,7 +576,7 @@ async fn test_default_component_plugin_installation(
     let target1_row: ComponentPluginInstallationRow = target1.clone().into();
 
     let installations1 = component_repo
-        .get_installed_plugins(&owner_row, &component_id.0, 0)
+        .get_installed_plugins(&component_owner_row, &component_id.0, 0)
         .await?;
 
     let installation1 = PluginInstallation {
@@ -578,7 +588,7 @@ async fn test_default_component_plugin_installation(
     };
     let installation1_row = installation1
         .clone()
-        .try_into(owner_row.clone(), target1_row.clone())
+        .try_into(component_owner_row.clone(), target1_row.clone())
         .unwrap();
 
     component_repo.install_plugin(&installation1_row).await?;
@@ -592,13 +602,13 @@ async fn test_default_component_plugin_installation(
     };
     let installation2_row = installation2
         .clone()
-        .try_into(owner_row.clone(), target1_row.clone())
+        .try_into(component_owner_row.clone(), target1_row.clone())
         .unwrap();
 
     component_repo.install_plugin(&installation2_row).await?;
 
     let installations2 = component_repo
-        .get_installed_plugins(&owner_row, &component_id.0, 2)
+        .get_installed_plugins(&component_owner_row, &component_id.0, 2)
         .await?;
 
     println!("{:?}", installations2);
@@ -612,7 +622,7 @@ async fn test_default_component_plugin_installation(
         HashMap::from_iter(vec![("param2".to_string(), "value2".to_string())]);
     component_repo
         .update_plugin_installation(
-            &owner_row,
+            &component_owner_row,
             &component_id.0,
             &latest_installation2_id,
             600,
@@ -621,7 +631,7 @@ async fn test_default_component_plugin_installation(
         .await?;
 
     let installations3 = component_repo
-        .get_installed_plugins(&owner_row, &component_id.0, 3)
+        .get_installed_plugins(&component_owner_row, &component_id.0, 3)
         .await?;
 
     let latest_installation1_id = installations3
@@ -630,11 +640,15 @@ async fn test_default_component_plugin_installation(
         .unwrap()
         .installation_id;
     component_repo
-        .uninstall_plugin(&owner_row, &component_id.0, &latest_installation1_id)
+        .uninstall_plugin(
+            &component_owner_row,
+            &component_id.0,
+            &latest_installation1_id,
+        )
         .await?;
 
     let installations4 = component_repo
-        .get_installed_plugins(&owner_row, &component_id.0, 4)
+        .get_installed_plugins(&component_owner_row, &component_id.0, 4)
         .await?;
 
     assert_eq!(installations1.len(), 0);

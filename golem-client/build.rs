@@ -60,6 +60,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "DefaultPluginScope",
                 "golem_common::model::plugin::DefaultPluginScope",
             ),
+            ("DefaultPluginOwner", "crate::DefaultPluginOwner"),
             (
                 "OplogCursor",
                 "golem_common::model::public_oplog::OplogCursor",

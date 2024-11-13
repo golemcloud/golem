@@ -46,7 +46,6 @@ use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as Fun
 use golem_api_grpc::proto::golem::component::{Component, PluginInstallation};
 use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id_string};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
@@ -55,7 +54,6 @@ use golem_component_service_base::model::{
     PluginInstallationUpdate,
 };
 use golem_component_service_base::service::component;
-use golem_component_service_base::service::plugin::PluginService;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -78,8 +76,6 @@ fn internal_error(error: &str) -> ComponentError {
 pub struct ComponentGrpcApi {
     pub component_service:
         Arc<dyn component::ComponentService<DefaultComponentOwner> + Sync + Send>,
-    pub plugin_service:
-        Arc<dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 impl ComponentGrpcApi {
@@ -267,7 +263,7 @@ impl ComponentGrpcApi {
         };
 
         let response = self
-            .plugin_service
+            .component_service
             .get_plugin_installations_for_component(&DefaultComponentOwner, &component_id, version)
             .await?;
 
@@ -288,7 +284,7 @@ impl ComponentGrpcApi {
         };
 
         let response = self
-            .plugin_service
+            .component_service
             .create_plugin_installation_for_component(
                 &DefaultComponentOwner,
                 &component_id,
@@ -316,7 +312,7 @@ impl ComponentGrpcApi {
             parameters: request.updated_parameters.clone(),
         };
 
-        self.plugin_service
+        self.component_service
             .update_plugin_installation_for_component(
                 &DefaultComponentOwner,
                 &installation_id,
@@ -340,7 +336,7 @@ impl ComponentGrpcApi {
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing installation id"))?;
 
-        self.plugin_service
+        self.component_service
             .delete_plugin_installation_for_component(
                 &DefaultComponentOwner,
                 &installation_id,

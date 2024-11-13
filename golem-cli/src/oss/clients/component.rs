@@ -202,7 +202,7 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         urn: &ComponentUrn,
         plugin_name: &str,
         plugin_version: &str,
-        priority: i16,
+        priority: i32,
         parameters: HashMap<String, String>,
     ) -> Result<PluginInstallation, GolemError> {
         info!("Installing plugin {plugin_name} version {plugin_version} to {urn}");

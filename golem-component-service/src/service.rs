@@ -17,7 +17,7 @@ use golem_common::config::DbConfig;
 use golem_common::model::plugin::DefaultPluginScope;
 use golem_component_service_base::config::ComponentCompilationConfig;
 use golem_component_service_base::config::ComponentStoreConfig;
-use golem_component_service_base::model::DefaultComponentOwner;
+use golem_component_service_base::model::{DefaultComponentOwner, DefaultPluginOwner};
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };
@@ -45,7 +45,7 @@ pub struct Services {
     pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
     pub compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
     pub plugin_service:
-        Arc<dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Send + Sync>,
+        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
 }
 
 impl Services {
@@ -61,7 +61,7 @@ impl Services {
                         db_pool.clone().into(),
                     )));
                 let plugin_repo: Arc<
-                    dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Sync + Send,
+                    dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
                 > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
                     db_pool.clone().into(),
                 )));
@@ -76,7 +76,7 @@ impl Services {
                         db_pool.clone().into(),
                     )));
                 let plugin_repo: Arc<
-                    dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Sync + Send,
+                    dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
                 > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
                     db_pool.clone().into(),
                 )));
@@ -146,8 +146,8 @@ impl Services {
             ));
 
         let plugin_service: Arc<
-            dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send,
-        > = Arc::new(PluginServiceDefault::new(plugin_repo, component_repo, ()));
+            dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+        > = Arc::new(PluginServiceDefault::new(plugin_repo, ()));
 
         Ok(Services {
             component_service,

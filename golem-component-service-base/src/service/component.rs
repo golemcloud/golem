@@ -20,21 +20,26 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::vec;
 
-use crate::model::ComponentOwner;
 use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentConstraints};
+use crate::model::{
+    ComponentOwner, ComponentPluginInstallationTarget, PluginInstallation,
+    PluginInstallationCreation, PluginInstallationUpdate,
+};
 use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
+use crate::repo::plugin_installation::PluginInstallationRecord;
 use crate::service::component_compilation::ComponentCompilationService;
 use crate::service::component_object_store::ComponentObjectStore;
+use crate::service::plugin::PluginError;
 use async_trait::async_trait;
 use async_zip::tokio::read::seek::ZipFileReader;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
-use golem_common::model::AccountId;
 use golem_common::model::ComponentVersion;
+use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
@@ -334,6 +339,36 @@ pub trait ComponentService<Owner: ComponentOwner>: Debug {
         component_id: &ComponentId,
         owner: &Owner,
     ) -> Result<Option<FunctionConstraintCollection>, ComponentError>;
+
+    /// Gets the list of installed plugins for a given component version belonging to `owner`
+    async fn get_plugin_installations_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Vec<PluginInstallation>, PluginError>;
+
+    async fn create_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        installation: PluginInstallationCreation,
+    ) -> Result<PluginInstallation, PluginError>;
+
+    async fn update_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+        update: PluginInstallationUpdate,
+    ) -> Result<(), PluginError>;
+
+    async fn delete_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+    ) -> Result<(), PluginError>;
 }
 
 pub struct ComponentServiceDefault<Owner: ComponentOwner> {
@@ -1081,6 +1116,129 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
             .get_constraint(&owner.to_string(), &component_id.0)
             .await?;
         Ok(result)
+    }
+
+    async fn get_plugin_installations_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Vec<PluginInstallation>, PluginError> {
+        let owner_record: Owner::Row = owner.clone().into();
+        let records = self
+            .component_repo
+            .get_installed_plugins(&owner_record, &component_id.0, component_version)
+            .await?;
+
+        records
+            .into_iter()
+            .map(PluginInstallation::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| PluginError::conversion_error("plugin installation", e))
+    }
+
+    async fn create_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        installation: PluginInstallationCreation,
+    ) -> Result<PluginInstallation, PluginError> {
+        let owner: Owner::Row = owner.clone().into();
+
+        let latest = self
+            .component_repo
+            .get_latest_version(&owner.to_string(), &component_id.0)
+            .await?;
+
+        if let Some(latest) = latest {
+            let installation = installation.with_generated_id();
+            let record = PluginInstallationRecord {
+                installation_id: installation.id.0,
+                plugin_name: installation.name.clone(),
+                plugin_version: installation.version.clone(),
+                priority: installation.priority,
+                parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
+                    PluginError::conversion_error("plugin installation parameters", e.to_string())
+                })?,
+                target: ComponentPluginInstallationTarget {
+                    component_id: component_id.clone(),
+                    component_version: latest.version as u64,
+                }
+                .into(),
+                owner,
+            };
+
+            self.component_repo.install_plugin(&record).await?;
+
+            Ok(installation)
+        } else {
+            Err(PluginError::ComponentNotFound {
+                component_id: component_id.clone(),
+            })
+        }
+    }
+
+    async fn update_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+        update: PluginInstallationUpdate,
+    ) -> Result<(), PluginError> {
+        let owner_record = owner.clone().into();
+
+        let latest = self
+            .component_repo
+            .get_latest_version(&owner.to_string(), &component_id.0)
+            .await?;
+
+        if latest.is_some() {
+            self.component_repo
+                .update_plugin_installation(
+                    &owner_record,
+                    &component_id.0,
+                    &installation_id.0,
+                    update.priority,
+                    serde_json::to_vec(&update.parameters).map_err(|e| {
+                        PluginError::conversion_error(
+                            "plugin installation parameters",
+                            e.to_string(),
+                        )
+                    })?,
+                )
+                .await?;
+
+            Ok(())
+        } else {
+            Err(PluginError::ComponentNotFound {
+                component_id: component_id.clone(),
+            })
+        }
+    }
+
+    async fn delete_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+    ) -> Result<(), PluginError> {
+        let owner_record = owner.clone().into();
+        let latest = self
+            .component_repo
+            .get_latest_version(&owner.to_string(), &component_id.0)
+            .await?;
+
+        if latest.is_some() {
+            self.component_repo
+                .uninstall_plugin(&owner_record, &component_id.0, &installation_id.0)
+                .await?;
+
+            Ok(())
+        } else {
+            Err(PluginError::ComponentNotFound {
+                component_id: component_id.clone(),
+            })
+        }
     }
 }
 

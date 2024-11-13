@@ -29,7 +29,7 @@ mod tests {
 
     use crate::repo::UuidOwner;
     use golem_common::model::plugin::DefaultPluginScope;
-    use golem_component_service_base::model::DefaultComponentOwner;
+    use golem_component_service_base::model::{DefaultComponentOwner, DefaultPluginOwner};
     use golem_component_service_base::repo::component::{
         ComponentRepo, DbComponentRepo, LoggedComponentRepo,
     };
@@ -66,7 +66,7 @@ mod tests {
     #[test_dep]
     fn sqlite_plugin_repo(
         db: &SqliteDb,
-    ) -> Arc<dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Send + Sync> {
+    ) -> Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync> {
         Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(db.pool.clone())))
     }
 
@@ -106,7 +106,7 @@ mod tests {
     #[tracing::instrument]
     async fn default_plugin_repo(
         component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-        plugin_repo: &Arc<dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Send + Sync>,
+        plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
     ) -> Result<(), RepoError> {
         crate::repo::test_default_plugin_repo(component_repo.clone(), plugin_repo.clone()).await
     }
@@ -115,7 +115,7 @@ mod tests {
     #[tracing::instrument]
     async fn default_component_plugin_installation(
         component_repo: &Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send>,
-        plugin_repo: &Arc<dyn PluginRepo<DefaultComponentOwner, DefaultPluginScope> + Send + Sync>,
+        plugin_repo: &Arc<dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
     ) -> Result<(), RepoError> {
         crate::repo::test_default_component_plugin_installation(
             component_repo.clone(),

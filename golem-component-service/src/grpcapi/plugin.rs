@@ -26,7 +26,7 @@ use golem_api_grpc::proto::golem::component::PluginDefinition;
 use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
-use golem_component_service_base::model::DefaultComponentOwner;
+use golem_component_service_base::model::DefaultPluginOwner;
 use golem_component_service_base::service::plugin::PluginService;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -34,7 +34,7 @@ use tracing::Instrument;
 
 pub struct PluginGrpcApi {
     pub plugin_service:
-        Arc<dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send>,
+        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 impl PluginGrpcApi {
@@ -50,12 +50,12 @@ impl PluginGrpcApi {
                     .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
 
                 self.plugin_service
-                    .list_plugins_for_scope(&DefaultComponentOwner, &scope)
+                    .list_plugins_for_scope(&DefaultPluginOwner, &scope)
                     .await?
             }
             None => {
                 self.plugin_service
-                    .list_plugins(&DefaultComponentOwner)
+                    .list_plugins(&DefaultPluginOwner)
                     .await?
             }
         };
@@ -69,7 +69,7 @@ impl PluginGrpcApi {
     ) -> Result<Vec<PluginDefinition>, ComponentError> {
         let plugins = self
             .plugin_service
-            .list_plugin_versions(&DefaultComponentOwner, &request.name)
+            .list_plugin_versions(&DefaultPluginOwner, &request.name)
             .await?;
 
         Ok(plugins.into_iter().map(|p| p.into()).collect())
@@ -94,7 +94,7 @@ impl PluginGrpcApi {
     ) -> Result<PluginDefinition, ComponentError> {
         let plugin = self
             .plugin_service
-            .get(&DefaultComponentOwner, &request.name, &request.version)
+            .get(&DefaultPluginOwner, &request.name, &request.version)
             .await?;
 
         match plugin {
@@ -109,7 +109,7 @@ impl PluginGrpcApi {
 
     async fn delete_plugin(&self, request: &DeletePluginRequest) -> Result<(), ComponentError> {
         self.plugin_service
-            .delete(&DefaultComponentOwner, &request.name, &request.version)
+            .delete(&DefaultPluginOwner, &request.name, &request.version)
             .await?;
 
         Ok(())

@@ -14,7 +14,6 @@
 
 use crate::api::{ComponentError, Result};
 use futures_util::TryStreamExt;
-use golem_common::model::plugin::DefaultPluginScope;
 use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
@@ -23,7 +22,6 @@ use golem_component_service_base::model::{
     DefaultComponentOwner, PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
 };
 use golem_component_service_base::service::component::ComponentService;
-use golem_component_service_base::service::plugin::PluginService;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::*;
 use poem::Body;
@@ -36,8 +34,6 @@ use tracing::Instrument;
 
 pub struct ComponentApi {
     pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
-    pub plugin_service:
-        Arc<dyn PluginService<DefaultComponentOwner, DefaultPluginScope> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
@@ -354,7 +350,7 @@ impl ComponentApi {
         let version_int = Self::parse_version_path_segment(&version.0)?;
 
         let response = self
-            .plugin_service
+            .component_service
             .get_plugin_installations_for_component(
                 &DefaultComponentOwner,
                 &component_id.0,
@@ -386,7 +382,7 @@ impl ComponentApi {
         );
 
         let response = self
-            .plugin_service
+            .component_service
             .create_plugin_installation_for_component(
                 &DefaultComponentOwner,
                 &component_id.0,
@@ -418,7 +414,7 @@ impl ComponentApi {
         );
 
         let response = self
-            .plugin_service
+            .component_service
             .update_plugin_installation_for_component(
                 &DefaultComponentOwner,
                 &installation_id.0,
@@ -450,7 +446,7 @@ impl ComponentApi {
         );
 
         let response = self
-            .plugin_service
+            .component_service
             .delete_plugin_installation_for_component(
                 &DefaultComponentOwner,
                 &installation_id.0,

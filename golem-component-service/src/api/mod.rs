@@ -56,7 +56,6 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
         (
             component::ComponentApi {
                 component_service: services.component_service.clone(),
-                plugin_service: services.plugin_service.clone(),
             },
             healthcheck::HealthcheckApi,
             plugin::PluginApi {
