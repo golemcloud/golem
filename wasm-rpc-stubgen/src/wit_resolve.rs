@@ -1,4 +1,4 @@
-use crate::commands::log::{log_action, LogColorize, LogIndent};
+use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::wasm_rpc::{Application, ComponentName};
 use crate::naming;
 use crate::validation::{ValidatedResult, ValidationBuilder};

@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::{log_action, LogColorize};
 use crate::fs;
 use crate::fs::PathExtra;
+use crate::log::{log_action, LogColorize};
 use crate::stub::{FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition};
 use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};

@@ -1,6 +1,6 @@
-use crate::commands::log::{log_warn_action, LogColorize};
 use crate::fs;
 use crate::fs::PathExtra;
+use crate::log::{log_warn_action, LogColorize};
 use anyhow::Context;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};

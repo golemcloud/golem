@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActions, PathExtra};
+use crate::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
 use crate::naming::wit::package_dep_dir_name_from_encoder;
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubTypeDef,

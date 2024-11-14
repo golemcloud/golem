@@ -4,7 +4,6 @@ use crate::validation::ValidatedResult;
 use colored::{ColoredString, Colorize};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
-// TODO: move package under lib
 
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
 

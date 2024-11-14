@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::commands::log::{log_action, log_warn_action, LogColorize};
 use crate::fs::PathExtra;
+use crate::log::{log_action, log_warn_action, LogColorize};
 use crate::stub::StubDefinition;
 use crate::wit_resolve::ResolvedWitDir;
 use crate::{fs, naming};
