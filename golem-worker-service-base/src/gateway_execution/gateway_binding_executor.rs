@@ -1,4 +1,4 @@
-use crate::gateway_binding::{AuthCallBack, GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding, RibInputTypeMismatch, RibInputValueResolver, StaticBinding};
+use crate::gateway_binding::{OpenIdProviderDetails, GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding, RibInputTypeMismatch, RibInputValueResolver, StaticBinding};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
@@ -43,6 +43,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         &self,
         request_details: &GatewayRequestDetails,
         resolved_worker_binding: &ResolvedWorkerBinding<N>,
+        session_store: GatewaySessionStore,
     ) -> Result<(RibInput, RibInput), R>
     where
         RibInputTypeMismatch: ToResponse<R>,
@@ -50,7 +51,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         let request_rib_input = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
             .map_err(|err| {
-                err.to_response(request_details, &resolved_worker_binding.middlewares)
+                err.to_response(request_details, &resolved_worker_binding.middlewares, &session_store)
             })?;
 
         let worker_rib_input = resolved_worker_binding
@@ -168,7 +169,7 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
         RibInputTypeMismatch: ToResponse<R>,
         FileServerBindingResult: ToResponse<R>,
         CorsPreflight: ToResponse<R>,
-        AuthCallBack: ToResponse<R>,
+        OpenIdProviderDetails: ToResponse<R>,
     {
         match &binding.resolved_binding {
             ResolvedBinding::Worker(resolved_binding) => {

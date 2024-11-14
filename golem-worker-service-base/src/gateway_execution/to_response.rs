@@ -1,7 +1,5 @@
 use crate::api::WorkerApiBaseError;
-use crate::gateway_binding::{
-    AuthCallBack, AuthCallBackWithClient, GatewayRequestDetails, RibInputTypeMismatch,
-};
+use crate::gateway_binding::{GatewayRequestDetails, RibInputTypeMismatch};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
 };
@@ -9,7 +7,7 @@ use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
 use crate::gateway_identity_provider::{IdentityProvider, IdentityProviderError};
-use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares};
+use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares, OpenIdProviderDetailsWithClient};
 use crate::gateway_rib_interpreter::EvaluationError;
 use async_trait::async_trait;
 use http::header::*;
@@ -21,21 +19,21 @@ use rib::RibResult;
 
 #[async_trait]
 pub trait ToResponse<A> {
-    fn to_response(
+    async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
-        session_store: GatewaySessionStore,
+        session_store: &GatewaySessionStore,
     ) -> A;
 }
 
 #[async_trait]
 impl ToResponse<poem::Response> for FileServerBindingResult {
-    fn to_response(
+    async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
-        _session_store: GatewaySessionStore,
+        _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         let mut response = match self {
             Ok(data) => Body::from_bytes_stream(data.data)
@@ -61,7 +59,7 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
 // Preflight (OPTIONS) response that will consist of all configured CORS headers
 #[async_trait]
 impl ToResponse<poem::Response> for CorsPreflight {
-    fn to_response(
+    async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         _middlewares: &Middlewares,
@@ -108,11 +106,11 @@ impl ToResponse<poem::Response> for CorsPreflight {
 
 #[async_trait]
 impl ToResponse<poem::Response> for RibResult {
-    fn to_response(
+    async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
-        _session_store: GatewaySessionStore,
+        _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
             Ok(intermediate_response) => {
@@ -130,7 +128,7 @@ impl ToResponse<poem::Response> for RibResult {
 
 #[async_trait]
 impl ToResponse<poem::Response> for RibInputTypeMismatch {
-    fn to_response(
+    async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
@@ -147,7 +145,7 @@ impl ToResponse<poem::Response> for RibInputTypeMismatch {
 
 #[async_trait]
 impl ToResponse<poem::Response> for EvaluationError {
-    fn to_response(
+    async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
@@ -165,7 +163,7 @@ impl ToResponse<poem::Response> for EvaluationError {
 
 #[async_trait]
 impl ToResponse<poem::Response> for String {
-    fn to_response(
+    async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
@@ -240,7 +238,7 @@ impl ToResponse<poem::Response> for AuthorisationError {
 }
 
 #[async_trait]
-impl ToResponse<poem::Response> for AuthCallBackWithClient {
+impl ToResponse<poem::Response> for OpenIdProviderDetailsWithClient {
     async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
@@ -259,9 +257,7 @@ impl ToResponse<poem::Response> for AuthCallBackWithClient {
 }
 
 mod internal {
-    use crate::gateway_binding::{
-        AuthCallBackWithClient, GatewayRequestDetails, HttpRequestDetails,
-    };
+    use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
@@ -275,15 +271,16 @@ mod internal {
         DataKey, DataValue, GatewaySessionStore, SessionId,
     };
     use crate::gateway_execution::to_response::{AuthorisationError, ToResponse};
-    use crate::gateway_middleware::Middlewares;
+    use crate::gateway_middleware::{Middlewares, OpenIdProviderDetailsWithClient};
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
 
+    // TODO; Move out of here
     pub(crate) async fn handle_auth(
-        auth_client: AuthCallBackWithClient,
+        auth_client: OpenIdProviderDetailsWithClient,
         request_details: &GatewayRequestDetails,
         http_request_details: &HttpRequestDetails,
         middlewares: &Middlewares,
@@ -496,6 +493,7 @@ mod test {
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;
+    use crate::gateway_execution::gateway_session::GatewaySessionStore;
 
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];
@@ -544,7 +542,8 @@ mod test {
         let http_response: poem::Response = evaluation_result.to_response(
             &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
             &Middlewares::default(),
-        );
+            &GatewaySessionStore::in_memory(),
+        ).await;
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();

@@ -14,6 +14,7 @@ pub trait GatewaySession {
 #[derive(Clone)]
 pub struct GatewaySessionStore(pub Arc<dyn GatewaySession + Send + Sync>,);
 
+
 impl GatewaySessionStore {
     pub fn in_memory() -> Self {
         GatewaySessionStore(Arc::new(InMemoryGatewaySession::new()))
