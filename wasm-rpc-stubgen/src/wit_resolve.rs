@@ -1,5 +1,5 @@
 use crate::commands::log::{log_action, LogColorize, LogIndent};
-use crate::model::validation::{ValidatedResult, ValidationBuilder};
+use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::model::wasm_rpc::Application;
 use crate::naming;
 use anyhow::{anyhow, bail, Context, Error};

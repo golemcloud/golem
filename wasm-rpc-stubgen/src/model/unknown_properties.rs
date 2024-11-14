@@ -1,4 +1,4 @@
-use crate::model::validation::ValidationBuilder;
+use crate::validation::ValidationBuilder;
 use std::collections::BTreeMap;
 
 pub type UnknownProperties = BTreeMap<String, serde_json::Value>;

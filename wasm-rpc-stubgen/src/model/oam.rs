@@ -1,4 +1,4 @@
-use crate::model::validation::{ValidatedResult, ValidationBuilder};
+use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::Context;
 use itertools::Itertools;
 use serde::de::DeserializeOwned;

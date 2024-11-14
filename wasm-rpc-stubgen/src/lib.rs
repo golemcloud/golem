@@ -24,6 +24,7 @@ pub mod stub;
 pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
+pub mod validation;
 
 use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
