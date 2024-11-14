@@ -58,7 +58,6 @@ pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Resul
     generate_cargo_toml(stub_def).context("Failed to generate the Cargo.toml file")?;
     generate_stub_source(stub_def).context("Failed to generate the stub Rust source")?;
 
-    // TODO: search for canonicalize on call site, as it is not needed anymore
     compile(
         &stub_def
             .config

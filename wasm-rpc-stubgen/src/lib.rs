@@ -239,11 +239,10 @@ pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
 
 pub async fn build(args: BuildArgs) -> anyhow::Result<()> {
     let target_root = TempDir::new()?;
-    let canonical_target_root = target_root.path().canonicalize()?;
 
     let stub_def = StubDefinition::new(StubConfig {
         source_wit_root: args.source_wit_root,
-        target_root: canonical_target_root,
+        target_root: target_root.path().to_path_buf(),
         selected_world: args.world,
         stub_crate_version: args.stub_crate_version,
         wasm_rpc_override: args.wasm_rpc_override,
