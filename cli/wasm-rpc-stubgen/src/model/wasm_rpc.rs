@@ -1,7 +1,7 @@
 use crate::model::oam;
 use crate::model::oam::TypedTraitProperties;
 use crate::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
-use crate::model::validation::{ValidatedResult, ValidationBuilder};
+use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::naming;
 use crate::naming::wit::package_dep_dir_name_from_parser;
 use golem_wasm_rpc::WASM_RPC_VERSION;

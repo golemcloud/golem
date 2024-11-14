@@ -5,7 +5,7 @@ use crate::commands::log::{
 };
 use crate::fs::copy;
 use crate::model::oam;
-use crate::model::validation::ValidatedResult;
+use crate::validation::ValidatedResult;
 use crate::model::wasm_rpc::{
     include_glob_patter_from_yaml_file, init_oam_app, Application, DEFAULT_CONFIG_FILE_NAME,
 };
@@ -264,6 +264,7 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
                     component_name.log_color_highlight(),
                 ),
             );
+            let _indent = LogIndent::new();
 
             let stub_wasms = component
                 .wasm_rpc_dependencies

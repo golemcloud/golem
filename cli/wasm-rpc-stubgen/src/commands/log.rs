@@ -1,5 +1,5 @@
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
-use crate::model::validation::ValidatedResult;
+use crate::validation::ValidatedResult;
 use colored::{ColoredString, Colorize};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
