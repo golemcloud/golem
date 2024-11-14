@@ -81,6 +81,11 @@ pub fn read_to_string<P: AsRef<Path>>(path: P) -> anyhow::Result<String> {
         .with_context(|| anyhow!("Failed to read to string, file: {}", path.display()))
 }
 
+pub fn read<P: AsRef<Path>>(path: P) -> anyhow::Result<Vec<u8>> {
+    let path = path.as_ref();
+    std::fs::read(path).with_context(|| anyhow!("Failed to read file: {}", path.display()))
+}
+
 // Creates all missing parent directories if necessary and writes str to path.
 pub fn write_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Result<()> {
     let path = PathExtra(path);
