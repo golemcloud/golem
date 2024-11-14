@@ -17,9 +17,11 @@ use futures_util::TryStreamExt;
 use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
-use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
 use golem_component_service_base::model::{
     DefaultComponentOwner, PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+};
+use golem_component_service_base::model::{
+    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };
 use golem_component_service_base::service::component::ComponentService;
 use golem_service_base::api_tags::ApiTags;
@@ -472,15 +474,6 @@ impl ComponentApi {
 #[oai(rename_all = "camelCase")]
 pub struct UploadPayload {
     name: ComponentName,
-    component_type: Option<ComponentType>,
-    component: Upload,
-    files_permissions: Option<ComponentFilePathWithPermissionsList>,
-    files: Option<Upload>,
-}
-
-#[derive(Multipart)]
-#[oai(rename_all = "camelCase")]
-pub struct UpdatePayload {
     component_type: Option<ComponentType>,
     component: Upload,
     files_permissions: Option<ComponentFilePathWithPermissionsList>,

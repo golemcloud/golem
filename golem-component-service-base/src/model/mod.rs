@@ -16,4 +16,16 @@ mod component;
 mod plugin;
 
 pub use component::*;
+use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentType};
 pub use plugin::*;
+use poem_openapi::types::multipart::Upload;
+use poem_openapi::Multipart;
+
+#[derive(Multipart)]
+#[oai(rename_all = "camelCase")]
+pub struct UpdatePayload {
+    component_type: Option<ComponentType>,
+    component: Upload,
+    files_permissions: Option<ComponentFilePathWithPermissionsList>,
+    files: Option<Upload>,
+}
