@@ -21,10 +21,10 @@ pub mod model;
 pub mod naming;
 pub mod rust;
 pub mod stub;
+pub mod validation;
 pub mod wit_encode;
 pub mod wit_generate;
 pub mod wit_resolve;
-pub mod validation;
 
 use crate::stub::{StubConfig, StubDefinition};
 use crate::wit_generate::UpdateCargoToml;
@@ -287,7 +287,7 @@ pub fn initialize_workspace(
 
 pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
     match command {
-        App::Init(args) => commands::declarative::init(args.component_name),
+        App::Init(args) => commands::declarative::init(args.component_name.into()),
         App::PreComponentBuild(args) => {
             commands::declarative::pre_component_build(dec_build_args_to_config(args)).await
         }

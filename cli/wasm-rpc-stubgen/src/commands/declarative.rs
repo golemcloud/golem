@@ -5,11 +5,12 @@ use crate::commands::log::{
 };
 use crate::fs::copy;
 use crate::model::oam;
-use crate::validation::ValidatedResult;
 use crate::model::wasm_rpc::{
-    include_glob_patter_from_yaml_file, init_oam_app, Application, DEFAULT_CONFIG_FILE_NAME,
+    include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName,
+    DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::stub::{StubConfig, StubDefinition};
+use crate::validation::ValidatedResult;
 use crate::wit_generate::{
     add_stub_as_dependency_to_wit_dir, extract_main_interface_as_wit_dep, AddStubAsDepConfig,
     UpdateCargoToml,
@@ -68,7 +69,7 @@ impl ApplicationContext {
     }
 }
 
-pub fn init(component_name: String) -> anyhow::Result<()> {
+pub fn init(component_name: ComponentName) -> anyhow::Result<()> {
     let file_name = DEFAULT_CONFIG_FILE_NAME;
 
     let mut file = std::fs::File::create_new(file_name)
@@ -341,7 +342,10 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
         for component_name in app.all_wasm_rpc_dependencies() {
             log_action(
                 "Cleaning",
-                format!("component stub {}", component_name.log_color_highlight()),
+                format!(
+                    "component stub {}",
+                    component_name.as_str().log_color_highlight()
+                ),
             );
             let _indent = LogIndent::new();
 
@@ -626,7 +630,10 @@ fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<Pa
         })
 }
 
-fn create_base_output_wit(ctx: &ApplicationContext, component_name: &str) -> Result<bool, Error> {
+fn create_base_output_wit(
+    ctx: &ApplicationContext,
+    component_name: &ComponentName,
+) -> Result<bool, Error> {
     let component_input_wit = ctx.application.component_input_wit(component_name);
     let component_base_output_wit = ctx.application.component_base_output_wit(component_name);
 
@@ -763,7 +770,10 @@ fn create_base_output_wit(ctx: &ApplicationContext, component_name: &str) -> Res
     }
 }
 
-fn create_output_wit(ctx: &ApplicationContext, component_name: &str) -> Result<bool, Error> {
+fn create_output_wit(
+    ctx: &ApplicationContext,
+    component_name: &ComponentName,
+) -> Result<bool, Error> {
     let component_base_output_wit = ctx.application.component_base_output_wit(component_name);
     let component_output_wit = ctx.application.component_output_wit(component_name);
 
@@ -795,7 +805,10 @@ fn create_output_wit(ctx: &ApplicationContext, component_name: &str) -> Result<b
     }
 }
 
-fn update_cargo_toml(ctx: &ApplicationContext, component_name: &str) -> anyhow::Result<()> {
+fn update_cargo_toml(
+    ctx: &ApplicationContext,
+    component_name: &ComponentName,
+) -> anyhow::Result<()> {
     let component_input_wit = ctx.application.component_input_wit(component_name);
     let component_input_wit_parent = component_input_wit.parent().ok_or_else(|| {
         anyhow!(
@@ -817,7 +830,10 @@ fn update_cargo_toml(ctx: &ApplicationContext, component_name: &str) -> anyhow::
     Ok(())
 }
 
-async fn build_stub(ctx: &ApplicationContext, component_name: &str) -> anyhow::Result<bool> {
+async fn build_stub(
+    ctx: &ApplicationContext,
+    component_name: &ComponentName,
+) -> anyhow::Result<bool> {
     let target_root = ctx.application.stub_temp_build_dir(component_name);
 
     let stub_def = StubDefinition::new(StubConfig {
@@ -882,7 +898,7 @@ async fn build_stub(ctx: &ApplicationContext, component_name: &str) -> anyhow::R
     }
 }
 
-fn add_stub_deps(ctx: &ApplicationContext, component_name: &str) -> Result<bool, Error> {
+fn add_stub_deps(ctx: &ApplicationContext, component_name: &ComponentName) -> Result<bool, Error> {
     let component = ctx.application.component(component_name);
     if component.wasm_rpc_dependencies.is_empty() {
         Ok(false)
