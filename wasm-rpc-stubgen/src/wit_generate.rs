@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
-use crate::fs::{
-    copy, get_file_name, strip_path_prefix, write_str, OverwriteSafeAction, OverwriteSafeActions,
-};
+use crate::fs::{copy, write_str, OverwriteSafeAction, OverwriteSafeActions, PathExtra};
 use crate::naming::wit::package_dep_dir_name_from_encoder;
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubTypeDef,
@@ -23,10 +21,9 @@ use crate::stub::{
 };
 use crate::wit_encode::EncodedWitDir;
 use crate::wit_resolve::ResolvedWitDir;
-use crate::{cargo, naming};
+use crate::{cargo, fs, naming};
 use anyhow::{anyhow, bail, Context};
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 use wit_encoder::{
     Ident, Interface, Package, PackageItem, PackageName, Params, ResourceFunc, Results,
@@ -346,15 +343,15 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
                         .dest_wit_root
                         .join(naming::wit::DEPS_DIR)
                         .join(naming::wit::package_dep_dir_name_from_parser(package_name))
-                        .join(get_file_name(source)?),
+                        .join(PathExtra::new(&source).file_name_to_string()?),
                 });
             }
         } else {
             package_names_to_package_path.insert(
                 package_name.clone(),
-                naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(
-                    &package_sources.dir,
-                )?),
+                naming::wit::package_wit_dep_dir_from_package_dir_name(
+                    &PathExtra::new(&package_sources.dir).file_name_to_string()?,
+                ),
             );
 
             for source in &package_sources.files {
@@ -362,7 +359,7 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
                     source: source.clone(),
                     target: config
                         .dest_wit_root
-                        .join(strip_path_prefix(&config.stub_wit_root, source)?),
+                        .join(PathExtra::new(&source).strip_prefix(&config.stub_wit_root)?),
                 });
             }
         }

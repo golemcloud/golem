@@ -1,5 +1,5 @@
+use crate::fs;
 use crate::validation::{ValidatedResult, ValidationBuilder};
-use anyhow::Context;
 use itertools::Itertools;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -17,10 +17,10 @@ pub struct ApplicationWithSource {
 
 impl ApplicationWithSource {
     pub fn from_yaml_file(file: PathBuf) -> anyhow::Result<Self> {
-        let content = std::fs::read_to_string(file.as_path())
-            .with_context(|| format!("Failed to load file: {}", file.display()))?;
-
-        Ok(Self::from_yaml_string(file, content)?)
+        Ok(Self::from_yaml_string(
+            file.clone(),
+            fs::read_to_string(file)?,
+        )?)
     }
 
     pub fn from_yaml_string(source: PathBuf, string: String) -> serde_yaml::Result<Self> {

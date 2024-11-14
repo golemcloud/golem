@@ -1,8 +1,6 @@
 use itertools::Itertools;
 use std::fmt::Display;
 
-
-
 pub struct ValidationContext {
     pub name: &'static str,
     pub value: String,

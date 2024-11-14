@@ -1,16 +1,15 @@
 use crate::model::oam;
 use crate::model::oam::TypedTraitProperties;
 use crate::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
-use crate::naming;
 use crate::naming::wit::package_dep_dir_name_from_parser;
 use crate::validation::{ValidatedResult, ValidationBuilder};
+use crate::{fs, naming};
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::fmt::Formatter;
-use std::fs;
 use std::path::{Path, PathBuf};
 use wit_parser::PackageName;
 
@@ -742,9 +741,13 @@ impl WasmComponent {
     }
 
     pub fn source_dir(&self) -> &Path {
-        self.source
-            .parent()
-            .expect("Failed to get parent for source")
+        self.source.parent().unwrap_or_else(|| {
+            panic!(
+                "Failed to get parent for component {}, source: {}",
+                self.name,
+                self.source.display()
+            )
+        })
     }
 }
 
