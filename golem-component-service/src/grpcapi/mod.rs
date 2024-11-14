@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::grpcapi::component::ComponentGrpcApi;
+use crate::grpcapi::plugin::PluginGrpcApi;
+use crate::service::Services;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;
+use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginServiceServer;
 use std::net::SocketAddr;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::{Error, Server};
-
-use crate::grpcapi::component::ComponentGrpcApi;
-use crate::service::Services;
 mod component;
 mod plugin;
 
@@ -41,6 +42,13 @@ pub async fn start_grpc_server(addr: SocketAddr, services: &Services) -> Result<
         .add_service(
             ComponentServiceServer::new(ComponentGrpcApi {
                 component_service: services.component_service.clone(),
+            })
+            .accept_compressed(CompressionEncoding::Gzip)
+            .send_compressed(CompressionEncoding::Gzip),
+        )
+        .add_service(
+            PluginServiceServer::new(PluginGrpcApi {
+                plugin_service: services.plugin_service.clone(),
             })
             .accept_compressed(CompressionEncoding::Gzip)
             .send_compressed(CompressionEncoding::Gzip),
