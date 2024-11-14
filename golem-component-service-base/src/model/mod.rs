@@ -24,8 +24,8 @@ use poem_openapi::Multipart;
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 pub struct UpdatePayload {
-    component_type: Option<ComponentType>,
-    component: Upload,
-    files_permissions: Option<ComponentFilePathWithPermissionsList>,
-    files: Option<Upload>,
+    pub component_type: Option<ComponentType>,
+    pub component: Upload,
+    pub files_permissions: Option<ComponentFilePathWithPermissionsList>,
+    pub files: Option<Upload>,
 }
