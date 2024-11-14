@@ -20,7 +20,7 @@ pub async fn compose(
 
     let mut graph = CompositionGraph::new();
 
-    let socket = fs::read_to_string(source_wasm).context("Failed to read socket component")?;
+    let socket = fs::read(source_wasm).context("Failed to read socket component")?;
 
     let socket = Package::from_bytes("socket", None, socket, graph.types_mut())?;
     let socket = graph.register_package(socket)?;
