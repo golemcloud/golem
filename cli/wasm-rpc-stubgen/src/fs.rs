@@ -25,7 +25,9 @@ pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> anyhow::Result<u6
 
     let context = || format!("Failed to copy from {} to {}", from.display(), to.display());
 
-    create_dir_all(from.parent()?).with_context(context)?;
+    create_dir_all(to.parent()?)
+        .context("Failed to create target dir")
+        .with_context(context)?;
 
     let bytes = std::fs::copy(&from, &to).with_context(context)?;
 
@@ -54,9 +56,7 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
         )
     };
 
-    let target_parent = from.parent().with_context(context)?;
-
-    create_dir_all(target_parent)
+    create_dir_all(from.parent()?)
         .context("Failed to create target dir")
         .with_context(context)?;
 

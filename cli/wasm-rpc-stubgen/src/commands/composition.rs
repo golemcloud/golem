@@ -1,5 +1,6 @@
 use crate::commands::log::{log_warn_action, LogColorize};
-use crate::fs::{create_dir_all, read_to_string, write, PathExtra};
+use crate::fs;
+use crate::fs::PathExtra;
 use anyhow::Context;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -19,7 +20,7 @@ pub async fn compose(
 
     let mut graph = CompositionGraph::new();
 
-    let socket = read_to_string(source_wasm).context("Failed to read socket component")?;
+    let socket = fs::read_to_string(source_wasm).context("Failed to read socket component")?;
 
     let socket = Package::from_bytes("socket", None, socket, graph.types_mut())?;
     let socket = graph.register_package(socket)?;
@@ -40,8 +41,8 @@ pub async fn compose(
 
     let bytes = graph.encode(EncodeOptions::default())?;
 
-    create_dir_all(dest_wasm.parent()?)?;
-    write(dest_wasm, bytes)?;
+    fs::create_dir_all(dest_wasm.parent()?)?;
+    fs::write(dest_wasm, bytes)?;
 
     Ok(())
 }

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
-use crate::fs::{copy, write_str, OverwriteSafeAction, OverwriteSafeActions, PathExtra};
+use crate::fs::{OverwriteSafeAction, OverwriteSafeActions, PathExtra};
 use crate::naming::wit::package_dep_dir_name_from_encoder;
 use crate::stub::{
     FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubTypeDef,
@@ -254,7 +254,7 @@ pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<
                     dest.log_color_highlight()
                 ),
             );
-            copy(source, &dest)?;
+            fs::copy(source, &dest)?;
         }
     }
 
@@ -705,7 +705,7 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
             interface_package_path.log_color_highlight()
         ),
     );
-    write_str(&interface_package_path, interface_package.to_string())?;
+    fs::write_str(&interface_package_path, interface_package.to_string())?;
 
     let main_package_path = &sources.files[0];
     log_action(
@@ -715,7 +715,7 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
             main_package_path.log_color_highlight()
         ),
     );
-    write_str(main_package_path, main_package.to_string())?;
+    fs::write_str(main_package_path, main_package.to_string())?;
 
     Ok(())
 }
