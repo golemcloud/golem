@@ -19,11 +19,6 @@ use std::sync::{Arc, Mutex};
 use tracing::info;
 use uuid::Uuid;
 
-pub enum RdbmsType {
-    Postgres,
-    Mysql,
-}
-
 #[async_trait]
 pub trait DbResultSet {
     async fn get_columns(&self) -> Result<Vec<DbColumn>, Error>;

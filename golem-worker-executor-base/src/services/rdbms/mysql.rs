@@ -19,88 +19,28 @@ use crate::services::rdbms::types::{
     DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue, DbValuePrimitive,
     Error,
 };
-use crate::services::rdbms::{RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey};
+use crate::services::rdbms::{Rdbms, RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey, RdbmsType};
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
-use golem_common::model::WorkerId;
 use sqlx::{Column, Pool, Row, TypeInfo};
+use std::fmt::Display;
 use std::sync::Arc;
 
-#[async_trait]
-pub trait Mysql {
-    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error>;
+#[derive(Debug, Clone)]
+pub struct MysqlType;
 
-    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
-
-    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
-
-    async fn execute(
-        &self,
-        worker_id: &WorkerId,
-        key: &RdbmsPoolKey,
-        statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<u64, Error>;
-
-    async fn query(
-        &self,
-        worker_id: &WorkerId,
-        key: &RdbmsPoolKey,
-        statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
-}
-
-#[derive(Clone)]
-pub struct MysqlDefault {
-    rdbms: Arc<SqlxRdbms<sqlx::MySql>>,
-}
-
-impl MysqlDefault {
-    pub fn new(config: RdbmsConfig) -> Self {
-        let rdbms = Arc::new(SqlxRdbms::new("mysql", config));
-        Self { rdbms }
+impl MysqlType {
+    pub fn new_rdbms(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
+        let sqlx: SqlxRdbms<sqlx::mysql::MySql> = SqlxRdbms::new("mysql", config);
+        Arc::new(sqlx)
     }
 }
 
-#[async_trait]
-impl Mysql for MysqlDefault {
-    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error> {
-        self.rdbms.create(worker_id, address).await
-    }
+impl RdbmsType for MysqlType {}
 
-    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
-        self.rdbms.exists(worker_id, key)
-    }
-
-    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
-        self.rdbms.remove(worker_id, key)
-    }
-
-    async fn execute(
-        &self,
-        worker_id: &WorkerId,
-        key: &RdbmsPoolKey,
-        statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<u64, Error> {
-        self.rdbms.execute(worker_id, key, statement, params).await
-    }
-
-    async fn query(
-        &self,
-        worker_id: &WorkerId,
-        key: &RdbmsPoolKey,
-        statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
-        self.rdbms.query(worker_id, key, statement, params).await
-    }
-}
-
-impl Default for MysqlDefault {
-    fn default() -> Self {
-        Self::new(RdbmsConfig::default())
+impl Display for MysqlType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "mysql")
     }
 }
 

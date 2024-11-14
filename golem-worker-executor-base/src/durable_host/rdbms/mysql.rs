@@ -18,7 +18,6 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::mysql::Host;
 use crate::preview2::wasi::rdbms::mysql::HostDbConnection;
 use crate::preview2::wasi::rdbms::types::{DbValue, Error};
-use crate::services::rdbms::types::RdbmsType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
@@ -98,7 +97,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
 
                 match result {
                     Ok(result) => {
-                        let entry = DbResultSetEntry::new(RdbmsType::Mysql, result);
+                        let entry = DbResultSetEntry::new(result);
                         let db_result_set = self.as_wasi_view().table().push(entry)?;
                         Ok(Ok(db_result_set))
                     }

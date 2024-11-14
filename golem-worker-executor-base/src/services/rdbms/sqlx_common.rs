@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, Error};
-use crate::services::rdbms::{RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey};
+use crate::services::rdbms::{Rdbms, RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey, RdbmsType};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::stream::BoxStream;
@@ -188,6 +188,47 @@ where
             );
             e
         })
+    }
+}
+
+#[async_trait]
+impl<T, DB> Rdbms<T> for SqlxRdbms<DB>
+where
+    T: RdbmsType,
+    DB: Database,
+    Pool<DB>: QueryExecutor,
+    RdbmsPoolKey: PoolCreator<DB>,
+{
+    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error> {
+        self.create(worker_id, address).await
+    }
+
+    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
+        self.exists(worker_id, key)
+    }
+
+    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
+        self.remove(worker_id, key)
+    }
+
+    async fn execute(
+        &self,
+        worker_id: &WorkerId,
+        key: &RdbmsPoolKey,
+        statement: &str,
+        params: Vec<DbValue>,
+    ) -> Result<u64, Error> {
+        self.execute(worker_id, key, statement, params).await
+    }
+
+    async fn query(
+        &self,
+        worker_id: &WorkerId,
+        key: &RdbmsPoolKey,
+        statement: &str,
+        params: Vec<DbValue>,
+    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
+        self.query(worker_id, key, statement, params).await
     }
 }
 

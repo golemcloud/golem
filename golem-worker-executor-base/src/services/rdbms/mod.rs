@@ -20,9 +20,9 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
-use crate::services::rdbms::mysql::{Mysql, MysqlDefault};
-use crate::services::rdbms::postgres::{Postgres, PostgresDefault};
-use crate::services::rdbms::types::{DbResultSet, DbValue, Error, RdbmsType};
+use crate::services::rdbms::mysql::MysqlType;
+use crate::services::rdbms::postgres::PostgresType;
+use crate::services::rdbms::types::{DbResultSet, DbValue, Error};
 use async_trait::async_trait;
 use golem_common::model::WorkerId;
 use lazy_static::lazy_static;
@@ -35,47 +35,48 @@ lazy_static! {
         .expect("Failed to compile mask address regex");
 }
 
-// #[async_trait]
-// pub trait Rdbms<T> {
-//
-//     async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error>;
-//
-//     fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
-//
-//     fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
-//
-//     async fn execute(
-//         &self,
-//         worker_id: &WorkerId,
-//         key: &RdbmsPoolKey,
-//         statement: &str,
-//         params: Vec<DbValue>,
-//     ) -> Result<u64, Error>;
-//
-//     async fn query(
-//         &self,
-//         worker_id: &WorkerId,
-//         key: &RdbmsPoolKey,
-//         statement: &str,
-//         params: Vec<DbValue>,
-//     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
-// }
+pub trait RdbmsType {}
+
+#[async_trait]
+pub trait Rdbms<T: RdbmsType> {
+    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error>;
+
+    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
+
+    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
+
+    async fn execute(
+        &self,
+        worker_id: &WorkerId,
+        key: &RdbmsPoolKey,
+        statement: &str,
+        params: Vec<DbValue>,
+    ) -> Result<u64, Error>;
+
+    async fn query(
+        &self,
+        worker_id: &WorkerId,
+        key: &RdbmsPoolKey,
+        statement: &str,
+        params: Vec<DbValue>,
+    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
+}
 
 pub trait RdbmsService {
-    fn mysql(&self) -> Arc<dyn Mysql + Send + Sync>;
-    fn postgres(&self) -> Arc<dyn Postgres + Send + Sync>;
+    fn mysql(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync>;
+    fn postgres(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync>;
 }
 
 #[derive(Clone)]
 pub struct RdbmsServiceDefault {
-    mysql: Arc<dyn Mysql + Send + Sync>,
-    postgres: Arc<dyn Postgres + Send + Sync>,
+    mysql: Arc<dyn Rdbms<MysqlType> + Send + Sync>,
+    postgres: Arc<dyn Rdbms<PostgresType> + Send + Sync>,
 }
 
 impl RdbmsServiceDefault {
     pub fn new(
-        mysql: Arc<dyn Mysql + Send + Sync>,
-        postgres: Arc<dyn Postgres + Send + Sync>,
+        mysql: Arc<dyn Rdbms<MysqlType> + Send + Sync>,
+        postgres: Arc<dyn Rdbms<PostgresType> + Send + Sync>,
     ) -> Self {
         Self { mysql, postgres }
     }
@@ -83,19 +84,20 @@ impl RdbmsServiceDefault {
 
 impl Default for RdbmsServiceDefault {
     fn default() -> Self {
+        let config = RdbmsConfig::default();
         Self::new(
-            Arc::new(MysqlDefault::default()),
-            Arc::new(PostgresDefault::default()),
+            MysqlType::new_rdbms(config),
+            PostgresType::new_rdbms(config),
         )
     }
 }
 
 impl RdbmsService for RdbmsServiceDefault {
-    fn mysql(&self) -> Arc<dyn Mysql + Send + Sync> {
+    fn mysql(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
         self.mysql.clone()
     }
 
-    fn postgres(&self) -> Arc<dyn Postgres + Send + Sync> {
+    fn postgres(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
         self.postgres.clone()
     }
 }

@@ -33,19 +33,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct DbResultSetEntry {
-    pub rdbms_type: rdbms_types::RdbmsType,
     pub internal: Arc<dyn rdbms_types::DbResultSet + Send + Sync>,
 }
 
 impl DbResultSetEntry {
-    pub fn new(
-        rdbms_type: rdbms_types::RdbmsType,
-        internal: Arc<dyn rdbms_types::DbResultSet + Send + Sync>,
-    ) -> Self {
-        Self {
-            rdbms_type,
-            internal,
-        }
+    pub fn new(internal: Arc<dyn rdbms_types::DbResultSet + Send + Sync>) -> Self {
+        Self { internal }
     }
 }
 

@@ -15,7 +15,7 @@
 use crate::services::rdbms::types::{DbRow, DbValue, DbValuePrimitive};
 use crate::services::rdbms::RdbmsServiceDefault;
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
+use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::RdbConnectionString;
