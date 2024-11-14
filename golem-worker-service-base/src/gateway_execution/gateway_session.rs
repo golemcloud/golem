@@ -1,21 +1,38 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
-use openidconnect::{CsrfToken, Nonce};
 use tokio::sync::Mutex;
-use crate::gateway_identity_provider::OpenIdClient;
 
-pub trait GatewaySession<Id, Data> {
-    async fn insert(&self, key: Id, value: Data) -> Result<(), String>;
-    async fn get(&self, key: Id) -> Result<Data, String>;
+pub trait GatewaySession {
+    async fn insert(&self, session_id: SessionId, data_key: DataKey, data_value: DataValue) -> Result<(), String>;
+    async fn get(&self, session_id: SessionId, data_key: DataKey) -> Result<Option<DataValue>, String>;
 }
+
+#[derive(Clone)]
+pub struct GatewaySessionStore(Arc<dyn GatewaySession + Send + Sync>,);
+
+impl GatewaySessionStore {
+    pub fn in_memory() -> Self {
+        GatewaySessionStore(Arc::new(InMemoryGatewaySession::new()))
+    }
+}
+
+#[derive(Hash, PartialEq, Eq)]
+pub struct SessionId(String);
+
+#[derive(Hash, PartialEq, Eq)]
+pub struct DataKey(String);
+
+#[derive(Clone)]
+pub struct DataValue(String);
 
 // Should be used only for testing
-pub struct InMemoryGatewaySession<Id, Data> {
-    data: Arc<Mutex<HashMap<Id, Data>>>,
+
+pub struct InMemoryGatewaySession {
+    data: Arc<Mutex<HashMap<SessionId, HashMap<DataKey, DataValue>>>>
 }
 
-impl<Id: Hash + Eq, Data> InMemoryGatewaySession<Id, Data> {
+impl InMemoryGatewaySession {
     pub fn new() -> Self {
         InMemoryGatewaySession {
             data: Arc::new(Mutex::new(HashMap::new())),
@@ -23,13 +40,24 @@ impl<Id: Hash + Eq, Data> InMemoryGatewaySession<Id, Data> {
     }
 }
 
-pub type OpenIdAuthSession = InMemoryGatewaySession<String, SessionParameters>;
+impl GatewaySession for InMemoryGatewaySession {
+    async fn insert(&self, session_id: SessionId, data_key: DataKey, data_value: DataValue) -> Result<(), String> {
+        let mut data = self.data.lock().await;
+        let session_data = data.entry(session_id).or_insert(HashMap::new());
+        session_data.insert(data_key, data_value);
+        Ok(())
+    }
 
-// No debug or SafeString or String
-#[derive(Clone)]
-pub struct SessionParameters {
-    client: OpenIdClient,
-    csrf_state: CsrfToken,
-    nonce: Nonce,
-    original_uri: String,
+    async fn get(&self, session_id: SessionId, data_key: DataKey) -> Result<DataValue, String> {
+        let data = self.data.lock().await;
+        match data.get(&session_id) {
+            Some(session_data) => {
+                match session_data.get(&data_key) {
+                    Some(data_value) => Ok(data_value.clone()),
+                    None => Err("Data key not found".to_string())
+                }
+            }
+            None => Err("Session not found".to_string())
+        }
+    }
 }

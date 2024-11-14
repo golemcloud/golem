@@ -16,6 +16,7 @@ use crate::gateway_binding::GatewayBindingResolver;
 use crate::gateway_execution::gateway_binding_executor::{
     DefaultGatewayBindingExecutor, GatewayBindingExecutor,
 };
+use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
 
@@ -30,6 +31,7 @@ pub struct CustomHttpRequestApi<Namespace> {
     >,
     pub gateway_binding_executor:
         Arc<dyn GatewayBindingExecutor<Namespace, poem::Response> + Sync + Send>,
+    pub gateway_session_store: GatewaySessionStore,
 }
 
 impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
@@ -51,9 +53,12 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             file_server_binding_handler: fileserver_binding_handler.clone(),
         });
 
+        let gateway_session_store = GatewaySessionStore::in_memory();
+
         Self {
             api_definition_lookup_service,
             gateway_binding_executor,
+            gateway_session_store
         }
     }
 
@@ -121,7 +126,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             Ok(resolved_gateway_binding) => {
                 let response: poem::Response = self
                     .gateway_binding_executor
-                    .execute_binding(&resolved_gateway_binding)
+                    .execute_binding(&resolved_gateway_binding, self.gateway_session_store.clone())
                     .await;
 
                 response

@@ -1,7 +1,4 @@
-use crate::gateway_binding::{
-    GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding,
-    RibInputTypeMismatch, RibInputValueResolver, StaticBinding,
-};
+use crate::gateway_binding::{AuthCallBack, GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding, RibInputTypeMismatch, RibInputValueResolver, StaticBinding};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
@@ -12,10 +9,12 @@ use async_trait::async_trait;
 use rib::{RibInput, RibResult};
 use std::fmt::Debug;
 use std::sync::Arc;
+use openidconnect::ClientId;
+use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore};
 
 #[async_trait]
 pub trait GatewayBindingExecutor<Namespace, Response> {
-    async fn execute_binding(&self, binding: &ResolvedGatewayBinding<Namespace>) -> Response
+    async fn execute_binding(&self, binding: &ResolvedGatewayBinding<Namespace>, session: GatewaySessionStore) -> Response
     where
         RibResult: ToResponse<Response>,
         EvaluationError: ToResponse<Response>,
@@ -161,13 +160,14 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
     for DefaultGatewayBindingExecutor<N>
 {
-    async fn execute_binding(&self, binding: &ResolvedGatewayBinding<N>) -> R
+    async fn execute_binding(&self, binding: &ResolvedGatewayBinding<N>, session: GatewaySessionStore) -> R
     where
         RibResult: ToResponse<R>,
         EvaluationError: ToResponse<R>,
         RibInputTypeMismatch: ToResponse<R>,
         FileServerBindingResult: ToResponse<R>,
         CorsPreflight: ToResponse<R>,
+        AuthCallBack: ToResponse<R>,
     {
         match &binding.resolved_binding {
             ResolvedBinding::Worker(resolved_binding) => {
@@ -182,6 +182,13 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
                 cors_preflight
                     .clone()
                     .to_response(&binding.request_details, &Middlewares::default())
+            }
+
+            ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
+                auth_call_back
+                    .clone()
+                    .to_response(&binding.request_details, &Middlewares::default())
+
             }
         }
     }

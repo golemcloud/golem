@@ -119,8 +119,11 @@ message Middleware {
 message StaticBinding {
   oneof static_binding {
     CorsPreflight http_cors_preflight = 1;
+    AuthCallBack auth_callback = 2;
   }
 }
+
+message AuthCallBack {}
 
 // Used in api definition repo and needs to be backward compatible
 message CorsPreflight {

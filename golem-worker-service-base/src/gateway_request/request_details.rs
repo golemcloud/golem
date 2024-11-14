@@ -116,6 +116,15 @@ impl HttpRequestDetails {
 pub struct RequestPathValues(pub JsonKeyValues);
 
 impl RequestPathValues {
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.0
+            .fields
+            .iter()
+            .find(|field| field.name == key)
+            .map(|field| &field.value)
+    }
+
+
     fn from(path_variables: &HashMap<VarInfo, &str>) -> RequestPathValues {
         let record_fields: Vec<JsonKeyValue> = path_variables
             .iter()

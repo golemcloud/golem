@@ -11,10 +11,22 @@ pub struct SecurityScheme {
     issuer_url: IssuerUrl
 }
 
-#[derive(Debug, Clone)]
+impl PartialEq for SecurityScheme {
+    fn eq(&self, other: &Self) -> bool {
+        self.provider_name == other.provider_name
+            && self.scheme_identifier == other.scheme_identifier
+            && self.client_id == other.client_id
+            && self.client_secret.secret() == other.client_secret.secret()
+            && self.redirect_url == other.redirect_url
+            && self.scopes == other.scopes
+            && self.issuer_url == other.issuer_url
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProviderName(String);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SchemeIdentifier(String);
 
 impl SecurityScheme {

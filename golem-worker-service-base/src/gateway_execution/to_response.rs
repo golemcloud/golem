@@ -1,5 +1,5 @@
 use crate::api::WorkerApiBaseError;
-use crate::gateway_binding::{GatewayRequestDetails, RibInputTypeMismatch};
+use crate::gateway_binding::{AuthCallBack, GatewayRequestDetails, RibInputTypeMismatch};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
 };
@@ -7,7 +7,8 @@ use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares};
 use crate::gateway_rib_interpreter::EvaluationError;
 use http::header::*;
 use http::StatusCode;
-use poem::Body;
+use openidconnect::AuthorizationCode;
+use poem::{Body, Response};
 use poem::IntoResponse;
 use rib::RibResult;
 
@@ -151,6 +152,53 @@ impl ToResponse<poem::Response> for String {
 
         middlewares.transform_http_response(&mut response);
         response
+    }
+}
+
+impl ToResponse<poem::Response> for AuthCallBack {
+    fn to_response(
+        self,
+        request_details: &GatewayRequestDetails,
+        middlewares: &Middlewares,
+    ) -> poem::Response {
+        match request_details {
+            GatewayRequestDetails::Http(http_request_details) => {
+                let query_params = &http_request_details.request_path_values;
+                let code = query_params.get("code");
+
+                match code {
+                    None => Response::builder()
+                        .status(StatusCode::UNAUTHORIZED)
+                        .body(Body::from_string("Unauthorised auth call back".to_string())),
+                    Some(code) => {
+                        let code = code.as_str();
+                        match code {
+                            None => Response::builder()
+                                .status(StatusCode::UNAUTHORIZED)
+                                .body(Body::from_string("Unauthorised auth call back".to_string())),
+                            Some(code) => {
+                                let authorisation_code =
+                                    AuthorizationCode::new(code.to_string());
+                                let state = query_params.get("state");
+
+                                if let Some(state) = state {
+                                    let state = state.as_str();
+                                    if let Some(state) = state {
+                                        let state = state.to_string();
+
+                                    }
+                                }
+
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .body(Body::from_string("Authorised auth call back".to_string()))
+                            }
+                        }
+                        let authorisation_code = AuthorizationCode::new(code.as_str().);
+                    }
+                }
+            }
+        }
     }
 }
 

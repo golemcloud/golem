@@ -1,3 +1,5 @@
+use openidconnect::AuthorizationCode;
+use crate::gateway_identity_provider::SecurityScheme;
 use crate::gateway_middleware::Cors;
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
@@ -9,6 +11,7 @@ use crate::gateway_middleware::Cors;
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticBinding {
     HttpCorsPreflight(Cors),
+    HttpAuthCallBack(AuthCallBack),
 }
 
 impl StaticBinding {
@@ -19,6 +22,7 @@ impl StaticBinding {
     pub fn get_cors_preflight(&self) -> Option<Cors> {
         match self {
             StaticBinding::HttpCorsPreflight(preflight) => Some(preflight.clone()),
+            _ => None,
         }
     }
 }
@@ -48,6 +52,17 @@ impl From<StaticBinding> for golem_api_grpc::proto::golem::apidefinition::Static
                     )),
                 }
             }
+            StaticBinding::HttpAuthCallBack(_) => {
+                golem_api_grpc::proto::golem::apidefinition::StaticBinding {
+                    static_binding: Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::AuthCallback(
+                        golem_api_grpc::proto::golem::apidefinition::AuthCallBack{}
+                    )),
+                }
+            }
         }
     }
 }
+
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuthCallBack {}
