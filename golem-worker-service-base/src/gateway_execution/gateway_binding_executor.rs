@@ -51,14 +51,14 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         let request_rib_input = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
             .map_err(|err| {
-                err.to_response(request_details, &resolved_worker_binding.middlewares, &session_store)
+                err.to_response(request_details, &session_store)
             })?;
 
         let worker_rib_input = resolved_worker_binding
             .worker_detail
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
             .map_err(|err| {
-                err.to_response(request_details, &resolved_worker_binding.middlewares)
+                err.to_response(request_details, &session_store)
             })?;
 
         Ok((request_rib_input, worker_rib_input))
@@ -91,6 +91,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         &self,
         binding: &ResolvedGatewayBinding<N>,
         resolved_binding: &ResolvedWorkerBinding<N>,
+
     ) -> R
     where
         RibResult: ToResponse<R>,

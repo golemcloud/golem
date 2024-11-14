@@ -11,6 +11,7 @@ pub mod rib_input_value_resolver;
 pub mod router;
 pub mod to_response;
 pub mod gateway_session;
+pub mod to_response_failure;
 
 pub use gateway_worker_request_executor::*;
 

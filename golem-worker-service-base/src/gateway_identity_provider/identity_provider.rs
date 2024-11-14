@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use async_trait::async_trait;
 use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
@@ -36,6 +37,18 @@ pub enum IdentityProviderError {
     FailedToDiscoverProviderMetadata(String),
     FailedToExchangeCodeForTokens(String),
     IdTokenVerificationError(String)
+}
+
+impl Display for IdentityProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IdentityProviderError::ClientInitError(err) => write!(f, "ClientInitError: {}", err),
+            IdentityProviderError::InvalidIssuerUrl(err) => write!(f, "InvalidIssuerUrl: {}", err),
+            IdentityProviderError::FailedToDiscoverProviderMetadata(err) => write!(f, "FailedToDiscoverProviderMetadata: {}", err),
+            IdentityProviderError::FailedToExchangeCodeForTokens(err) => write!(f, "FailedToExchangeCodeForTokens: {}", err),
+            IdentityProviderError::IdTokenVerificationError(err) => write!(f, "IdTokenVerificationError: {}", err),
+        }
+    }
 }
 
 #[derive(Clone)]

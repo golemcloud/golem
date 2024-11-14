@@ -2,12 +2,12 @@ use crate::gateway_middleware::http::cors::Cors;
 use http::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
 };
-use crate::gateway_middleware::OpenIdProviderDetails;
+use crate::gateway_middleware::AuthCallBackDetails;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {
     Cors(Cors),
-    OpenIdAuth(OpenIdProviderDetails),
+    OpenIdAuth(AuthCallBackDetails),
 }
 
 impl HttpMiddleware {

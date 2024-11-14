@@ -1,3 +1,5 @@
+use std::fmt::Display;
+use std::os::macos::raw::stat;
 use crate::api::WorkerApiBaseError;
 use crate::gateway_binding::{GatewayRequestDetails, RibInputTypeMismatch};
 use crate::gateway_execution::file_server_binding_handler::{
@@ -6,9 +8,8 @@ use crate::gateway_execution::file_server_binding_handler::{
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
-use crate::gateway_identity_provider::{IdentityProvider, IdentityProviderError};
-use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares, OpenIdProviderDetailsWithClient};
-use crate::gateway_rib_interpreter::EvaluationError;
+use crate::gateway_identity_provider::{IdentityProvider};
+use crate::gateway_middleware::{Cors as CorsPreflight, AuthCallBackDetailsInternal};
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
@@ -16,13 +17,13 @@ use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
+use crate::gateway_execution::to_response_failure::ToResponseFailure;
 
 #[async_trait]
 pub trait ToResponse<A> {
     async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
         session_store: &GatewaySessionStore,
     ) -> A;
 }
@@ -32,7 +33,6 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
     async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         let mut response = match self {
@@ -51,7 +51,6 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
             }
         };
 
-        middlewares.transform_http_response(&mut response);
         response
     }
 }
@@ -62,7 +61,6 @@ impl ToResponse<poem::Response> for CorsPreflight {
     async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
-        _middlewares: &Middlewares,
         _session_store: GatewaySessionStore,
     ) -> poem::Response {
         let mut response = poem::Response::builder().status(StatusCode::OK).finish();
@@ -109,146 +107,37 @@ impl ToResponse<poem::Response> for RibResult {
     async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
             Ok(intermediate_response) => {
-                intermediate_response.to_http_response(request_details, middlewares)
+                intermediate_response.to_http_response(request_details)
             }
-            Err(e) => poem::Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::from_string(format!(
-                    "Error when  converting worker response to http response. Error: {}",
-                    e
-                ))),
+            Err(e) => e.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
 
-#[async_trait]
-impl ToResponse<poem::Response> for RibInputTypeMismatch {
-    async fn to_response(
-        self,
-        _request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
-        _session_store: GatewaySessionStore,
-    ) -> poem::Response {
-        let mut response = poem::Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::from_string(format!("Error {}", self.0).to_string()));
+pub struct AuthorisationError(String);
 
-        middlewares.transform_http_response(&mut response);
-        response
+impl Display for AuthorisationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Authorisation Error: {}", self.0)
     }
 }
+
 
 #[async_trait]
-impl ToResponse<poem::Response> for EvaluationError {
-    async fn to_response(
-        self,
-        _request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
-        _session_store: GatewaySessionStore,
-    ) -> poem::Response {
-        let mut response = poem::Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from_string(format!("Error {}", self).to_string()));
-
-        middlewares.transform_http_response(&mut response);
-
-        response
-    }
-}
-
-#[async_trait]
-impl ToResponse<poem::Response> for String {
-    async fn to_response(
-        self,
-        _request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
-        _session_store: &GatewaySessionStore,
-    ) -> poem::Response {
-        let mut response = poem::Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .body(Body::from_string(self.to_string()));
-
-        middlewares.transform_http_response(&mut response);
-        response
-    }
-}
-
-impl ToResponse<poem::Response> for IdentityProviderError {
-    async fn to_response(
-        self,
-        _request_details: &GatewayRequestDetails,
-        _middlewares: &Middlewares,
-        _session_store: &GatewaySessionStore,
-    ) -> poem::Response {
-        match self {
-            IdentityProviderError::FailedToDiscoverProviderMetadata(e) => poem::Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from_string(format!("Error {}", e).to_string())),
-            IdentityProviderError::FailedToExchangeCodeForTokens(e) => poem::Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from_string(format!("Error {}", e).to_string())),
-            IdentityProviderError::IdTokenVerificationError(e) => poem::Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from_string(format!("Error {}", e).to_string())),
-            IdentityProviderError::ClientInitError(error) => poem::Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from_string(format!("Error {}", error).to_string())),
-            IdentityProviderError::InvalidIssuerUrl(error) => poem::Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from_string(format!("Error {}", error).to_string())),
-        }
-    }
-}
-
-impl<T, E> ToResponse<poem::Response> for Result<T, E> {
-    fn to_response(
-        self,
-        _request_details: &GatewayRequestDetails,
-        _middlewares: &Middlewares,
-        _session_store: GatewaySessionStore,
-    ) -> poem::Response {
-        match self {
-            Ok(_) => poem::Response::builder()
-                .status(StatusCode::OK)
-                .body(Body::empty()),
-            Err(_) => poem::Response::builder()
-                .status(StatusCode::UNAUTHORIZED)
-                .body(Body::from_string("Unauthorised auth call back".to_string())),
-        }
-    }
-}
-
-struct AuthorisationError(String);
-impl ToResponse<poem::Response> for AuthorisationError {
-    async fn to_response(
-        self,
-        _request_details: &GatewayRequestDetails,
-        _middlewares: &Middlewares,
-        _session_store: &GatewaySessionStore,
-    ) -> poem::Response {
-        poem::Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .body(Body::from_string(self.0))
-    }
-}
-
-#[async_trait]
-impl ToResponse<poem::Response> for OpenIdProviderDetailsWithClient {
+impl ToResponse<poem::Response> for AuthCallBackDetailsInternal {
     async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
-        middlewares: &Middlewares,
         session_store: GatewaySessionStore,
     ) -> poem::Response {
         match request_details {
             GatewayRequestDetails::Http(http_request_details) => {
                 let response_result =
-                    internal::handle_auth(self, request_details, http_request_details, middlewares, session_store);
+                    internal::handle_auth(self, http_request_details, session_store);
 
                 response_result.await.unwrap_or_else(|response| response)
             }
@@ -257,8 +146,6 @@ impl ToResponse<poem::Response> for OpenIdProviderDetailsWithClient {
 }
 
 mod internal {
-    use std::future::Future;
-    use std::pin::Pin;
     use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
@@ -273,64 +160,35 @@ mod internal {
         DataKey, DataValue, GatewaySessionStore, SessionId,
     };
     use crate::gateway_execution::to_response::{AuthorisationError, ToResponse};
-    use crate::gateway_middleware::{Middlewares, OpenIdProviderDetailsWithClient};
+    use crate::gateway_middleware::{Middlewares, AuthCallBackDetailsInternal};
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
-
-
-    trait AsyncErrExtension<A, B, C, F, G> {
-        async fn execute(self, f: F, g: G) -> Result<C, C>
-        where
-            F: FnOnce(A) -> Pin<Box<dyn Future<Output = C>>>,
-            G: FnOnce(B) -> Pin<Box<dyn Future<Output = C>>>,
-            A: 'static,
-            B: 'static,
-            C: 'static,
-            Self: Sized; // Self is the Future that returns a Result<A, B>
-    }
-
-    impl<F, A, B, C, G> AsyncErrExtension<F, A, B, C, G> for F
-    where
-        F: Future<Output = Result<A, B>>,
-        A: 'static,
-        B: 'static,
-        C: 'static,
-        G: FnOnce(B) -> Pin<Box<dyn Future<Output = C>>>,
-        F: Sized,
-    {
-        async fn execute(self, f: G, g: G) -> Result<A, C> {
-            match self.await {
-                Ok(val) =>  Ok(val),
-                Err(err) => Err(g(err).await),
-            }
-        }
-    }
+    use crate::gateway_execution::to_response_failure::ToResponseFailure;
 
     // TODO; Move out of here
     pub(crate) async fn handle_auth(
-        auth_client: OpenIdProviderDetailsWithClient,
-        request_details: &GatewayRequestDetails,
+        auth_client: AuthCallBackDetailsInternal,
         http_request_details: &HttpRequestDetails,
-        middlewares: &Middlewares,
         session_store: GatewaySessionStore,
     ) -> Result<poem::Response, poem::Response> {
         let query_params = &http_request_details.request_path_values;
+
         let code = query_params
             .get("code")
             .ok_or(AuthorisationError(
                 "Unauthorised auth call back".to_string(),
             ))
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
 
         let code = code
             .as_str()
             .ok_or(AuthorisationError(
                 "Unauthorised auth call back".to_string(),
             ))
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
 
         let authorisation_code = AuthorizationCode::new(code.to_string());
         let state_value = query_params
@@ -338,32 +196,32 @@ mod internal {
             .ok_or(AuthorisationError(
                 "Unauthorised auth call back".to_string(),
             ))
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
 
         let state_str = state_value
             .as_str()
             .ok_or(AuthorisationError(
                 "Unauthorised auth call back".to_string(),
             ))
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
 
         let obtained_state = state_str.to_string();
         let session_params = session_store
             .0
             .get_params(SessionId(obtained_state.to_string()))
             .await
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?
             .ok_or(AuthorisationError(
-                "Unauthorised auth call back".to_string(),
+                "Failed authorisation state".to_string(),
             ))
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
 
         let nonce = session_params
             .get(&DataKey("nonce".to_string()))
             .ok_or(AuthorisationError(
-                "Unauthorised auth call back".to_string(),
+                "Failed auth verification".to_string(),
             ))
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?
             .0
             .clone();
 
@@ -373,13 +231,13 @@ mod internal {
                 &auth_client.provider_metadata.clone(),
                 &auth_client.security_scheme_name.clone(),
             )
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
 
         let token_response = auth_client
             .identity_provider
             .exchange_code_for_tokens(&open_id_client, &authorisation_code)
             .await
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
 
         let claims = auth_client
             .identity_provider
@@ -388,7 +246,7 @@ mod internal {
                 token_response.clone(),
                 &Nonce::new(nonce.clone()),
             )
-            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
 
         let _ = session_store
             .0
@@ -411,7 +269,7 @@ mod internal {
             )
             .await;
 
-        let mut response = poem::Response::builder()
+        let response = poem::Response::builder()
             .status(StatusCode::FOUND)
             .header("Location", "/")
             .header(
@@ -419,8 +277,6 @@ mod internal {
                 format!("Bearer {}", &token_response.access_token().secret().clone()),
             )
             .body(());
-
-        middlewares.transform_http_response(&mut response);
 
         Ok(response)
     }
@@ -464,7 +320,6 @@ mod internal {
         pub(crate) fn to_http_response(
             &self,
             request_details: &GatewayRequestDetails,
-            middleware: &Middlewares,
         ) -> poem::Response {
             let response_content_type = self.headers.get_content_type();
             let response_headers = self.headers.headers.clone();
@@ -505,7 +360,6 @@ mod internal {
                 }
             };
 
-            middleware.transform_http_response(&mut response);
             response
         }
     }
