@@ -32,15 +32,16 @@ use golem_api_grpc::proto::golem::shardmanager::{
     Pod as GrpcPod, RoutingTable as GrpcRoutingTable, RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_api_grpc::proto::golem::worker::Cursor;
-use golem_wasm_ast::analysis::analysed_type::{field, record, s64, str};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::analysed_type::{field, record, s64};
+use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::IntoValue;
 use poem::http::Uri;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, NewType, Object, Union};
 use rand::prelude::IteratorRandom;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::de::Unexpected;
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::borrow::Cow;
 use std::cmp::Ordering;
@@ -915,7 +916,7 @@ impl IntoValue for IdempotencyKey {
     }
 
     fn get_type() -> AnalysedType {
-        str()
+        analysed_type::str()
     }
 }
 
@@ -2860,48 +2861,87 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, Enum, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Enum, Default)]
 #[serde(rename_all = "kebab-case")]
 #[oai(rename_all = "kebab-case")]
-pub enum WorkerBindingType {
+pub enum GatewayBindingType {
     #[default]
     Default,
     FileServer,
+    CorsPreflight,
 }
 
-impl TryFrom<String> for WorkerBindingType {
+// To keep backward compatibility as we documented wit-worker to be default
+impl<'de> Deserialize<'de> for GatewayBindingType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct GatewayBindingTypeVisitor;
+
+        impl<'de> de::Visitor<'de> for GatewayBindingTypeVisitor {
+            type Value = GatewayBindingType;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string representing the binding type")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                match value {
+                    "default" | "wit-worker" => Ok(GatewayBindingType::Default),
+                    "file-server" => Ok(GatewayBindingType::FileServer),
+                    "cors-preflight" => Ok(GatewayBindingType::CorsPreflight),
+                    _ => Err(de::Error::invalid_value(Unexpected::Str(value), &self)),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(GatewayBindingTypeVisitor)
+    }
+}
+
+impl TryFrom<String> for GatewayBindingType {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         match value.as_str() {
-            "default" => Ok(WorkerBindingType::Default),
-            "file-server" => Ok(WorkerBindingType::FileServer),
+            "default" => Ok(GatewayBindingType::Default),
+            "file-server" => Ok(GatewayBindingType::FileServer),
             _ => Err(format!("Invalid WorkerBindingType: {}", value)),
         }
     }
 }
 
-impl From<golem_api_grpc::proto::golem::apidefinition::WorkerBindingType> for WorkerBindingType {
-    fn from(value: golem_api_grpc::proto::golem::apidefinition::WorkerBindingType) -> Self {
+impl From<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType> for GatewayBindingType {
+    fn from(value: golem_api_grpc::proto::golem::apidefinition::GatewayBindingType) -> Self {
         match value {
-            golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::Default => {
-                WorkerBindingType::Default
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default => {
+                GatewayBindingType::Default
             }
-            golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::FileServer => {
-                WorkerBindingType::FileServer
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
+                GatewayBindingType::FileServer
+            }
+            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
+                GatewayBindingType::CorsPreflight
             }
         }
     }
 }
 
-impl From<WorkerBindingType> for golem_api_grpc::proto::golem::apidefinition::WorkerBindingType {
-    fn from(value: WorkerBindingType) -> Self {
+impl From<GatewayBindingType> for golem_api_grpc::proto::golem::apidefinition::GatewayBindingType {
+    fn from(value: GatewayBindingType) -> Self {
         match value {
-            WorkerBindingType::Default => {
-                golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::Default
+            GatewayBindingType::Default => {
+                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default
             }
-            WorkerBindingType::FileServer => {
-                golem_api_grpc::proto::golem::apidefinition::WorkerBindingType::FileServer
+            GatewayBindingType::FileServer => {
+                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer
+            }
+            GatewayBindingType::CorsPreflight => {
+                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight
             }
         }
     }

@@ -10,6 +10,7 @@ import "golem/rib/worker_functions_in_rib.proto";
 import "golem/component/versioned_component_id.proto";
 import "google/protobuf/timestamp.proto";
 
+// Used in api definition repo and needs to be backward compatible
 message ApiDefinition {
   ApiDefinitionId id = 1;
   string version = 2;
@@ -20,34 +21,41 @@ message ApiDefinition {
   google.protobuf.Timestamp created_at = 5;
 }
 
+// Used in api definition repo and needs to be backward compatible
 message ApiDefinitionList {
   repeated ApiDefinition definitions = 1;
 }
 
+// Used in api definition repo and needs to be backward compatible
 message HttpApiDefinition {
   repeated HttpRoute routes = 1;
 }
 
+// Used in api definition repo and needs to be backward compatible
 message CompiledHttpApiDefinition {
   repeated CompiledHttpRoute routes = 1;
 }
 
+// Used in api definition repo and needs to be backward compatible
 message ApiDefinitionId {
   string value = 1;
 }
 
+// Used in api definition repo and needs to be backward compatible
 message HttpRoute {
   HttpMethod method = 1;
   string path = 2;
-  WorkerBinding binding = 3;
+  GatewayBinding binding = 3;
 }
 
+// Used in api definition repo and needs to be backward compatible
 message CompiledHttpRoute {
-    HttpMethod method = 1;
-    string path = 2;
-    CompiledWorkerBinding binding = 3;
+   HttpMethod method = 1;
+   string path = 2;
+   CompiledGatewayBinding binding = 3;
 }
 
+// Used in api definition repo and needs to be backward compatible
 enum HttpMethod {
   GET = 0;
   CONNECT = 1;
@@ -60,30 +68,66 @@ enum HttpMethod {
   HEAD = 8;
 }
 
-message WorkerBinding {
-  golem.component.VersionedComponentId component = 1;
+// Used in api definition repo and needs to be backward compatible
+message GatewayBinding {
+  // Optional field to keep backward compatibility
+  optional golem.component.VersionedComponentId component = 1;
   optional golem.rib.Expr worker_name = 2;
-  golem.rib.Expr response = 3;
+  // Optional field to keep backward compatibility
+  optional golem.rib.Expr response = 3;
   optional golem.rib.Expr idempotency_key = 4;
-  optional WorkerBindingType type = 5;
+  // type discriminator to keep backward compatibility
+  optional GatewayBindingType binding_type = 5;
+  optional StaticBinding static_binding = 6;
+  optional Middleware middleware = 7;
 }
 
-message CompiledWorkerBinding {
-  golem.component.VersionedComponentId component = 1;
-  optional golem.rib.Expr worker_name = 2;
-  optional golem.rib.RibByteCode compiled_worker_name_expr = 3;
-  optional golem.rib.RibInputType worker_name_rib_input = 4;
-  golem.rib.Expr response = 5;
-  golem.rib.RibByteCode compiled_response_expr = 6;
-  golem.rib.RibInputType response_rib_input = 7;
-  optional golem.rib.Expr idempotency_key = 8;
-  optional golem.rib.RibByteCode compiled_idempotency_key_expr = 9;
-  optional golem.rib.RibInputType idempotency_key_rib_input = 10;
-  optional golem.rib.WorkerFunctionsInRib worker_functions_in_response = 11;
-  optional WorkerBindingType type = 12;
+// Used in api definition repo and needs to be backward compatible
+message CompiledGatewayBinding {
+    // Optional field to keep backward compatibility
+    optional golem.component.VersionedComponentId component = 1;
+    optional golem.rib.Expr worker_name = 2;
+    optional golem.rib.RibByteCode compiled_worker_name_expr = 3;
+    optional golem.rib.RibInputType worker_name_rib_input = 4;
+    optional golem.rib.Expr response = 5;
+    optional golem.rib.RibByteCode compiled_response_expr = 6;
+    optional golem.rib.RibInputType response_rib_input = 7;
+    optional golem.rib.Expr idempotency_key = 8;
+    optional golem.rib.RibByteCode compiled_idempotency_key_expr = 9;
+    optional golem.rib.RibInputType idempotency_key_rib_input = 10;
+    optional golem.rib.WorkerFunctionsInRib worker_functions_in_response = 11;
+    // type discriminator to keep backward compatibility
+    optional GatewayBindingType binding_type = 12;
+    optional StaticBinding static_binding = 13;
+    // middleware
+    optional Middleware middleware = 14;
 }
 
-enum WorkerBindingType {
+// Used in api definition repo and needs to be backward compatible
+enum GatewayBindingType {
   DEFAULT = 0;
   FILE_SERVER = 1;
+  CORS_PREFLIGHT = 2;
+}
+
+// Used in api definition repo and needs to be backward compatible
+message Middleware {
+  optional CorsPreflight cors = 1;
+}
+
+// Used in api definition repo and needs to be backward compatible
+message StaticBinding {
+  oneof static_binding {
+    CorsPreflight http_cors_preflight = 1;
+  }
+}
+
+// Used in api definition repo and needs to be backward compatible
+message CorsPreflight {
+  optional string allow_origin = 1;
+  optional string allow_methods = 2;
+  optional string allow_headers = 3;
+  optional string expose_headers = 4;
+  optional uint64 max_age = 5;
+  optional bool allow_credentials = 6;
 }

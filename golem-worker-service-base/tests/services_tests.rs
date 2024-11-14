@@ -10,27 +10,29 @@ use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
     AnalysedInstance,
 };
-use golem_worker_service_base::api_definition::http::HttpApiDefinition;
-use golem_worker_service_base::api_definition::http::HttpApiDefinitionRequest;
-use golem_worker_service_base::api_definition::{
-    ApiDefinitionId, ApiDeploymentRequest, ApiSite, ApiSiteString, ApiVersion,
-};
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinition;
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::repo::{api_definition, api_deployment};
-use golem_worker_service_base::service::api_definition::{
+use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
+use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionError, ApiDefinitionIdWithVersion, ApiDefinitionService,
     ApiDefinitionServiceDefault,
 };
-use golem_worker_service_base::service::api_deployment::{
+use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
 };
-use golem_worker_service_base::service::component::{ComponentResult, ComponentService};
-use golem_worker_service_base::service::http::http_api_definition_validator::{
+use golem_worker_service_base::service::gateway::http_api_definition_validator::{
     HttpApiDefinitionValidator, RouteValidationError,
 };
 
 use chrono::Utc;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_wasm_ast::analysis::analysed_type::str;
+use golem_worker_service_base::api;
+use golem_worker_service_base::gateway_api_deployment::{
+    ApiDeploymentRequest, ApiSite, ApiSiteString,
+};
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
@@ -786,7 +788,8 @@ fn get_api_definition(
         id, version, draft, path_pattern, worker_id, response_mapping
     );
 
-    serde_yaml::from_str(yaml_string.as_str()).unwrap()
+    let api: api::HttpApiDefinitionRequest = serde_yaml::from_str(yaml_string.as_str()).unwrap();
+    api.try_into().unwrap()
 }
 
 fn contains_definitions(

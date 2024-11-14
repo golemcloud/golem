@@ -5,10 +5,11 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::{ApiDeployment, ApiDeploymentRequest};
-use golem_worker_service_base::api_definition;
-use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSiteString};
-use golem_worker_service_base::service::api_definition::ApiDefinitionIdWithVersion;
-use golem_worker_service_base::service::api_deployment::ApiDeploymentService;
+use golem_worker_service_base::gateway_api_definition::ApiDefinitionId;
+use golem_worker_service_base::gateway_api_deployment;
+use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
+use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionIdWithVersion;
+use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -47,7 +48,7 @@ impl ApiDeploymentApi {
                 })
                 .collect::<Vec<ApiDefinitionIdWithVersion>>();
 
-            let api_deployment = api_definition::ApiDeploymentRequest {
+            let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
                 namespace: DefaultNamespace::default(),
                 api_definition_keys: api_definition_infos,
                 site: payload.site.clone(),

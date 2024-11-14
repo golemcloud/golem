@@ -131,8 +131,10 @@ fn api_deployment_deploy(
         .first()
         .unwrap()
         .binding
+        .clone()
         .component_id
-        .component_id;
+        .map(|c| c.component_id)
+        .unwrap();
 
     // Updating the component after a deployment with incompatible changes should fail
     let component_urn = format!("urn:component:{}", component_id_in_def);
