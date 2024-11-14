@@ -16,12 +16,13 @@ use crate::wit_generate::{
     add_stub_as_dependency_to_wit_dir, extract_main_interface_as_wit_dep, AddStubAsDepConfig,
     UpdateCargoToml,
 };
-use crate::wit_resolve::{parse_wit_deps_dir, ResolvedWitApplication};
+use crate::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
 use crate::{commands, naming, WasmRpcOverride};
 use anyhow::{anyhow, Context, Error};
 use colored::Colorize;
 use glob::glob;
 use itertools::Itertools;
+use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -43,6 +44,7 @@ struct ApplicationContext {
     config: Config,
     application: Application,
     wit: ResolvedWitApplication,
+    wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
 }
 
 impl ApplicationContext {
@@ -54,6 +56,7 @@ impl ApplicationContext {
                     config,
                     application,
                     wit,
+                    wit_deps: OnceCell::new(),
                 })
             }),
         )
@@ -66,6 +69,17 @@ impl ApplicationContext {
                 self.wit = wit;
             }),
         )
+    }
+
+    fn wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
+        match self
+            .wit_deps
+            .get_or_init(|| WitDepsResolver::new(self.application.wit_deps()))
+            .as_ref()
+        {
+            Ok(wit_deps) => Ok(wit_deps),
+            Err(err) => Err(anyhow!("Failed to init wit dependency resolver? {}", err)),
+        }
     }
 }
 
@@ -655,16 +669,14 @@ fn create_base_output_wit(
                 ctx.wit.missing_generic_input_package_deps(component_name)?;
 
             if !missing_package_deps.is_empty() {
-                log_action("Adding", "common package deps");
+                log_action("Adding", "package deps");
                 let _indent = LogIndent::new();
 
-                // TODO: transitive deps?
-                // TODO: use wit dep from app manifest
-                // TODO: extract dep management, with preferring higher versions
+                let wit_deps = ctx.wit_deps()?;
 
-                let wit_deps = parse_wit_deps_dir(Path::new("wit-deps"))?;
+                let all_package_deps = wit_deps.package_names_with_deps(&missing_package_deps)?;
 
-                for package_name in missing_package_deps {
+                for package_name in all_package_deps {
                     log_action(
                         "Adding",
                         format!(
@@ -672,11 +684,8 @@ fn create_base_output_wit(
                             package_name.to_string().log_color_highlight()
                         ),
                     );
-                    let dep = wit_deps
-                        .iter()
-                        .find(|package| package.main.name == package_name)
-                        .ok_or_else(|| anyhow!("Package dependency {} not found", package_name))?;
-                    for source in dep.source_map.source_files() {
+
+                    for source in wit_deps.package_sources(&package_name)? {
                         let source = PathExtra::new(source);
                         let parent = PathExtra::new(
                             source

@@ -584,6 +584,13 @@ impl Application {
         )
     }
 
+    pub fn wit_deps(&self) -> Vec<PathBuf> {
+        self.common_wasm_build
+            .as_ref()
+            .map(|wasm_build| wasm_build._wit_deps.clone())
+            .unwrap_or_default()
+    }
+
     pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<ComponentName> {
         self.wasm_components_by_name
             .iter()

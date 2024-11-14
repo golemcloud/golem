@@ -516,3 +516,77 @@ pub fn parse_wit_deps_dir(path: &Path) -> Result<Vec<UnresolvedPackageGroup>, Er
         })
         .collect::<Result<Vec<_>, _>>()
 }
+
+pub struct WitDepsResolver {
+    sources: Vec<PathBuf>,
+    packages: HashMap<PathBuf, HashMap<PackageName, UnresolvedPackageGroup>>,
+}
+
+impl WitDepsResolver {
+    pub fn new(sources: Vec<PathBuf>) -> anyhow::Result<Self> {
+        let mut packages = HashMap::<PathBuf, HashMap<PackageName, UnresolvedPackageGroup>>::new();
+
+        for source in &sources {
+            packages.insert(
+                source.clone(),
+                parse_wit_deps_dir(source)?
+                    .into_iter()
+                    .map(|package| (package.main.name.clone(), package))
+                    .collect(),
+            );
+        }
+
+        Ok(Self { sources, packages })
+    }
+
+    pub fn package(&self, package_name: &PackageName) -> anyhow::Result<&UnresolvedPackageGroup> {
+        for source in &self.sources {
+            if let Some(package) = self.packages.get(source).unwrap().get(package_name) {
+                return Ok(package);
+            }
+        }
+        bail!(
+            "Package {} not found, sources searched: {}",
+            package_name,
+            self.sources
+                .iter()
+                .map(|s| s.display().to_string())
+                .join(", ")
+        )
+    }
+
+    pub fn package_sources(
+        &self,
+        package_name: &PackageName,
+    ) -> anyhow::Result<impl Iterator<Item = &Path>> {
+        self.package(package_name)
+            .map(|package| package.source_map.source_files())
+    }
+
+    pub fn package_names_with_deps(
+        &self,
+        package_names: &[PackageName],
+    ) -> anyhow::Result<HashSet<PackageName>> {
+        fn visit(
+            resolver: &WitDepsResolver,
+            all_package_names: &mut HashSet<PackageName>,
+            package_name: &PackageName,
+        ) -> anyhow::Result<()> {
+            if !all_package_names.contains(package_name) {
+                let package = resolver.package(package_name)?;
+                all_package_names.insert(package_name.clone());
+                for package_name in package.main.foreign_deps.keys() {
+                    visit(resolver, all_package_names, package_name)?;
+                }
+            }
+
+            Ok(())
+        }
+
+        let mut all_package_names = HashSet::<PackageName>::new();
+        for package_name in package_names {
+            visit(self, &mut all_package_names, package_name)?;
+        }
+        Ok(all_package_names)
+    }
+}
