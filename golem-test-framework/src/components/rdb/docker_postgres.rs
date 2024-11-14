@@ -23,7 +23,10 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::components::docker::KillContainer;
-use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::docker_mysql::DockerMysqlRdb;
+use crate::components::rdb::{
+    postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb, RdbConnectionString,
+};
 use crate::components::NETWORK;
 
 pub struct DockerPostgresRdb {
@@ -102,16 +105,12 @@ impl DockerPostgresRdb {
             info,
         }
     }
-
-    pub fn postgres_info(&self) -> PostgresInfo {
-        self.info.clone()
-    }
 }
 
 #[async_trait]
 impl Rdb for DockerPostgresRdb {
     fn info(&self) -> DbInfo {
-        DbInfo::Postgres(self.postgres_info())
+        DbInfo::Postgres(self.info.clone())
     }
 
     async fn kill(&self) {
@@ -123,6 +122,16 @@ impl Rdb for DockerPostgresRdb {
 impl Debug for DockerPostgresRdb {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "DockerPostgresRdb")
+    }
+}
+
+impl RdbConnectionString for DockerPostgresRdb {
+    fn connection_string(&self) -> String {
+        self.info.connection_string()
+    }
+
+    fn host_connection_string(&self) -> String {
+        self.info.host_connection_string()
     }
 }
 
@@ -154,5 +163,11 @@ impl DockerPostgresRdbs {
         }
 
         Self { rdbs }
+    }
+}
+
+impl Debug for DockerPostgresRdbs {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DockerPostgresRdbs")
     }
 }

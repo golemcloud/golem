@@ -66,6 +66,12 @@ impl DbInfo {
     }
 }
 
+pub trait RdbConnectionString {
+    fn connection_string(&self) -> String;
+
+    fn host_connection_string(&self) -> String;
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct PostgresInfo {
     #[arg(long = "postgres-host", default_value = "localhost")]
@@ -83,20 +89,6 @@ pub struct PostgresInfo {
 }
 
 impl PostgresInfo {
-    pub fn connection_string(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.port, self.database_name
-        )
-    }
-
-    pub fn host_connection_string(&self) -> String {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.host_port, self.database_name
-        )
-    }
-
     pub fn env(&self, service_namespace: &str) -> HashMap<String, String> {
         HashMap::from([
             ("DB_HOST".to_string(), self.host.clone()),
@@ -129,6 +121,22 @@ impl PostgresInfo {
                 self.password.clone(),
             ),
         ])
+    }
+}
+
+impl RdbConnectionString for PostgresInfo {
+    fn connection_string(&self) -> String {
+        format!(
+            "postgres://{}:{}@{}:{}/{}",
+            self.username, self.password, self.host, self.port, self.database_name
+        )
+    }
+
+    fn host_connection_string(&self) -> String {
+        format!(
+            "postgres://{}:{}@{}:{}/{}",
+            self.username, self.password, self.host, self.host_port, self.database_name
+        )
     }
 }
 
@@ -245,20 +253,6 @@ pub struct MysqlInfo {
 }
 
 impl MysqlInfo {
-    pub fn connection_string(&self) -> String {
-        format!(
-            "mysql://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.port, self.database_name
-        )
-    }
-
-    pub fn host_connection_string(&self) -> String {
-        format!(
-            "mysql://{}:{}@{}:{}/{}",
-            self.username, self.password, self.host, self.host_port, self.database_name
-        )
-    }
-
     pub fn env(&self, service_namespace: &str) -> HashMap<String, String> {
         HashMap::from([
             ("DB_HOST".to_string(), self.host.clone()),
@@ -341,5 +335,21 @@ async fn mysql_wait_for_startup(info: &MysqlInfo, timeout: Duration) {
             }
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+impl RdbConnectionString for MysqlInfo {
+    fn connection_string(&self) -> String {
+        format!(
+            "mysql://{}:{}@{}:{}/{}",
+            self.username, self.password, self.host, self.port, self.database_name
+        )
+    }
+
+    fn host_connection_string(&self) -> String {
+        format!(
+            "mysql://{}:{}@{}:{}/{}",
+            self.username, self.password, self.host, self.host_port, self.database_name
+        )
     }
 }

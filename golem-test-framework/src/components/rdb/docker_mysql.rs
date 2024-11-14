@@ -23,7 +23,7 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::components::docker::KillContainer;
-use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb};
+use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb, RdbConnectionString};
 use crate::components::NETWORK;
 
 pub struct DockerMysqlRdb {
@@ -102,21 +102,27 @@ impl DockerMysqlRdb {
             info,
         }
     }
-
-    pub fn mysql_info(&self) -> MysqlInfo {
-        self.info.clone()
-    }
 }
 
 #[async_trait]
 impl Rdb for DockerMysqlRdb {
     fn info(&self) -> DbInfo {
-        DbInfo::Mysql(self.mysql_info())
+        DbInfo::Mysql(self.info.clone())
     }
 
     async fn kill(&self) {
         info!("Stopping Mysql container");
         self.container.kill(self.keep_container).await;
+    }
+}
+
+impl RdbConnectionString for DockerMysqlRdb {
+    fn connection_string(&self) -> String {
+        self.info.connection_string()
+    }
+
+    fn host_connection_string(&self) -> String {
+        self.info.host_connection_string()
     }
 }
 
@@ -154,5 +160,11 @@ impl DockerMysqlRdbs {
         }
 
         Self { rdbs }
+    }
+}
+
+impl Debug for DockerMysqlRdbs {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DockerMysqlRdbs")
     }
 }

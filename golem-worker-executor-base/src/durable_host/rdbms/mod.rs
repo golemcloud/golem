@@ -15,8 +15,3 @@
 pub mod mysql;
 pub mod postgres;
 pub mod types;
-
-pub enum RdbmsType {
-    Postgres,
-    Mysql,
-}

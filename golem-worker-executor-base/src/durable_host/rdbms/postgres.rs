@@ -13,12 +13,12 @@
 // limitations under the License.
 
 use crate::durable_host::rdbms::types::DbResultSetEntry;
-use crate::durable_host::rdbms::RdbmsType;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::postgres::Host;
 use crate::preview2::wasi::rdbms::postgres::HostDbConnection;
 use crate::preview2::wasi::rdbms::types::{DbValue, Error};
+use crate::services::rdbms::types::RdbmsType;
 use crate::services::rdbms::RdbmsPoolKey;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;

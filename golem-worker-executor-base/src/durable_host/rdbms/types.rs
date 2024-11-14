@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::rdbms::RdbmsType;
 use crate::durable_host::DurableWorkerCtx;
 use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::wasi::rdbms::types::{
@@ -34,13 +33,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {}
 impl<Ctx: WorkerCtx> Host for &mut DurableWorkerCtx<Ctx> {}
 
 pub struct DbResultSetEntry {
-    pub rdbms_type: RdbmsType,
+    pub rdbms_type: rdbms_types::RdbmsType,
     pub internal: Arc<dyn rdbms_types::DbResultSet + Send + Sync>,
 }
 
 impl DbResultSetEntry {
     pub fn new(
-        rdbms_type: RdbmsType,
+        rdbms_type: rdbms_types::RdbmsType,
         internal: Arc<dyn rdbms_types::DbResultSet + Send + Sync>,
     ) -> Self {
         Self {

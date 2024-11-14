@@ -22,6 +22,9 @@ mod tests;
 
 use crate::services::rdbms::mysql::{Mysql, MysqlDefault};
 use crate::services::rdbms::postgres::{Postgres, PostgresDefault};
+use crate::services::rdbms::types::{DbResultSet, DbValue, Error, RdbmsType};
+use async_trait::async_trait;
+use golem_common::model::WorkerId;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::fmt::Display;
@@ -31,6 +34,32 @@ lazy_static! {
     static ref MASK_ADDRESS_REGEX: Regex = Regex::new(r"(?i)([a-z]+)://([^:]+):([^@]+)@")
         .expect("Failed to compile mask address regex");
 }
+
+// #[async_trait]
+// pub trait Rdbms<T> {
+//
+//     async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error>;
+//
+//     fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
+//
+//     fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
+//
+//     async fn execute(
+//         &self,
+//         worker_id: &WorkerId,
+//         key: &RdbmsPoolKey,
+//         statement: &str,
+//         params: Vec<DbValue>,
+//     ) -> Result<u64, Error>;
+//
+//     async fn query(
+//         &self,
+//         worker_id: &WorkerId,
+//         key: &RdbmsPoolKey,
+//         statement: &str,
+//         params: Vec<DbValue>,
+//     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
+// }
 
 pub trait RdbmsService {
     fn mysql(&self) -> Arc<dyn Mysql + Send + Sync>;

@@ -18,12 +18,13 @@ use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
+use golem_test_framework::components::rdb::RdbConnectionString;
 use test_r::{test, test_dep};
 use uuid::Uuid;
 
 #[test_dep]
 async fn postgres() -> DockerPostgresRdbs {
-    DockerPostgresRdbs::new(3, 5444, true, false).await
+    DockerPostgresRdbs::new(3, 5434, true, false).await
 }
 
 #[test_dep]
@@ -36,7 +37,7 @@ async fn postgres_test(postgres: &DockerPostgresRdbs) {
     let rdbms_service = RdbmsServiceDefault::default();
 
     for rdb in postgres.rdbs.iter() {
-        let address = rdb.postgres_info().host_connection_string();
+        let address = rdb.host_connection_string();
         println!("address: {}", address);
         let worker_id = WorkerId {
             component_id: ComponentId::new_v4(),
@@ -57,7 +58,7 @@ async fn postgres_test(postgres: &DockerPostgresRdbs) {
         assert!(result.is_ok());
     }
 
-    let address = postgres.rdbs[0].postgres_info().host_connection_string();
+    let address = postgres.rdbs[0].host_connection_string();
     println!("address: {}", address);
 
     let worker_id = WorkerId {
@@ -171,7 +172,7 @@ async fn mysql_test(mysql: &DockerMysqlRdbs) {
     let rdbms_service = RdbmsServiceDefault::default();
 
     for rdb in mysql.rdbs.iter() {
-        let address = rdb.mysql_info().host_connection_string();
+        let address = rdb.host_connection_string();
         println!("address: {}", address);
         let worker_id = WorkerId {
             component_id: ComponentId::new_v4(),
@@ -191,7 +192,7 @@ async fn mysql_test(mysql: &DockerMysqlRdbs) {
         assert!(result.is_ok());
     }
 
-    let address = mysql.rdbs[0].mysql_info().host_connection_string();
+    let address = mysql.rdbs[0].host_connection_string();
     println!("address: {}", address);
 
     let worker_id = WorkerId {
