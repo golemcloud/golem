@@ -847,7 +847,7 @@ async fn build_stub(
     } else {
         log_action(
             "Building",
-            format!("wasm rpc stub: {}", component_name.log_color_highlight()),
+            format!("wasm rpc stub for {}", component_name.log_color_highlight()),
         );
         let _indent = LogIndent::new();
 
