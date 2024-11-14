@@ -58,6 +58,8 @@ async fn postgres_test(postgres: &DockerPostgresRdbs) {
         assert!(result.is_ok());
     }
 
+    println!("status: {}", rdbms_service.postgres().status());
+
     let address = postgres.rdbs[0].host_connection_string();
     println!("address: {}", address);
 
@@ -191,6 +193,8 @@ async fn mysql_test(mysql: &DockerMysqlRdbs) {
 
         assert!(result.is_ok());
     }
+
+    println!("status: {}", rdbms_service.mysql().status());
 
     let address = mysql.rdbs[0].host_connection_string();
     println!("address: {}", address);

@@ -27,8 +27,10 @@ use async_trait::async_trait;
 use golem_common::model::WorkerId;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::sync::Arc;
+use itertools::Itertools;
 
 lazy_static! {
     static ref MASK_ADDRESS_REGEX: Regex = Regex::new(r"(?i)([a-z]+)://([^:]+):([^@]+)@")
@@ -36,6 +38,21 @@ lazy_static! {
 }
 
 pub trait RdbmsType {}
+
+#[derive(Clone)]
+pub struct RdbmsStatus {
+    pools: HashMap<RdbmsPoolKey, HashSet<WorkerId>>,
+}
+
+impl Display for RdbmsStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (key, workers) in self.pools.iter() {
+            writeln!(f, "{}: {}", key, workers.iter().join(", "))?;
+        }
+
+        Ok(())
+    }
+}
 
 #[async_trait]
 pub trait Rdbms<T: RdbmsType> {
@@ -60,6 +77,8 @@ pub trait Rdbms<T: RdbmsType> {
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;
+
+    fn status(&self) -> RdbmsStatus;
 }
 
 pub trait RdbmsService {

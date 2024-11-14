@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, Error};
-use crate::services::rdbms::{Rdbms, RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey, RdbmsType};
+use crate::services::rdbms::{
+    Rdbms, RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey, RdbmsStatus, RdbmsType,
+};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::stream::BoxStream;
@@ -22,7 +24,7 @@ use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, 
 use golem_common::model::WorkerId;
 use sqlx::database::HasArguments;
 use sqlx::{Database, Pool, Row};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -100,17 +102,6 @@ where
         Ok(pool)
     }
 
-    pub(crate) async fn create(
-        &self,
-        worker_id: &WorkerId,
-        address: &str,
-    ) -> Result<RdbmsPoolKey, Error> {
-        let key = RdbmsPoolKey::new(address.to_string());
-        info!("{} create connection - pool: {}", self.name, key);
-        let _pool = self.get_or_create(worker_id, &key).await?;
-        Ok(key)
-    }
-
     pub(crate) async fn remove_pool(&self, key: &RdbmsPoolKey) -> Result<bool, Error> {
         let _ = self.pool_workers_cache.remove(key);
         let pool = self.pool_cache.try_get(key);
@@ -122,21 +113,37 @@ where
             Ok(false)
         }
     }
+}
 
-    pub(crate) fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
+#[async_trait]
+impl<T, DB> Rdbms<T> for SqlxRdbms<DB>
+where
+    T: RdbmsType,
+    DB: Database,
+    Pool<DB>: QueryExecutor,
+    RdbmsPoolKey: PoolCreator<DB>,
+{
+    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error> {
+        let key = RdbmsPoolKey::new(address.to_string());
+        info!("{} create connection - pool: {}", self.name, key);
+        let _pool = self.get_or_create(worker_id, &key).await?;
+        Ok(key)
+    }
+
+    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
         match self.pool_workers_cache.get_mut(key) {
             Some(mut workers) => (*workers).remove(worker_id),
             None => false,
         }
     }
 
-    pub(crate) fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
+    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
         self.pool_workers_cache
             .get(key)
             .is_some_and(|workers| workers.contains(worker_id))
     }
 
-    pub(crate) async fn execute(
+    async fn execute(
         &self,
         worker_id: &WorkerId,
         key: &RdbmsPoolKey,
@@ -162,7 +169,7 @@ where
         })
     }
 
-    pub(crate) async fn query(
+    async fn query(
         &self,
         worker_id: &WorkerId,
         key: &RdbmsPoolKey,
@@ -189,46 +196,14 @@ where
             e
         })
     }
-}
 
-#[async_trait]
-impl<T, DB> Rdbms<T> for SqlxRdbms<DB>
-where
-    T: RdbmsType,
-    DB: Database,
-    Pool<DB>: QueryExecutor,
-    RdbmsPoolKey: PoolCreator<DB>,
-{
-    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error> {
-        self.create(worker_id, address).await
-    }
-
-    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
-        self.exists(worker_id, key)
-    }
-
-    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
-        self.remove(worker_id, key)
-    }
-
-    async fn execute(
-        &self,
-        worker_id: &WorkerId,
-        key: &RdbmsPoolKey,
-        statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<u64, Error> {
-        self.execute(worker_id, key, statement, params).await
-    }
-
-    async fn query(
-        &self,
-        worker_id: &WorkerId,
-        key: &RdbmsPoolKey,
-        statement: &str,
-        params: Vec<DbValue>,
-    ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
-        self.query(worker_id, key, statement, params).await
+    fn status(&self) -> RdbmsStatus {
+        let pools: HashMap<RdbmsPoolKey, HashSet<WorkerId>> = self
+            .pool_workers_cache
+            .iter()
+            .map(|kv| (kv.key().clone(), kv.value().clone()))
+            .collect();
+        RdbmsStatus { pools }
     }
 }
 
