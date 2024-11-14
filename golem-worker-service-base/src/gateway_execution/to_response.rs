@@ -257,6 +257,8 @@ impl ToResponse<poem::Response> for OpenIdProviderDetailsWithClient {
 }
 
 mod internal {
+    use std::future::Future;
+    use std::pin::Pin;
     use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
@@ -277,6 +279,35 @@ mod internal {
     use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
+
+
+    trait AsyncErrExtension<A, B, C, F, G> {
+        async fn execute(self, f: F, g: G) -> Result<C, C>
+        where
+            F: FnOnce(A) -> Pin<Box<dyn Future<Output = C>>>,
+            G: FnOnce(B) -> Pin<Box<dyn Future<Output = C>>>,
+            A: 'static,
+            B: 'static,
+            C: 'static,
+            Self: Sized; // Self is the Future that returns a Result<A, B>
+    }
+
+    impl<F, A, B, C, G> AsyncErrExtension<F, A, B, C, G> for F
+    where
+        F: Future<Output = Result<A, B>>,
+        A: 'static,
+        B: 'static,
+        C: 'static,
+        G: FnOnce(B) -> Pin<Box<dyn Future<Output = C>>>,
+        F: Sized,
+    {
+        async fn execute(self, f: G, g: G) -> Result<A, C> {
+            match self.await {
+                Ok(val) =>  Ok(val),
+                Err(err) => Err(g(err).await),
+            }
+        }
+    }
 
     // TODO; Move out of here
     pub(crate) async fn handle_auth(
