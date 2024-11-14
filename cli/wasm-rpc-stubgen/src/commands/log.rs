@@ -205,7 +205,7 @@ pub trait LogColorize {
 
 impl<'a> LogColorize for &'a str {
     fn as_str(&self) -> impl Colorize {
-        self.as_ref()
+        *self
     }
 }
 
