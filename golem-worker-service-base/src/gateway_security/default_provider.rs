@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
 use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType, CoreTokenResponse};
-use crate::gateway_identity_provider::identity_provider::{AuthorizationUrl, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError};
-use crate::gateway_identity_provider::open_id_client::OpenIdClient;
-use crate::gateway_identity_provider::security_scheme::SecurityScheme;
+use crate::gateway_security::identity_provider::{AuthorizationUrl, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError};
+use crate::gateway_security::open_id_client::OpenIdClient;
+use crate::gateway_security::security_scheme::SecurityScheme;
 
 pub struct DefaultIdentityProvider {}
 

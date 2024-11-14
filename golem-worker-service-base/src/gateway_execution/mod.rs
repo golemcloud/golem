@@ -12,6 +12,7 @@ pub mod router;
 pub mod to_response;
 pub mod gateway_session;
 pub mod to_response_failure;
+pub mod gateway_security_scheme_store;
 
 pub use gateway_worker_request_executor::*;
 

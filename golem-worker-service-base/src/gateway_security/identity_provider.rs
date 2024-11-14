@@ -3,9 +3,9 @@ use async_trait::async_trait;
 use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
 use url::Url;
-use crate::gateway_identity_provider::GolemIdentityProviderMetadata;
-use crate::gateway_identity_provider::open_id_client::OpenIdClient;
-use crate::gateway_identity_provider::security_scheme::SecurityScheme;
+use crate::gateway_security::GolemIdentityProviderMetadata;
+use crate::gateway_security::open_id_client::OpenIdClient;
+use crate::gateway_security::security_scheme::SecurityScheme;
 
 // A high level abstraction of an identity-provider, that
 // all providers need to support.

@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use openidconnect::{AuthorizationCode, IssuerUrl, Nonce, Scope};
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
-use crate::gateway_identity_provider::default_provider::DefaultIdentityProvider;
-use crate::gateway_identity_provider::identity_provider::{AuthorizationUrl, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError};
-use crate::gateway_identity_provider::open_id_client::OpenIdClient;
-use crate::gateway_identity_provider::security_scheme::SecurityScheme;
+use crate::gateway_security::default_provider::DefaultIdentityProvider;
+use crate::gateway_security::identity_provider::{AuthorizationUrl, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError};
+use crate::gateway_security::open_id_client::OpenIdClient;
+use crate::gateway_security::security_scheme::SecurityScheme;
 
 pub struct GoogleIdentityProvider {
     default_provider: DefaultIdentityProvider

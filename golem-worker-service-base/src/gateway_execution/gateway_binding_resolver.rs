@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use openidconnect::{CsrfToken, Nonce};
-use crate::gateway_identity_provider::OpenIdClient;
+use crate::gateway_security::OpenIdClient;
 use crate::gateway_middleware::{Cors, Middlewares};
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,

@@ -5,14 +5,14 @@ use async_trait::async_trait;
 use tokio::sync::Mutex;
 
 #[async_trait]
-pub trait GatewaySession {
+pub trait GatewayData {
     async fn insert(&self, session_id: SessionId, data_key: DataKey, data_value: DataValue) -> Result<(), String>;
     async fn get(&self, session_id: SessionId, data_key: DataKey) -> Result<Option<DataValue>, String>;
     async fn get_params(&self, session_id: SessionId) -> Result<Option<HashMap<DataKey, DataValue>>, String>;
 }
 
 #[derive(Clone)]
-pub struct GatewaySessionStore(pub Arc<dyn GatewaySession + Send + Sync>,);
+pub struct GatewaySessionStore(pub Arc<dyn GatewayData + Send + Sync>,);
 
 
 impl GatewaySessionStore {
@@ -45,7 +45,7 @@ impl InMemoryGatewaySession {
 }
 
 #[async_trait]
-impl GatewaySession for InMemoryGatewaySession {
+impl GatewayData for InMemoryGatewaySession {
     async fn insert(&self, session_id: SessionId, data_key: DataKey, data_value: DataValue) -> Result<(), String> {
         let mut data = self.data.lock().await;
         let session_data = data.entry(session_id).or_insert(HashMap::new());

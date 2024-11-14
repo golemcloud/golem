@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use crate::gateway_identity_provider::{GolemIdentityProviderMetadata, IdentityProvider, SecurityScheme};
+use crate::gateway_security::{GolemIdentityProviderMetadata, IdentityProvider, SecurityScheme};
 
 #[derive(Debug, Clone, PartialEq)]
     pub struct AuthCallBackDetails {

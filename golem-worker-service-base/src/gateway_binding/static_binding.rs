@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use openidconnect::{AuthorizationCode, ClientId, ClientSecret};
-use crate::gateway_identity_provider::{GolemIdentityProviderMetadata, IdentityProvider, OpenIdClient, SecurityScheme};
+use crate::gateway_security::{GolemIdentityProviderMetadata, IdentityProvider, OpenIdClient, SecurityScheme};
 use crate::gateway_middleware::{AuthCallBackDetails, Cors};
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,

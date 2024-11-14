@@ -19,7 +19,7 @@ pub mod metrics;
 pub mod path;
 pub mod repo;
 pub mod service;
-pub mod gateway_identity_provider;
+pub mod gateway_security;
 
 #[cfg(test)]
 test_r::enable!();

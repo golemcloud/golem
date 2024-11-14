@@ -8,7 +8,7 @@ use crate::gateway_execution::file_server_binding_handler::{
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
-use crate::gateway_identity_provider::{IdentityProvider};
+use crate::gateway_security::{IdentityProvider};
 use crate::gateway_middleware::{Cors as CorsPreflight, AuthCallBackDetailsInternal};
 use async_trait::async_trait;
 use http::header::*;
