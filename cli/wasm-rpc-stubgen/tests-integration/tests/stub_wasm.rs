@@ -15,6 +15,7 @@
 //! Tests in this module are verifying the STUB WASM created by the stub generator
 //! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
 
+use fs_extra::dir::CopyOptions;
 use test_r::test;
 
 use golem_wasm_ast::analysis::analysed_type::*;
@@ -34,12 +35,21 @@ test_r::enable!();
 
 #[test]
 async fn all_wit_types() {
-    let source_wit_root = test_data_path().join("all-wit-types");
+    let source = test_data_path().join("wit/all-wit-types");
+    let source_wit_root = tempdir().unwrap();
+
+    fs_extra::dir::copy(
+        source,
+        source_wit_root.path(),
+        &CopyOptions::new().content_only(true),
+    )
+    .unwrap();
+
     let target_root = tempdir().unwrap();
     let canonical_target_root = target_root.path().canonicalize().unwrap();
 
     let def = StubDefinition::new(StubConfig {
-        source_wit_root,
+        source_wit_root: source_wit_root.path().to_path_buf(),
         target_root: canonical_target_root,
         selected_world: None,
         stub_crate_version: "1.0.0".to_string(),
