@@ -24,6 +24,7 @@ use glob::glob;
 use itertools::Itertools;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -44,7 +45,8 @@ struct ApplicationContext {
     config: Config,
     application: Application,
     wit: ResolvedWitApplication,
-    wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
+    common_wit_deps: OnceCell<anyhow::Result<WitDepsResolver>>,
+    component_base_output_wit_deps: HashMap<ComponentName, WitDepsResolver>,
 }
 
 impl ApplicationContext {
@@ -56,7 +58,8 @@ impl ApplicationContext {
                     config,
                     application,
                     wit,
-                    wit_deps: OnceCell::new(),
+                    common_wit_deps: OnceCell::new(),
+                    component_base_output_wit_deps: HashMap::new(),
                 })
             }),
         )
@@ -71,15 +74,38 @@ impl ApplicationContext {
         )
     }
 
-    fn wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
+    fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
         match self
-            .wit_deps
+            .common_wit_deps
             .get_or_init(|| WitDepsResolver::new(self.application.wit_deps()))
             .as_ref()
         {
             Ok(wit_deps) => Ok(wit_deps),
             Err(err) => Err(anyhow!("Failed to init wit dependency resolver? {}", err)),
         }
+    }
+
+    fn component_base_output_wit_deps(
+        &mut self,
+        component_name: &ComponentName,
+    ) -> anyhow::Result<&WitDepsResolver> {
+        // Not using the entry API, so we can skip copying the component name
+        if !self
+            .component_base_output_wit_deps
+            .contains_key(component_name)
+        {
+            self.component_base_output_wit_deps.insert(
+                component_name.clone(),
+                WitDepsResolver::new(vec![self
+                    .application
+                    .component_base_output_wit(component_name)
+                    .join(naming::wit::DEPS_DIR)])?,
+            );
+        }
+        Ok(self
+            .component_base_output_wit_deps
+            .get(component_name)
+            .unwrap())
     }
 }
 
@@ -101,15 +127,11 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
     let _indent = LogIndent::new();
 
     {
-        let mut any_changed = false;
-        for component_name in &ctx.wit.component_order {
-            any_changed |= create_base_output_wit(ctx, component_name)?;
+        for component_name in ctx.wit.component_order_cloned() {
+            create_base_output_wit(ctx, &component_name)?;
         }
         for component_name in &ctx.application.all_wasm_rpc_dependencies() {
-            any_changed |= build_stub(ctx, component_name).await?;
-        }
-        if any_changed {
-            ctx.update_wit_context()?;
+            build_stub(ctx, component_name).await?;
         }
     }
 
@@ -635,7 +657,7 @@ fn compile_and_collect_globs(root_dir: &Path, globs: &[String]) -> Result<Vec<Pa
 }
 
 fn create_base_output_wit(
-    ctx: &ApplicationContext,
+    ctx: &mut ApplicationContext,
     component_name: &ComponentName,
 ) -> Result<bool, Error> {
     let component_input_wit = ctx.application.component_input_wit(component_name);
@@ -672,45 +694,11 @@ fn create_base_output_wit(
                 log_action("Adding", "package deps");
                 let _indent = LogIndent::new();
 
-                let wit_deps = ctx.wit_deps()?;
-
-                let all_package_deps = wit_deps.package_names_with_deps(&missing_package_deps)?;
-
-                for package_name in all_package_deps {
-                    log_action(
-                        "Adding",
-                        format!(
-                            "package dependency {}",
-                            package_name.to_string().log_color_highlight()
-                        ),
-                    );
-
-                    for source in wit_deps.package_sources(&package_name)? {
-                        let source = PathExtra::new(source);
-                        let parent = PathExtra::new(
-                            source
-                                .parent()
-                                .context("Failed to get dependency source parent")?,
-                        );
-
-                        let target = ctx
-                            .application
-                            .component_base_output_wit(component_name)
-                            .join(naming::wit::DEPS_DIR)
-                            .join(parent.file_name_to_string()?)
-                            .join(source.file_name_to_string()?);
-
-                        log_action(
-                            "Copying",
-                            format!(
-                                "package dependency from {} to {}",
-                                source.log_color_highlight(),
-                                target.log_color_highlight()
-                            ),
-                        );
-                        fs::copy(source, target)?;
-                    }
-                }
+                ctx.common_wit_deps()?
+                    .add_packages_with_transitive_deps_to_wit_dir(
+                        &missing_package_deps,
+                        &component_base_output_wit,
+                    )?;
             }
         }
 
@@ -721,32 +709,14 @@ fn create_base_output_wit(
                 log_action("Adding", "component interface package dependencies");
                 let _indent = LogIndent::new();
 
-                // TODO: transitive deps?
-
                 for (dep_interface_package_name, dep_component_name) in
                     &component_interface_package_deps
                 {
-                    let source = ctx
-                        .application
-                        .component_base_output_wit_interface_package_dir(
-                            dep_component_name,
-                            dep_interface_package_name,
-                        );
-                    let target = ctx
-                        .application
-                        .component_base_output_wit_interface_package_dir(
-                            component_name,
-                            dep_interface_package_name,
-                        );
-                    log_action(
-                        "Copying",
-                        format!(
-                            "interface package dependency from {} to {}",
-                            source.log_color_highlight(),
-                            target.log_color_highlight()
-                        ),
-                    );
-                    fs::copy(source, target)?;
+                    ctx.component_base_output_wit_deps(dep_component_name)?
+                        .add_packages_with_transitive_deps_to_wit_dir(
+                            &[dep_interface_package_name.clone()],
+                            &component_base_output_wit,
+                        )?;
                 }
             }
         }

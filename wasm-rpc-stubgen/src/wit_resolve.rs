@@ -1,7 +1,8 @@
+use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
 use crate::model::wasm_rpc::{Application, ComponentName};
-use crate::naming;
 use crate::validation::{ValidatedResult, ValidationBuilder};
+use crate::{fs, naming};
 use anyhow::{anyhow, bail, Context, Error};
 use indexmap::IndexMap;
 use itertools::Itertools;
@@ -156,26 +157,28 @@ fn collect_package_sources(
 }
 
 pub struct ResolvedWitComponent {
-    pub main_package_name: PackageName,
-    pub unresolved_input_package_group: UnresolvedPackageGroup,
-    pub resolved_output_wit_dir: Option<ResolvedWitDir>,
-    pub app_component_deps: HashSet<ComponentName>,
-    pub input_referenced_package_deps: HashSet<PackageName>,
-    pub input_contained_package_deps: HashSet<PackageName>,
-    pub input_component_deps: BTreeSet<ComponentName>, // NOTE: BTree for making dep sorting deterministic
-    pub output_component_deps: Option<HashSet<ComponentName>>,
+    main_package_name: PackageName,
+    resolved_output_wit_dir: Option<ResolvedWitDir>,
+    app_component_deps: HashSet<ComponentName>,
+    input_referenced_package_deps: HashSet<PackageName>,
+    input_contained_package_deps: HashSet<PackageName>,
+    input_component_deps: BTreeSet<ComponentName>, // NOTE: BTree for making dep sorting deterministic
+    output_component_deps: Option<HashSet<ComponentName>>,
 }
 
 pub struct ResolvedWitApplication {
-    pub components: BTreeMap<ComponentName, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
-    pub package_to_component: HashMap<PackageName, ComponentName>,
-    pub stub_package_to_component: HashMap<PackageName, ComponentName>,
-    pub interface_package_to_component: HashMap<PackageName, ComponentName>,
-    pub component_order: Vec<ComponentName>,
+    components: BTreeMap<ComponentName, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
+    package_to_component: HashMap<PackageName, ComponentName>,
+    stub_package_to_component: HashMap<PackageName, ComponentName>,
+    interface_package_to_component: HashMap<PackageName, ComponentName>,
+    component_order: Vec<ComponentName>,
 }
 
 impl ResolvedWitApplication {
     pub fn new(app: &Application) -> ValidatedResult<Self> {
+        log_action("Resolving", "application wit directories");
+        let _indent = LogIndent::new();
+
         let mut resolved_app = Self {
             components: Default::default(),
             package_to_component: Default::default(),
@@ -219,32 +222,29 @@ impl ResolvedWitApplication {
     }
 
     fn add_components_from_app(&mut self, validation: &mut ValidationBuilder, app: &Application) {
-        log_action("Resolving", "application wit directories");
-        let _indent = LogIndent::new();
-
         for (component_name, component) in &app.wasm_components_by_name {
             validation.push_context("component name", component_name.to_string());
 
-            let input_wit = app.component_input_wit(component_name);
-            let output_wit = app.component_output_wit(component_name);
+            let input_wit_dir = app.component_input_wit(component_name);
+            let output_wit_dir = app.component_output_wit(component_name);
 
             log_action(
                 "Resolving",
                 format!(
                     "component wit dirs for {} ({}, {})",
                     component_name.log_color_highlight(),
-                    input_wit.log_color_highlight(),
-                    output_wit.log_color_highlight(),
+                    input_wit_dir.log_color_highlight(),
+                    output_wit_dir.log_color_highlight(),
                 ),
             );
 
             let resolved_component = (|| -> anyhow::Result<ResolvedWitComponent> {
-                let unresolved_input_package_group = UnresolvedPackageGroup::parse_dir(&input_wit)
-                    .with_context(|| {
+                let unresolved_input_package_group =
+                    UnresolvedPackageGroup::parse_dir(&input_wit_dir).with_context(|| {
                         anyhow!(
                             "Failed to parse component {} main package in input wit dir {}",
                             component_name,
-                            input_wit.display()
+                            input_wit_dir.display()
                         )
                     })?;
 
@@ -269,7 +269,7 @@ impl ResolvedWitApplication {
 
                 let main_package_name = unresolved_input_package_group.main.name.clone();
 
-                let resolved_output_wit_dir = ResolvedWitDir::new(&output_wit).ok();
+                let resolved_output_wit_dir = ResolvedWitDir::new(&output_wit_dir).ok();
                 let output_has_same_main_package_name = resolved_output_wit_dir
                     .as_ref()
                     .map(|wit| wit.main_package())
@@ -284,7 +284,6 @@ impl ResolvedWitApplication {
 
                 Ok(ResolvedWitComponent {
                     main_package_name,
-                    unresolved_input_package_group,
                     resolved_output_wit_dir,
                     app_component_deps,
                     input_referenced_package_deps,
@@ -418,6 +417,14 @@ impl ResolvedWitApplication {
         }
 
         self.component_order = component_order;
+    }
+
+    pub fn component_order(&self) -> &[ComponentName] {
+        &self.component_order
+    }
+
+    pub fn component_order_cloned(&self) -> Vec<ComponentName> {
+        self.component_order.clone()
     }
 
     fn component(&self, component_name: &ComponentName) -> Result<&ResolvedWitComponent, Error> {
@@ -563,9 +570,9 @@ impl WitDepsResolver {
             .map(|package| package.source_map.source_files())
     }
 
-    pub fn package_names_with_deps(
+    pub fn package_names_with_transitive_deps(
         &self,
-        package_names: &[PackageName],
+        packages: &[PackageName],
     ) -> anyhow::Result<HashSet<PackageName>> {
         fn visit(
             resolver: &WitDepsResolver,
@@ -584,9 +591,48 @@ impl WitDepsResolver {
         }
 
         let mut all_package_names = HashSet::<PackageName>::new();
-        for package_name in package_names {
+        for package_name in packages {
             visit(self, &mut all_package_names, package_name)?;
         }
         Ok(all_package_names)
+    }
+
+    pub fn add_packages_with_transitive_deps_to_wit_dir(
+        &self,
+        packages: &[PackageName],
+        target_deps_dir: &Path,
+    ) -> anyhow::Result<()> {
+        for package_name in self.package_names_with_transitive_deps(packages)? {
+            log_action(
+                "Adding",
+                format!(
+                    "package dependency {} to {}",
+                    package_name.to_string().log_color_highlight(),
+                    target_deps_dir.log_color_highlight(),
+                ),
+            );
+
+            for source in self.package_sources(&package_name)? {
+                let source = PathExtra::new(source);
+                let source_parent = PathExtra::new(source.parent()?);
+
+                let target = target_deps_dir
+                    .join(naming::wit::DEPS_DIR)
+                    .join(source_parent.file_name_to_string()?)
+                    .join(source.file_name_to_string()?);
+
+                log_action(
+                    "Copying",
+                    format!(
+                        "package dependency source from {} to {}",
+                        source.log_color_highlight(),
+                        target.log_color_highlight()
+                    ),
+                );
+                fs::copy(source, target)?;
+            }
+        }
+
+        Ok(())
     }
 }
