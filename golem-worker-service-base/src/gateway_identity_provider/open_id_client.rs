@@ -1,6 +1,6 @@
 use openidconnect::core::{CoreClient};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OpenIdClient {
     pub client: CoreClient,
 }

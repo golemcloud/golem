@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use async_trait::async_trait;
 use crate::api::WorkerApiBaseError;
 use crate::gateway_binding::{AuthCallBack, GatewayRequestDetails, RibInputTypeMismatch};
 use crate::gateway_execution::file_server_binding_handler::{
@@ -11,16 +13,20 @@ use openidconnect::AuthorizationCode;
 use poem::{Body, Response};
 use poem::IntoResponse;
 use rib::RibResult;
+use crate::gateway_execution::gateway_session::{DataKey, DataValue, GatewaySessionStore, SessionId};
 
+#[async_trait]
 pub trait ToResponse<A> {
-    fn to_response(self, request_details: &GatewayRequestDetails, middlewares: &Middlewares) -> A;
+    async fn to_response(self, request_details: &GatewayRequestDetails, middlewares: &Middlewares, session_store: GatewaySessionStore) -> A;
 }
 
+#[async_trait]
 impl ToResponse<poem::Response> for FileServerBindingResult {
-    fn to_response(
+    async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
+        _session_store: GatewaySessionStore
     ) -> poem::Response {
         let mut response = match self {
             Ok(data) => Body::from_bytes_stream(data.data)
@@ -44,11 +50,13 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
 }
 
 // Preflight (OPTIONS) response that will consist of all configured CORS headers
+#[async_trait]
 impl ToResponse<poem::Response> for CorsPreflight {
     fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         _middlewares: &Middlewares,
+        _session_store: GatewaySessionStore
     ) -> poem::Response {
         let mut response = poem::Response::builder().status(StatusCode::OK).finish();
 
@@ -89,11 +97,13 @@ impl ToResponse<poem::Response> for CorsPreflight {
     }
 }
 
+#[async_trait]
 impl ToResponse<poem::Response> for RibResult {
     fn to_response(
         self,
         request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
+        _session_store: GatewaySessionStore
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
             Ok(intermediate_response) => {
@@ -109,11 +119,13 @@ impl ToResponse<poem::Response> for RibResult {
     }
 }
 
+#[async_trait]
 impl ToResponse<poem::Response> for RibInputTypeMismatch {
     fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
+        _session_store: GatewaySessionStore
     ) -> poem::Response {
         let mut response = poem::Response::builder()
             .status(StatusCode::BAD_REQUEST)
@@ -124,11 +136,13 @@ impl ToResponse<poem::Response> for RibInputTypeMismatch {
     }
 }
 
+#[async_trait]
 impl ToResponse<poem::Response> for EvaluationError {
     fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
+        _session_store: GatewaySessionStore
     ) -> poem::Response {
         let mut response = poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -140,11 +154,13 @@ impl ToResponse<poem::Response> for EvaluationError {
     }
 }
 
+#[async_trait]
 impl ToResponse<poem::Response> for String {
     fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
+        _session_store: GatewaySessionStore
     ) -> poem::Response {
         let mut response = poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -155,11 +171,13 @@ impl ToResponse<poem::Response> for String {
     }
 }
 
+#[async_trait]
 impl ToResponse<poem::Response> for AuthCallBack {
-    fn to_response(
+    async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
+        session_store: GatewaySessionStore
     ) -> poem::Response {
         match request_details {
             GatewayRequestDetails::Http(http_request_details) => {
@@ -184,7 +202,24 @@ impl ToResponse<poem::Response> for AuthCallBack {
                                 if let Some(state) = state {
                                     let state = state.as_str();
                                     if let Some(state) = state {
-                                        let state = state.to_string();
+                                        let obtained_state = state.to_string();
+                                        let existing_state =
+                                            session_store.0.get_params(SessionId("state".to_string())).await;
+
+                                        match existing_state {
+                                            Ok(Some(session_params)) => {
+                                                let original_uri = session_params.get(&DataKey("original_uri".to_string())).unwrap();
+                                                let client =
+
+                                            }
+                                            Err(_) => {
+                                                return Response::builder()
+                                                    .status(StatusCode::UNAUTHORIZED)
+                                                    .body(Body::from_string("Unauthorised auth call back".to_string()))
+                                            }
+                                        }
+
+
 
                                     }
                                 }

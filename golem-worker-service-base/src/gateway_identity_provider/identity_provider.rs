@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreTokenResponse};
-use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
+use openidconnect::core::{CoreAuthDisplay, CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdTokenClaims, CoreJsonWebKey, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType, CoreTokenResponse};
+use openidconnect::{AuthorizationCode, CsrfToken, EmptyAdditionalProviderMetadata, IssuerUrl, Nonce, ProviderMetadata, Scope};
 use url::Url;
 use crate::gateway_identity_provider::open_id_client::OpenIdClient;
 use crate::gateway_identity_provider::security_scheme::SecurityScheme;
@@ -15,11 +15,15 @@ use crate::gateway_identity_provider::security_scheme::SecurityScheme;
 
 #[async_trait]
 pub trait IdentityProvider {
-    async fn get_client(&self, security_scheme: &SecurityScheme) -> Result<OpenIdClient, IdentityProviderError>;
+    async fn get_provider_metadata(&self, issuer_url: &IssuerUrl) -> Result<GolemIdentityProviderMetadata, IdentityProviderError>;
     async fn exchange_code_for_tokens(&self, client: &OpenIdClient, code: &AuthorizationCode) -> Result<CoreTokenResponse, IdentityProviderError>;
+
+    fn get_client(&self, provider_metadata: &GolemIdentityProviderMetadata, security_scheme: &SecurityScheme) -> Result<OpenIdClient, IdentityProviderError>;
     fn get_claims(&self, client: &OpenIdClient, core_token_response: CoreTokenResponse, nonce: &Nonce) -> Result<CoreIdTokenClaims, IdentityProviderError>;
     fn get_authorization_url(&self, client: &OpenIdClient, scopes: Vec<Scope>) -> Result<AuthorizationUrl, IdentityProviderError>;
 }
+
+pub type GolemIdentityProviderMetadata = ProviderMetadata<EmptyAdditionalProviderMetadata, CoreAuthDisplay, CoreClientAuthMethod, CoreClaimName, CoreClaimType, CoreGrantType, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJsonWebKey, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType>;
 
 pub struct AuthorizationUrl {
     pub url: Url,

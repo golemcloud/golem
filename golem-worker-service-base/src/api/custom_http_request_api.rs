@@ -120,7 +120,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
         };
 
         match input_http_request
-            .resolve_worker_binding(possible_api_definitions)
+            .resolve_gateway_binding(possible_api_definitions)
             .await
         {
             Ok(resolved_gateway_binding) => {

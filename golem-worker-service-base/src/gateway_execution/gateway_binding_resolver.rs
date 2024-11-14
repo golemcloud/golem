@@ -9,14 +9,15 @@ use golem_service_base::model::VersionedComponentId;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
-
-use crate::gateway_middleware::Middlewares;
+use openidconnect::{CsrfToken, Nonce};
+use crate::gateway_identity_provider::OpenIdClient;
+use crate::gateway_middleware::{Cors, Middlewares};
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // which will resolve the gateway binding equired for that request.
 #[async_trait]
 pub trait GatewayBindingResolver<Namespace, ApiDefinition> {
-    async fn resolve_worker_binding(
+    async fn resolve_gateway_binding(
         &self,
         api_definitions: Vec<ApiDefinition>,
     ) -> Result<ResolvedGatewayBinding<Namespace>, GatewayBindingResolverError>;
@@ -48,6 +49,20 @@ pub enum ResolvedBinding<Namespace> {
     Static(StaticBinding),
     Worker(ResolvedWorkerBinding<Namespace>),
     FileServer(ResolvedWorkerBinding<Namespace>),
+}
+
+#[derive(Clone, Debug)]
+pub enum ResolvedStaticBinding {
+    HttpCorsPreflight(Cors),
+    HttpAuthCallBack(AuthParams),
+}
+
+#[derive(Clone, Debug)]
+pub struct AuthParams {
+    pub client: OpenIdClient,
+    pub csrf_state: CsrfToken,
+    pub nonce: Nonce,
+    pub original_uri: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -125,7 +140,7 @@ impl<Namespace> ResolvedGatewayBinding<Namespace> {
 impl<Namespace: Clone + Send + Sync + 'static>
     GatewayBindingResolver<Namespace, CompiledHttpApiDefinition<Namespace>> for InputHttpRequest
 {
-    async fn resolve_worker_binding(
+    async fn resolve_gateway_binding(
         &self,
         compiled_api_definitions: Vec<CompiledHttpApiDefinition<Namespace>>,
     ) -> Result<ResolvedGatewayBinding<Namespace>, GatewayBindingResolverError> {

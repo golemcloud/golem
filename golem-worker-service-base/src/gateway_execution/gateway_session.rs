@@ -1,15 +1,18 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
+use async_trait::async_trait;
 use tokio::sync::Mutex;
 
+#[async_trait]
 pub trait GatewaySession {
     async fn insert(&self, session_id: SessionId, data_key: DataKey, data_value: DataValue) -> Result<(), String>;
     async fn get(&self, session_id: SessionId, data_key: DataKey) -> Result<Option<DataValue>, String>;
+    async fn get_params(&self, session_id: SessionId) -> Result<Option<HashMap<DataKey, DataValue>>, String>;
 }
 
 #[derive(Clone)]
-pub struct GatewaySessionStore(Arc<dyn GatewaySession + Send + Sync>,);
+pub struct GatewaySessionStore(pub Arc<dyn GatewaySession + Send + Sync>,);
 
 impl GatewaySessionStore {
     pub fn in_memory() -> Self {
@@ -20,7 +23,7 @@ impl GatewaySessionStore {
 #[derive(Hash, PartialEq, Eq)]
 pub struct SessionId(String);
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq, Clone)]
 pub struct DataKey(String);
 
 #[derive(Clone)]
@@ -40,6 +43,7 @@ impl InMemoryGatewaySession {
     }
 }
 
+#[async_trait]
 impl GatewaySession for InMemoryGatewaySession {
     async fn insert(&self, session_id: SessionId, data_key: DataKey, data_value: DataValue) -> Result<(), String> {
         let mut data = self.data.lock().await;
@@ -58,6 +62,14 @@ impl GatewaySession for InMemoryGatewaySession {
                 }
             }
             None => Err("Session not found".to_string())
+        }
+    }
+
+    async fn get_params(&self, session_id: SessionId) -> Result<Option<HashMap<DataKey, DataValue>>, String> {
+        let data = self.data.lock().await;
+        match data.get(&session_id) {
+            Some(session_data) => Ok(Some(session_data.clone())),
+            None => Ok(None)
         }
     }
 }

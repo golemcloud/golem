@@ -1,8 +1,7 @@
 use async_trait::async_trait;
-use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, Scope};
+use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
 use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType, CoreTokenResponse};
-use tokio::task;
-use crate::gateway_identity_provider::identity_provider::{AuthorizationUrl, IdentityProvider, IdentityProviderError};
+use crate::gateway_identity_provider::identity_provider::{AuthorizationUrl, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError};
 use crate::gateway_identity_provider::open_id_client::OpenIdClient;
 use crate::gateway_identity_provider::security_scheme::SecurityScheme;
 
@@ -10,33 +9,44 @@ pub struct DefaultIdentityProvider {}
 
 #[async_trait]
 impl IdentityProvider for DefaultIdentityProvider {
-    async fn get_client(&self, security_scheme: &SecurityScheme) -> Result<OpenIdClient, IdentityProviderError> {
-        let provider_metadata =
-            task::block_in_place(|| {
-                CoreProviderMetadata::discover(&security_scheme.issuer_url(), openidconnect::reqwest::http_client)
-            }).map_err(|err| {
-                IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string())
-            })?;
+    // To be called during API definition registration to then store them in the database
+    async fn get_provider_metadata(&self, issuer_url: &IssuerUrl) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
+        let provide_metadata =
+            CoreProviderMetadata::discover_async(issuer_url.clone(), openidconnect::reqwest::async_http_client)
+                .await
+                .map_err(|err| {
+                    IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string())
+                })?;
 
-        let client = CoreClient::from_provider_metadata(provider_metadata, security_scheme.client_id().clone(), Some(security_scheme.client_secret().clone()))
-            .set_redirect_uri(security_scheme.redirect_url().clone());
-
-        Ok(OpenIdClient::new(client))
+        Ok(provide_metadata)
     }
 
+
+    // To be called during call_back authentication URL which is a injected URL
     async fn exchange_code_for_tokens(&self, client: &OpenIdClient, code: &AuthorizationCode) -> Result<CoreTokenResponse, IdentityProviderError> {
-        let token_response =
-            task::block_in_place(
-                || {
-                    client.client.exchange_code(code.clone())
-                        .request(openidconnect::reqwest::http_client)
-                }
-            ).map_err(|err| {
-                IdentityProviderError::FailedToExchangeCodeForTokens(err.to_string())
-            })?;
+       let token_response =
+           client.client.exchange_code(code.clone())
+               .request_async(openidconnect::reqwest::async_http_client)
+                .await.map_err(|err| {
+                    IdentityProviderError::FailedToExchangeCodeForTokens(err.to_string())
+                })?;
 
         Ok(token_response)
     }
+
+    // To be called before getting the authorisation URL
+    fn get_client(&self, provider_metadata: &GolemIdentityProviderMetadata, security_scheme: &SecurityScheme) -> Result<OpenIdClient, IdentityProviderError> {
+        let client = CoreClient::from_provider_metadata(
+            provider_metadata.clone(),
+            security_scheme.client_id().clone(),
+            Some(security_scheme.client_secret().clone())
+        ).set_redirect_uri(security_scheme.redirect_url().clone());
+
+        Ok(OpenIdClient {
+            client
+        })
+    }
+
 
     fn get_claims(&self, client: &OpenIdClient, core_token_response: CoreTokenResponse, nonce: &Nonce) -> Result<CoreIdTokenClaims, IdentityProviderError> {
         let id_token_verifier: CoreIdTokenVerifier = client.client.id_token_verifier();

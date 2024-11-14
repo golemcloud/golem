@@ -43,7 +43,7 @@ async fn execute(
     .unwrap();
 
     let resolved_route = api_request
-        .resolve_worker_binding(vec![compiled])
+        .resolve_gateway_binding(vec![compiled])
         .await
         .unwrap();
 
@@ -521,7 +521,7 @@ async fn test_api_gateway_rib_input_from_request_details() {
         .unwrap();
 
         let resolved_route = api_request
-            .resolve_worker_binding(vec![compiled_api_spec])
+            .resolve_gateway_binding(vec![compiled_api_spec])
             .await;
 
         let result =
@@ -564,7 +564,7 @@ async fn test_api_gateway_idempotency_key_resolution() {
         .unwrap();
 
         let resolved_route = api_request
-            .resolve_worker_binding(vec![compiled_api_spec])
+            .resolve_gateway_binding(vec![compiled_api_spec])
             .await
             .unwrap();
 
