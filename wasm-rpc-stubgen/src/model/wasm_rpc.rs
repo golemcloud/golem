@@ -587,12 +587,7 @@ impl Application {
     pub fn all_wasm_rpc_dependencies(&self) -> BTreeSet<ComponentName> {
         self.wasm_components_by_name
             .iter()
-            .flat_map(|(_, component)| {
-                component
-                    .wasm_rpc_dependencies
-                    .iter()
-                    .map(|component_name| component_name.clone())
-            })
+            .flat_map(|(_, component)| component.wasm_rpc_dependencies.iter().cloned())
             .collect()
     }
 
