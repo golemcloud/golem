@@ -191,7 +191,7 @@ impl ResolvedWitApplication {
 
         resolved_app.add_components_from_app(&mut validation, app);
 
-        // TODO: validate conflicting package names
+        resolved_app.validate_package_names(&mut validation);
 
         if !validation.has_any_errors() {
             resolved_app.collect_component_deps();
@@ -199,6 +199,37 @@ impl ResolvedWitApplication {
         }
 
         validation.build(resolved_app)
+    }
+
+    fn validate_package_names(&self, validation: &mut ValidationBuilder) {
+        if self.package_to_component.len() != self.components.len() {
+            let mut package_names_to_component_names =
+                BTreeMap::<&PackageName, Vec<&ComponentName>>::new();
+            for (component_name, component) in &self.components {
+                package_names_to_component_names
+                    .entry(&component.main_package_name)
+                    .and_modify(|component_names| component_names.push(&component_name))
+                    .or_insert_with(|| vec![&component_name]);
+            }
+
+            validation.add_errors(
+                package_names_to_component_names,
+                |(package_name, component_names)| {
+                    (component_names.len() > 1).then(|| {
+                        (
+                            vec![
+                                ("package name", package_name.to_string()),
+                                (
+                                    "component names",
+                                    component_names.iter().map(|s| s.as_str()).join(", "),
+                                ),
+                            ],
+                            "Same package name is used for multiple components".to_string(),
+                        )
+                    })
+                },
+            );
+        }
     }
 
     fn add_resolved_component(
