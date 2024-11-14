@@ -180,6 +180,11 @@ impl From<PluginError> for ComponentError {
             PluginError::ComponentNotFound { .. } => ComponentError::NotFound(Json(ErrorBody {
                 error: value.to_safe_string(),
             })),
+            PluginError::FailedToGetAvailableScopes { .. } => {
+                ComponentError::InternalError(Json(ErrorBody {
+                    error: value.to_safe_string(),
+                }))
+            }
         }
     }
 }

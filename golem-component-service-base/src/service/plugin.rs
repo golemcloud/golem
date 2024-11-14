@@ -33,6 +33,8 @@ pub enum PluginError {
     InternalComponentError(#[from] ComponentError),
     #[error("Component not found: {component_id}")]
     ComponentNotFound { component_id: ComponentId },
+    #[error("Failed to get available scopes: {error}")]
+    FailedToGetAvailableScopes { error: String },
 }
 
 impl PluginError {
@@ -51,6 +53,7 @@ impl SafeDisplay for PluginError {
             Self::InternalConversionError { .. } => self.to_string(),
             Self::InternalComponentError(inner) => inner.to_safe_string(),
             Self::ComponentNotFound { .. } => self.to_string(),
+            Self::FailedToGetAvailableScopes { .. } => self.to_string(),
         }
     }
 }
@@ -71,6 +74,11 @@ impl From<PluginError> for golem_api_grpc::proto::golem::component::v1::Componen
             PluginError::InternalComponentError(component_error) => component_error.into(),
             PluginError::ComponentNotFound { .. } => Self {
                 error: Some(component_error::Error::NotFound(ErrorBody {
+                    error: value.to_safe_string(),
+                })),
+            },
+            PluginError::FailedToGetAvailableScopes { .. } => Self {
+                error: Some(component_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),
                 })),
             },
