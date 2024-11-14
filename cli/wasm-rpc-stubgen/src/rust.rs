@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action, LogColorize};
+use crate::fs;
+use crate::fs::PathExtra;
 use crate::stub::{FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition};
 use anyhow::anyhow;
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
-use std::fs;
 use wit_bindgen_rust::to_rust_ident;
 use wit_parser::{
     Enum, Flags, Handle, Record, Result_, Tuple, Type, TypeDef, TypeDefKind, TypeOwner, Variant,
@@ -284,14 +285,13 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
     let syntax_tree = syn::parse2(lib)?;
     let src = prettyplease::unparse(&syntax_tree);
 
+    let target_rust_path = PathExtra::new(def.target_rust_path());
+
     log_action(
         "Generating",
-        format!(
-            "stub source to {}",
-            def.target_rust_path().log_color_highlight()
-        ),
+        format!("stub source to {}", target_rust_path.log_color_highlight()),
     );
-    fs::create_dir_all(def.target_rust_path().parent().unwrap())?;
+    fs::create_dir_all(target_rust_path.parent()?)?;
     fs::write(def.target_rust_path(), src)?;
     Ok(())
 }

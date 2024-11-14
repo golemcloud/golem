@@ -13,9 +13,8 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action, log_warn_action, LogColorize};
-use crate::{cargo, GenerateArgs, WasmRpcOverride};
+use crate::{cargo, fs, GenerateArgs, WasmRpcOverride};
 use heck::ToSnakeCase;
-use std::fs;
 use std::path::Path;
 use std::process::Command;
 use toml::map::Map;

@@ -1,7 +1,18 @@
 use anyhow::{anyhow, Context};
 use std::cmp::PartialEq;
+use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+
+pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
+    let path = path.as_ref();
+    if path.exists() {
+        Ok(())
+    } else {
+        std::fs::create_dir_all(path)
+            .with_context(|| anyhow!("Failed to create directory {}", path.display()))
+    }
+}
 
 // Differences compared to std::fs::copy
 //  - ensures that the target dir exists
@@ -9,25 +20,18 @@ use std::time::SystemTime;
 //    modtime based up-to-date checks (see https://github.com/rust-lang/rust/issues/115982 for more info)
 //  - uses anyhow error with added context
 pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> anyhow::Result<u64> {
-    let from = from.as_ref();
-    let to = to.as_ref();
+    let from = PathExtra(from);
+    let to = PathExtra(to);
 
     let context = || format!("Failed to copy from {} to {}", from.display(), to.display());
 
-    let target_parent = to
-        .parent()
-        .ok_or_else(|| anyhow!("Failed to get target parent dir"))
-        .with_context(context)?;
+    create_dir_all(from.parent()?).with_context(context)?;
 
-    std::fs::create_dir_all(target_parent)
-        .with_context(|| anyhow!("Failed to create target dir"))
-        .with_context(context)?;
+    let bytes = std::fs::copy(&from, &to).with_context(context)?;
 
-    let bytes = std::fs::copy(from, to).with_context(context)?;
-
-    std::fs::File::open(to)
+    std::fs::File::open(&to)
         .and_then(|to| to.set_modified(SystemTime::now()))
-        .with_context(|| anyhow!("Failed to update target modification time"))
+        .context("Failed to update target modification time")
         .with_context(context)?;
 
     Ok(bytes)
@@ -39,8 +43,8 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
     to: Q,
     transform: T,
 ) -> anyhow::Result<u64> {
-    let from = from.as_ref();
-    let to = to.as_ref();
+    let from = PathExtra(from);
+    let to = PathExtra(to);
 
     let context = || {
         format!(
@@ -50,50 +54,66 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
         )
     };
 
-    let target_parent = to
-        .parent()
-        .ok_or_else(|| anyhow!("Failed to get target parent dir"))
+    let target_parent = from.parent().with_context(context)?;
+
+    create_dir_all(target_parent)
+        .context("Failed to create target dir")
         .with_context(context)?;
 
-    std::fs::create_dir_all(target_parent)
-        .with_context(|| anyhow!("Failed to create target dir"))
-        .with_context(context)?;
-
-    let content = std::fs::read_to_string(from)
-        .with_context(|| anyhow!("Failed to read source content"))
-        .with_context(context)?;
+    let content = read_to_string(&from).with_context(context)?;
 
     let transformed_content = transform(content)
-        .with_context(|| anyhow!("Failed to transform source content"))
+        .context("Failed to transform source content")
         .with_context(context)?;
 
     let bytes_count = transformed_content.as_bytes().len();
 
-    std::fs::write(to, transformed_content.as_bytes())
-        .with_context(|| anyhow!("Failed to write transformed content"))
+    write(&to, transformed_content.as_bytes())
+        .context("Failed to write transformed content")
         .with_context(context)?;
 
     Ok(bytes_count as u64)
 }
 
+pub fn read_to_string<P: AsRef<Path>>(path: P) -> anyhow::Result<String> {
+    let path = path.as_ref();
+    fs_extra::file::read_to_string(path)
+        .with_context(|| anyhow!("Failed to read to string, file: {}", path.display()))
+}
+
 // Creates all missing parent directories if necessary and writes str to path.
 pub fn write_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Result<()> {
-    let path = path.as_ref();
+    let path = PathExtra(path);
     let str = str.as_ref();
 
     let context = || format!("Failed to write string to {}", path.display());
 
-    let target_parent = path
-        .parent()
-        .ok_or_else(|| anyhow!("Failed to get parent dir"))
-        .with_context(context)?;
+    let target_parent = path.parent().with_context(context)?;
+    create_dir_all(target_parent).with_context(context)?;
+    std::fs::write(&path, str.as_bytes()).with_context(context)
+}
 
-    std::fs::create_dir_all(target_parent)
-        .with_context(|| anyhow!("Failed to create parent dir"))
-        .with_context(context)?;
+pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> anyhow::Result<()> {
+    let path = PathExtra(path);
 
-    std::fs::write(path, str.as_bytes()).with_context(context)?;
+    let context = || format!("Failed to write to {}", path.display());
 
+    let target_parent = path.parent().with_context(context)?;
+    create_dir_all(target_parent).with_context(context)?;
+    std::fs::write(&path, contents).with_context(context)
+}
+
+pub fn remove<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
+    let path = path.as_ref();
+    if path.exists() {
+        if path.is_dir() {
+            std::fs::remove_dir_all(path)
+                .with_context(|| anyhow!("Failed to delete directory {}", path.display()))?;
+        } else {
+            std::fs::remove_file(path)
+                .with_context(|| anyhow!("Failed to delete file {}", path.display()))?;
+        }
+    }
     Ok(())
 }
 
@@ -103,7 +123,7 @@ pub fn has_str_content<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow
 
     let context = || format!("Failed to compare content to string for {}", path.display());
 
-    let content = std::fs::read_to_string(path)
+    let content = read_to_string(path)
         .with_context(|| anyhow!("Failed to read as string: {}", path.display()))
         .with_context(context)?;
 
@@ -122,43 +142,69 @@ pub fn has_same_string_content<P: AsRef<Path>, Q: AsRef<Path>>(a: P, b: Q) -> an
         )
     };
 
-    let content_a = std::fs::read_to_string(a)
-        .with_context(|| anyhow!("Failed to read as string: {}", a.display()))
-        .with_context(context)?;
-
-    let content_b = std::fs::read_to_string(b)
-        .with_context(|| anyhow!("Failed to read as string: {}", b.display()))
-        .with_context(context)?;
+    let content_a = read_to_string(a).with_context(context)?;
+    let content_b = read_to_string(b).with_context(context)?;
 
     Ok(content_a == content_b)
 }
 
-pub fn get_file_name<P: AsRef<Path>>(path: P) -> anyhow::Result<String> {
+pub fn metadata<P: AsRef<Path>>(path: P) -> anyhow::Result<Metadata> {
     let path = path.as_ref();
-    path.file_name()
-        .ok_or_else(|| anyhow!("Failed to get file name for path: {}", path.display(),))?
-        .to_os_string()
-        .into_string()
-        .map_err(|_| anyhow!("Failed to convert filename for path: {}", path.display()))
+    std::fs::metadata(path)
+        .with_context(|| anyhow!("Failed to get metadata for {}", path.display()))
 }
 
-pub fn strip_path_prefix<P: AsRef<Path>, Q: AsRef<Path>>(
-    prefix: Q,
-    path: P,
-) -> anyhow::Result<PathBuf> {
-    let path = path.as_ref();
-    let prefix = prefix.as_ref();
+pub struct PathExtra<P: AsRef<Path>>(P);
 
-    Ok(path
-        .strip_prefix(prefix)
-        .with_context(|| {
-            anyhow!(
-                "Failed to strip prefix from path, prefix: {}, path: {}",
-                prefix.display(),
-                path.display()
-            )
-        })?
-        .to_path_buf())
+impl<P: AsRef<Path>> PathExtra<P> {
+    pub fn new(path: P) -> Self {
+        Self(path)
+    }
+
+    pub fn parent(&self) -> anyhow::Result<&Path> {
+        let path = self.0.as_ref();
+        path.parent()
+            .ok_or_else(|| anyhow!("Failed to get parent dir for path: {}", path.display()))
+    }
+
+    pub fn file_name_to_string(&self) -> anyhow::Result<String> {
+        let path = self.0.as_ref();
+        path.file_name()
+            .ok_or_else(|| anyhow!("Failed to get file name for path: {}", path.display(),))?
+            .to_os_string()
+            .into_string()
+            .map_err(|_| anyhow!("Failed to convert filename for path: {}", path.display()))
+    }
+
+    pub fn strip_prefix<Q: AsRef<Path>>(&self, prefix: Q) -> anyhow::Result<PathBuf> {
+        let path = self.0.as_ref();
+        let prefix = prefix.as_ref();
+
+        Ok(path
+            .strip_prefix(prefix)
+            .with_context(|| {
+                anyhow!(
+                    "Failed to strip prefix from path, prefix: {}, path: {}",
+                    prefix.display(),
+                    path.display()
+                )
+            })?
+            .to_path_buf())
+    }
+
+    pub fn as_path(&self) -> &Path {
+        self.0.as_ref()
+    }
+
+    pub fn display(&self) -> std::path::Display {
+        self.as_path().display()
+    }
+}
+
+impl<P: AsRef<Path>> AsRef<Path> for PathExtra<P> {
+    fn as_ref(&self) -> &Path {
+        self.as_path()
+    }
 }
 
 pub enum OverwriteSafeAction {

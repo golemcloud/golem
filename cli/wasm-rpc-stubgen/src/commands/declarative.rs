@@ -3,7 +3,8 @@ use crate::commands::log::{
     log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action, LogColorize,
     LogIndent,
 };
-use crate::fs::copy;
+use crate::fs;
+use crate::fs::PathExtra;
 use crate::model::oam;
 use crate::model::wasm_rpc::{
     include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName,
@@ -22,7 +23,6 @@ use colored::Colorize;
 use glob::glob;
 use itertools::Itertools;
 use std::cmp::Ordering;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -70,16 +70,11 @@ impl ApplicationContext {
 }
 
 pub fn init(component_name: ComponentName) -> anyhow::Result<()> {
-    let file_name = DEFAULT_CONFIG_FILE_NAME;
-
-    let mut file = std::fs::File::create_new(file_name)
-        .with_context(|| format!("Failed to create {}", file_name))?;
-
-    let app = init_oam_app(component_name);
-    file.write_all(app.to_yaml_string().as_bytes())
-        .with_context(|| format!("Failed to write {}", file_name))?;
-
-    Ok(())
+    fs::write_str(
+        DEFAULT_CONFIG_FILE_NAME,
+        init_oam_app(component_name).to_yaml_string(),
+    )
+    .context("Failed to init component application manifest")
 }
 
 pub async fn pre_component_build(config: Config) -> anyhow::Result<()> {
@@ -251,7 +246,7 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
                     output_wasm.log_color_highlight(),
                 ),
             );
-            copy(&input_wasm, &output_wasm)?;
+            fs::copy(&input_wasm, &output_wasm)?;
         } else {
             log_action(
                 "Composing",
@@ -370,13 +365,8 @@ fn delete_path(context: &str, path: &Path) -> anyhow::Result<()> {
             "Deleting",
             format!("{} {}", context, path.log_color_highlight()),
         );
-        if path.is_dir() {
-            std::fs::remove_dir_all(path)
-                .with_context(|| anyhow!("Failed to delete directory {}", path.display()))?;
-        } else {
-            std::fs::remove_file(path)
-                .with_context(|| anyhow!("Failed to delete file {}", path.display()))?;
-        }
+        fs::remove(path)
+            .with_context(|| anyhow!("Failed to delete {}, path: {}", context, path.display()))?;
     }
     Ok(())
 }
@@ -422,7 +412,7 @@ fn collect_sources(mode: &ApplicationSourceMode) -> ValidatedResult<Vec<PathBuf>
     let sources = match mode {
         ApplicationSourceMode::Automatic => match find_main_source() {
             Some(source) => {
-                std::env::set_current_dir(source.parent().expect("Failed ot get config parent"))
+                std::env::set_current_dir(PathExtra::new(&source).parent().unwrap())
                     .expect("Failed to set current dir for config parent");
 
                 match include_glob_patter_from_yaml_file(source.as_path()) {
@@ -563,7 +553,7 @@ where
             }
         };
 
-        if let Ok(metadata) = std::fs::metadata(path) {
+        if let Ok(metadata) = fs::metadata(path) {
             if metadata.is_dir() {
                 WalkDir::new(path)
                     .into_iter()
@@ -687,19 +677,19 @@ fn create_base_output_wit(
                         .find(|package| package.main.name == package_name)
                         .ok_or_else(|| anyhow!("Package dependency {} not found", package_name))?;
                     for source in dep.source_map.source_files() {
-                        let parent = source.parent().ok_or_else(|| {
-                            anyhow!(
-                                "Failed to get dependency source parent for {}",
-                                source.display()
-                            )
-                        })?;
-                        // TODO: un-unwrap
+                        let source = PathExtra::new(source);
+                        let parent = PathExtra::new(
+                            source
+                                .parent()
+                                .context("Failed to get dependency source parent")?,
+                        );
+
                         let target = ctx
                             .application
                             .component_base_output_wit(component_name)
                             .join(naming::wit::DEPS_DIR)
-                            .join(parent.file_name().unwrap())
-                            .join(source.file_name().unwrap());
+                            .join(parent.file_name_to_string()?)
+                            .join(source.file_name_to_string()?);
 
                         log_action(
                             "Copying",
@@ -709,7 +699,7 @@ fn create_base_output_wit(
                                 target.log_color_highlight()
                             ),
                         );
-                        copy(source, target)?;
+                        fs::copy(source, target)?;
                     }
                 }
             }
@@ -747,7 +737,7 @@ fn create_base_output_wit(
                             target.log_color_highlight()
                         ),
                     );
-                    copy(source, target)?;
+                    fs::copy(source, target)?;
                 }
             }
         }
@@ -809,14 +799,10 @@ fn update_cargo_toml(
     ctx: &ApplicationContext,
     component_name: &ComponentName,
 ) -> anyhow::Result<()> {
-    let component_input_wit = ctx.application.component_input_wit(component_name);
-    let component_input_wit_parent = component_input_wit.parent().ok_or_else(|| {
-        anyhow!(
-            "Failed to get parent for component {} input wit dir: {}",
-            component_name.log_color_highlight(),
-            component_input_wit.log_color_highlight()
-        )
-    })?;
+    let component_input_wit = PathExtra::new(ctx.application.component_input_wit(component_name));
+    let component_input_wit_parent = component_input_wit
+        .parent()
+        .with_context(|| anyhow!("Failed to get parent for component {}", component_name))?;
     let cargo_toml = component_input_wit_parent.join("Cargo.toml");
 
     if cargo_toml.exists() {
@@ -888,7 +874,7 @@ async fn build_stub(
             "Creating",
             format!("stub temp build dir {}", target_root.log_color_highlight()),
         );
-        std::fs::create_dir_all(&target_root)?;
+        fs::create_dir_all(&target_root)?;
 
         commands::generate::build(&stub_def, &stub_wasm, &stub_wit).await?;
 
@@ -968,7 +954,7 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
                 to.log_color_highlight()
             ),
         );
-        copy(from, to)?;
+        fs::copy(from, to)?;
     }
 
     Ok(())

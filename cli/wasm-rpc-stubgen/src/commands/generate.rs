@@ -15,7 +15,7 @@
 use crate::cargo::generate_cargo_toml;
 use crate::commands::log::{log_action, LogColorize, LogIndent};
 use crate::compilation::compile;
-use crate::fs::copy;
+use crate::fs;
 use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
@@ -24,7 +24,6 @@ use crate::wit_resolve::ResolvedWitDir;
 use anyhow::{anyhow, Context};
 use fs_extra::dir::CopyOptions;
 use heck::ToSnakeCase;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn generate(stub_def: &StubDefinition) -> anyhow::Result<()> {
@@ -41,8 +40,7 @@ pub async fn build(
 ) -> anyhow::Result<()> {
     let wasm_path = generate_and_build_stub(stub_def).await?;
 
-    copy(wasm_path, dest_wasm).context("Failed to copy the WASM file to the destination")?;
-
+    fs::copy(wasm_path, dest_wasm).context("Failed to copy the WASM file to the destination")?;
     fs::create_dir_all(dest_wit_root).context("Failed to create the target WIT root directory")?;
 
     fs_extra::dir::copy(

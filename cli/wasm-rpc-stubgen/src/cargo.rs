@@ -13,10 +13,10 @@
 // limitations under the License.
 
 use crate::commands::log::{log_action, log_warn_action, LogColorize};
-use crate::fs::get_file_name;
-use crate::naming;
+use crate::fs::PathExtra;
 use crate::stub::StubDefinition;
 use crate::wit_resolve::ResolvedWitDir;
+use crate::{fs, naming};
 use anyhow::{anyhow, Context};
 use cargo_toml::{
     Dependency, DependencyDetail, DepsSet, Edition, Inheritable, LtoSetting, Manifest, Profile,
@@ -25,7 +25,6 @@ use cargo_toml::{
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 use toml::Value;
 use wit_parser::PackageName;
@@ -111,9 +110,9 @@ pub fn generate_cargo_toml(def: &StubDefinition) -> anyhow::Result<()> {
             wit_dependencies.insert(
                 format_package_name_without_version(&dep_package.name),
                 WitDependency {
-                    path: naming::wit::package_wit_dep_dir_from_package_dir_name(&get_file_name(
-                        &dep_package_sources.dir,
-                    )?)
+                    path: naming::wit::package_wit_dep_dir_from_package_dir_name(
+                        &PathExtra::new(&dep_package_sources.dir).file_name_to_string()?,
+                    )
                     .to_string_lossy()
                     .to_string(),
                 },
@@ -312,6 +311,8 @@ pub fn regenerate_cargo_package_component(
     wit_path: &Path,
     world: Option<String>,
 ) -> anyhow::Result<()> {
+    let cargo_toml_path = PathExtra::new(cargo_toml_path);
+
     log_warn_action(
         "Regenerating",
         format!(
@@ -320,12 +321,7 @@ pub fn regenerate_cargo_package_component(
         ),
     );
 
-    let project_root = cargo_toml_path.parent().ok_or_else(|| {
-        anyhow!(
-            "Failed to get parent directory for {}",
-            cargo_toml_path.display()
-        )
-    })?;
+    let project_root = cargo_toml_path.parent()?;
     let relative_wit_path = wit_path.strip_prefix(project_root).with_context(|| {
         anyhow!(
             "Failed to create relative path for wit dir: {}, project root: {}",
@@ -334,7 +330,7 @@ pub fn regenerate_cargo_package_component(
         )
     })?;
 
-    let raw_manifest = fs::read_to_string(cargo_toml_path).with_context(|| {
+    let raw_manifest = fs::read_to_string(&cargo_toml_path).with_context(|| {
         anyhow!(
             "Failed to read Cargo.toml at {}",
             cargo_toml_path.log_color_highlight()

@@ -1,4 +1,4 @@
-use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
+use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan, PathExtra};
 use crate::model::wasm_rpc::ComponentName;
 use crate::validation::ValidatedResult;
 use colored::{ColoredString, Colorize};
@@ -222,6 +222,12 @@ impl<'a> LogColorize for &'a Path {
 }
 
 impl LogColorize for PathBuf {
+    fn as_str(&self) -> impl Colorize {
+        ColoredString::from(self.display().to_string())
+    }
+}
+
+impl<P: AsRef<Path>> LogColorize for PathExtra<P> {
     fn as_str(&self) -> impl Colorize {
         ColoredString::from(self.display().to_string())
     }
