@@ -1,9 +1,10 @@
 use crate::commands::log::{log_action, LogColorize, LogIndent};
-use crate::validation::{ValidatedResult, ValidationBuilder};
-use crate::model::wasm_rpc::Application;
+use crate::model::wasm_rpc::{Application, ComponentName};
 use crate::naming;
+use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{anyhow, bail, Context, Error};
 use indexmap::IndexMap;
+use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use wit_parser::{
@@ -158,19 +159,19 @@ pub struct ResolvedWitComponent {
     pub main_package_name: PackageName,
     pub unresolved_input_package_group: UnresolvedPackageGroup,
     pub resolved_output_wit_dir: Option<ResolvedWitDir>,
-    pub app_component_deps: HashSet<String>,
+    pub app_component_deps: HashSet<ComponentName>,
     pub input_referenced_package_deps: HashSet<PackageName>,
     pub input_contained_package_deps: HashSet<PackageName>,
-    pub input_component_deps: BTreeSet<String>, // NOTE: BTree for making dep sorting deterministic
-    pub output_component_deps: Option<HashSet<String>>,
+    pub input_component_deps: BTreeSet<ComponentName>, // NOTE: BTree for making dep sorting deterministic
+    pub output_component_deps: Option<HashSet<ComponentName>>,
 }
 
 pub struct ResolvedWitApplication {
-    pub components: BTreeMap<String, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
-    pub package_to_component: HashMap<PackageName, String>,
-    pub stub_package_to_component: HashMap<PackageName, String>,
-    pub interface_package_to_component: HashMap<PackageName, String>,
-    pub component_order: Vec<String>,
+    pub components: BTreeMap<ComponentName, ResolvedWitComponent>, // NOTE: BTree for making dep sorting deterministic
+    pub package_to_component: HashMap<PackageName, ComponentName>,
+    pub stub_package_to_component: HashMap<PackageName, ComponentName>,
+    pub interface_package_to_component: HashMap<PackageName, ComponentName>,
+    pub component_order: Vec<ComponentName>,
 }
 
 impl ResolvedWitApplication {
@@ -199,7 +200,7 @@ impl ResolvedWitApplication {
 
     fn add_resolved_component(
         &mut self,
-        component_name: String,
+        component_name: ComponentName,
         resolved_component: ResolvedWitComponent,
     ) {
         self.package_to_component.insert(
@@ -222,7 +223,7 @@ impl ResolvedWitApplication {
         let _indent = LogIndent::new();
 
         for (component_name, component) in &app.wasm_components_by_name {
-            validation.push_context("component name", component_name.clone());
+            validation.push_context("component name", component_name.to_string());
 
             let input_wit = app.component_input_wit(component_name);
             let output_wit = app.component_output_wit(component_name);
@@ -305,8 +306,12 @@ impl ResolvedWitApplication {
     }
 
     fn collect_component_deps(&mut self) {
-        fn component_deps<'a, I: IntoIterator<Item = &'a PackageName>, O: FromIterator<String>>(
-            known_package_deps: &HashMap<PackageName, String>,
+        fn component_deps<
+            'a,
+            I: IntoIterator<Item = &'a PackageName>,
+            O: FromIterator<ComponentName>,
+        >(
+            known_package_deps: &HashMap<PackageName, ComponentName>,
             dep_package_names: I,
         ) -> O {
             dep_package_names
@@ -315,7 +320,10 @@ impl ResolvedWitApplication {
                 .collect()
         }
 
-        let mut deps = HashMap::<String, (BTreeSet<String>, Option<HashSet<String>>)>::new();
+        let mut deps = HashMap::<
+            ComponentName,
+            (BTreeSet<ComponentName>, Option<HashSet<ComponentName>>),
+        >::new();
         for (component_name, component) in &self.components {
             deps.insert(
                 component_name.clone(),
@@ -344,23 +352,23 @@ impl ResolvedWitApplication {
         let mut component_order = Vec::with_capacity(self.components.len());
 
         // TODO: use some id instead of Strings?
-        let mut visited = HashSet::<String>::new();
-        let mut visiting = HashSet::<String>::new();
+        let mut visited = HashSet::<ComponentName>::new();
+        let mut visiting = HashSet::<ComponentName>::new();
 
         fn visit(
             resolved_app: &ResolvedWitApplication,
-            visited: &mut HashSet<String>,
-            visiting: &mut HashSet<String>,
-            component_order: &mut Vec<String>,
-            component_name: &str,
-            input_deps: &BTreeSet<String>,
+            visited: &mut HashSet<ComponentName>,
+            visiting: &mut HashSet<ComponentName>,
+            component_order: &mut Vec<ComponentName>,
+            component_name: &ComponentName,
+            input_deps: &BTreeSet<ComponentName>,
         ) -> bool {
             if visited.contains(component_name) {
                 true
             } else if visiting.contains(component_name) {
                 false
             } else {
-                visiting.insert(component_name.to_string());
+                visiting.insert(component_name.clone());
 
                 for dep_component_name in input_deps {
                     if !visit(
@@ -380,9 +388,9 @@ impl ResolvedWitApplication {
                 }
 
                 visiting.remove(component_name);
-                visited.insert(component_name.to_string());
+                visited.insert(component_name.clone());
 
-                component_order.push(component_name.to_string());
+                component_order.push(component_name.clone());
 
                 true
             }
@@ -400,10 +408,10 @@ impl ResolvedWitApplication {
                 )
             {
                 // TODO: better error message, collect full path
-                component_order.push(component_name.to_string());
+                component_order.push(component_name.clone());
                 validation.add_error(format!(
                     "Found component cycle: {}",
-                    component_order.join(", ")
+                    component_order.iter().map(|s| s.as_str()).join(", ")
                 ));
                 break;
             }
@@ -412,7 +420,7 @@ impl ResolvedWitApplication {
         self.component_order = component_order;
     }
 
-    fn component(&self, component_name: &str) -> Result<&ResolvedWitComponent, Error> {
+    fn component(&self, component_name: &ComponentName) -> Result<&ResolvedWitComponent, Error> {
         self.components
             .get(component_name)
             .ok_or_else(|| anyhow!("Component not found: {}", component_name))
@@ -422,7 +430,7 @@ impl ResolvedWitApplication {
     //       component interface packages, as those are added from stubs
     pub fn missing_generic_input_package_deps(
         &self,
-        component_name: &str,
+        component_name: &ComponentName,
     ) -> anyhow::Result<Vec<PackageName>> {
         let component = self.component(component_name)?;
         Ok(component
@@ -442,8 +450,8 @@ impl ResolvedWitApplication {
 
     pub fn component_interface_package_deps(
         &self,
-        component_name: &str,
-    ) -> anyhow::Result<Vec<(PackageName, String)>> {
+        component_name: &ComponentName,
+    ) -> anyhow::Result<Vec<(PackageName, ComponentName)>> {
         let component = self.component(component_name)?;
         Ok(component
             .input_referenced_package_deps
@@ -462,7 +470,7 @@ impl ResolvedWitApplication {
     // NOTE: this does not mean that the dependencies themselves are up-to-date, rather
     //       only checks if there are difference in set of dependencies specified in the
     //       application model vs in wit dependencies
-    pub fn is_dep_graph_up_to_date(&self, component_name: &str) -> anyhow::Result<bool> {
+    pub fn is_dep_graph_up_to_date(&self, component_name: &ComponentName) -> anyhow::Result<bool> {
         let component = self.component(component_name)?;
         Ok(match &component.output_component_deps {
             Some(output_deps) => &component.app_component_deps == output_deps,
@@ -474,8 +482,8 @@ impl ResolvedWitApplication {
     //       only checks if it is present as wit package dependency
     pub fn has_as_wit_dep(
         &self,
-        component_name: &str,
-        dep_component_name: &str,
+        component_name: &ComponentName,
+        dep_component_name: &ComponentName,
     ) -> anyhow::Result<bool> {
         let component = self.component(component_name)?;
 

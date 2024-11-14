@@ -1,10 +1,9 @@
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan};
+use crate::model::wasm_rpc::ComponentName;
 use crate::validation::ValidatedResult;
 use colored::{ColoredString, Colorize};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
-use std::thread::JoinHandle;
-
 // TODO: move package under lib
 
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
@@ -185,60 +184,51 @@ pub fn log_action_plan(action: &OverwriteSafeAction, plan: OverwriteSafeActionPl
 }
 
 pub trait LogColorize {
-    type Colorize: Colorize;
-
-    fn to_colorize(&self) -> Self::Colorize;
+    fn as_str(&self) -> impl Colorize;
 
     fn log_color_action(&self) -> ColoredString {
-        self.to_colorize().green()
+        self.as_str().green()
     }
 
     fn log_color_warn(&self) -> ColoredString {
-        self.to_colorize().yellow()
+        self.as_str().yellow()
     }
 
     fn log_color_error(&self) -> ColoredString {
-        self.to_colorize().red()
+        self.as_str().red()
     }
 
     fn log_color_highlight(&self) -> ColoredString {
-        self.to_colorize().bold()
+        self.as_str().bold()
     }
 }
 
 impl<'a> LogColorize for &'a str {
-    type Colorize = &'a str;
-
-    fn to_colorize(&self) -> Self::Colorize {
-        self
+    fn as_str(&self) -> impl Colorize {
+        self.as_ref()
     }
 }
 
 impl LogColorize for String {
-    type Colorize = ColoredString;
-
-    fn to_colorize(&self) -> Self::Colorize {
-        self.clone().into()
-    }
-}
-
-impl LogColorize for PathBuf {
-    type Colorize = ColoredString;
-
-    fn to_colorize(&self) -> Self::Colorize {
-        self.display().to_string().into()
+    fn as_str(&self) -> impl Colorize {
+        self.as_str()
     }
 }
 
 impl<'a> LogColorize for &'a Path {
-    type Colorize = ColoredString;
-
-    fn to_colorize(&self) -> Self::Colorize {
-        self.display().to_string().into()
+    fn as_str(&self) -> impl Colorize {
+        ColoredString::from(self.display().to_string())
     }
 }
 
-pub struct ChildProcessLogger {
-    _out_handle: JoinHandle<()>,
-    _err_handle: JoinHandle<()>,
+impl LogColorize for PathBuf {
+    fn as_str(&self) -> impl Colorize {
+        ColoredString::from(self.display().to_string())
+    }
+}
+
+impl LogColorize for ComponentName {
+    fn as_str(&self) -> impl Colorize {
+        self.as_str()
+    }
 }
