@@ -16,6 +16,7 @@ pub mod cargo;
 pub mod commands;
 pub mod compilation;
 pub mod fs;
+pub mod log;
 pub mod make;
 pub mod model;
 pub mod naming;

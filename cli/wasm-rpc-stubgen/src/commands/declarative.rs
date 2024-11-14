@@ -1,10 +1,10 @@
 use crate::cargo::regenerate_cargo_package_component;
-use crate::commands::log::{
+use crate::fs;
+use crate::fs::PathExtra;
+use crate::log::{
     log_action, log_skipping_up_to_date, log_validated_action_result, log_warn_action, LogColorize,
     LogIndent,
 };
-use crate::fs;
-use crate::fs::PathExtra;
 use crate::model::oam;
 use crate::model::wasm_rpc::{
     include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName,

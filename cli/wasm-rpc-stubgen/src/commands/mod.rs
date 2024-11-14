@@ -23,6 +23,3 @@ pub mod composition;
 
 /// Declarative subcommands
 pub mod declarative;
-
-/// Logging
-pub mod log;

@@ -13,9 +13,9 @@
 // limitations under the License.
 
 use crate::cargo::generate_cargo_toml;
-use crate::commands::log::{log_action, LogColorize, LogIndent};
 use crate::compilation::compile;
 use crate::fs;
+use crate::log::{log_action, LogColorize, LogIndent};
 use crate::naming;
 use crate::rust::generate_stub_source;
 use crate::stub::StubDefinition;
