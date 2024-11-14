@@ -1,5 +1,6 @@
+use std::sync::Arc;
 use openidconnect::{AuthorizationCode, ClientId, ClientSecret};
-use crate::gateway_identity_provider::{OpenIdClient, SecurityScheme};
+use crate::gateway_identity_provider::{GolemIdentityProviderMetadata, IdentityProvider, OpenIdClient, SecurityScheme};
 use crate::gateway_middleware::Cors;
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
@@ -64,14 +65,15 @@ impl From<StaticBinding> for golem_api_grpc::proto::golem::apidefinition::Static
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AuthCallBack {
     security_scheme_name: SecurityScheme,
-    provider_metadata:
+    provider_metadata: GolemIdentityProviderMetadata
 }
 
-impl PartialEq for AuthCallBack {
-    fn eq(&self, other: &Self) -> bool {
-        self.client_id == other.client_id
-    }
+#[derive(Debug, Clone)]
+pub struct AuthCallBackWithClient {
+    pub security_scheme_name: SecurityScheme,
+    pub provider_metadata: GolemIdentityProviderMetadata,
+    pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>
 }

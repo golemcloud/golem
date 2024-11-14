@@ -27,7 +27,7 @@ pub struct SessionId(String);
 pub struct DataKey(String);
 
 #[derive(Clone)]
-pub struct DataValue(String);
+pub struct DataValue(pub String);
 
 // Should be used only for testing
 

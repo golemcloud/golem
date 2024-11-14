@@ -154,6 +154,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
             Err(err_response) => err_response,
         }
     }
+
 }
 
 #[async_trait]

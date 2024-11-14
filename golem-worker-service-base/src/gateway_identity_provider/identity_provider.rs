@@ -1,7 +1,8 @@
 use async_trait::async_trait;
-use openidconnect::core::{CoreAuthDisplay, CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdTokenClaims, CoreJsonWebKey, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType, CoreTokenResponse};
-use openidconnect::{AuthorizationCode, CsrfToken, EmptyAdditionalProviderMetadata, IssuerUrl, Nonce, ProviderMetadata, Scope};
+use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreTokenResponse};
+use openidconnect::{AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
 use url::Url;
+use crate::gateway_identity_provider::GolemIdentityProviderMetadata;
 use crate::gateway_identity_provider::open_id_client::OpenIdClient;
 use crate::gateway_identity_provider::security_scheme::SecurityScheme;
 
@@ -22,8 +23,6 @@ pub trait IdentityProvider {
     fn get_claims(&self, client: &OpenIdClient, core_token_response: CoreTokenResponse, nonce: &Nonce) -> Result<CoreIdTokenClaims, IdentityProviderError>;
     fn get_authorization_url(&self, client: &OpenIdClient, scopes: Vec<Scope>) -> Result<AuthorizationUrl, IdentityProviderError>;
 }
-
-pub type GolemIdentityProviderMetadata = ProviderMetadata<EmptyAdditionalProviderMetadata, CoreAuthDisplay, CoreClientAuthMethod, CoreClaimName, CoreClaimType, CoreGrantType, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJsonWebKey, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType>;
 
 pub struct AuthorizationUrl {
     pub url: Url,

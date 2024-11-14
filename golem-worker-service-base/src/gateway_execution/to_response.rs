@@ -1,32 +1,41 @@
-use std::collections::HashMap;
-use async_trait::async_trait;
 use crate::api::WorkerApiBaseError;
-use crate::gateway_binding::{AuthCallBack, GatewayRequestDetails, RibInputTypeMismatch};
+use crate::gateway_binding::{
+    AuthCallBack, AuthCallBackWithClient, GatewayRequestDetails, RibInputTypeMismatch,
+};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
 };
+use crate::gateway_execution::gateway_session::{
+    DataKey, DataValue, GatewaySessionStore, SessionId,
+};
+use crate::gateway_identity_provider::{IdentityProvider, IdentityProviderError};
 use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares};
 use crate::gateway_rib_interpreter::EvaluationError;
+use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
-use openidconnect::AuthorizationCode;
-use poem::{Body, Response};
+use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
+use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
-use crate::gateway_execution::gateway_session::{DataKey, DataValue, GatewaySessionStore, SessionId};
 
 #[async_trait]
 pub trait ToResponse<A> {
-    async fn to_response(self, request_details: &GatewayRequestDetails, middlewares: &Middlewares, session_store: GatewaySessionStore) -> A;
+    fn to_response(
+        self,
+        request_details: &GatewayRequestDetails,
+        middlewares: &Middlewares,
+        session_store: GatewaySessionStore,
+    ) -> A;
 }
 
 #[async_trait]
 impl ToResponse<poem::Response> for FileServerBindingResult {
-    async fn to_response(
+    fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
-        _session_store: GatewaySessionStore
+        _session_store: GatewaySessionStore,
     ) -> poem::Response {
         let mut response = match self {
             Ok(data) => Body::from_bytes_stream(data.data)
@@ -56,7 +65,7 @@ impl ToResponse<poem::Response> for CorsPreflight {
         self,
         _request_details: &GatewayRequestDetails,
         _middlewares: &Middlewares,
-        _session_store: GatewaySessionStore
+        _session_store: GatewaySessionStore,
     ) -> poem::Response {
         let mut response = poem::Response::builder().status(StatusCode::OK).finish();
 
@@ -103,7 +112,7 @@ impl ToResponse<poem::Response> for RibResult {
         self,
         request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
-        _session_store: GatewaySessionStore
+        _session_store: GatewaySessionStore,
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
             Ok(intermediate_response) => {
@@ -125,7 +134,7 @@ impl ToResponse<poem::Response> for RibInputTypeMismatch {
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
-        _session_store: GatewaySessionStore
+        _session_store: GatewaySessionStore,
     ) -> poem::Response {
         let mut response = poem::Response::builder()
             .status(StatusCode::BAD_REQUEST)
@@ -142,7 +151,7 @@ impl ToResponse<poem::Response> for EvaluationError {
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
-        _session_store: GatewaySessionStore
+        _session_store: GatewaySessionStore,
     ) -> poem::Response {
         let mut response = poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -160,7 +169,7 @@ impl ToResponse<poem::Response> for String {
         self,
         _request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
-        _session_store: GatewaySessionStore
+        _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         let mut response = poem::Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -171,74 +180,88 @@ impl ToResponse<poem::Response> for String {
     }
 }
 
+impl ToResponse<poem::Response> for IdentityProviderError {
+    async fn to_response(
+        self,
+        _request_details: &GatewayRequestDetails,
+        _middlewares: &Middlewares,
+        _session_store: &GatewaySessionStore,
+    ) -> poem::Response {
+        match self {
+            IdentityProviderError::FailedToDiscoverProviderMetadata(e) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(format!("Error {}", e).to_string())),
+            IdentityProviderError::FailedToExchangeCodeForTokens(e) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(format!("Error {}", e).to_string())),
+            IdentityProviderError::IdTokenVerificationError(e) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(format!("Error {}", e).to_string())),
+            IdentityProviderError::ClientInitError(error) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(format!("Error {}", error).to_string())),
+            IdentityProviderError::InvalidIssuerUrl(error) => poem::Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from_string(format!("Error {}", error).to_string())),
+        }
+    }
+}
+
+impl<T, E> ToResponse<poem::Response> for Result<T, E> {
+    fn to_response(
+        self,
+        _request_details: &GatewayRequestDetails,
+        _middlewares: &Middlewares,
+        _session_store: GatewaySessionStore,
+    ) -> poem::Response {
+        match self {
+            Ok(_) => poem::Response::builder()
+                .status(StatusCode::OK)
+                .body(Body::empty()),
+            Err(_) => poem::Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .body(Body::from_string("Unauthorised auth call back".to_string())),
+        }
+    }
+}
+
+struct AuthorisationError(String);
+impl ToResponse<poem::Response> for AuthorisationError {
+    async fn to_response(
+        self,
+        _request_details: &GatewayRequestDetails,
+        _middlewares: &Middlewares,
+        _session_store: &GatewaySessionStore,
+    ) -> poem::Response {
+        poem::Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(Body::from_string(self.0))
+    }
+}
+
 #[async_trait]
-impl ToResponse<poem::Response> for AuthCallBack {
+impl ToResponse<poem::Response> for AuthCallBackWithClient {
     async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
         middlewares: &Middlewares,
-        session_store: GatewaySessionStore
+        session_store: GatewaySessionStore,
     ) -> poem::Response {
         match request_details {
             GatewayRequestDetails::Http(http_request_details) => {
-                let query_params = &http_request_details.request_path_values;
-                let code = query_params.get("code");
+                let response_result =
+                    internal::handle_auth(self, request_details, http_request_details, middlewares, session_store);
 
-                match code {
-                    None => Response::builder()
-                        .status(StatusCode::UNAUTHORIZED)
-                        .body(Body::from_string("Unauthorised auth call back".to_string())),
-                    Some(code) => {
-                        let code = code.as_str();
-                        match code {
-                            None => Response::builder()
-                                .status(StatusCode::UNAUTHORIZED)
-                                .body(Body::from_string("Unauthorised auth call back".to_string())),
-                            Some(code) => {
-                                let authorisation_code =
-                                    AuthorizationCode::new(code.to_string());
-                                let state = query_params.get("state");
-
-                                if let Some(state) = state {
-                                    let state = state.as_str();
-                                    if let Some(state) = state {
-                                        let obtained_state = state.to_string();
-                                        let existing_state =
-                                            session_store.0.get_params(SessionId("state".to_string())).await;
-
-                                        match existing_state {
-                                            Ok(Some(session_params)) => {
-                                                let original_uri = session_params.get(&DataKey("original_uri".to_string())).unwrap();
-                                                let client =
-
-                                            }
-                                            Err(_) => {
-                                                return Response::builder()
-                                                    .status(StatusCode::UNAUTHORIZED)
-                                                    .body(Body::from_string("Unauthorised auth call back".to_string()))
-                                            }
-                                        }
-
-
-
-                                    }
-                                }
-
-                                Response::builder()
-                                    .status(StatusCode::OK)
-                                    .body(Body::from_string("Authorised auth call back".to_string()))
-                            }
-                        }
-                        let authorisation_code = AuthorizationCode::new(code.as_str().);
-                    }
-                }
+                response_result.await.unwrap_or_else(|response| response)
             }
         }
     }
 }
 
 mod internal {
-    use crate::gateway_binding::GatewayRequestDetails;
+    use crate::gateway_binding::{
+        AuthCallBackWithClient, GatewayRequestDetails, HttpRequestDetails,
+    };
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
@@ -248,12 +271,131 @@ mod internal {
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
     use crate::path::Path;
 
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-
+    use crate::gateway_execution::gateway_session::{
+        DataKey, DataValue, GatewaySessionStore, SessionId,
+    };
+    use crate::gateway_execution::to_response::{AuthorisationError, ToResponse};
     use crate::gateway_middleware::Middlewares;
     use crate::headers::ResolvedResponseHeaders;
+    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
+
+    pub(crate) async fn handle_auth(
+        auth_client: AuthCallBackWithClient,
+        request_details: &GatewayRequestDetails,
+        http_request_details: &HttpRequestDetails,
+        middlewares: &Middlewares,
+        session_store: GatewaySessionStore,
+    ) -> Result<poem::Response, poem::Response> {
+        let query_params = &http_request_details.request_path_values;
+        let code = query_params
+            .get("code")
+            .ok_or(AuthorisationError(
+                "Unauthorised auth call back".to_string(),
+            ))
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+
+        let code = code
+            .as_str()
+            .ok_or(AuthorisationError(
+                "Unauthorised auth call back".to_string(),
+            ))
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+
+        let authorisation_code = AuthorizationCode::new(code.to_string());
+        let state_value = query_params
+            .get("state")
+            .ok_or(AuthorisationError(
+                "Unauthorised auth call back".to_string(),
+            ))
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+
+        let state_str = state_value
+            .as_str()
+            .ok_or(AuthorisationError(
+                "Unauthorised auth call back".to_string(),
+            ))
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+
+        let obtained_state = state_str.to_string();
+        let session_params = session_store
+            .0
+            .get_params(SessionId(obtained_state.to_string()))
+            .await
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?
+            .ok_or(AuthorisationError(
+                "Unauthorised auth call back".to_string(),
+            ))
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+
+        let nonce = session_params
+            .get(&DataKey("nonce".to_string()))
+            .ok_or(AuthorisationError(
+                "Unauthorised auth call back".to_string(),
+            ))
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?
+            .0
+            .clone();
+
+        let open_id_client = auth_client
+            .identity_provider
+            .get_client(
+                &auth_client.provider_metadata.clone(),
+                &auth_client.security_scheme_name.clone(),
+            )
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+
+        let token_response = auth_client
+            .identity_provider
+            .exchange_code_for_tokens(&open_id_client, &authorisation_code)
+            .await
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+
+        let claims = auth_client
+            .identity_provider
+            .get_claims(
+                &open_id_client,
+                token_response.clone(),
+                &Nonce::new(nonce.clone()),
+            )
+            .map_err(|err| err.to_response(request_details, middlewares, &session_store))?;
+
+        let _ = session_store
+            .0
+            .insert(
+                SessionId(obtained_state.to_string()),
+                DataKey("claims".to_string()),
+                DataValue(claims.to_string()), // TODO;
+            )
+            .await;
+
+        let access_token = token_response.access_token().secret().clone();
+
+        // access token in session store
+        let _ = session_store
+            .0
+            .insert(
+                SessionId(obtained_state.to_string()),
+                DataKey("access_token".to_string()),
+                DataValue(access_token),
+            )
+            .await;
+
+        let mut response = poem::Response::builder()
+            .status(StatusCode::FOUND)
+            .header("Location", "/")
+            .header(
+                "Authorization",
+                format!("Bearer {}", &token_response.access_token().secret().clone()),
+            )
+            .body(());
+
+        middlewares.transform_http_response(&mut response);
+
+        Ok(response)
+    }
 
     #[derive(Debug)]
     pub(crate) struct IntermediateHttpResponse {
