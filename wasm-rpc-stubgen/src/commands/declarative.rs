@@ -18,7 +18,7 @@ use crate::wit_generate::{
 };
 use crate::wit_resolve::{ResolvedWitApplication, WitDepsResolver};
 use crate::{commands, naming, WasmRpcOverride};
-use anyhow::{anyhow, Context, Error};
+use anyhow::{anyhow, bail, Context, Error};
 use colored::Colorize;
 use glob::glob;
 use itertools::Itertools;
@@ -77,11 +77,17 @@ impl ApplicationContext {
     fn common_wit_deps(&self) -> anyhow::Result<&WitDepsResolver> {
         match self
             .common_wit_deps
-            .get_or_init(|| WitDepsResolver::new(self.application.wit_deps()))
+            .get_or_init(|| {
+                let sources = self.application.wit_deps();
+                if sources.is_empty() {
+                    bail!("No common witDeps were defined in the application manifest")
+                }
+                WitDepsResolver::new(sources)
+            })
             .as_ref()
         {
             Ok(wit_deps) => Ok(wit_deps),
-            Err(err) => Err(anyhow!("Failed to init wit dependency resolver? {}", err)),
+            Err(err) => Err(anyhow!("Failed to init wit dependency resolver: {}", err)),
         }
     }
 

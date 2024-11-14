@@ -555,10 +555,14 @@ impl WitDepsResolver {
         bail!(
             "Package {} not found, sources searched: {}",
             package_name,
-            self.sources
-                .iter()
-                .map(|s| s.display().to_string())
-                .join(", ")
+            if self.sources.is_empty() {
+                "no sources were provided".to_string()
+            } else {
+                self.sources
+                    .iter()
+                    .map(|s| s.display().to_string())
+                    .join(", ")
+            }
         )
     }
 
@@ -611,6 +615,7 @@ impl WitDepsResolver {
                     target_deps_dir.log_color_highlight(),
                 ),
             );
+            let _indent = LogIndent::new();
 
             for source in self.package_sources(&package_name)? {
                 let source = PathExtra::new(source);
