@@ -66,7 +66,7 @@ async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
     let source_wit_root = source_dir.path().canonicalize().unwrap();
 
     fs_extra::dir::copy(
-        test_data_path().join(name),
+        test_data_path().join("wit").join(name),
         &source_wit_root,
         &CopyOptions::new().content_only(true),
     )
@@ -91,7 +91,7 @@ async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
 
 fn init_caller(name: &str) -> TempDir {
     let temp_dir = TempDir::new().unwrap();
-    let source = test_data_path().join(name);
+    let source = test_data_path().join("wit").join(name);
 
     fs_extra::dir::copy(
         source,
