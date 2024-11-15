@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use openidconnect::{AuthorizationCode, IssuerUrl, Nonce, Scope};
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
+use crate::gateway_middleware::SecuritySchemeWithProviderMetadata;
 use crate::gateway_security::default_provider::DefaultIdentityProvider;
 use crate::gateway_security::identity_provider::{AuthorizationUrl, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError};
 use crate::gateway_security::open_id_client::OpenIdClient;
@@ -20,8 +21,8 @@ impl IdentityProvider for GoogleIdentityProvider {
         self.default_provider.exchange_code_for_tokens(client, code).await
     }
 
-    fn get_client(&self, provider_metadata: &GolemIdentityProviderMetadata, security_scheme: &SecurityScheme) -> Result<OpenIdClient, IdentityProviderError> {
-        self.default_provider.get_client(provider_metadata, security_scheme)
+    fn get_client(&self, security_scheme: &SecuritySchemeWithProviderMetadata) -> Result<OpenIdClient, IdentityProviderError> {
+        self.default_provider.get_client(security_scheme)
     }
 
     fn get_claims(&self, client: &OpenIdClient, core_token_response: CoreTokenResponse, nonce: &Nonce) -> Result<CoreIdTokenClaims, IdentityProviderError> {

@@ -9,7 +9,7 @@ use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
 use crate::gateway_security::{IdentityProvider};
-use crate::gateway_middleware::{Cors as CorsPreflight, AuthCallBackDetailsInternal};
+use crate::gateway_middleware::{Cors as CorsPreflight, SecuritySchemeInternal};
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
@@ -128,7 +128,7 @@ impl Display for AuthorisationError {
 
 
 #[async_trait]
-impl ToResponse<poem::Response> for AuthCallBackDetailsInternal {
+impl ToResponse<poem::Response> for SecuritySchemeInternal {
     async fn to_response(
         self,
         request_details: &GatewayRequestDetails,
@@ -160,7 +160,7 @@ mod internal {
         DataKey, DataValue, GatewaySessionStore, SessionId,
     };
     use crate::gateway_execution::to_response::{AuthorisationError, ToResponse};
-    use crate::gateway_middleware::{Middlewares, AuthCallBackDetailsInternal};
+    use crate::gateway_middleware::{Middlewares, SecuritySchemeInternal};
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
@@ -170,7 +170,7 @@ mod internal {
 
     // TODO; Move out of here
     pub(crate) async fn handle_auth(
-        auth_client: AuthCallBackDetailsInternal,
+        auth_client: SecuritySchemeInternal,
         http_request_details: &HttpRequestDetails,
         session_store: GatewaySessionStore,
     ) -> Result<poem::Response, poem::Response> {

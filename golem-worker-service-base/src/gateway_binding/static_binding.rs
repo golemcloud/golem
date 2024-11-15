@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use openidconnect::{AuthorizationCode, ClientId, ClientSecret};
 use crate::gateway_security::{GolemIdentityProviderMetadata, IdentityProvider, OpenIdClient, SecurityScheme};
-use crate::gateway_middleware::{AuthCallBackDetails, Cors};
+use crate::gateway_middleware::{SecuritySchemeWithProviderMetadata, Cors};
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
 // as it may introduce unnecessary latency
@@ -12,7 +12,7 @@ use crate::gateway_middleware::{AuthCallBackDetails, Cors};
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticBinding {
     HttpCorsPreflight(Cors),
-    HttpAuthCallBack(AuthCallBackDetails),
+    HttpAuthCallBack(SecuritySchemeWithProviderMetadata),
 }
 
 impl StaticBinding {

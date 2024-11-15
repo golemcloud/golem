@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
 use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType, CoreTokenResponse};
+use crate::gateway_middleware::SecuritySchemeWithProviderMetadata;
 use crate::gateway_security::identity_provider::{AuthorizationUrl, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError};
 use crate::gateway_security::open_id_client::OpenIdClient;
 use crate::gateway_security::security_scheme::SecurityScheme;
@@ -35,10 +36,10 @@ impl IdentityProvider for DefaultIdentityProvider {
     }
 
     // To be called before getting the authorisation URL
-    fn get_client(&self, provider_metadata: &GolemIdentityProviderMetadata, security_scheme: &SecurityScheme) -> Result<OpenIdClient, IdentityProviderError> {
+    fn get_client(&self, security_scheme: &SecuritySchemeWithProviderMetadata) -> Result<OpenIdClient, IdentityProviderError> {
         let client = CoreClient::from_provider_metadata(
-            provider_metadata.clone(),
-            security_scheme.client_id().clone(),
+            security_scheme.provider_metadata.clone(),
+            security_scheme.security_scheme.client_id().clone(),
             Some(security_scheme.client_secret().clone())
         ).set_redirect_uri(security_scheme.redirect_url().clone());
 

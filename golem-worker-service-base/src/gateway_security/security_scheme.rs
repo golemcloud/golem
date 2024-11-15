@@ -11,6 +11,16 @@ pub struct SecurityScheme {
     issuer_url: IssuerUrl
 }
 
+impl SecurityScheme {
+    pub fn issue_url(&self) -> IssuerUrl {
+        self.issuer_url.clone()
+    }
+
+    pub fn scheme_identifier(&self) -> SchemeIdentifier {
+        self.scheme_identifier.clone()
+    }
+}
+
 impl PartialEq for SecurityScheme {
     fn eq(&self, other: &Self) -> bool {
         self.provider_name == other.provider_name
