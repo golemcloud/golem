@@ -60,7 +60,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         resolved_worker_binding: &ResolvedWorkerBinding<N>,
     ) -> Result<(RibInput, RibInput), R>
     where
-        RibInputTypeMismatch: ToResponse<R>,
+        RibInputTypeMismatch: ToResponseFailure<R>,
     {
         let request_rib_input = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
@@ -105,8 +105,8 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     ) -> R
     where
         RibResult: ToResponse<R>,
-        EvaluationError: ToResponse<R>,
-        RibInputTypeMismatch: ToResponse<R>,
+        EvaluationError: ToResponseFailure<R>,
+        RibInputTypeMismatch: ToResponseFailure<R>,
     {
         match self
             .resolve_rib_inputs(&binding.request_details, resolved_binding)
@@ -117,7 +117,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                     .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
                     .await
                 {
-                    Ok(result) => result.to_response(&binding.request_details, session_store),
+                    Ok(result) => result.to_response(&binding.request_details, session_store).await,
                     Err(err) => err.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
                 }
             }
@@ -134,8 +134,8 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     where
         FileServerBindingResult: ToResponse<R>,
         RibResult: ToResponse<R>,
-        EvaluationError: ToResponse<R>,
-        RibInputTypeMismatch: ToResponse<R>,
+        EvaluationError: ToResponseFailure<R>,
+        RibInputTypeMismatch: ToResponseFailure<R>,
     {
         match self
             .resolve_rib_inputs(&binding.request_details, resolved_binding)
@@ -192,8 +192,8 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
     ) -> R
     where
         RibResult: ToResponse<R>,
-        EvaluationError: ToResponse<R>,
-        RibInputTypeMismatch: ToResponse<R>,
+        EvaluationError: ToResponseFailure<R>,
+        RibInputTypeMismatch: ToResponseFailure<R>,
         FileServerBindingResult: ToResponse<R>, // FileServerBindingResult can be a direct response in a file server endpoint
         CorsPreflight: ToResponse<R>, // Cors can be a direct response in a cors preflight endpoint
         SecuritySchemeInternal: ToResponse<R>, // SecuritySchemeInternal can be a direct response in auth callback endpoint

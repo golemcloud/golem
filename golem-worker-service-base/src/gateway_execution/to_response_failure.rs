@@ -9,13 +9,13 @@ pub trait ToResponseFailure<A> {
 }
 
 // Good to create only safe-display instances for these errors
-impl<E: Display> ToResponseFailure<poem::Response> for E {
-    fn to_failed_response(&self, status_code: &StatusCode) -> poem::Response {
-        poem::Response::builder()
-            .status(status_code.clone())
-            .body(Body::from_string(format!("Error {}", self).to_string()))
-    }
-}
+// impl<E: Display> ToResponseFailure<poem::Response> for E {
+//     fn to_failed_response(&self, status_code: &StatusCode) -> poem::Response {
+//         poem::Response::builder()
+//             .status(status_code.clone())
+//             .body(Body::from_string(format!("Error {}", self).to_string()))
+//     }
+// }
 
 impl<E: SafeDisplay> ToResponseFailure<poem::Response> for E {
     fn to_failed_response(&self, status_code: &StatusCode) -> poem::Response {

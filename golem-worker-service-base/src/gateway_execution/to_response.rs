@@ -59,7 +59,7 @@ impl ToResponse<poem::Response> for CorsPreflight {
     async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
-        _session_store: GatewaySessionStore,
+        _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         let mut response = poem::Response::builder().status(StatusCode::OK).finish();
 

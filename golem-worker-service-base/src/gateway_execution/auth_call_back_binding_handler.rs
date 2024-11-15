@@ -148,7 +148,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .insert(
                 SessionId(obtained_state.to_string()),
                 DataKey("claims".to_string()),
-                DataValue(serde_json::to_value(claims).unwrap()), // TODO;
+                DataValue(serde_json::to_value(claims.clone()).unwrap()), // TODO;
             )
             .await
             .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 use golem_common::model::{ComponentId, IdempotencyKey};
-
+use golem_common::SafeDisplay;
 use rib::{RibByteCode, RibFunctionInvoke, RibInput, RibResult};
 
 use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor};
@@ -35,6 +35,13 @@ impl Display for EvaluationError {
         write!(f, "{}", self.0)
     }
 }
+
+impl SafeDisplay for EvaluationError {
+    fn to_safe_string(&self) -> String {
+        self.0.clone()
+    }
+}
+
 
 impl From<String> for EvaluationError {
     fn from(err: String) -> Self {

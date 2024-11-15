@@ -94,6 +94,7 @@ impl Middleware {
     pub fn get_cors(&self) -> Option<Cors> {
         match self {
             Middleware::Http(HttpMiddleware::AddCorsHeaders(cors)) => Some(cors.clone()),
+            _ => None,
         }
     }
 

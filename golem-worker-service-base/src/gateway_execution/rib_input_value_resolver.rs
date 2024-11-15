@@ -5,6 +5,7 @@ use rib::{RibInput, RibInputTypeInfo};
 use std::collections::HashMap;
 use std::fmt::Display;
 use tracing::warn;
+use golem_common::SafeDisplay;
 
 // `RibInputValueResolver` is responsible
 // for extracting `RibInputValue` from any input, given the requirements as `RibInputTypeInfo`.
@@ -23,6 +24,12 @@ pub struct RibInputTypeMismatch(pub String);
 impl Display for RibInputTypeMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Rib input type mismatch: {}", self.0)
+    }
+}
+
+impl SafeDisplay for RibInputTypeMismatch {
+    fn to_safe_string(&self) -> String {
+        self.0.clone()
     }
 }
 

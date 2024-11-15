@@ -33,10 +33,10 @@ impl GatewaySessionStore {
 }
 
 #[derive(Hash, PartialEq, Eq, Clone)]
-pub struct SessionId(String);
+pub struct SessionId(pub String);
 
 #[derive(Hash, PartialEq, Eq, Clone)]
-pub struct DataKey(String);
+pub struct DataKey(pub String);
 
 impl DataKey {
     pub fn nonce() -> DataKey {
