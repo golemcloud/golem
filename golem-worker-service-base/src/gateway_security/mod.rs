@@ -3,6 +3,7 @@ pub(crate) use identity_provider_metadata::*;
 pub(crate) use open_id_client::*;
 pub(crate) use security_scheme::*;
 pub(crate) use security_scheme_internal::*;
+pub(crate) use security_scheme_metadata::*;
 
 mod default_provider;
 mod google;

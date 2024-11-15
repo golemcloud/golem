@@ -30,11 +30,12 @@ impl Middlewares {
             .collect()
     }
 
-    pub fn transform_response
-
-    pub fn transform_http_response(&self, response: &mut poem::Response) {
+    pub fn process_middleware_out<Out>(&self, response: &mut Out) where Cors: MiddlewareOut<Out> {
         for middleware in self.http_middlewares() {
-            middleware.transform_response(response);
+            match middleware {
+                HttpMiddleware::AddCorsHeaders(cors) => cors.process(response),
+                HttpMiddleware::AuthenticateRequest(_) => {}
+            }
         }
     }
 
@@ -67,7 +68,7 @@ impl Middleware {
 
     pub fn get_cors(&self) -> Option<Cors> {
         match self {
-            Middleware::Http(HttpMiddleware::Cors(cors)) => Some(cors.clone()),
+            Middleware::Http(HttpMiddleware::AddCorsHeaders(cors)) => Some(cors.clone()),
         }
     }
 

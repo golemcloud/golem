@@ -1,6 +1,6 @@
 use crate::gateway_middleware::SecuritySchemeWithProviderMetadata;
 use crate::gateway_security::open_id_client::OpenIdClient;
-use crate::gateway_security::GolemIdentityProviderMetadata;
+use crate::gateway_security::{GolemIdentityProviderMetadata, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
 use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};

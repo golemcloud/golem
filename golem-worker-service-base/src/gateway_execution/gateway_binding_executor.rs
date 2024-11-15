@@ -186,10 +186,10 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
     {
         match &binding.resolved_binding {
             ResolvedBinding::Worker(resolved_binding) => {
-                let response = self.handle_worker_binding::<R>(binding, resolved_binding, &session)
+                let mut response = self.handle_worker_binding::<R>(binding, resolved_binding, &session)
                     .await;
-
-                resolved_binding.middlewares.transform_http_response(response)
+                resolved_binding.middlewares.process(response);
+                response
             }
             ResolvedBinding::FileServer(resolved_binding) => {
                 self.handle_file_server_binding::<R>(binding, resolved_binding)
@@ -207,5 +207,7 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
                     .to_response(&binding.request_details, &Middlewares::default())
             }
         }
+
+
     }
 }

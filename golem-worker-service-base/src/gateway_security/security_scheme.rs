@@ -19,6 +19,10 @@ impl SecurityScheme {
     pub fn scheme_identifier(&self) -> SchemeIdentifier {
         self.scheme_identifier.clone()
     }
+
+    pub fn scopes(&self) -> Vec<Scope> {
+        self.scopes.clone()
+    }
 }
 
 impl PartialEq for SecurityScheme {

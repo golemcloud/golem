@@ -105,7 +105,7 @@ mod internal {
                 );
                 Err(error)
             } else {
-                worker_binding.add_middleware(Middleware::Http(HttpMiddleware::Cors(cors)));
+                worker_binding.add_middleware(Middleware::Http(HttpMiddleware::AddCorsHeaders(cors)));
                 Ok(())
             }
         } else {
@@ -172,7 +172,7 @@ mod tests {
             worker_name: None,
             idempotency_key: None,
             response_mapping: ResponseMapping(Expr::literal("")),
-            middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::Cors(
+            middleware: Some(Middlewares(vec![Middleware::Http(HttpMiddleware::AddCorsHeaders(
                 cors(),
             ))])),
         };
