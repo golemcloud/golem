@@ -13,10 +13,7 @@
 // limitations under the License.
 
 use crate::model::{Component, ComponentConstraints, ComponentPluginInstallationTarget};
-use crate::repo::plugin_installation::{
-    ComponentPluginInstallationRow, DbPluginInstallationRepoQueries, PluginInstallationRecord,
-    PluginInstallationRepoQueries,
-};
+use crate::repo::plugin_installation::ComponentPluginInstallationRow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use conditional_trait_gen::{trait_gen, when};
@@ -29,6 +26,9 @@ use golem_common::model::{
     InitialComponentFileKey,
 };
 use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::repo::plugin_installation::{
+    DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
+};
 use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, Row};
 use std::fmt::{Debug, Formatter};

@@ -3829,6 +3829,7 @@ dependencies = [
  "bincode",
  "bytes 1.8.0",
  "chrono",
+ "conditional-trait-gen",
  "dashmap",
  "futures",
  "golem-api-grpc",

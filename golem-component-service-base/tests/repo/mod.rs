@@ -29,10 +29,9 @@ use golem_component_service_base::repo::component::{ComponentRecord, ComponentRe
 use golem_component_service_base::repo::plugin::{
     DefaultPluginOwnerRow, DefaultPluginScopeRow, PluginRepo,
 };
-use golem_component_service_base::repo::plugin_installation::{
-    ComponentPluginInstallationRow, PluginInstallationRecord,
-};
+use golem_component_service_base::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use poem_openapi::NewType;
 use poem_openapi::__private::serde_json;
