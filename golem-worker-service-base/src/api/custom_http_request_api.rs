@@ -58,7 +58,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
         Self {
             api_definition_lookup_service,
             gateway_binding_executor,
-            gateway_session_store
+            gateway_session_store,
         }
     }
 
@@ -126,7 +126,10 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             Ok(resolved_gateway_binding) => {
                 let response: poem::Response = self
                     .gateway_binding_executor
-                    .execute_binding(&resolved_gateway_binding, self.gateway_session_store.clone())
+                    .execute_binding(
+                        &resolved_gateway_binding,
+                        self.gateway_session_store.clone(),
+                    )
                     .await;
 
                 response

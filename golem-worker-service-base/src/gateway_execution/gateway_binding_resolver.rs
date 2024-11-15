@@ -2,16 +2,16 @@ use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
 use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
 use crate::gateway_execution::router::RouterPattern;
+use crate::gateway_middleware::{Cors, Middlewares};
 use crate::gateway_request::http_request::{router, InputHttpRequest};
+use crate::gateway_security::OpenIdClient;
 use async_trait::async_trait;
 use golem_common::model::IdempotencyKey;
 use golem_service_base::model::VersionedComponentId;
+use openidconnect::{CsrfToken, Nonce};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
-use openidconnect::{CsrfToken, Nonce};
-use crate::gateway_security::OpenIdClient;
-use crate::gateway_middleware::{Cors, Middlewares};
 
 // Every type of request (example: InputHttpRequest (which corresponds to a Route)) can have an instance of this resolver,
 // which will resolve the gateway binding equired for that request.

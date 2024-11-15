@@ -1,20 +1,27 @@
-use crate::gateway_binding::{OpenIdProviderDetails, GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding, RibInputTypeMismatch, RibInputValueResolver, StaticBinding};
+use crate::gateway_binding::{
+    GatewayRequestDetails, OpenIdProviderDetails, ResolvedBinding, ResolvedGatewayBinding,
+    ResolvedWorkerBinding, RibInputTypeMismatch, RibInputValueResolver, StaticBinding,
+};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
+use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore};
 use crate::gateway_execution::to_response::ToResponse;
 use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares};
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use async_trait::async_trait;
+use openidconnect::ClientId;
 use rib::{RibInput, RibResult};
 use std::fmt::Debug;
 use std::sync::Arc;
-use openidconnect::ClientId;
-use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore};
 
 #[async_trait]
 pub trait GatewayBindingExecutor<Namespace, Response> {
-    async fn execute_binding(&self, binding: &ResolvedGatewayBinding<Namespace>, session: GatewaySessionStore) -> Response
+    async fn execute_binding(
+        &self,
+        binding: &ResolvedGatewayBinding<Namespace>,
+        session: GatewaySessionStore,
+    ) -> Response
     where
         RibResult: ToResponse<Response>,
         EvaluationError: ToResponse<Response>,
@@ -50,16 +57,12 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     {
         let request_rib_input = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-            .map_err(|err| {
-                err.to_response(request_details, &session_store)
-            })?;
+            .map_err(|err| err.to_response(request_details, &session_store))?;
 
         let worker_rib_input = resolved_worker_binding
             .worker_detail
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-            .map_err(|err| {
-                err.to_response(request_details, &session_store)
-            })?;
+            .map_err(|err| err.to_response(request_details, &session_store))?;
 
         Ok((request_rib_input, worker_rib_input))
     }
@@ -91,7 +94,6 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         &self,
         binding: &ResolvedGatewayBinding<N>,
         resolved_binding: &ResolvedWorkerBinding<N>,
-
     ) -> R
     where
         RibResult: ToResponse<R>,
@@ -156,14 +158,17 @@ impl<N> DefaultGatewayBindingExecutor<N> {
             Err(err_response) => err_response,
         }
     }
-
 }
 
 #[async_trait]
 impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
     for DefaultGatewayBindingExecutor<N>
 {
-    async fn execute_binding(&self, binding: &ResolvedGatewayBinding<N>, session: GatewaySessionStore) -> R
+    async fn execute_binding(
+        &self,
+        binding: &ResolvedGatewayBinding<N>,
+        session: GatewaySessionStore,
+    ) -> R
     where
         RibResult: ToResponse<R>,
         EvaluationError: ToResponse<R>,
@@ -191,7 +196,6 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
                 auth_call_back
                     .clone()
                     .to_response(&binding.request_details, &Middlewares::default())
-
             }
         }
     }

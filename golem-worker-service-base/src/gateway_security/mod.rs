@@ -1,12 +1,12 @@
+pub(crate) use identity_provider::*;
+pub(crate) use identity_provider_metadata::*;
 pub(crate) use open_id_client::*;
 pub(crate) use security_scheme::*;
-pub(crate) use identity_provider_metadata::*;
-pub(crate) use identity_provider::*;
+mod default_provider;
 mod google;
 mod identity_provider;
-mod security_scheme;
-mod default_provider;
-mod open_id_client;
 mod identity_provider_metadata;
-pub mod security_scheme_metadata;
+mod open_id_client;
+mod security_scheme;
 mod security_scheme_internal;
+pub mod security_scheme_metadata;

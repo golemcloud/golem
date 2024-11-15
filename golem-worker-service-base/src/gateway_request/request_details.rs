@@ -124,7 +124,6 @@ impl RequestPathValues {
             .map(|field| &field.value)
     }
 
-
     fn from(path_variables: &HashMap<VarInfo, &str>) -> RequestPathValues {
         let record_fields: Vec<JsonKeyValue> = path_variables
             .iter()

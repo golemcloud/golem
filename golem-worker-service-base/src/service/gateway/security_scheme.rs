@@ -6,17 +6,17 @@ use async_trait::async_trait;
 use golem_common::cache::{Cache, SimpleCache};
 use std::sync::Arc;
 
+// The controller phase can decide whether the developer of API deployment
+// has create-security role in Namespace, before calling this service
 #[async_trait]
-pub trait SecuritySchemeService<AuthCtx, Namespace> {
+pub trait SecuritySchemeService<Namespace> {
     async fn get(
         &self,
         security_scheme_name: &SchemeIdentifier,
-        auth_ctx: AuthCtx,
         namespace: Namespace,
     ) -> Option<SecuritySchemeWithProviderMetadata>;
     async fn create(
         &self,
-        auth_ctx: AuthCtx,
         namespace: Namespace,
         security_scheme: &SecurityScheme,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
@@ -50,14 +50,13 @@ impl<Namespace> DefaultSecuritySchemeService<Namespace> {
     }
 }
 
-impl<Namespace, AuthCtx> SecuritySchemeService<Namespace, AuthCtx>
+impl<Namespace, AuthCtx> SecuritySchemeService<Namespace>
     for DefaultSecuritySchemeService<Namespace>
 {
     async fn get(
         &self,
         security_scheme_identifier: &SchemeIdentifier,
         namespace: Namespace,
-        _auth_ctx: AuthCtx,
     ) -> Option<SecuritySchemeWithProviderMetadata> {
         // TODO; get_or_insert_simple with Repo
         self.cache
@@ -67,7 +66,6 @@ impl<Namespace, AuthCtx> SecuritySchemeService<Namespace, AuthCtx>
     async fn create(
         &self,
         namespace: Namespace,
-        auth_ctx: AuthCtx,
         security_scheme: &SecurityScheme,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
         let provider_metadata = self

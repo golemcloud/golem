@@ -1,5 +1,3 @@
-use std::fmt::Display;
-use std::os::macos::raw::stat;
 use crate::api::WorkerApiBaseError;
 use crate::gateway_binding::{GatewayRequestDetails, RibInputTypeMismatch};
 use crate::gateway_execution::file_server_binding_handler::{
@@ -8,8 +6,9 @@ use crate::gateway_execution::file_server_binding_handler::{
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
-use crate::gateway_security::{IdentityProvider};
+use crate::gateway_execution::to_response_failure::ToResponseFailure;
 use crate::gateway_middleware::{Cors as CorsPreflight, SecuritySchemeInternal};
+use crate::gateway_security::IdentityProvider;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
@@ -17,7 +16,8 @@ use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
-use crate::gateway_execution::to_response_failure::ToResponseFailure;
+use std::fmt::Display;
+use std::os::macos::raw::stat;
 
 #[async_trait]
 pub trait ToResponse<A> {
@@ -110,9 +110,7 @@ impl ToResponse<poem::Response> for RibResult {
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
-            Ok(intermediate_response) => {
-                intermediate_response.to_http_response(request_details)
-            }
+            Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
             Err(e) => e.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
@@ -125,7 +123,6 @@ impl Display for AuthorisationError {
         write!(f, "Authorisation Error: {}", self.0)
     }
 }
-
 
 #[async_trait]
 impl ToResponse<poem::Response> for SecuritySchemeInternal {
@@ -160,13 +157,13 @@ mod internal {
         DataKey, DataValue, GatewaySessionStore, SessionId,
     };
     use crate::gateway_execution::to_response::{AuthorisationError, ToResponse};
+    use crate::gateway_execution::to_response_failure::ToResponseFailure;
     use crate::gateway_middleware::{Middlewares, SecuritySchemeInternal};
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
-    use crate::gateway_execution::to_response_failure::ToResponseFailure;
 
     // TODO; Move out of here
     pub(crate) async fn handle_auth(
@@ -211,16 +208,12 @@ mod internal {
             .get_params(SessionId(obtained_state.to_string()))
             .await
             .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?
-            .ok_or(AuthorisationError(
-                "Failed authorisation state".to_string(),
-            ))
+            .ok_or(AuthorisationError("Failed authorisation state".to_string()))
             .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
 
         let nonce = session_params
             .get(&DataKey("nonce".to_string()))
-            .ok_or(AuthorisationError(
-                "Failed auth verification".to_string(),
-            ))
+            .ok_or(AuthorisationError("Failed auth verification".to_string()))
             .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?
             .0
             .clone();
@@ -373,12 +366,12 @@ mod test {
     use test_r::test;
 
     use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
+    use crate::gateway_execution::gateway_session::GatewaySessionStore;
     use crate::gateway_execution::to_response::ToResponse;
     use crate::gateway_middleware::Middlewares;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;
-    use crate::gateway_execution::gateway_session::GatewaySessionStore;
 
     fn create_record(values: Vec<(String, TypeAnnotatedValue)>) -> TypeAnnotatedValue {
         let mut name_type_pairs = vec![];
@@ -424,11 +417,13 @@ mod test {
 
         let evaluation_result: RibResult = RibResult::Val(record);
 
-        let http_response: poem::Response = evaluation_result.to_response(
-            &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
-            &Middlewares::default(),
-            &GatewaySessionStore::in_memory(),
-        ).await;
+        let http_response: poem::Response = evaluation_result
+            .to_response(
+                &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
+                &Middlewares::default(),
+                &GatewaySessionStore::in_memory(),
+            )
+            .await;
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();

@@ -1,9 +1,9 @@
-use std::fmt::Display;
+use crate::gateway_binding::RibInputTypeMismatch;
+use crate::gateway_execution::to_response::ToResponse;
 use async_trait::async_trait;
 use http::StatusCode;
-use poem::{Body};
-use crate::gateway_binding::{RibInputTypeMismatch};
-use crate::gateway_execution::to_response::ToResponse;
+use poem::Body;
+use std::fmt::Display;
 
 pub trait ToResponseFailure<A> {
     fn to_failed_response(&self, status_code: &StatusCode) -> A;
@@ -17,5 +17,3 @@ impl<E: Display> ToResponseFailure<poem::Response> for E {
             .body(Body::from_string(format!("Error {}", self).to_string()))
     }
 }
-
-

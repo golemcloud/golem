@@ -8,7 +8,7 @@ pub struct SecurityScheme {
     client_secret: ClientSecret, // secret type macros and therefore already redacted
     redirect_url: RedirectUrl,
     scopes: Vec<Scope>,
-    issuer_url: IssuerUrl
+    issuer_url: IssuerUrl,
 }
 
 impl SecurityScheme {
@@ -56,7 +56,6 @@ impl SecurityScheme {
         &self.client_secret
     }
 
-
     fn from(
         provider_name: ProviderName,
         scheme_id: &str,
@@ -64,13 +63,10 @@ impl SecurityScheme {
         client_secret: &str,
         redirect_uri: &str,
         scope: Vec<&str>,
-        issuer_url: IssuerUrl
+        issuer_url: IssuerUrl,
     ) -> Result<SecurityScheme, String> {
-        let redirect_url = RedirectUrl::new(redirect_uri.to_string()).map_err(
-            |err| {
-                format!("Invalid redirect URL, {} {}", redirect_uri, err)
-            }
-        )?;
+        let redirect_url = RedirectUrl::new(redirect_uri.to_string())
+            .map_err(|err| format!("Invalid redirect URL, {} {}", redirect_uri, err))?;
 
         let scheme_identifier = if !scheme_id.is_empty() {
             SchemeIdentifier(scheme_id.to_string())
@@ -90,8 +86,7 @@ impl SecurityScheme {
             return Err("Invalid client secret".to_string());
         };
 
-        let scopes =
-            scope.iter().map(|s| Scope::new(s.to_string())).collect();
+        let scopes = scope.iter().map(|s| Scope::new(s.to_string())).collect();
 
         Ok(SecurityScheme {
             provider_name,
@@ -100,14 +95,21 @@ impl SecurityScheme {
             client_secret,
             redirect_url,
             scopes,
-            issuer_url
+            issuer_url,
         })
     }
 
-    pub fn google_default_scope(scheme_id: &str, client_id: &str, client_secret: &str, redirect_uri: &str, scope: &str) -> Result<SecurityScheme, String> {
-        let issuer_url =  IssuerUrl::new("https://accounts.google.com".to_string()).map_err(|err| {
-            format!("Invalid Issuer URL for Google, {}", err) // shouldn't happen
-        })?;
+    pub fn google_default_scope(
+        scheme_id: &str,
+        client_id: &str,
+        client_secret: &str,
+        redirect_uri: &str,
+        scope: &str,
+    ) -> Result<SecurityScheme, String> {
+        let issuer_url =
+            IssuerUrl::new("https://accounts.google.com".to_string()).map_err(|err| {
+                format!("Invalid Issuer URL for Google, {}", err) // shouldn't happen
+            })?;
 
         Self::from(
             ProviderName("google".to_string()),
@@ -116,7 +118,7 @@ impl SecurityScheme {
             client_secret,
             redirect_uri,
             vec!["openid", "email", "profile"],
-            issuer_url
+            issuer_url,
         )
     }
 }

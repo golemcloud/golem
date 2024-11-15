@@ -1,8 +1,8 @@
 use crate::gateway_middleware::http::cors::Cors;
+use crate::gateway_middleware::SecuritySchemeWithProviderMetadata;
 use http::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
 };
-use crate::gateway_middleware::SecuritySchemeWithProviderMetadata;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {

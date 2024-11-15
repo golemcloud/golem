@@ -5,15 +5,13 @@ pub mod api_definition_lookup;
 pub mod file_server_binding_handler;
 pub mod gateway_binding_executor;
 pub mod gateway_binding_resolver;
+pub mod gateway_session;
 mod gateway_worker_request_executor;
 mod http_content_type_mapper;
 pub mod rib_input_value_resolver;
 pub mod router;
 pub mod to_response;
-pub mod gateway_session;
 pub mod to_response_failure;
-pub mod gateway_security_scheme_store;
-
 pub use gateway_worker_request_executor::*;
 
 #[derive(PartialEq, Debug, Clone)]
