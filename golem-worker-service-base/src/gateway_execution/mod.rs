@@ -12,6 +12,8 @@ pub mod rib_input_value_resolver;
 pub mod router;
 pub mod to_response;
 pub mod to_response_failure;
+pub mod auth_call_back_binding_handler;
+
 pub use gateway_worker_request_executor::*;
 
 #[derive(PartialEq, Debug, Clone)]

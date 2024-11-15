@@ -7,13 +7,14 @@ use crate::gateway_execution::file_server_binding_handler::{
 };
 use crate::gateway_execution::gateway_session::{GatewaySession, GatewaySessionStore};
 use crate::gateway_execution::to_response::ToResponse;
-use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares};
+use crate::gateway_middleware::{Cors as CorsPreflight, Middlewares, SecuritySchemeWithProviderMetadata};
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use async_trait::async_trait;
 use openidconnect::ClientId;
 use rib::{RibInput, RibResult};
 use std::fmt::Debug;
 use std::sync::Arc;
+use crate::gateway_security::SecuritySchemeInternal;
 
 #[async_trait]
 pub trait GatewayBindingExecutor<Namespace, Response> {
@@ -175,7 +176,7 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
         RibInputTypeMismatch: ToResponse<R>,
         FileServerBindingResult: ToResponse<R>,
         CorsPreflight: ToResponse<R>,
-        OpenIdProviderDetails: ToResponse<R>,
+        SecuritySchemeInternal: ToResponse<R>,
     {
         match &binding.resolved_binding {
             ResolvedBinding::Worker(resolved_binding) => {

@@ -7,7 +7,7 @@ use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
 use crate::gateway_execution::to_response_failure::ToResponseFailure;
-use crate::gateway_middleware::{Cors as CorsPreflight, SecuritySchemeInternal};
+use crate::gateway_middleware::{Cors as CorsPreflight};
 use crate::gateway_security::IdentityProvider;
 use async_trait::async_trait;
 use http::header::*;
@@ -158,12 +158,13 @@ mod internal {
     };
     use crate::gateway_execution::to_response::{AuthorisationError, ToResponse};
     use crate::gateway_execution::to_response_failure::ToResponseFailure;
-    use crate::gateway_middleware::{Middlewares, SecuritySchemeInternal};
+    use crate::gateway_middleware::{Middlewares};
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
+    use crate::gateway_security::SecuritySchemeInternal;
 
     // TODO; Move out of here
     pub(crate) async fn handle_auth(
