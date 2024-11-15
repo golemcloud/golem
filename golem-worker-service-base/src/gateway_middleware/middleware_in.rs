@@ -1,4 +1,5 @@
 use http::StatusCode;
+use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{DataKey, DataValue, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::HttpAuthorizer;
 use crate::gateway_request::http_request::InputHttpRequest;
@@ -17,7 +18,7 @@ pub struct PassThroughMetadata {
 }
 
 impl MiddlewareIn<InputHttpRequest, MiddlewareResult<poem::Response>> for HttpAuthorizer {
-    async fn process_input(&self, input: InputHttpRequest, session_store: GatewaySessionStore) -> Result<MiddlewareResult<poem::Response>, String> {
+    async fn process_input(&self, input: HttpRequestDetails, session_store: GatewaySessionStore) -> Result<MiddlewareResult<poem::Response>, String> {
 
         // validate first if the input has headers consisting of auth bearer token
         // or cookie that acess_token, and then based on it fetch things from session store
@@ -27,7 +28,7 @@ impl MiddlewareIn<InputHttpRequest, MiddlewareResult<poem::Response>> for HttpAu
         //     // do nothing for now
         // }
 
-        let redirect_uri = input.uri();
+        let redirect_uri = input.get_uri();
 
         let identity_provider =
             &self.scheme_internal.identity_provider;

@@ -174,6 +174,7 @@ impl<Namespace: Clone + Send + Sync + 'static>
         };
 
         let http_request_details = GatewayRequestDetails::from(
+            &self.input_path,
             &zipped_path_params,
             &request_query_variables,
             query_params,

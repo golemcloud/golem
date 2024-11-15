@@ -3,6 +3,7 @@ use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use crate::gateway_request::http_request::ApiInputPath;
 
 #[derive(Clone, Debug)]
 pub enum GatewayRequestDetails {
@@ -10,6 +11,7 @@ pub enum GatewayRequestDetails {
 }
 impl GatewayRequestDetails {
     pub fn from(
+        api_input_path: &ApiInputPath,
         path_params: &HashMap<VarInfo, &str>,
         query_variable_values: &HashMap<String, String>,
         query_variable_names: &[QueryInfo],
@@ -17,6 +19,7 @@ impl GatewayRequestDetails {
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
         Ok(Self::Http(HttpRequestDetails::from_input_http_request(
+            api_input_path,
             path_params,
             query_variable_values,
             query_variable_names,
@@ -66,6 +69,7 @@ impl GatewayRequestDetails {
 
 #[derive(Clone, Debug)]
 pub struct HttpRequestDetails {
+    pub request_uri: ApiInputPath,
     pub request_path_values: RequestPathValues,
     pub request_body: RequestBody,
     pub request_query_values: RequestQueryValues,
@@ -75,11 +79,78 @@ pub struct HttpRequestDetails {
 impl HttpRequestDetails {
     pub fn empty() -> HttpRequestDetails {
         HttpRequestDetails {
+            request_uri: ApiInputPath {
+                base_path: "".to_string(),
+                query_path: None,
+            },
             request_path_values: RequestPathValues(JsonKeyValues::default()),
             request_body: RequestBody(Value::Null),
             request_query_values: RequestQueryValues(JsonKeyValues::default()),
             request_header_values: RequestHeaderValues(JsonKeyValues::default()),
         }
+    }
+
+    pub fn get_uri(&self) -> String {
+        self.request_uri.to_string()
+    }
+
+    pub fn get_access_token_from_cookie(&self) -> Option<String> {
+        self.request_header_values
+            .0
+            .fields
+            .iter()
+            .find(|field| field.name == "Cookie" || field.name == "cookie")
+            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+            .and_then(|cookie_header| {
+                let parts: Vec<&str> = cookie_header.split(';').collect();
+                let access_token_part = parts.iter().find(|part| part.contains("access_token"));
+                access_token_part.and_then(|part| {
+                    let token_parts: Vec<&str> = part.split('=').collect();
+                    if token_parts.len() == 2 {
+                        Some(token_parts[1].to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+    }
+
+    pub fn get_id_token_from_cookie(&self) -> Option<String> {
+        self.request_header_values
+            .0
+            .fields
+            .iter()
+            .find(|field| field.name == "Cookie")
+            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+            .and_then(|cookie_header| {
+                let parts: Vec<&str> = cookie_header.split(';').collect();
+                let id_token_part = parts.iter().find(|part| part.contains("id_token"));
+                id_token_part.and_then(|part| {
+                    let token_parts: Vec<&str> = part.split('=').collect();
+                    if token_parts.len() == 2 {
+                        Some(token_parts[1].to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+    }
+
+    pub fn get_auth_bearer_token(&self) -> Option<String> {
+        self.request_header_values
+            .0
+            .fields
+            .iter()
+            .find(|field| field.name == "Authorization")
+            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+            .and_then(|auth_header| {
+                let parts: Vec<&str> = auth_header.split_whitespace().collect();
+                if parts.len() == 2 && parts[0] == "Bearer" {
+                    Some(parts[1].to_string())
+                } else {
+                    None
+                }
+            })
     }
 
     pub fn get_accept_content_type_header(&self) -> Option<String> {
@@ -92,18 +163,21 @@ impl HttpRequestDetails {
     }
 
     fn from_input_http_request(
+        api_input_path: &ApiInputPath,
         path_params: &HashMap<VarInfo, &str>,
         query_variable_values: &HashMap<String, String>,
         query_variable_names: &[QueryInfo],
         request_body: &Value,
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
+
         let request_body = RequestBody::from(request_body)?;
         let path_params = RequestPathValues::from(path_params);
         let query_params = RequestQueryValues::from(query_variable_values, query_variable_names)?;
         let header_params = RequestHeaderValues::from(headers)?;
 
         Ok(Self {
+            request_uri: api_input_path.clone(),
             request_path_values: path_params,
             request_body,
             request_query_values: query_params,

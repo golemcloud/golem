@@ -28,7 +28,7 @@ impl InputHttpRequest {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ApiInputPath {
     pub base_path: String,
     pub query_path: Option<String>,
