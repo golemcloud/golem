@@ -668,9 +668,12 @@ fn create_base_output_wit(
 ) -> Result<bool, Error> {
     let component_input_wit = ctx.application.component_input_wit(component_name);
     let component_base_output_wit = ctx.application.component_base_output_wit(component_name);
+    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&component_base_output_wit);
 
     if is_up_to_date(
-        ctx.config.skip_up_to_date_checks || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
+        ctx.config.skip_up_to_date_checks
+            || !gen_dir_done_marker.is_done()
+            || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
         || [component_input_wit.clone()],
         || [component_base_output_wit.clone()],
     ) {
@@ -741,6 +744,8 @@ fn create_base_output_wit(
             extract_main_interface_as_wit_dep(&component_base_output_wit)?;
         }
 
+        gen_dir_done_marker.mark_as_done()?;
+
         Ok(true)
     }
 }
@@ -751,9 +756,12 @@ fn create_output_wit(
 ) -> Result<bool, Error> {
     let component_base_output_wit = ctx.application.component_base_output_wit(component_name);
     let component_output_wit = ctx.application.component_output_wit(component_name);
+    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&component_output_wit);
 
     if is_up_to_date(
-        ctx.config.skip_up_to_date_checks || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
+        ctx.config.skip_up_to_date_checks
+            || !gen_dir_done_marker.is_done()
+            || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
         || [component_base_output_wit.clone()],
         || [component_output_wit.clone()],
     ) {
@@ -775,6 +783,8 @@ fn create_output_wit(
         delete_path("output wit directory", &component_output_wit)?;
         copy_wit_sources(&component_base_output_wit, &component_output_wit)?;
         add_stub_deps(ctx, component_name)?;
+
+        gen_dir_done_marker.mark_as_done()?;
 
         Ok(true)
     }
@@ -833,9 +843,10 @@ async fn build_stub(
 
     let stub_wasm = ctx.application.stub_wasm(component_name);
     let stub_wit = ctx.application.stub_wit(component_name);
+    let gen_dir_done_marker = GeneratedDirDoneMarker::new(&stub_wit);
 
     if is_up_to_date(
-        ctx.config.skip_up_to_date_checks,
+        ctx.config.skip_up_to_date_checks || !gen_dir_done_marker.is_done(),
         || stub_inputs,
         || [stub_wit.clone(), stub_wasm.clone()],
     ) {
@@ -862,6 +873,8 @@ async fn build_stub(
         fs::create_dir_all(&target_root)?;
 
         commands::generate::build(&stub_def, &stub_wasm, &stub_wit).await?;
+
+        gen_dir_done_marker.mark_as_done()?;
 
         delete_path("stub temp build dir", &target_root)?;
 
@@ -943,4 +956,24 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+static GENERATED_DIR_DONE_MARKER_FILE_NAME: &str = &".done";
+
+struct GeneratedDirDoneMarker<'a> {
+    dir: &'a Path,
+}
+
+impl<'a> GeneratedDirDoneMarker<'a> {
+    fn new(dir: &'a Path) -> Self {
+        Self { dir }
+    }
+
+    fn is_done(&self) -> bool {
+        self.dir.join(GENERATED_DIR_DONE_MARKER_FILE_NAME).exists()
+    }
+
+    fn mark_as_done(&self) -> anyhow::Result<()> {
+        fs::write_str(self.dir.join(GENERATED_DIR_DONE_MARKER_FILE_NAME), "")
+    }
 }
