@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{PluginDefinition, PluginOwner, PluginScope};
+use crate::model::{PluginDefinition, PluginScope};
 use crate::repo::plugin::{PluginRecord, PluginRepo};
 use crate::service::component::ComponentError;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::component::v1::component_error;
+use golem_common::model::plugin::PluginOwner;
 use golem_common::model::ComponentId;
 use golem_common::SafeDisplay;
 use golem_service_base::repo::RepoError;

@@ -14,11 +14,11 @@
 
 use crate::model::{
     ComponentTransformerDefinition, DefaultPluginOwner, OplogProcessorDefinition, PluginDefinition,
-    PluginOwner, PluginScope, PluginTypeSpecificDefinition,
+    PluginScope, PluginTypeSpecificDefinition,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
-use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope};
+use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope, PluginOwner};
 use golem_common::model::ComponentId;
 use golem_common::model::Empty;
 use golem_common::repo::RowMeta;

@@ -14,7 +14,7 @@
 
 use crate::service::plugin::PluginError;
 use async_trait::async_trait;
-use golem_common::model::plugin::{DefaultPluginScope, PluginInstallationTarget};
+use golem_common::model::plugin::{DefaultPluginScope, PluginInstallationTarget, PluginOwner};
 use golem_common::model::{AccountId, ComponentId, ComponentVersion, HasAccountId};
 use golem_common::repo::RowMeta;
 use http::Uri;
@@ -318,36 +318,6 @@ impl PluginInstallationTarget for ComponentPluginInstallationTarget {
     fn table_name() -> &'static str {
         "component_plugin_installation"
     }
-}
-
-pub trait PluginOwner:
-    Debug
-    + Display
-    + FromStr<Err = String>
-    + HasAccountId
-    + Clone
-    + PartialEq
-    + Serialize
-    + for<'de> Deserialize<'de>
-    + Type
-    + ParseFromJSON
-    + ToJSON
-    + Send
-    + Sync
-    + 'static
-{
-    type Row: RowMeta<Sqlite>
-        + RowMeta<Postgres>
-        + for<'r> sqlx::FromRow<'r, SqliteRow>
-        + for<'r> sqlx::FromRow<'r, PgRow>
-        + From<Self>
-        + TryInto<Self, Error = String>
-        + Clone
-        + Display
-        + Send
-        + Sync
-        + Unpin
-        + 'static;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]

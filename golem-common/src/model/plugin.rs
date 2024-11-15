@@ -1,4 +1,4 @@
-use crate::model::{ComponentId, Empty, PluginInstallationId};
+use crate::model::{ComponentId, Empty, HasAccountId, PluginInstallationId};
 use crate::repo::RowMeta;
 use poem_openapi::types::{
     ParseError, ParseFromJSON, ParseFromParameter, ParseResult, ToJSON, Type,
@@ -9,6 +9,7 @@ use sqlx::postgres::PgRow;
 use sqlx::sqlite::SqliteRow;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display};
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -189,4 +190,34 @@ pub trait PluginInstallationTarget:
         + 'static;
 
     fn table_name() -> &'static str;
+}
+
+pub trait PluginOwner:
+    Debug
+    + Display
+    + FromStr<Err = String>
+    + HasAccountId
+    + Clone
+    + PartialEq
+    + Serialize
+    + for<'de> Deserialize<'de>
+    + Type
+    + ParseFromJSON
+    + ToJSON
+    + Send
+    + Sync
+    + 'static
+{
+    type Row: RowMeta<sqlx::Sqlite>
+        + RowMeta<sqlx::Postgres>
+        + for<'r> sqlx::FromRow<'r, SqliteRow>
+        + for<'r> sqlx::FromRow<'r, PgRow>
+        + From<Self>
+        + TryInto<Self, Error = String>
+        + Clone
+        + Display
+        + Send
+        + Sync
+        + Unpin
+        + 'static;
 }
