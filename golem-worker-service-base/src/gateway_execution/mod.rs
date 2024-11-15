@@ -2,6 +2,7 @@ use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 
 pub mod api_definition_lookup;
+pub mod auth_call_back_binding_handler;
 pub mod file_server_binding_handler;
 pub mod gateway_binding_executor;
 pub mod gateway_binding_resolver;
@@ -12,7 +13,6 @@ pub mod rib_input_value_resolver;
 pub mod router;
 pub mod to_response;
 pub mod to_response_failure;
-pub mod auth_call_back_binding_handler;
 
 pub use gateway_worker_request_executor::*;
 

@@ -1,9 +1,11 @@
-use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
 use crate::gateway_binding::HttpRequestDetails;
-use crate::gateway_execution::gateway_session::{DataKey, DataValue, GatewaySessionStore, SessionId};
+use crate::gateway_execution::gateway_session::{
+    DataKey, DataValue, GatewaySessionStore, SessionId,
+};
 use crate::gateway_security::{IdentityProviderError, SecuritySchemeInternal};
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
+use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
 
 pub type AuthorisationResult = Result<AuthorisationSuccess, AuthorisationError>;
 
@@ -44,15 +46,20 @@ impl SafeDisplay for AuthorisationError {
         match self {
             AuthorisationError::CodeNotFound => "The authorisation code is missing.".to_string(),
             AuthorisationError::InvalidCode => "The authorisation code is invalid.".to_string(),
-            AuthorisationError::StateNotFound => "Missing parameters from identity provider".to_string(),
-            AuthorisationError::InvalidState => "Invalid parameters from identity provider.".to_string(),
+            AuthorisationError::StateNotFound => {
+                "Missing parameters from identity provider".to_string()
+            }
+            AuthorisationError::InvalidState => {
+                "Invalid parameters from identity provider.".to_string()
+            }
             AuthorisationError::InvalidSession => "The session is no longer valid.".to_string(),
             AuthorisationError::MissingParametersInSession => "Session failures".to_string(),
             AuthorisationError::ClaimFetchError(err) => {
                 format!("Failed to fetch claims. Error details: {}", err)
             }
-            AuthorisationError::IdentityProviderError(err) =>
-                format!("Identity provider error: {}", err),
+            AuthorisationError::IdentityProviderError(err) => {
+                format!("Identity provider error: {}", err)
+            }
             AuthorisationError::AccessTokenNotFound => {
                 "Unable to continue with authorisation".to_string()
             }
@@ -89,12 +96,9 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .get("code")
             .ok_or(AuthorisationError::CodeNotFound)?;
 
-        let code = code_value
-            .as_str()
-            .ok_or(AuthorisationError::InvalidCode)?;
+        let code = code_value.as_str().ok_or(AuthorisationError::InvalidCode)?;
 
-        let authorisation_code =
-            AuthorizationCode::new(code.to_string());
+        let authorisation_code = AuthorizationCode::new(code.to_string());
 
         let state_value = query_params
             .get("state")
@@ -121,9 +125,8 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
 
         let open_id_client = security_scheme_internal
             .identity_provider
-            .get_client(
-                &security_scheme_internal.security_scheme
-            ).map_err(|err| AuthorisationError::IdentityProviderError(err))?;
+            .get_client(&security_scheme_internal.security_scheme)
+            .map_err(|err| AuthorisationError::IdentityProviderError(err))?;
 
         let token_response = security_scheme_internal
             .identity_provider
@@ -137,7 +140,8 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 &open_id_client,
                 token_response.clone(),
                 &Nonce::new(nonce.clone()),
-            ).map_err(|err| AuthorisationError::ClaimFetchError(err))?;
+            )
+            .map_err(|err| AuthorisationError::ClaimFetchError(err))?;
 
         let _ = session_store
             .0
@@ -146,10 +150,10 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 DataKey("claims".to_string()),
                 DataValue(serde_json::to_value(claims).unwrap()), // TODO;
             )
-            .await.map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
+            .await
+            .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
 
-        let access_token =
-            token_response.access_token().secret().clone();
+        let access_token = token_response.access_token().secret().clone();
 
         // access token in session store
         let _ = session_store
@@ -159,7 +163,8 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
                 DataKey("access_token".to_string()),
                 DataValue(serde_json::Value::String(access_token)),
             )
-            .await.map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
+            .await
+            .map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
 
         Ok(AuthorisationSuccess {
             token_response,

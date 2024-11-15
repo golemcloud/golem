@@ -1,8 +1,8 @@
+use crate::gateway_middleware::http::authentication::HttpAuthorizer;
 use crate::gateway_middleware::http::cors::Cors;
 use http::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
 };
-use crate::gateway_middleware::http::authentication::HttpAuthorizer;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {

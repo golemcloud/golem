@@ -1,9 +1,9 @@
 use crate::gateway_api_definition::http::{QueryInfo, VarInfo};
 
+use crate::gateway_request::http_request::ApiInputPath;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::gateway_request::http_request::ApiInputPath;
 
 #[derive(Clone, Debug)]
 pub enum GatewayRequestDetails {
@@ -191,7 +191,6 @@ impl HttpRequestDetails {
         request_body: &Value,
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
-
         let request_body = RequestBody::from(request_body)?;
         let path_params = RequestPathValues::from(path_params);
         let query_params = RequestQueryValues::from(query_variable_values, query_variable_names)?;

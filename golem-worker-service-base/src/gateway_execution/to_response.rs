@@ -1,21 +1,21 @@
 use crate::api::WorkerApiBaseError;
-use crate::gateway_binding::{GatewayRequestDetails};
+use crate::gateway_binding::GatewayRequestDetails;
+use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationResult;
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
 };
-use crate::gateway_execution::gateway_session::{GatewaySessionStore};
+use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response_failure::ToResponseFailure;
-use crate::gateway_middleware::{Cors as CorsPreflight};
+use crate::gateway_middleware::Cors as CorsPreflight;
 use crate::gateway_security::IdentityProvider;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
-use openidconnect::{ OAuth2TokenResponse};
+use openidconnect::OAuth2TokenResponse;
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
 use std::fmt::Display;
-use crate::gateway_execution::auth_call_back_binding_handler::{AuthorisationResult};
 
 #[async_trait]
 pub trait ToResponse<A> {
@@ -121,26 +121,26 @@ impl ToResponse<poem::Response> for AuthorisationResult {
         _request_details: &GatewayRequestDetails,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
-
         match self {
-            Ok(success) => {
-                poem::Response::builder()
-                    .status(StatusCode::FOUND)
-                    .header("Location", "/")
-                    .header(
-                        "Authorization",
-                        format!("Bearer {}", success.token_response.access_token().secret().clone()),
-                    )
-                    .body(())
-            }
+            Ok(success) => poem::Response::builder()
+                .status(StatusCode::FOUND)
+                .header("Location", "/")
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        success.token_response.access_token().secret().clone()
+                    ),
+                )
+                .body(()),
 
-            Err(err) => err.to_failed_response(&StatusCode::UNAUTHORIZED)
+            Err(err) => err.to_failed_response(&StatusCode::UNAUTHORIZED),
         }
     }
 }
 
 mod internal {
-    use crate::gateway_binding::{GatewayRequestDetails};
+    use crate::gateway_binding::GatewayRequestDetails;
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
@@ -150,7 +150,7 @@ mod internal {
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
     use crate::path::Path;
 
-    use crate::gateway_execution::to_response::{ToResponse};
+    use crate::gateway_execution::to_response::ToResponse;
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use poem::{Body, IntoResponse, ResponseParts};

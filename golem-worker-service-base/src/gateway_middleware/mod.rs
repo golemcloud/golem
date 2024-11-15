@@ -1,8 +1,8 @@
+use crate::gateway_binding::GatewayRequestDetails;
+use crate::gateway_execution::gateway_session::GatewaySessionStore;
 pub use http::*;
 pub use middleware_in::*;
 pub use middleware_out::*;
-use crate::gateway_binding::GatewayRequestDetails;
-use crate::gateway_execution::gateway_session::GatewaySessionStore;
 
 mod http;
 mod middleware_in;
@@ -27,21 +27,35 @@ impl Middlewares {
         self.0
             .iter()
             .flat_map(|m| match m {
-                Middleware::Http(http_middleware    ) => Some(http_middleware.clone()),
+                Middleware::Http(http_middleware) => Some(http_middleware.clone()),
             })
             .collect()
     }
 
-    pub fn process_middleware_in<R>(&self, session_store: &GatewaySessionStore, input: &GatewayRequestDetails) where HttpAuthorizer: MiddlewareIn<R> {
+    pub fn process_middleware_in<R>(
+        &self,
+        session_store: &GatewaySessionStore,
+        input: &GatewayRequestDetails,
+    ) where
+        HttpAuthorizer: MiddlewareIn<R>,
+    {
         for middleware in self.http_middlewares() {
             match middleware {
-                HttpMiddleware::AddCorsHeaders(_) => {},
-                HttpMiddleware::AuthenticateRequest(auth) => auth.process_input(input, session_store)
+                HttpMiddleware::AddCorsHeaders(_) => {}
+                HttpMiddleware::AuthenticateRequest(auth) => {
+                    auth.process_input(input, session_store)
+                }
             }
         }
     }
 
-    pub fn process_middleware_out<Out>(&self, session_store: &GatewaySessionStore, response: &mut Out) where Cors: MiddlewareOut<Out> {
+    pub fn process_middleware_out<Out>(
+        &self,
+        session_store: &GatewaySessionStore,
+        response: &mut Out,
+    ) where
+        Cors: MiddlewareOut<Out>,
+    {
         for middleware in self.http_middlewares() {
             match middleware {
                 HttpMiddleware::AddCorsHeaders(cors) => cors.process(session_store, response),

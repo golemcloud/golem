@@ -1,11 +1,11 @@
-use crate::gateway_binding::{GatewayRequestDetails};
+use crate::gateway_binding::GatewayRequestDetails;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::HttpAuthorizer;
 use crate::gateway_security::IdentityProvider;
+use async_trait::async_trait;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
 use openidconnect::{ClaimsVerificationError, Nonce};
 use std::str::FromStr;
-use async_trait::async_trait;
 
 #[async_trait]
 pub trait MiddlewareIn<Out> {
@@ -34,8 +34,7 @@ impl MiddlewareIn<poem::Response> for HttpAuthorizer {
     ) -> Result<MiddlewareResult<poem::Response>, String> {
         match input {
             GatewayRequestDetails::Http(input) => {
-                let identity_provider=
-                    &self.scheme_internal.identity_provider;
+                let identity_provider = &self.scheme_internal.identity_provider;
 
                 let open_id_client = identity_provider
                     .get_client(&self.scheme_internal.security_scheme)
@@ -62,37 +61,56 @@ impl MiddlewareIn<poem::Response> for HttpAuthorizer {
 
                         match result {
                             Ok(claims) => {
-                                internal::store_claims_in_session_store(&SessionId(state.clone()), claims, &session_store).await?;
+                                internal::store_claims_in_session_store(
+                                    &SessionId(state.clone()),
+                                    claims,
+                                    &session_store,
+                                )
+                                .await?;
                                 Ok(MiddlewareResult::PassThrough)
                             }
                             Err(ClaimsVerificationError::Expired(_)) => {
-                                internal::redirect(&session_store, &input, identity_provider, &open_id_client, self).await
+                                internal::redirect(
+                                    &session_store,
+                                    &input,
+                                    identity_provider,
+                                    &open_id_client,
+                                    self,
+                                )
+                                .await
                             }
-                            Err(_) => {
-                                Err("Authentication failed".to_string())
-                            }
+                            Err(_) => Err("Authentication failed".to_string()),
                         }
                     } else {
                         Err("Nonce not found".to_string())
                     }
                 } else {
-                    internal::redirect(&session_store, &input, identity_provider, &open_id_client, self).await
+                    internal::redirect(
+                        &session_store,
+                        &input,
+                        identity_provider,
+                        &open_id_client,
+                        self,
+                    )
+                    .await
                 }
             }
-            _ => Ok(MiddlewareResult::PassThrough)
+            _ => Ok(MiddlewareResult::PassThrough),
         }
     }
 }
 
 mod internal {
     use crate::gateway_binding::HttpRequestDetails;
-    use crate::gateway_execution::gateway_session::{DataKey, DataValue, GatewaySessionStore, SessionId};
+    use crate::gateway_execution::gateway_session::{
+        DataKey, DataValue, GatewaySessionStore, SessionId,
+    };
+    use crate::gateway_middleware::middleware_in::MiddlewareResult;
     use crate::gateway_middleware::HttpAuthorizer;
     use crate::gateway_security::{IdentityProvider, OpenIdClient};
-    use std::sync::Arc;
     use http::StatusCode;
     use openidconnect::core::CoreIdTokenClaims;
-    use crate::gateway_middleware::middleware_in::MiddlewareResult;
+    use std::sync::Arc;
 
     pub(crate) async fn redirect(
         session_store: &GatewaySessionStore,
@@ -100,7 +118,7 @@ mod internal {
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
         client: &OpenIdClient,
         http_authorizer: &HttpAuthorizer,
-    )  -> Result<MiddlewareResult<poem::Response>, String>{
+    ) -> Result<MiddlewareResult<poem::Response>, String> {
         let redirect_uri = input.get_uri();
 
         let authorization = identity_provider
@@ -143,10 +161,12 @@ mod internal {
     pub(crate) async fn store_claims_in_session_store(
         session_id: &SessionId,
         claims: &CoreIdTokenClaims,
-        session_store: &GatewaySessionStore
+        session_store: &GatewaySessionStore,
     ) -> Result<(), String> {
         let claims_data_key = DataKey("claims".to_string());
-        let json = serde_json::to_value(claims).map_err(|err| err.to_string()).unwrap();
+        let json = serde_json::to_value(claims)
+            .map_err(|err| err.to_string())
+            .unwrap();
         let claims_data_value = DataValue(json);
 
         session_store
@@ -154,6 +174,5 @@ mod internal {
             .insert(session_id.clone(), claims_data_key, claims_data_value)
             .await
             .map_err(|err| err.to_string())
-
     }
 }
