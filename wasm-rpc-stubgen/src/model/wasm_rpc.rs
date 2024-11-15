@@ -1,3 +1,4 @@
+use crate::log::LogColorize;
 use crate::model::oam;
 use crate::model::oam::TypedTraitProperties;
 use crate::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
@@ -447,7 +448,7 @@ impl Application {
                 vec![("component name", component_name.0)],
                 format!(
                     "Component is specified multiple times in sources: {}",
-                    sources.join(", ")
+                    sources.iter().map(|s| s.log_color_highlight()).join(", ")
                 ),
             ))
         });
@@ -461,7 +462,8 @@ impl Application {
                         vec![],
                         format!(
                             "Component {} references unknown component {} as dependency",
-                            component_name, dep_component_name,
+                            component_name.log_color_highlight(),
+                            dep_component_name.log_color_error_highlight(),
                         ),
                     )
                 })
@@ -482,7 +484,11 @@ impl Application {
                 "Component Build is specified multiple times in sources: {}",
                 wasm_builds
                     .iter()
-                    .map(|c| format!("{} in {}", c.name, c.source.display()))
+                    .map(|c| format!(
+                        "{} in {}",
+                        c.name.log_color_highlight(),
+                        c.source.log_color_highlight()
+                    ))
                     .join(", ")
             ));
         }
@@ -548,7 +554,7 @@ impl Application {
                     vec![("component name", component_name.0)],
                     format!(
                         "Wasm rpc stub build is specified multiple times in sources: {}",
-                        sources.join(", ")
+                        sources.iter().map(|s| s.log_color_highlight()).join(", ")
                     ),
                 ))
             },
@@ -558,7 +564,7 @@ impl Application {
             validation.add_error(
                 format!(
                     "Common (without component name) wasm rpc build is specified multiple times in sources: {}",
-                    common_sources.join(", "),
+                    common_sources.iter().map(|s| s.log_color_highlight()).join(", "),
                 )
             )
         }
@@ -571,7 +577,8 @@ impl Application {
                         vec![("source", wasm_rpc_stub_build.source_as_string())],
                         format!(
                             "Wasm rpc stub build {} references unknown component {}",
-                            wasm_rpc_stub_build.name, component_name
+                            wasm_rpc_stub_build.name.log_color_highlight(),
+                            component_name.log_color_error_highlight(),
                         ),
                     )
                 })

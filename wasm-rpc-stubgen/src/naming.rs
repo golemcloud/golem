@@ -1,4 +1,5 @@
 pub mod wit {
+    use crate::log::LogColorize;
     use anyhow::{anyhow, bail};
     use std::path::{Path, PathBuf};
 
@@ -69,7 +70,7 @@ pub mod wit {
         if stub_package.interfaces.len() != 1 {
             bail!(
                 "Expected exactly one interface in stub package, package name: {}",
-                package_name
+                package_name.to_string().log_color_highlight()
             );
         }
 

@@ -1,4 +1,5 @@
 use crate::fs;
+use crate::log::LogColorize;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use itertools::Itertools;
 use serde::de::DeserializeOwned;
@@ -40,11 +41,19 @@ impl ApplicationWithSource {
         validation.push_context("source", self.source_as_string());
 
         if self.application.api_version != API_VERSION_V1BETA1 {
-            validation.add_warn(format!("Expected apiVersion: {}", API_VERSION_V1BETA1))
+            validation.add_warn(format!(
+                "Expected apiVersion: {}, got: {}",
+                API_VERSION_V1BETA1.log_color_highlight(),
+                self.application.api_version.log_color_error_highlight()
+            ))
         }
 
         if self.application.kind != KIND_APPLICATION {
-            validation.add_error(format!("Expected kind: {}", KIND_APPLICATION))
+            validation.add_error(format!(
+                "Expected kind: {}, got: {}",
+                KIND_APPLICATION.log_color_highlight(),
+                self.application.kind.log_color_error_highlight()
+            ))
         }
 
         self.application

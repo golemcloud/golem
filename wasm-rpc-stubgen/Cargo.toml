@@ -31,11 +31,11 @@ harness = false
 [dependencies]
 anyhow = "1.0.79"
 assert2 = { workspace = true }
+cargo-component = "=0.13.2"
+cargo-component-core = "=0.13.2"
 cargo_toml = "0.20.2"
 clap = { version = "4.5.7", features = ["derive"] }
 colored = "2.1.0"
-cargo-component-core = "=0.13.2"
-cargo-component = "=0.13.2"
 dir-diff = "0.3.3"
 fs_extra = { workspace = true }
 glob = "0.3.1"
@@ -44,6 +44,7 @@ golem-wasm-rpc = { path = "../wasm-rpc", version = "0.0.0" }
 heck = "0.5.0"
 id-arena = "2.2.1"
 indexmap = "2.2.6"
+indoc = "2.0.5"
 itertools = "0.12.1"
 pretty_env_logger = "0.5.0"
 prettyplease = "0.2.20"
@@ -58,8 +59,8 @@ syn = "2.0.66"
 tempfile = { workspace = true }
 tokio = { workspace = true }
 toml = "0.8.14"
-walkdir = "2.5.0"
 wac-graph = "=0.6.0"
+walkdir = "2.5.0"
 wit-bindgen-rust = "=0.26.0"
 wit-encoder = { git = "https://github.com/golemcloud/wasm-tools.git" }
 wit-parser = { git = "https://github.com/golemcloud/wasm-tools.git" }

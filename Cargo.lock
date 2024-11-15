@@ -1921,6 +1921,7 @@ dependencies = [
  "heck 0.5.0",
  "id-arena",
  "indexmap 2.6.0",
+ "indoc",
  "itertools 0.12.1",
  "pretty_env_logger",
  "prettyplease",
@@ -2299,6 +2300,12 @@ dependencies = [
  "hashbrown 0.15.0",
  "serde 1.0.210",
 ]
+
+[[package]]
+name = "indoc"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b248f5224d1d606005e02c97f5aa4e88eeb230488bcc03bc9ca4d7991399f2b5"
 
 [[package]]
 name = "inout"

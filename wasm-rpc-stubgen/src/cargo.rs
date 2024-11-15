@@ -325,8 +325,8 @@ pub fn regenerate_cargo_package_component(
     let relative_wit_path = wit_path.strip_prefix(project_root).with_context(|| {
         anyhow!(
             "Failed to create relative path for wit dir: {}, project root: {}",
-            wit_path.display(),
-            project_root.display()
+            wit_path.log_color_highlight(),
+            project_root.log_color_highlight()
         )
     })?;
 
@@ -343,10 +343,12 @@ pub fn regenerate_cargo_package_component(
                 cargo_toml_path.log_color_highlight()
             )
         })?;
-    let package = manifest
-        .package
-        .as_mut()
-        .ok_or_else(|| anyhow!("No package found in {}", cargo_toml_path.display()))?;
+    let package = manifest.package.as_mut().ok_or_else(|| {
+        anyhow!(
+            "No package found in {}",
+            cargo_toml_path.log_color_highlight()
+        )
+    })?;
 
     let wit_dir = ResolvedWitDir::new(wit_path)?;
 
