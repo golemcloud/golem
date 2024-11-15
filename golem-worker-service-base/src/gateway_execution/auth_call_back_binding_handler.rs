@@ -12,7 +12,7 @@ pub trait AuthCallBackBindingHandler {
         &self,
         http_request_details: &HttpRequestDetails,
         security_scheme_internal: &SecuritySchemeInternal,
-        session: GatewaySessionStore,
+        session: &GatewaySessionStore,
     ) -> AuthorisationResult;
 }
 
@@ -81,7 +81,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         &self,
         http_request_details: &HttpRequestDetails,
         security_scheme_internal: &SecuritySchemeInternal,
-        session_store: GatewaySessionStore,
+        session_store: &GatewaySessionStore,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
         let query_params = &http_request_details.request_path_values;
 
@@ -116,8 +116,8 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         let nonce = session_params
             .get(&DataKey("nonce".to_string()))
             .ok_or(AuthorisationError::MissingParametersInSession)?
-            .0
-            .clone();
+            .as_string()
+            .ok_or(AuthorisationError::NonceNotFound)?;
 
         let open_id_client = security_scheme_internal
             .identity_provider
@@ -144,7 +144,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .insert(
                 SessionId(obtained_state.to_string()),
                 DataKey("claims".to_string()),
-                DataValue(claims.to_string()), // TODO;
+                DataValue(serde_json::to_value(claims).unwrap()), // TODO;
             )
             .await.map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
 
@@ -157,7 +157,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .insert(
                 SessionId(obtained_state.to_string()),
                 DataKey("access_token".to_string()),
-                DataValue(access_token),
+                DataValue(serde_json::Value::String(access_token)),
             )
             .await.map_err(|err| AuthorisationError::SessionUpdateError(err.to_string()))?;
 

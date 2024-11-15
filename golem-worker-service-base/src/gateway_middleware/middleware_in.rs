@@ -1,20 +1,18 @@
-use crate::gateway_binding::HttpRequestDetails;
-use crate::gateway_execution::gateway_session::{
-    DataKey, DataValue, GatewaySessionStore, SessionId,
-};
+use crate::gateway_binding::{GatewayRequestDetails};
+use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::HttpAuthorizer;
-use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_security::IdentityProvider;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
 use openidconnect::{ClaimsVerificationError, Nonce};
 use std::str::FromStr;
-use std::sync::Arc;
+use async_trait::async_trait;
 
-trait MiddlewareIn<In, Out> {
+#[async_trait]
+pub trait MiddlewareIn<Out> {
     async fn process_input(
         &self,
-        input: In,
-        session_store: GatewaySessionStore,
+        input: &GatewayRequestDetails,
+        session_store: &GatewaySessionStore,
     ) -> Result<MiddlewareResult<Out>, String>;
 }
 
@@ -27,55 +25,61 @@ pub struct PassThroughMetadata {
     value: serde_json::Value,
 }
 
-impl MiddlewareIn<InputHttpRequest, MiddlewareResult<poem::Response>> for HttpAuthorizer {
+#[async_trait]
+impl MiddlewareIn<poem::Response> for HttpAuthorizer {
     async fn process_input(
         &self,
-        input: HttpRequestDetails,
-        session_store: GatewaySessionStore,
+        input: &GatewayRequestDetails,
+        session_store: &GatewaySessionStore,
     ) -> Result<MiddlewareResult<poem::Response>, String> {
-        let identity_provider: &Arc<dyn IdentityProvider + Send + Sync> =
-            &self.scheme_internal.identity_provider;
+        match input {
+            GatewayRequestDetails::Http(input) => {
+                let identity_provider=
+                    &self.scheme_internal.identity_provider;
 
-        let client = identity_provider
-            .get_client(&self.scheme_internal.security_scheme)
-            .map_err(|err| err.to_string())?;
+                let open_id_client = identity_provider
+                    .get_client(&self.scheme_internal.security_scheme)
+                    .map_err(|err| err.to_string())?;
 
-        let id_token = input.get_id_token_from_cookie();
+                let id_token = input.get_id_token_from_cookie();
 
-        let state = input.get_auth_state_from_cookie();
+                let state = input.get_auth_state_from_cookie();
 
-        if let (Some(id_token), Some(state)) = (id_token, state) {
-            let id_token = CoreIdToken::from_str(&id_token)
-                .map_err(|err| err.to_string())
-                .map_err(|err| err.to_string())?;
+                if let (Some(id_token), Some(state)) = (id_token, state) {
+                    let id_token = CoreIdToken::from_str(&id_token)
+                        .map_err(|err| err.to_string())
+                        .map_err(|err| err.to_string())?;
 
-            let nonce = session_store
-                .0
-                .get(SessionId(state.clone()), DataKey::nonce())
-                .await
-                .map_err(|err| err.to_string())?;
+                    let nonce = session_store
+                        .0
+                        .get(SessionId(state.clone()), DataKey::nonce())
+                        .await
+                        .map_err(|err| err.to_string())?;
 
-            if let Some(nonce) = nonce.and_then(|x| x.as_string()) {
-                let result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
-                    id_token.claims(&client.id_token_verifier(), &Nonce(nonce));
+                    if let Some(nonce) = nonce.and_then(|x| x.as_string()) {
+                        let result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
+                            id_token.claims(&open_id_client.id_token_verifier(), &Nonce(nonce));
 
-                match result {
-                    Ok(claims) => {
-                        internal::store_claims_in_session_store(&SessionId(state.clone()), claims, &session_store).await?;
-                        Ok(MiddlewareResult::PassThrough)
+                        match result {
+                            Ok(claims) => {
+                                internal::store_claims_in_session_store(&SessionId(state.clone()), claims, &session_store).await?;
+                                Ok(MiddlewareResult::PassThrough)
+                            }
+                            Err(ClaimsVerificationError::Expired(_)) => {
+                                internal::redirect(&session_store, &input, identity_provider, &open_id_client, self).await
+                            }
+                            Err(_) => {
+                                Err("Authentication failed".to_string())
+                            }
+                        }
+                    } else {
+                        Err("Nonce not found".to_string())
                     }
-                    Err(ClaimsVerificationError::Expired(_)) => {
-                        internal::redirect(&session_store, &input, identity_provider, &client, self).await
-                    }
-                    Err(_) => {
-                        Err("Authentication failed".to_string())
-                    }
+                } else {
+                    internal::redirect(&session_store, &input, identity_provider, &open_id_client, self).await
                 }
-            } else {
-                Err("Nonce not found".to_string())
             }
-        } else {
-            internal::redirect(&session_store, &input, identity_provider, &client, self).await
+            _ => Ok(MiddlewareResult::PassThrough)
         }
     }
 }

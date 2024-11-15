@@ -1,4 +1,4 @@
-use crate::gateway_middleware::{Cors, SecuritySchemeWithProviderMetadata};
+use crate::gateway_middleware::{Cors, HttpAuthorizer, SecuritySchemeWithProviderMetadata};
 use crate::gateway_security::{
     GolemIdentityProviderMetadata, IdentityProvider, OpenIdClient, SecurityScheme,
 };
@@ -14,7 +14,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticBinding {
     HttpCorsPreflight(Cors),
-    HttpAuthCallBack(SecuritySchemeWithProviderMetadata),
+    HttpAuthCallBack(HttpAuthorizer),
 }
 
 impl StaticBinding {

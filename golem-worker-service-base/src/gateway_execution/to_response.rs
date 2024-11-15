@@ -119,7 +119,7 @@ impl ToResponse<poem::Response> for AuthorisationResult {
     async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,
-        _session_store: GatewaySessionStore,
+        _session_store: &GatewaySessionStore,
     ) -> poem::Response {
 
         match self {
