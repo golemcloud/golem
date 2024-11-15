@@ -664,33 +664,20 @@ impl InterfaceStubTypeDef {
 pub struct FunctionStub {
     pub name: String,
     pub params: Vec<FunctionParamStub>,
-    pub results: FunctionResultStub, // TODO: option?
+    pub results: FunctionResultStub,
 }
 
 impl FunctionStub {
     pub fn as_method(&self) -> Option<FunctionStub> {
-        // TODO: duplicated code
-        self.name.strip_prefix("[method]").and_then(|method_name| {
-            let parts = method_name.split('.').collect::<Vec<_>>();
-            if parts.len() != 2 {
-                None
-            } else {
-                Some(FunctionStub {
-                    name: parts[1].to_string(),
-                    params: self
-                        .params
-                        .iter()
-                        .filter(|p| p.name != "self")
-                        .cloned()
-                        .collect(),
-                    results: self.results.clone(),
-                })
-            }
-        })
+        self.as_function_stub_without_prefix("[method]")
     }
 
     pub fn as_static(&self) -> Option<FunctionStub> {
-        self.name.strip_prefix("[static]").and_then(|method_name| {
+        self.as_function_stub_without_prefix("[static]")
+    }
+
+    fn as_function_stub_without_prefix(&self, prefix: &str) -> Option<FunctionStub> {
+        self.name.strip_prefix(prefix).and_then(|method_name| {
             let parts = method_name.split('.').collect::<Vec<_>>();
             if parts.len() != 2 {
                 None

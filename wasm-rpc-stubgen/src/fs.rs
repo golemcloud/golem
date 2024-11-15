@@ -181,6 +181,16 @@ impl<P: AsRef<Path>> PathExtra<P> {
             .map_err(|_| anyhow!("Failed to convert filename for path: {}", path.display()))
     }
 
+    pub fn to_str(&self) -> anyhow::Result<&str> {
+        let path = self.0.as_ref();
+        path.to_str()
+            .ok_or_else(|| anyhow!("Failed to convert path to string: {}", path.display()))
+    }
+
+    pub fn to_string(&self) -> anyhow::Result<String> {
+        Ok(self.to_str()?.to_string())
+    }
+
     pub fn strip_prefix<Q: AsRef<Path>>(&self, prefix: Q) -> anyhow::Result<PathBuf> {
         let path = self.0.as_ref();
         let prefix = prefix.as_ref();
