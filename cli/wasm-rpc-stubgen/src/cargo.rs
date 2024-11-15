@@ -366,12 +366,13 @@ pub fn regenerate_cargo_package_component(
                                 &wit_dir.package(*package_id).unwrap().name,
                             ),
                             WitDependency {
-                                path: package_sources
-                                    .dir
-                                    .strip_prefix(project_root)
-                                    .unwrap() // TODO: unwrap
-                                    .to_string_lossy()
-                                    .to_string(),
+                                path: PathExtra::new(
+                                    PathExtra::new(&package_sources.dir)
+                                        .strip_prefix(project_root)
+                                        .unwrap(),
+                                )
+                                .to_string()
+                                .unwrap(),
                             },
                         )
                     })

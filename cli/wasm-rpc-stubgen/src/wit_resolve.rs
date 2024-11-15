@@ -208,7 +208,7 @@ impl ResolvedWitApplication {
             for (component_name, component) in &self.components {
                 package_names_to_component_names
                     .entry(&component.main_package_name)
-                    .and_modify(|component_names| component_names.push(&component_name))
+                    .and_modify(|component_names| component_names.push(component_name))
                     .or_insert_with(|| vec![&component_name]);
             }
 

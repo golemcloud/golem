@@ -16,8 +16,7 @@ use crate::fs::{OverwriteSafeAction, OverwriteSafeActions, PathExtra};
 use crate::log::{log_action, log_action_plan, log_warn_action, LogColorize, LogIndent};
 use crate::naming::wit::package_dep_dir_name_from_encoder;
 use crate::stub::{
-    FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, InterfaceStubTypeDef,
-    StubDefinition,
+    FunctionParamStub, FunctionResultStub, FunctionStub, InterfaceStub, StubDefinition,
 };
 use crate::wit_encode::EncodedWitDir;
 use crate::wit_resolve::ResolvedWitDir;
@@ -27,7 +26,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use wit_encoder::{
     Ident, Interface, Package, PackageItem, PackageName, Params, ResourceFunc, Results,
-    StandaloneFunc, Type, TypeDef, TypeDefKind, VariantCase, World, WorldItem,
+    StandaloneFunc, Type, TypeDef, World, WorldItem,
 };
 use wit_parser::PackageId;
 
@@ -47,10 +46,10 @@ pub fn generate_stub_wit_to_target(def: &StubDefinition) -> anyhow::Result<()> {
 }
 
 pub fn generate_stub_wit_from_stub_def(def: &StubDefinition) -> anyhow::Result<String> {
-    Ok(generate_stub_package_from_stub_def(def).to_string())
+    Ok(generate_stub_package_from_stub_def(def)?.to_string())
 }
 
-pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> Package {
+pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> anyhow::Result<Package> {
     let mut package = Package::new(PackageName::new(
         def.source_package_name.namespace.clone(),
         format!("{}-stub", def.source_package_name.name),
@@ -88,7 +87,7 @@ pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> Package {
         for interface in def.stub_imported_interfaces() {
             for (function, _) in interface.all_functions() {
                 if !function.results.is_empty() {
-                    add_async_return_type(def, &mut stub_interface, function, interface);
+                    add_async_return_type(def, &mut stub_interface, function, interface)?;
                 }
             }
         }
@@ -101,7 +100,7 @@ pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> Package {
             {
                 let mut constructor = ResourceFunc::constructor();
                 let mut params = match &interface.constructor_params {
-                    Some(constructor_params) => constructor_params.to_encoder(def),
+                    Some(constructor_params) => constructor_params.to_encoder(def)?,
                     None => Params::empty(),
                 };
                 params.items_mut().insert(
@@ -127,9 +126,9 @@ pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> Package {
                             ResourceFunc::method(function_name)
                         }
                     };
-                    blocking_function.set_params(function.params.to_encoder(def));
+                    blocking_function.set_params(function.params.to_encoder(def)?);
                     if !function.results.is_empty() {
-                        blocking_function.set_results(function.results.to_encoder(def));
+                        blocking_function.set_results(function.results.to_encoder(def)?);
                     }
                     stub_functions.push(blocking_function);
                 }
@@ -143,7 +142,7 @@ pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> Package {
                             ResourceFunc::method(function.name.clone())
                         }
                     };
-                    async_function.set_params(function.params.to_encoder(def));
+                    async_function.set_params(function.params.to_encoder(def)?);
                     if !function.results.is_empty() {
                         async_function.set_results(Results::Anon(Type::Named(Ident::new(
                             function.async_result_type(interface),
@@ -166,7 +165,7 @@ pub fn generate_stub_package_from_stub_def(def: &StubDefinition) -> Package {
         package.world(stub_world);
     }
 
-    package
+    Ok(package)
 }
 
 fn add_async_return_type(
@@ -174,7 +173,12 @@ fn add_async_return_type(
     stub_interface: &mut Interface,
     function: &FunctionStub,
     owner_interface: &InterfaceStub,
-) {
+) -> anyhow::Result<()> {
+    let context = || {
+        anyhow!(
+            "Failed to add async return type to stub, stub interface: {}, owner interface: {}, function: {:?}", stub_interface.name(), owner_interface.name, function.name)
+    };
+
     stub_interface.type_def(TypeDef::resource(
         function.async_result_type(owner_interface),
         [
@@ -187,22 +191,27 @@ fn add_async_return_type(
                 let mut get = ResourceFunc::method("get");
                 match &function.results {
                     FunctionResultStub::Anon(typ) => {
-                        get.set_results(Results::Anon(Type::option(typ.to_encoder(def))));
+                        get.set_results(Results::Anon(Type::option(
+                            typ.to_encoder(def).with_context(context)?,
+                        )));
                     }
-                    FunctionResultStub::Named(_params) => {
-                        // TODO: this case was generating in the previous version, check it
-                        // TODO: this should be a proper error message with context
-                        panic!("Named parameters are not supported");
+                    FunctionResultStub::Named(params) => {
+                        Err(anyhow!(
+                            "Named parameters are not supported as async stub result, params: {:?}",
+                            params
+                        ))
+                        .with_context(context)?;
                     }
                     FunctionResultStub::SelfType => {
-                        // TODO: this should be a proper error message with context
-                        panic!("Unexpected self return type in wit generator");
+                        Err(anyhow!("Unexpected self return type")).with_context(context)?;
                     }
                 }
                 get
             },
         ],
-    ))
+    ));
+
+    Ok(())
 }
 
 pub fn add_dependencies_to_stub_wit_dir(def: &StubDefinition) -> anyhow::Result<()> {
@@ -438,14 +447,14 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
 
 trait ToEncoder {
     type EncoderType;
-    fn to_encoder(&self, stub_definition: &StubDefinition) -> Self::EncoderType;
+    fn to_encoder(&self, stub_definition: &StubDefinition) -> anyhow::Result<Self::EncoderType>;
 }
 
 impl ToEncoder for wit_parser::Type {
     type EncoderType = Type;
 
-    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
-        match self {
+    fn to_encoder(&self, def: &StubDefinition) -> anyhow::Result<Self::EncoderType> {
+        Ok(match self {
             wit_parser::Type::Bool => Type::Bool,
             wit_parser::Type::U8 => Type::U8,
             wit_parser::Type::U16 => Type::U16,
@@ -463,167 +472,132 @@ impl ToEncoder for wit_parser::Type {
                 if let Some(type_alias) = def.get_stub_used_type_alias(*type_id) {
                     Type::Named(Ident::new(type_alias.to_string()))
                 } else {
-                    let typ = def.get_type_def(*type_id).expect("type not found");
+                    let typ = def.get_type_def(*type_id)?;
+
+                    let context = || {
+                        anyhow!(
+                            "Failed to convert wit parser type to encoder type, type: {:?}",
+                            typ
+                        )
+                    };
+
                     match &typ.kind {
-                        wit_parser::TypeDefKind::Option(inner) => {
-                            Type::option(inner.to_encoder(def))
-                        }
-                        wit_parser::TypeDefKind::List(inner) => Type::list(inner.to_encoder(def)),
-                        wit_parser::TypeDefKind::Tuple(tuple) => {
-                            Type::tuple(tuple.types.iter().map(|t| t.to_encoder(def)))
-                        }
+                        wit_parser::TypeDefKind::Option(inner) => Type::option(
+                            inner
+                                .to_encoder(def)
+                                .context("Failed to convert option inner type")
+                                .with_context(context)?,
+                        ),
+                        wit_parser::TypeDefKind::List(inner) => Type::list(
+                            inner
+                                .to_encoder(def)
+                                .context("Failed to convert list inner type")
+                                .with_context(context)?,
+                        ),
+                        wit_parser::TypeDefKind::Tuple(tuple) => Type::tuple(
+                            tuple
+                                .types
+                                .iter()
+                                .map(|t| {
+                                    t.to_encoder(def).with_context(|| {
+                                        anyhow!("Failed to convert tuple elem type: {:?}", t)
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()
+                                .with_context(context)?,
+                        ),
                         wit_parser::TypeDefKind::Result(result) => {
                             match (&result.ok, &result.err) {
-                                (Some(ok), Some(err)) => {
-                                    Type::result_both(ok.to_encoder(def), err.to_encoder(def))
-                                }
-                                (Some(ok), None) => Type::result_ok(ok.to_encoder(def)),
-                                (None, Some(err)) => Type::result_err(err.to_encoder(def)),
-                                (None, None) => {
-                                    panic!("result type has no ok or err types")
-                                }
+                                (Some(ok), Some(err)) => Type::result_both(
+                                    ok.to_encoder(def)
+                                        .context("Failed to convert result ok type")
+                                        .with_context(context)?,
+                                    err.to_encoder(def)
+                                        .context("Failed to convert result error type")
+                                        .with_context(context)?,
+                                ),
+                                (Some(ok), None) => Type::result_ok(
+                                    ok.to_encoder(def)
+                                        .context("Failed to convert result ok type (no error case)")
+                                        .with_context(context)?,
+                                ),
+                                (None, Some(err)) => Type::result_err(
+                                    err.to_encoder(def)
+                                        .context("Failed to convert result error type (no ok case)")
+                                        .with_context(context)?,
+                                ),
+                                (None, None) => Err(anyhow!("Result type has no ok or err types"))
+                                    .with_context(context)?,
                             }
                         }
                         wit_parser::TypeDefKind::Handle(handle) => match handle {
                             wit_parser::Handle::Own(type_id) => {
-                                wit_parser::Type::Id(*type_id).to_encoder(def)
+                                wit_parser::Type::Id(*type_id).to_encoder(def)?
                             }
                             wit_parser::Handle::Borrow(type_id) => Type::borrow(
-                                wit_parser::Type::Id(*type_id).to_encoder(def).to_string(),
+                                wit_parser::Type::Id(*type_id).to_encoder(def)?.to_string(),
                             ),
                         },
                         _ => {
                             let name = typ
                                 .name
                                 .clone()
-                                .unwrap_or_else(|| panic!("missing name for type: {:?}", typ));
+                                .ok_or_else(|| anyhow!("Expected name for type: {:?}", typ))
+                                .with_context(context)?;
                             Type::Named(Ident::new(name))
                         }
                     }
                 }
             }
-        }
+        })
     }
 }
 
 impl ToEncoder for Vec<FunctionParamStub> {
     type EncoderType = Params;
 
-    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
-        Params::from_iter(
+    fn to_encoder(&self, def: &StubDefinition) -> anyhow::Result<Self::EncoderType> {
+        Ok(Params::from_iter(
             self.iter()
-                .map(|param| (param.name.clone(), param.typ.to_encoder(def))),
-        )
+                .map(|param| {
+                    param
+                        .typ
+                        .to_encoder(def)
+                        .with_context(|| {
+                            anyhow!(
+                                "Failed to convert parameter to encoder type, parameter: {:?}",
+                                param
+                            )
+                        })
+                        .map(|typ| (param.name.clone(), typ))
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .with_context(|| anyhow!("Failed to convert params to encoder type: {:?}", self))?,
+        ))
     }
 }
 
 impl ToEncoder for FunctionResultStub {
     type EncoderType = Results;
 
-    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
-        match self {
-            FunctionResultStub::Anon(typ) => Results::Anon(typ.to_encoder(def)),
-            FunctionResultStub::Named(types) => Results::Named(types.to_encoder(def)),
+    fn to_encoder(&self, def: &StubDefinition) -> anyhow::Result<Self::EncoderType> {
+        let context = || {
+            anyhow!(
+                "Failed to convert function result stub to encoder type: {:?}",
+                self
+            )
+        };
+        Ok(match self {
+            FunctionResultStub::Anon(typ) => {
+                Results::Anon(typ.to_encoder(def).with_context(context)?)
+            }
+            FunctionResultStub::Named(types) => {
+                Results::Named(types.to_encoder(def).with_context(context)?)
+            }
             FunctionResultStub::SelfType => {
-                // TODO: This should be a proper error message
-                panic!("Unexpected self type function result")
+                Err(anyhow!("Unexpected self type")).with_context(context)?
             }
-        }
-    }
-}
-
-impl ToEncoder for InterfaceStubTypeDef {
-    type EncoderType = TypeDef;
-
-    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
-        (self.stub_type_name(), &self.type_def).to_encoder(def)
-    }
-}
-
-impl ToEncoder for (&str, &wit_parser::TypeDef) {
-    type EncoderType = TypeDef;
-
-    fn to_encoder(&self, def: &StubDefinition) -> Self::EncoderType {
-        let (name, type_def) = self;
-        match &type_def.kind {
-            wit_parser::TypeDefKind::Record(record) => TypeDef::record(
-                name.to_string(),
-                record
-                    .fields
-                    .iter()
-                    .map(|field| (field.name.clone(), field.ty.to_encoder(def))),
-            ),
-            wit_parser::TypeDefKind::Flags(flags) => TypeDef::flags(
-                name.to_string(),
-                flags.flags.iter().map(|flag| (flag.name.clone(),)),
-            ),
-            wit_parser::TypeDefKind::Tuple(tuple) => TypeDef::new(
-                name.to_string(),
-                TypeDefKind::Type(Type::tuple(
-                    tuple.types.iter().map(|typ| typ.to_encoder(def)),
-                )),
-            ),
-            wit_parser::TypeDefKind::Variant(variant) => TypeDef::variant(
-                name.to_string(),
-                variant.cases.iter().map(|case| match case.ty {
-                    Some(ty) => VariantCase::value(case.name.clone(), ty.to_encoder(def)),
-                    None => VariantCase::empty(case.name.clone()),
-                }),
-            ),
-            wit_parser::TypeDefKind::Enum(enum_ty) => TypeDef::enum_(
-                name.to_string(),
-                enum_ty.cases.iter().map(|case| case.name.clone()),
-            ),
-            wit_parser::TypeDefKind::Option(typ) => TypeDef::new(
-                name.to_string(),
-                TypeDefKind::Type(Type::option(typ.to_encoder(def))),
-            ),
-            wit_parser::TypeDefKind::Result(result) => TypeDef::new(
-                name.to_string(),
-                // TODO: match is duplicated
-                TypeDefKind::Type(match (&result.ok, &result.err) {
-                    (Some(ok), Some(err)) => {
-                        Type::result_both(ok.to_encoder(def), err.to_encoder(def))
-                    }
-                    (Some(ok), None) => Type::result_ok(ok.to_encoder(def)),
-                    (None, Some(err)) => Type::result_err(err.to_encoder(def)),
-                    (None, None) => {
-                        panic!("result type has no ok or err types")
-                    }
-                }),
-            ),
-            wit_parser::TypeDefKind::List(typ) => TypeDef::new(
-                name.to_string(),
-                TypeDefKind::Type(Type::list(typ.to_encoder(def))),
-            ),
-            wit_parser::TypeDefKind::Future(_) => {
-                panic!("Future type is not supported yet")
-            }
-            wit_parser::TypeDefKind::Stream(_) => {
-                panic!("Stream type is not supported yet")
-            }
-            wit_parser::TypeDefKind::Type(typ) => {
-                TypeDef::new(name.to_string(), TypeDefKind::Type(typ.to_encoder(def)))
-            }
-            wit_parser::TypeDefKind::Unknown => {
-                panic!("Unexpected unknown type")
-            }
-            wit_parser::TypeDefKind::Resource => {
-                panic!("Unexpected resource type")
-            }
-            wit_parser::TypeDefKind::Handle(handle) => TypeDef::new(
-                name.to_string(),
-                // TODO: match is duplicated
-                TypeDefKind::Type(match handle {
-                    wit_parser::Handle::Own(type_id) => {
-                        wit_parser::Type::Id(*type_id).to_encoder(def)
-                    }
-                    wit_parser::Handle::Borrow(type_id) => {
-                        Type::borrow(wit_parser::Type::Id(*type_id).to_encoder(def).to_string())
-                    }
-                }),
-            ),
-        }
+        })
     }
 }
 
