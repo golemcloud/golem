@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-
+use std::fmt::Display;
 use crate::gateway_api_deployment::ApiSiteString;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
@@ -13,6 +13,13 @@ pub struct InputHttpRequest {
 }
 
 impl InputHttpRequest {
+    pub fn uri(&self) -> String {
+        match self.input_path.query_path {
+            Some(ref query_path) => format!("{}?{}", self.input_path.base_path, query_path),
+            None => self.input_path.base_path.clone(),
+        }
+    }
+
     pub fn get_host(&self) -> Option<ApiSiteString> {
         self.headers
             .get("host")
@@ -25,6 +32,15 @@ impl InputHttpRequest {
 pub struct ApiInputPath {
     pub base_path: String,
     pub query_path: Option<String>,
+}
+
+impl Display for ApiInputPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.query_path {
+            Some(ref query_path) => write!(f, "{}?{}", self.base_path, query_path),
+            None => write!(f, "{}", self.base_path),
+        }
+    }
 }
 
 impl ApiInputPath {

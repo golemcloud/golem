@@ -38,8 +38,18 @@ pub struct SessionId(String);
 #[derive(Hash, PartialEq, Eq, Clone)]
 pub struct DataKey(String);
 
+impl DataKey {
+    pub fn nonce() -> DataKey {
+        DataKey("nonce".to_string())
+    }
+
+    pub fn redirect_uri() -> DataKey {
+        DataKey("redirect_url".to_string())
+    }
+}
+
 #[derive(Clone)]
-pub struct DataValue(pub String);
+pub struct DataValue(pub serde_json::Value);
 
 // Should be used only for testing
 

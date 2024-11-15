@@ -2,12 +2,12 @@ use crate::gateway_middleware::http::cors::Cors;
 use http::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
 };
-use crate::gateway_middleware::http::authentication::HttpAuth;
+use crate::gateway_middleware::http::authentication::HttpAuthorizer;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {
     AddCorsHeaders(Cors),
-    AuthenticateRequest(HttpAuth), // Middleware to authenticate before feeding the input to the binding executor
+    AuthenticateRequest(HttpAuthorizer), // Middleware to authenticate before feeding the input to the binding executor
 }
 
 impl HttpMiddleware {
