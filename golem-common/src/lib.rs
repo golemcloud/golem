@@ -26,6 +26,7 @@ pub mod metrics;
 pub mod model;
 pub mod newtype;
 pub mod redis;
+pub mod repo;
 pub mod retriable_error;
 pub mod retries;
 pub mod serialization;

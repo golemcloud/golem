@@ -3623,6 +3623,7 @@ dependencies = [
  "serde 1.0.213",
  "serde_json",
  "serde_yaml",
+ "sqlx",
  "test-r",
  "thiserror",
  "tokio",

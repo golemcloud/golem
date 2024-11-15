@@ -1,8 +1,14 @@
-use crate::model::{ComponentId, Empty};
-use poem_openapi::types::{ParseError, ParseFromParameter, ParseResult};
+use crate::model::{ComponentId, Empty, PluginInstallationId};
+use crate::repo::RowMeta;
+use poem_openapi::types::{
+    ParseError, ParseFromJSON, ParseFromParameter, ParseResult, ToJSON, Type,
+};
 use poem_openapi::{Object, Union};
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
+use sqlx::postgres::PgRow;
+use sqlx::sqlite::SqliteRow;
+use std::collections::HashMap;
+use std::fmt::{Debug, Display};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -102,4 +108,85 @@ impl TryFrom<golem_api_grpc::proto::golem::component::DefaultPluginScope> for De
             None => Err("Missing scope".to_string()),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct PluginInstallation {
+    pub id: PluginInstallationId,
+    pub name: String,
+    pub version: String,
+    pub priority: i32,
+    pub parameters: HashMap<String, String>,
+}
+
+impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::PluginInstallation {
+    fn from(plugin_installation: PluginInstallation) -> Self {
+        golem_api_grpc::proto::golem::component::PluginInstallation {
+            id: Some(plugin_installation.id.into()),
+            name: plugin_installation.name,
+            version: plugin_installation.version,
+            priority: plugin_installation.priority,
+            parameters: plugin_installation.parameters,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct PluginInstallationCreation {
+    pub name: String,
+    pub version: String,
+    pub priority: i32,
+    pub parameters: HashMap<String, String>,
+}
+
+impl PluginInstallationCreation {
+    pub fn with_generated_id(self) -> PluginInstallation {
+        PluginInstallation {
+            id: PluginInstallationId::new_v4(),
+            name: self.name,
+            version: self.version,
+            priority: self.priority,
+            parameters: self.parameters,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+pub struct PluginInstallationUpdate {
+    pub priority: i32,
+    pub parameters: HashMap<String, String>,
+}
+
+pub trait PluginInstallationTarget:
+    Debug
+    + Display
+    + Clone
+    + PartialEq
+    + Serialize
+    + for<'de> Deserialize<'de>
+    + Type
+    + ParseFromJSON
+    + ToJSON
+    + Send
+    + Sync
+    + 'static
+{
+    type Row: RowMeta<sqlx::Sqlite>
+        + RowMeta<sqlx::Postgres>
+        + for<'r> sqlx::FromRow<'r, SqliteRow>
+        + for<'r> sqlx::FromRow<'r, PgRow>
+        + From<Self>
+        + TryInto<Self, Error = String>
+        + Clone
+        + Display
+        + Send
+        + Sync
+        + Unpin
+        + 'static;
+
+    fn table_name() -> &'static str;
 }

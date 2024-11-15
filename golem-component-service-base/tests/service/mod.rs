@@ -17,15 +17,14 @@ use test_r::{inherit_test_dep, test, test_dep};
 use crate::repo::sqlite::SqliteDb;
 use crate::repo::{constraint_data, get_component_data};
 use crate::Tracing;
+use golem_common::model::component::DefaultComponentOwner;
 use golem_common::model::{
     ComponentFilePath, ComponentFilePathWithPermissions, ComponentFilePermissions, ComponentId,
     ComponentType,
 };
 use golem_common::SafeDisplay;
 use golem_component_service_base::config::ComponentStoreLocalConfig;
-use golem_component_service_base::model::{
-    DefaultComponentOwner, InitialComponentFilesArchiveAndPermissions,
-};
+use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
 use golem_component_service_base::repo::component::{
     ComponentRepo, DbComponentRepo, LoggedComponentRepo,
 };

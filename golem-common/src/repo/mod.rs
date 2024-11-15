@@ -13,5 +13,13 @@
 // limitations under the License.
 
 pub mod component;
-pub mod plugin;
-pub mod plugin_installation;
+
+use sqlx::query_builder::Separated;
+use sqlx::{Database, QueryBuilder};
+use std::fmt::Display;
+
+pub trait RowMeta<DB: Database> {
+    fn add_column_list<Sep: Display>(builder: &mut Separated<DB, Sep>);
+    fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>);
+    fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>);
+}

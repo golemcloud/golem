@@ -45,14 +45,13 @@ use golem_api_grpc::proto::golem::component::ComponentConstraints as ComponentCo
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_api_grpc::proto::golem::component::{Component, PluginInstallation};
 use golem_common::grpc::{proto_component_id_string, proto_plugin_installation_id_string};
+use golem_common::model::component::DefaultComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
+use golem_common::model::plugin::{PluginInstallationCreation, PluginInstallationUpdate};
 use golem_common::model::{ComponentId, ComponentType};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
-use golem_component_service_base::model::{
-    ComponentConstraints, DefaultComponentOwner, PluginInstallationCreation,
-    PluginInstallationUpdate,
-};
+use golem_component_service_base::model::ComponentConstraints;
 use golem_component_service_base::service::component;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};

@@ -36,14 +36,7 @@ prost-types = { workspace = true }
 sanitize-filename = "0.5.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { workspace = true, features = [
-    "runtime-tokio",
-    "sqlite",
-    "postgres",
-    "uuid",
-    "migrate",
-    "chrono",
-] }
+sqlx = { workspace = true }
 tap = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }

@@ -12,10 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraint;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::ComponentId;
-use golem_component_service_base::model::{ComponentConstraints, ComponentOwner};
+use golem_component_service_base::model::ComponentConstraints;
 use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
 use golem_wasm_ast::analysis::NameTypePair;
 use rib::RegistryKey;

@@ -30,8 +30,9 @@ mod tests {
     use crate::Tracing;
 
     use crate::repo::UuidOwner;
+    use golem_common::model::component::DefaultComponentOwner;
     use golem_common::model::plugin::DefaultPluginScope;
-    use golem_component_service_base::model::{DefaultComponentOwner, DefaultPluginOwner};
+    use golem_component_service_base::model::DefaultPluginOwner;
     use golem_component_service_base::repo::component::{
         ComponentRepo, DbComponentRepo, LoggedComponentRepo,
     };

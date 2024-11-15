@@ -12,15 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::ComponentOwner;
-use crate::repo::plugin_installation::PluginInstallationRecord;
-use crate::repo::RowMeta;
 use crate::service::plugin::PluginError;
 use async_trait::async_trait;
-use golem_common::model::plugin::DefaultPluginScope;
-use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, HasAccountId, PluginInstallationId,
-};
+use golem_common::model::plugin::{DefaultPluginScope, PluginInstallationTarget};
+use golem_common::model::{AccountId, ComponentId, ComponentVersion, HasAccountId};
+use golem_common::repo::RowMeta;
 use http::Uri;
 use poem_openapi::types::{ParseFromJSON, ToJSON, Type};
 use poem_openapi::{Enum, Object, Union};
@@ -28,7 +24,6 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Postgres, Sqlite};
-use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
@@ -306,97 +301,6 @@ impl PluginScope for DefaultPluginScope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct PluginInstallation {
-    pub id: PluginInstallationId,
-    pub name: String,
-    pub version: String,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
-}
-
-impl PluginInstallation {
-    pub fn try_into<Owner: ComponentOwner, Target: PluginInstallationTarget>(
-        self,
-        owner: Owner::Row,
-        target: Target::Row,
-    ) -> Result<PluginInstallationRecord<Owner, Target>, String> {
-        PluginInstallationRecord::try_from(self, owner, target)
-    }
-}
-
-impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::PluginInstallation {
-    fn from(plugin_installation: PluginInstallation) -> Self {
-        golem_api_grpc::proto::golem::component::PluginInstallation {
-            id: Some(plugin_installation.id.into()),
-            name: plugin_installation.name,
-            version: plugin_installation.version,
-            priority: plugin_installation.priority,
-            parameters: plugin_installation.parameters,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct PluginInstallationCreation {
-    pub name: String,
-    pub version: String,
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
-}
-
-impl PluginInstallationCreation {
-    pub fn with_generated_id(self) -> PluginInstallation {
-        PluginInstallation {
-            id: PluginInstallationId::new_v4(),
-            name: self.name,
-            version: self.version,
-            priority: self.priority,
-            parameters: self.parameters,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct PluginInstallationUpdate {
-    pub priority: i32,
-    pub parameters: HashMap<String, String>,
-}
-
-pub trait PluginInstallationTarget:
-    Debug
-    + Display
-    + Clone
-    + PartialEq
-    + Serialize
-    + for<'de> Deserialize<'de>
-    + Type
-    + ParseFromJSON
-    + ToJSON
-    + Send
-    + Sync
-    + 'static
-{
-    type Row: RowMeta<Sqlite>
-        + RowMeta<Postgres>
-        + for<'r> sqlx::FromRow<'r, SqliteRow>
-        + for<'r> sqlx::FromRow<'r, PgRow>
-        + From<Self>
-        + TryInto<Self, Error = String>
-        + Clone
-        + Display
-        + Send
-        + Sync
-        + Unpin
-        + 'static;
-
-    fn table_name() -> &'static str;
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
 pub struct ComponentPluginInstallationTarget {
     pub component_id: ComponentId,
     pub component_version: ComponentVersion,
@@ -452,7 +356,7 @@ pub trait PluginOwner:
 pub struct DefaultPluginOwner;
 
 impl Display for DefaultPluginOwner {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "default")
     }
 }

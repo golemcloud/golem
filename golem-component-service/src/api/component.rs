@@ -14,12 +14,13 @@
 
 use crate::api::{ComponentError, Result};
 use futures_util::TryStreamExt;
+use golem_common::model::component::DefaultComponentOwner;
+use golem_common::model::plugin::{
+    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+};
 use golem_common::model::ComponentFilePathWithPermissionsList;
 use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
 use golem_common::recorded_http_api_request;
-use golem_component_service_base::model::{
-    DefaultComponentOwner, PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
-};
 use golem_component_service_base::model::{
     InitialComponentFilesArchiveAndPermissions, UpdatePayload,
 };

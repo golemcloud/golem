@@ -13,24 +13,25 @@
 // limitations under the License.
 
 use crate::Tracing;
+use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope};
+use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope, PluginInstallation};
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, Empty, HasAccountId, PluginInstallationId,
 };
+use golem_common::repo::component::DefaultComponentOwnerRow;
+use golem_common::repo::RowMeta;
 use golem_component_service_base::model::{
-    Component, ComponentOwner, ComponentPluginInstallationTarget, ComponentTransformerDefinition,
-    DefaultComponentOwner, DefaultPluginOwner, OplogProcessorDefinition, PluginDefinition,
-    PluginInstallation, PluginTypeSpecificDefinition,
+    Component, ComponentPluginInstallationTarget, ComponentTransformerDefinition,
+    DefaultPluginOwner, OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
 };
-use golem_component_service_base::repo::component::{
-    ComponentRecord, ComponentRepo, DefaultComponentOwnerRow,
-};
+use golem_component_service_base::repo::component::{ComponentRecord, ComponentRepo};
 use golem_component_service_base::repo::plugin::{
     DefaultPluginOwnerRow, DefaultPluginScopeRow, PluginRepo,
 };
-use golem_component_service_base::repo::plugin_installation::ComponentPluginInstallationRow;
-use golem_component_service_base::repo::RowMeta;
+use golem_component_service_base::repo::plugin_installation::{
+    ComponentPluginInstallationRow, PluginInstallationRecord,
+};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use poem_openapi::NewType;
@@ -586,10 +587,12 @@ async fn test_default_component_plugin_installation(
         priority: 1000,
         parameters: HashMap::from_iter(vec![("param1".to_string(), "value1".to_string())]),
     };
-    let installation1_row = installation1
-        .clone()
-        .try_into(component_owner_row.clone(), target1_row.clone())
-        .unwrap();
+    let installation1_row = PluginInstallationRecord::try_from(
+        installation1.clone(),
+        component_owner_row.clone(),
+        target1_row.clone(),
+    )
+    .unwrap();
 
     component_repo.install_plugin(&installation1_row).await?;
 
@@ -600,10 +603,12 @@ async fn test_default_component_plugin_installation(
         priority: 800,
         parameters: HashMap::default(),
     };
-    let installation2_row = installation2
-        .clone()
-        .try_into(component_owner_row.clone(), target1_row.clone())
-        .unwrap();
+    let installation2_row = PluginInstallationRecord::try_from(
+        installation2.clone(),
+        component_owner_row.clone(),
+        target1_row.clone(),
+    )
+    .unwrap();
 
     component_repo.install_plugin(&installation2_row).await?;
 

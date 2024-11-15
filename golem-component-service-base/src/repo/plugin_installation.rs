@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{
-    ComponentOwner, ComponentPluginInstallationTarget, PluginInstallation, PluginInstallationTarget,
-};
-use crate::repo::RowMeta;
+use crate::model::ComponentPluginInstallationTarget;
 use conditional_trait_gen::trait_gen;
+use golem_common::model::component::ComponentOwner;
+use golem_common::model::plugin::{PluginInstallation, PluginInstallationTarget};
 use golem_common::model::{ComponentId, PluginInstallationId};
+use golem_common::repo::RowMeta;
 use poem_openapi::__private::serde_json;
 use sqlx::query_builder::Separated;
 use sqlx::{Database, Encode, QueryBuilder};

@@ -20,12 +20,9 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::vec;
 
+use crate::model::ComponentPluginInstallationTarget;
 use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentConstraints};
-use crate::model::{
-    ComponentOwner, ComponentPluginInstallationTarget, PluginInstallation,
-    PluginInstallationCreation, PluginInstallationUpdate,
-};
 use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::repo::plugin_installation::PluginInstallationRecord;
@@ -36,8 +33,12 @@ use async_trait::async_trait;
 use async_zip::tokio::read::seek::ZipFileReader;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
+use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
+use golem_common::model::plugin::{
+    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+};
 use golem_common::model::ComponentVersion;
 use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{

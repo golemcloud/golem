@@ -53,6 +53,7 @@ use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
+pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
 pub mod exports;
