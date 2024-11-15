@@ -27,8 +27,8 @@ pub trait GatewayBindingExecutor<Namespace, Response> {
     ) -> Response
     where
         RibResult: ToResponse<Response>,
-        EvaluationError: ToResponse<Response>,
-        RibInputTypeMismatch: ToResponse<Response>,
+        EvaluationError: ToResponseFailure<Response>,
+        RibInputTypeMismatch: ToResponseFailure<Response>,
         FileServerBindingResult: ToResponse<Response>,
         CorsPreflight: ToResponse<Response>;
 }
