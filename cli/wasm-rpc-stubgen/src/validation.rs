@@ -1,3 +1,4 @@
+use crate::log::LogColorize;
 use itertools::Itertools;
 use std::fmt::Display;
 
@@ -188,12 +189,64 @@ impl ValidationBuilder {
         _ = self.context.pop();
     }
 
+    fn format(&mut self, message: String) -> String {
+        let multiline = message.contains("\n");
+
+        let message = {
+            if multiline {
+                message.lines().map(|l| format!("  {}", l)).join("\n")
+            } else {
+                message
+            }
+        };
+
+        let context = {
+            if self.context.is_empty() {
+                "".to_string()
+            } else if multiline {
+                format!(
+                    "{}{}",
+                    if message.ends_with("\n") {
+                        "\n  "
+                    } else {
+                        "\n\n  "
+                    },
+                    self.context
+                        .iter()
+                        .map(|c| format!("{}: {}", c.name, c.value.log_color_highlight()))
+                        .join(", ")
+                )
+            } else {
+                format!(
+                    ", {}",
+                    self.context
+                        .iter()
+                        .map(|c| format!("{}: {}", c.name, c.value.log_color_highlight()))
+                        .join("\n")
+                )
+            }
+        };
+
+        format!(
+            "{}{}{}",
+            if multiline && !message.starts_with("\n") {
+                "\n"
+            } else {
+                ""
+            },
+            message,
+            context
+        )
+    }
+
     pub fn add_error(&mut self, error: String) {
-        self.errors.push(format!("{}{}", error, self.context(),));
+        let error = self.format(error);
+        self.errors.push(error);
     }
 
     pub fn add_warn(&mut self, warn: String) {
-        self.warns.push(format!("{}{}", warn, self.context(),));
+        let warn = self.format(warn);
+        self.warns.push(warn);
     }
 
     pub fn add_errors<T, C, F>(&mut self, elems: C, context_and_error: F)
@@ -201,7 +254,7 @@ impl ValidationBuilder {
         C: IntoIterator<Item = T>,
         F: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
     {
-        self.add(elems, context_and_error, Self::add_error);
+        self.add_all(elems, context_and_error, Self::add_error);
     }
 
     pub fn add_warns<T, C, F>(&mut self, elems: C, context_and_error: F)
@@ -209,10 +262,10 @@ impl ValidationBuilder {
         C: IntoIterator<Item = T>,
         F: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
     {
-        self.add(elems, context_and_error, Self::add_warn);
+        self.add_all(elems, context_and_error, Self::add_warn);
     }
 
-    pub fn add<T, C, CE, A>(&mut self, elems: C, context_and_error: CE, add: A)
+    fn add_all<T, C, CE, A>(&mut self, elems: C, context_and_error: CE, add: A)
     where
         C: IntoIterator<Item = T>,
         CE: Fn(T) -> Option<(Vec<(&'static str, String)>, String)>,
@@ -245,20 +298,6 @@ impl ValidationBuilder {
             ValidatedResult::from_value_and_warns(value, self.warns)
         } else {
             ValidatedResult::WarnsAndErrors(self.warns, self.errors)
-        }
-    }
-
-    fn context(&self) -> String {
-        if self.context.is_empty() {
-            "".to_string()
-        } else {
-            format!(
-                ", {}",
-                self.context
-                    .iter()
-                    .map(|c| format!("{}: {}", c.name, c.value))
-                    .join(", ")
-            )
         }
     }
 }

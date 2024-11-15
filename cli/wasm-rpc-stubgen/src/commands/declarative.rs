@@ -237,7 +237,7 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
                     "Command failed with exit code: {}",
                     result
                         .code()
-                        .map(|code| code.to_string())
+                        .map(|code| code.to_string().log_color_error_highlight().to_string())
                         .unwrap_or_else(|| "?".to_string())
                 )));
             }
@@ -407,8 +407,13 @@ fn delete_path(context: &str, path: &Path) -> anyhow::Result<()> {
             "Deleting",
             format!("{} {}", context, path.log_color_highlight()),
         );
-        fs::remove(path)
-            .with_context(|| anyhow!("Failed to delete {}, path: {}", context, path.display()))?;
+        fs::remove(path).with_context(|| {
+            anyhow!(
+                "Failed to delete {}, path: {}",
+                context.log_color_highlight(),
+                path.log_color_highlight()
+            )
+        })?;
     }
     Ok(())
 }
@@ -562,11 +567,13 @@ fn to_anyhow<T>(message: &str, result: ValidatedResult<T>) -> anyhow::Result<T> 
     match result {
         ValidatedResult::Ok(value) => Ok(value),
         ValidatedResult::OkWithWarns(components, warns) => {
+            println!();
             print_warns(warns);
             println!();
             Ok(components)
         }
         ValidatedResult::WarnsAndErrors(warns, errors) => {
+            println!();
             print_warns(warns);
             print_errors(errors);
             println!();
@@ -795,9 +802,12 @@ fn update_cargo_toml(
     component_name: &ComponentName,
 ) -> anyhow::Result<()> {
     let component_input_wit = PathExtra::new(ctx.application.component_input_wit(component_name));
-    let component_input_wit_parent = component_input_wit
-        .parent()
-        .with_context(|| anyhow!("Failed to get parent for component {}", component_name))?;
+    let component_input_wit_parent = component_input_wit.parent().with_context(|| {
+        anyhow!(
+            "Failed to get parent for component {}",
+            component_name.log_color_highlight()
+        )
+    })?;
     let cargo_toml = component_input_wit_parent.join("Cargo.toml");
 
     if cargo_toml.exists() {
@@ -933,16 +943,18 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
     let dir_content = fs_extra::dir::get_dir_content(source).with_context(|| {
         anyhow!(
             "Failed to read component input wit directory entries for {}",
-            source.display()
+            source.log_color_highlight()
         )
     })?;
 
     for file in dir_content.files {
         let from = PathBuf::from(&file);
-        let to = target.join(
-            from.strip_prefix(source)
-                .with_context(|| anyhow!("Failed to strip prefix for source {}", &file))?,
-        );
+        let to = target.join(from.strip_prefix(source).with_context(|| {
+            anyhow!(
+                "Failed to strip prefix for source {}",
+                &file.log_color_highlight()
+            )
+        })?);
 
         log_action(
             "Copying",

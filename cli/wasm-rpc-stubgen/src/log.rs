@@ -200,6 +200,10 @@ pub trait LogColorize {
     fn log_color_highlight(&self) -> ColoredString {
         self.as_str().bold()
     }
+
+    fn log_color_error_highlight(&self) -> ColoredString {
+        self.as_str().bold().red().underline()
+    }
 }
 
 impl<'a> LogColorize for &'a str {

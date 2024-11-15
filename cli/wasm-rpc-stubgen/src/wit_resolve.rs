@@ -5,6 +5,7 @@ use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
 use anyhow::{anyhow, bail, Context, Error};
 use indexmap::IndexMap;
+use indoc::formatdoc;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -34,7 +35,7 @@ impl ResolvedWitDir {
             anyhow!(
                 "Failed to get package by id: {:?}, wit dir: {}",
                 package_id,
-                self.path.display()
+                self.path.log_color_highlight()
             )
         })
     }
@@ -44,7 +45,7 @@ impl ResolvedWitDir {
             anyhow!(
                 "Failed to get package sources by id: {:?}, wit dir: {}",
                 package_id,
-                self.path.display()
+                self.path.log_color_highlight()
             )
         })
     }
@@ -62,7 +63,7 @@ fn resolve_wit_dir(path: &Path) -> anyhow::Result<ResolvedWitDir> {
 
     let (package_id, package_source_map) = resolve
         .push_dir(path)
-        .with_context(|| anyhow!("Failed to resolve wit dir: {}", path.display()))?;
+        .with_context(|| anyhow!("Failed to resolve wit dir: {}", path.log_color_highlight()))?;
 
     let package_sources = collect_package_sources(path, &resolve, package_id, &package_source_map)?;
 
@@ -98,7 +99,7 @@ fn collect_package_sources(
             .ok_or_else(|| {
                 anyhow!(
                     "Failed to get package source map for package {}",
-                    package.name
+                    package.name.to_string().log_color_highlight()
                 )
             })?
             .map(|path| path.to_path_buf())
@@ -114,7 +115,10 @@ fn collect_package_sources(
             );
         } else {
             if sources.is_empty() {
-                bail!("Expected at least one source for package: {}", package.name);
+                bail!(
+                    "Expected at least one source for package: {}",
+                    package.name.to_string().log_color_error_highlight()
+                );
             };
 
             let source = &sources[0];
@@ -122,25 +126,28 @@ fn collect_package_sources(
             let extension = source.extension().ok_or_else(|| {
                 anyhow!(
                     "Failed to get extension for wit source: {}",
-                    source.display()
+                    source.log_color_highlight()
                 )
             })?;
 
             if extension != "wit" {
                 bail!(
                     "Only wit sources are supported, source: {}",
-                    source.display()
+                    source.log_color_highlight()
                 );
             }
 
             let parent = source.parent().ok_or_else(|| {
-                anyhow!("Failed to get parent for wit source: {}", source.display())
+                anyhow!(
+                    "Failed to get parent for wit source: {}",
+                    source.log_color_highlight()
+                )
             })?;
 
             if parent == deps_dir {
                 bail!(
                     "Single-file wit packages without folder are not supported, source: {}",
-                    source.display()
+                    source.log_color_highlight()
                 );
             }
 
@@ -192,11 +199,8 @@ impl ResolvedWitApplication {
         resolved_app.add_components_from_app(&mut validation, app);
 
         resolved_app.validate_package_names(&mut validation);
-
-        if !validation.has_any_errors() {
-            resolved_app.collect_component_deps();
-            resolved_app.sort_components_by_input_deps(&mut validation);
-        }
+        resolved_app.collect_component_deps(app, &mut validation);
+        resolved_app.sort_components_by_input_deps(&mut validation);
 
         validation.build(resolved_app)
     }
@@ -274,8 +278,8 @@ impl ResolvedWitApplication {
                     UnresolvedPackageGroup::parse_dir(&input_wit_dir).with_context(|| {
                         anyhow!(
                             "Failed to parse component {} main package in input wit dir {}",
-                            component_name,
-                            input_wit_dir.display()
+                            component_name.log_color_error_highlight(),
+                            input_wit_dir.log_color_highlight(),
                         )
                     })?;
 
@@ -335,7 +339,7 @@ impl ResolvedWitApplication {
         }
     }
 
-    fn collect_component_deps(&mut self) {
+    fn collect_component_deps(&mut self, app: &Application, validation: &mut ValidationBuilder) {
         fn component_deps<
             'a,
             I: IntoIterator<Item = &'a PackageName>,
@@ -375,6 +379,71 @@ impl ResolvedWitApplication {
             let component = self.components.get_mut(&component_name).unwrap();
             component.input_component_deps = input_deps;
             component.output_component_deps = output_deps;
+        }
+
+        for (component_name, component) in &self.components {
+            let main_deps: HashSet<ComponentName> = component_deps(
+                &self.package_to_component,
+                &component.input_referenced_package_deps,
+            );
+
+            let stub_deps: HashSet<ComponentName> = component_deps(
+                &self.stub_package_to_component,
+                &component.input_referenced_package_deps,
+            );
+
+            if !main_deps.is_empty() || !stub_deps.is_empty() {
+                validation.push_context("component name", component_name.to_string());
+                validation.push_context("package name", component.main_package_name.to_string());
+                {
+                    let component = app.component(component_name);
+                    validation
+                        .push_context("source", component.source.to_string_lossy().to_string());
+                }
+
+                for dep_component_name in main_deps {
+                    let dep_package_name = &self
+                        .component(&dep_component_name)
+                        .unwrap()
+                        .main_package_name;
+
+                    validation
+                        .push_context("referenced package name", dep_package_name.to_string());
+
+                    validation.add_error(formatdoc!("
+                      Direct WIT package reference to component ({}) main package ({}) is not supported.
+                      For using component stubs, declare them in the app manifest.
+                      For using exported types from another component, use the component interface package (e.g.: ns:package-name-interface).",
+                      dep_component_name.to_string().log_color_error_highlight(),
+                      dep_package_name.to_string().log_color_highlight()
+                    ));
+
+                    validation.pop_context();
+                }
+
+                for dep_component_name in stub_deps {
+                    let dep_package_name = &self
+                        .component(&dep_component_name)
+                        .unwrap()
+                        .main_package_name;
+
+                    validation
+                        .push_context("referenced package name", dep_package_name.to_string());
+
+                    validation.add_error(formatdoc!("
+                      Direct WIT package reference to component ({}) stub packages ({}) is not supported.
+                      For using component stubs, declare them in the app manifest.
+                      For using exported types from another component, use the component interface package (e.g.: ns:package-name-interface).",
+                      dep_component_name.to_string().log_color_error_highlight(),
+                      dep_package_name.to_string().log_color_highlight()
+                    ));
+
+                    validation.pop_context();
+                }
+
+                validation.pop_context();
+                validation.pop_context();
+            }
         }
     }
 
@@ -459,9 +528,12 @@ impl ResolvedWitApplication {
     }
 
     fn component(&self, component_name: &ComponentName) -> Result<&ResolvedWitComponent, Error> {
-        self.components
-            .get(component_name)
-            .ok_or_else(|| anyhow!("Component not found: {}", component_name))
+        self.components.get(component_name).ok_or_else(|| {
+            anyhow!(
+                "Component not found: {}",
+                component_name.log_color_error_highlight()
+            )
+        })
     }
 
     // NOTE: Intended to be used for non-component wit package deps, so it does not include
@@ -536,7 +608,12 @@ pub fn parse_wit_deps_dir(path: &Path) -> Result<Vec<UnresolvedPackageGroup>, Er
     let mut entries = path
         .read_dir()
         .and_then(|read_dir| read_dir.collect::<std::io::Result<Vec<_>>>())
-        .with_context(|| anyhow!("Failed to read wit dependencies from {}", path.display(),))?;
+        .with_context(|| {
+            anyhow!(
+                "Failed to read wit dependencies from {}",
+                path.log_color_error_highlight()
+            )
+        })?;
     entries.sort_by_key(|e| e.file_name());
     entries
         .iter()
@@ -548,7 +625,10 @@ pub fn parse_wit_deps_dir(path: &Path) -> Result<Vec<UnresolvedPackageGroup>, Er
             //         - wasm or wat deps
             path.is_dir().then(|| {
                 UnresolvedPackageGroup::parse_dir(&path).with_context(|| {
-                    anyhow!("Failed to parse wit dependency package {}", path.display())
+                    anyhow!(
+                        "Failed to parse wit dependency package {}",
+                        path.log_color_error_highlight()
+                    )
                 })
             })
         })
@@ -585,13 +665,13 @@ impl WitDepsResolver {
         }
         bail!(
             "Package {} not found, sources searched: {}",
-            package_name,
+            package_name.to_string().log_color_error_highlight(),
             if self.sources.is_empty() {
                 "no sources were provided".to_string()
             } else {
                 self.sources
                     .iter()
-                    .map(|s| s.display().to_string())
+                    .map(|s| s.log_color_highlight())
                     .join(", ")
             }
         )

@@ -1,3 +1,4 @@
+use crate::log::LogColorize;
 use anyhow::{anyhow, Context};
 use std::cmp::PartialEq;
 use std::fs::Metadata;
@@ -10,7 +11,7 @@ pub fn create_dir_all<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
         Ok(())
     } else {
         std::fs::create_dir_all(path)
-            .with_context(|| anyhow!("Failed to create directory {}", path.display()))
+            .with_context(|| anyhow!("Failed to create directory {}", path.log_color_highlight()))
     }
 }
 
@@ -77,13 +78,18 @@ pub fn copy_transformed<P: AsRef<Path>, Q: AsRef<Path>, T: Fn(String) -> anyhow:
 
 pub fn read_to_string<P: AsRef<Path>>(path: P) -> anyhow::Result<String> {
     let path = path.as_ref();
-    fs_extra::file::read_to_string(path)
-        .with_context(|| anyhow!("Failed to read to string, file: {}", path.display()))
+    fs_extra::file::read_to_string(path).with_context(|| {
+        anyhow!(
+            "Failed to read to string, file: {}",
+            path.log_color_highlight()
+        )
+    })
 }
 
 pub fn read<P: AsRef<Path>>(path: P) -> anyhow::Result<Vec<u8>> {
     let path = path.as_ref();
-    std::fs::read(path).with_context(|| anyhow!("Failed to read file: {}", path.display()))
+    std::fs::read(path)
+        .with_context(|| anyhow!("Failed to read file: {}", path.log_color_highlight()))
 }
 
 // Creates all missing parent directories if necessary and writes str to path.
@@ -91,7 +97,7 @@ pub fn write_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Resu
     let path = PathExtra(path);
     let str = str.as_ref();
 
-    let context = || format!("Failed to write string to {}", path.display());
+    let context = || anyhow!("Failed to write string to {}", path.log_color_highlight());
 
     let target_parent = path.parent().with_context(context)?;
     create_dir_all(target_parent).with_context(context)?;
@@ -101,7 +107,7 @@ pub fn write_str<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow::Resu
 pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> anyhow::Result<()> {
     let path = PathExtra(path);
 
-    let context = || format!("Failed to write to {}", path.display());
+    let context = || anyhow!("Failed to write to {}", path.log_color_highlight());
 
     let target_parent = path.parent().with_context(context)?;
     create_dir_all(target_parent).with_context(context)?;
@@ -112,11 +118,12 @@ pub fn remove<P: AsRef<Path>>(path: P) -> anyhow::Result<()> {
     let path = path.as_ref();
     if path.exists() {
         if path.is_dir() {
-            std::fs::remove_dir_all(path)
-                .with_context(|| anyhow!("Failed to delete directory {}", path.display()))?;
+            std::fs::remove_dir_all(path).with_context(|| {
+                anyhow!("Failed to delete directory {}", path.log_color_highlight())
+            })?;
         } else {
             std::fs::remove_file(path)
-                .with_context(|| anyhow!("Failed to delete file {}", path.display()))?;
+                .with_context(|| anyhow!("Failed to delete file {}", path.log_color_highlight()))?;
         }
     }
     Ok(())
@@ -126,10 +133,15 @@ pub fn has_str_content<P: AsRef<Path>, S: AsRef<str>>(path: P, str: S) -> anyhow
     let path = path.as_ref();
     let str = str.as_ref();
 
-    let context = || format!("Failed to compare content to string for {}", path.display());
+    let context = || {
+        anyhow!(
+            "Failed to compare content to string for {}",
+            path.log_color_highlight()
+        )
+    };
 
     let content = read_to_string(path)
-        .with_context(|| anyhow!("Failed to read as string: {}", path.display()))
+        .with_context(|| anyhow!("Failed to read as string: {}", path.log_color_highlight()))
         .with_context(context)?;
 
     Ok(content == str)
@@ -140,10 +152,10 @@ pub fn has_same_string_content<P: AsRef<Path>, Q: AsRef<Path>>(a: P, b: Q) -> an
     let b = b.as_ref();
 
     let context = || {
-        format!(
+        anyhow!(
             "Failed to compare string contents of {} and {}",
-            a.display(),
-            b.display()
+            a.log_color_highlight(),
+            b.log_color_highlight()
         )
     };
 
@@ -156,7 +168,7 @@ pub fn has_same_string_content<P: AsRef<Path>, Q: AsRef<Path>>(a: P, b: Q) -> an
 pub fn metadata<P: AsRef<Path>>(path: P) -> anyhow::Result<Metadata> {
     let path = path.as_ref();
     std::fs::metadata(path)
-        .with_context(|| anyhow!("Failed to get metadata for {}", path.display()))
+        .with_context(|| anyhow!("Failed to get metadata for {}", path.log_color_highlight()))
 }
 
 pub struct PathExtra<P: AsRef<Path>>(P);
@@ -168,23 +180,41 @@ impl<P: AsRef<Path>> PathExtra<P> {
 
     pub fn parent(&self) -> anyhow::Result<&Path> {
         let path = self.0.as_ref();
-        path.parent()
-            .ok_or_else(|| anyhow!("Failed to get parent dir for path: {}", path.display()))
+        path.parent().ok_or_else(|| {
+            anyhow!(
+                "Failed to get parent dir for path: {}",
+                path.log_color_highlight()
+            )
+        })
     }
 
     pub fn file_name_to_string(&self) -> anyhow::Result<String> {
         let path = self.0.as_ref();
         path.file_name()
-            .ok_or_else(|| anyhow!("Failed to get file name for path: {}", path.display(),))?
+            .ok_or_else(|| {
+                anyhow!(
+                    "Failed to get file name for path: {}",
+                    path.log_color_highlight(),
+                )
+            })?
             .to_os_string()
             .into_string()
-            .map_err(|_| anyhow!("Failed to convert filename for path: {}", path.display()))
+            .map_err(|_| {
+                anyhow!(
+                    "Failed to convert filename for path: {}",
+                    path.log_color_highlight()
+                )
+            })
     }
 
     pub fn to_str(&self) -> anyhow::Result<&str> {
         let path = self.0.as_ref();
-        path.to_str()
-            .ok_or_else(|| anyhow!("Failed to convert path to string: {}", path.display()))
+        path.to_str().ok_or_else(|| {
+            anyhow!(
+                "Failed to convert path to string: {}",
+                path.log_color_highlight()
+            )
+        })
     }
 
     pub fn to_string(&self) -> anyhow::Result<String> {
@@ -200,8 +230,8 @@ impl<P: AsRef<Path>> PathExtra<P> {
             .with_context(|| {
                 anyhow!(
                     "Failed to strip prefix from path, prefix: {}, path: {}",
-                    prefix.display(),
-                    path.display()
+                    prefix.log_color_highlight(),
+                    path.log_color_highlight()
                 )
             })?
             .to_path_buf())
@@ -248,11 +278,18 @@ impl OverwriteSafeAction {
         F: FnOnce(String) -> anyhow::Result<String>,
     {
         let content = std::fs::read_to_string(&source).with_context(|| {
-            anyhow!("Failed to read file as string, path: {}", source.display())
+            anyhow!(
+                "Failed to read file as string, path: {}",
+                source.log_color_highlight()
+            )
         })?;
 
-        let source_transformed = transform(content)
-            .with_context(|| anyhow!("Failed to transform file, path: {}", source.display()))?;
+        let source_transformed = transform(content).with_context(|| {
+            anyhow!(
+                "Failed to transform file, path: {}",
+                source.log_color_highlight()
+            )
+        })?;
 
         Ok(OverwriteSafeAction::CopyFileTransformed {
             source,

@@ -22,6 +22,7 @@ use crate::wit_encode::EncodedWitDir;
 use crate::wit_resolve::ResolvedWitDir;
 use crate::{cargo, fs, naming};
 use anyhow::{anyhow, bail, Context};
+use itertools::Itertools;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use wit_encoder::{
@@ -384,8 +385,12 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
 
     if dest_main_package_sources.files.len() != 1 {
         bail!(
-            "Expected exactly one dest main package source, got sources: {:?}",
-            dest_main_package_sources.files
+            "Expected exactly one dest main package source, got sources: {}",
+            dest_main_package_sources
+                .files
+                .iter()
+                .map(|s| s.log_color_highlight())
+                .join(", ")
         );
     }
 
@@ -435,7 +440,7 @@ pub fn add_stub_as_dependency_to_wit_dir(config: AddStubAsDepConfig) -> anyhow::
         } else if config.update_cargo_toml == UpdateCargoToml::Update {
             return Err(anyhow!(
                 "Cannot update {:?} file because it does not exist or is not a file",
-                target_cargo_toml
+                target_cargo_toml.log_color_highlight()
             ));
         }
     } else if config.update_cargo_toml == UpdateCargoToml::Update {
@@ -655,14 +660,14 @@ pub fn extract_main_interface_as_wit_dep(wit_dir: &Path) -> anyhow::Result<()> {
         .ok_or_else(|| {
             anyhow!(
                 "Failed to get sources for main package, wit dir: {}",
-                wit_dir.display()
+                wit_dir.log_color_highlight()
             )
         })?;
 
     if sources.files.len() != 1 {
         bail!(
             "Expected exactly one source for main package, wit dir: {}",
-            wit_dir.display()
+            wit_dir.log_color_highlight()
         );
     }
 

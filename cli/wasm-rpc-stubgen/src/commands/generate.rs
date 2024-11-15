@@ -66,7 +66,7 @@ pub async fn generate_and_build_stub(stub_def: &StubDefinition) -> anyhow::Resul
             .with_context(|| {
                 anyhow!(
                     "Failed to canonicalize stub target root {}",
-                    stub_def.config.target_root.display()
+                    stub_def.config.target_root.log_color_error_highlight()
                 )
             })?,
     )
