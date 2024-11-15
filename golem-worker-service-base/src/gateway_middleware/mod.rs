@@ -1,5 +1,10 @@
 pub use http::*;
+pub use middleware_in::*;
+pub use middleware_out::*;
+
 mod http;
+mod middleware_in;
+mod middleware_out;
 
 // A set of middleware can exist in a binding.
 // These middlewares will be processed in a sequential order.
@@ -24,6 +29,8 @@ impl Middlewares {
             })
             .collect()
     }
+
+    pub fn transform_response
 
     pub fn transform_http_response(&self, response: &mut poem::Response) {
         for middleware in self.http_middlewares() {

@@ -1,23 +1,21 @@
 use crate::api::WorkerApiBaseError;
-use crate::gateway_binding::{GatewayRequestDetails, RibInputTypeMismatch};
+use crate::gateway_binding::{GatewayRequestDetails};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
 };
-use crate::gateway_execution::gateway_session::{
-    DataKey, DataValue, GatewaySessionStore, SessionId,
-};
+use crate::gateway_execution::gateway_session::{GatewaySessionStore};
 use crate::gateway_execution::to_response_failure::ToResponseFailure;
 use crate::gateway_middleware::{Cors as CorsPreflight};
 use crate::gateway_security::IdentityProvider;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
-use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
+use openidconnect::{ OAuth2TokenResponse};
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
 use std::fmt::Display;
-use std::os::macos::raw::stat;
+use crate::gateway_execution::auth_call_back_binding_handler::{AuthorisationResult};
 
 #[async_trait]
 pub trait ToResponse<A> {
@@ -116,34 +114,33 @@ impl ToResponse<poem::Response> for RibResult {
     }
 }
 
-pub struct AuthorisationError(String);
-
-impl Display for AuthorisationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Authorisation Error: {}", self.0)
-    }
-}
-
 #[async_trait]
-impl ToResponse<poem::Response> for SecuritySchemeInternal {
+impl ToResponse<poem::Response> for AuthorisationResult {
     async fn to_response(
         self,
-        request_details: &GatewayRequestDetails,
-        session_store: GatewaySessionStore,
+        _request_details: &GatewayRequestDetails,
+        _session_store: GatewaySessionStore,
     ) -> poem::Response {
-        match request_details {
-            GatewayRequestDetails::Http(http_request_details) => {
-                let response_result =
-                    internal::handle_auth(self, http_request_details, session_store);
 
-                response_result.await.unwrap_or_else(|response| response)
+        match self {
+            Ok(success) => {
+                poem::Response::builder()
+                    .status(StatusCode::FOUND)
+                    .header("Location", "/")
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}", success.token_response.access_token().secret().clone()),
+                    )
+                    .body(())
             }
+
+            Err(err) => err.to_failed_response(&StatusCode::UNAUTHORIZED)
         }
     }
 }
 
 mod internal {
-    use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
+    use crate::gateway_binding::{GatewayRequestDetails};
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
     };
@@ -153,127 +150,11 @@ mod internal {
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
     use crate::path::Path;
 
-    use crate::gateway_execution::gateway_session::{
-        DataKey, DataValue, GatewaySessionStore, SessionId,
-    };
-    use crate::gateway_execution::to_response::{AuthorisationError, ToResponse};
-    use crate::gateway_execution::to_response_failure::ToResponseFailure;
-    use crate::gateway_middleware::{Middlewares};
+    use crate::gateway_execution::to_response::{ToResponse};
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
-    use crate::gateway_security::SecuritySchemeInternal;
-
-    // TODO; Move out of here
-    pub(crate) async fn handle_auth(
-        auth_client: SecuritySchemeInternal,
-        http_request_details: &HttpRequestDetails,
-        session_store: GatewaySessionStore,
-    ) -> Result<poem::Response, poem::Response> {
-        let query_params = &http_request_details.request_path_values;
-
-        let code = query_params
-            .get("code")
-            .ok_or(AuthorisationError(
-                "Unauthorised auth call back".to_string(),
-            ))
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
-
-        let code = code
-            .as_str()
-            .ok_or(AuthorisationError(
-                "Unauthorised auth call back".to_string(),
-            ))
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
-
-        let authorisation_code = AuthorizationCode::new(code.to_string());
-        let state_value = query_params
-            .get("state")
-            .ok_or(AuthorisationError(
-                "Unauthorised auth call back".to_string(),
-            ))
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
-
-        let state_str = state_value
-            .as_str()
-            .ok_or(AuthorisationError(
-                "Unauthorised auth call back".to_string(),
-            ))
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
-
-        let obtained_state = state_str.to_string();
-        let session_params = session_store
-            .0
-            .get_params(SessionId(obtained_state.to_string()))
-            .await
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?
-            .ok_or(AuthorisationError("Failed authorisation state".to_string()))
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
-
-        let nonce = session_params
-            .get(&DataKey("nonce".to_string()))
-            .ok_or(AuthorisationError("Failed auth verification".to_string()))
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?
-            .0
-            .clone();
-
-        let open_id_client = auth_client
-            .identity_provider
-            .get_client(
-                &auth_client.provider_metadata.clone(),
-                &auth_client.security_scheme_name.clone(),
-            )
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
-
-        let token_response = auth_client
-            .identity_provider
-            .exchange_code_for_tokens(&open_id_client, &authorisation_code)
-            .await
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
-
-        let claims = auth_client
-            .identity_provider
-            .get_claims(
-                &open_id_client,
-                token_response.clone(),
-                &Nonce::new(nonce.clone()),
-            )
-            .map_err(|err| err.to_failed_response(&StatusCode::UNAUTHORIZED))?;
-
-        let _ = session_store
-            .0
-            .insert(
-                SessionId(obtained_state.to_string()),
-                DataKey("claims".to_string()),
-                DataValue(claims.to_string()), // TODO;
-            )
-            .await;
-
-        let access_token = token_response.access_token().secret().clone();
-
-        // access token in session store
-        let _ = session_store
-            .0
-            .insert(
-                SessionId(obtained_state.to_string()),
-                DataKey("access_token".to_string()),
-                DataValue(access_token),
-            )
-            .await;
-
-        let response = poem::Response::builder()
-            .status(StatusCode::FOUND)
-            .header("Location", "/")
-            .header(
-                "Authorization",
-                format!("Bearer {}", &token_response.access_token().secret().clone()),
-            )
-            .body(());
-
-        Ok(response)
-    }
 
     #[derive(Debug)]
     pub(crate) struct IntermediateHttpResponse {
@@ -421,7 +302,6 @@ mod test {
         let http_response: poem::Response = evaluation_result
             .to_response(
                 &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
-                &Middlewares::default(),
                 &GatewaySessionStore::in_memory(),
             )
             .await;
