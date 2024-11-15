@@ -970,7 +970,7 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-static GENERATED_DIR_DONE_MARKER_FILE_NAME: &str = &".done";
+static GENERATED_DIR_DONE_MARKER_FILE_NAME: &str = ".done";
 
 struct GeneratedDirDoneMarker<'a> {
     dir: &'a Path,
