@@ -136,6 +136,27 @@ impl HttpRequestDetails {
             })
     }
 
+    pub fn get_auth_state_from_cookie(&self) -> Option<String> {
+        self.request_header_values
+            .0
+            .fields
+            .iter()
+            .find(|field| field.name == "Cookie")
+            .and_then(|field| field.value.as_str().map(|x| x.to_string()))
+            .and_then(|cookie_header| {
+                let parts: Vec<&str> = cookie_header.split(';').collect();
+                let state_part = parts.iter().find(|part| part.contains("auth_state"));
+                state_part.and_then(|part| {
+                    let token_parts: Vec<&str> = part.split('=').collect();
+                    if token_parts.len() == 2 {
+                        Some(token_parts[1].to_string())
+                    } else {
+                        None
+                    }
+                })
+            })
+    }
+
     pub fn get_auth_bearer_token(&self) -> Option<String> {
         self.request_header_values
             .0

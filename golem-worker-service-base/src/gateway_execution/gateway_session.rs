@@ -32,7 +32,7 @@ impl GatewaySessionStore {
     }
 }
 
-#[derive(Hash, PartialEq, Eq)]
+#[derive(Hash, PartialEq, Eq, Clone)]
 pub struct SessionId(String);
 
 #[derive(Hash, PartialEq, Eq, Clone)]
@@ -50,6 +50,12 @@ impl DataKey {
 
 #[derive(Clone)]
 pub struct DataValue(pub serde_json::Value);
+
+impl DataValue {
+    pub fn as_string(&self) -> Option<String> {
+        self.0.as_str().map(|s| s.to_string())
+    }
+}
 
 // Should be used only for testing
 
