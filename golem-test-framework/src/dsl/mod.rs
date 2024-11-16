@@ -23,13 +23,14 @@ use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_api_grpc::proto::golem::worker::v1::{
     get_oplog_response, get_worker_metadata_response, get_workers_metadata_response,
     interrupt_worker_response, invoke_and_await_json_response, invoke_and_await_response,
-    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
-    search_oplog_response, update_worker_response, worker_execution_error, ConnectWorkerRequest,
-    DeleteWorkerRequest, GetFileContentsRequest, GetOplogRequest, GetWorkerMetadataRequest,
-    GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest,
-    InterruptWorkerResponse, InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest,
-    LaunchNewWorkerRequest, ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError, WorkerExecutionError,
+    invoke_and_await_typed_response, invoke_response, launch_new_worker_response,
+    list_directory_response, resume_worker_response, search_oplog_response, update_worker_response,
+    worker_execution_error, ConnectWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest,
+    GetOplogRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, InterruptWorkerResponse,
+    InvokeAndAwaitJsonRequest, InvokeAndAwaitRequest, InvokeRequest, LaunchNewWorkerRequest,
+    ListDirectoryRequest, ResumeWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError, WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{
     log_event, InvokeParameters, LogEvent, StdErrLog, StdOutLog, UpdateMode,
@@ -50,7 +51,7 @@ use golem_common::model::{
     WorkerResourceDescription, WorkerStatusRecord,
 };
 use golem_service_base::model::PublicOplogEntryWithIndex;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -187,6 +188,32 @@ pub trait TestDsl {
         function_name: &str,
         params: Vec<Value>,
     ) -> crate::Result<Result<Vec<Value>, Error>>;
+    async fn invoke_and_await_typed(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> crate::Result<Result<Vec<ValueAndType>, Error>>;
+    async fn invoke_and_await_typed_custom(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> crate::Result<Result<Vec<ValueAndType>, Error>>;
+    async fn invoke_and_await_typed_with_key(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> crate::Result<Result<Vec<ValueAndType>, Error>>;
+    async fn invoke_and_await_typed_custom_with_key(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> crate::Result<Result<Vec<ValueAndType>, Error>>;
     async fn invoke_and_await_json(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -637,6 +664,87 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
             }
             Some(invoke_and_await_response::Result::Error(_)) => {
                 Err(anyhow!("Empty error response from invoke_and_await"))
+            }
+        }
+    }
+
+    async fn invoke_and_await_typed(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> crate::Result<Result<Vec<ValueAndType>, Error>> {
+        TestDsl::invoke_and_await_typed_custom(self, worker_id, function_name, params).await
+    }
+
+    async fn invoke_and_await_typed_custom(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> crate::Result<Result<Vec<ValueAndType>, Error>> {
+        let idempotency_key = IdempotencyKey::fresh();
+        TestDsl::invoke_and_await_typed_custom_with_key(
+            self,
+            worker_id,
+            &idempotency_key,
+            function_name,
+            params,
+        )
+        .await
+    }
+
+    async fn invoke_and_await_typed_with_key(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> crate::Result<Result<Vec<ValueAndType>, Error>> {
+        TestDsl::invoke_and_await_typed_custom_with_key(
+            self,
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+        )
+        .await
+    }
+
+    async fn invoke_and_await_typed_custom_with_key(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> crate::Result<Result<Vec<ValueAndType>, Error>> {
+        let target_worker_id: TargetWorkerId = worker_id.into();
+        let invoke_response = self
+            .worker_service()
+            .invoke_and_await_typed(InvokeAndAwaitRequest {
+                worker_id: Some(target_worker_id.into()),
+                idempotency_key: Some(idempotency_key.clone().into()),
+                function: function_name.to_string(),
+                invoke_parameters: Some(InvokeParameters {
+                    params: params.into_iter().map(|v| v.into()).collect(),
+                }),
+                context: None,
+            })
+            .await?;
+
+        match invoke_response.result {
+            None => Err(anyhow!("No response from invoke_and_await_typed")),
+            Some(invoke_and_await_typed_response::Result::Success(response)) => Ok(Ok(response
+                .result
+                .into_iter()
+                .map(|v| v.try_into())
+                .collect::<Result<Vec<ValueAndType>, String>>()
+                .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?)),
+            Some(invoke_and_await_typed_response::Result::Error(WorkerError {
+                error: Some(error),
+            })) => Ok(Err(error)),
+            Some(invoke_and_await_typed_response::Result::Error(_)) => {
+                Err(anyhow!("Empty error response from invoke_and_await_typed"))
             }
         }
     }
@@ -1524,6 +1632,19 @@ pub trait TestDslUnsafe {
         function_name: &str,
         params: Vec<Value>,
     ) -> Result<Vec<Value>, Error>;
+    async fn invoke_and_await_typed(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<ValueAndType>, Error>;
+    async fn invoke_and_await_typed_with_key(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<ValueAndType>, Error>;
     async fn invoke_and_await_json(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -1771,7 +1892,33 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         .await
         .expect("Failed to invoke function")
     }
-
+    async fn invoke_and_await_typed(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<ValueAndType>, Error> {
+        <T as TestDsl>::invoke_and_await_typed(self, worker_id, function_name, params)
+            .await
+            .expect("Failed to invoke function")
+    }
+    async fn invoke_and_await_typed_with_key(
+        &self,
+        worker_id: impl Into<TargetWorkerId> + Send + Sync,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<Value>,
+    ) -> Result<Vec<ValueAndType>, Error> {
+        <T as TestDsl>::invoke_and_await_typed_with_key(
+            self,
+            worker_id,
+            idempotency_key,
+            function_name,
+            params,
+        )
+        .await
+        .expect("Failed to invoke function")
+    }
     async fn capture_output(&self, worker_id: &WorkerId) -> UnboundedReceiver<LogEvent> {
         <T as TestDsl>::capture_output(self, worker_id).await
     }

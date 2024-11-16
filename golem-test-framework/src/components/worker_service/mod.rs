@@ -30,10 +30,11 @@ use golem_api_grpc::proto::golem::worker::v1::{
     GetFileContentsRequest, GetOplogRequest, GetOplogResponse, GetWorkerMetadataRequest,
     GetWorkerMetadataResponse, GetWorkersMetadataRequest, GetWorkersMetadataResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
-    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse, InvokeJsonRequest,
-    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
-    ListDirectoryRequest, ListDirectoryResponse, ResumeWorkerRequest, ResumeWorkerResponse,
-    SearchOplogRequest, SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
+    InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
+    LaunchNewWorkerRequest, LaunchNewWorkerResponse, ListDirectoryRequest, ListDirectoryResponse,
+    ResumeWorkerRequest, ResumeWorkerResponse, SearchOplogRequest, SearchOplogResponse,
+    UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_api_grpc::proto::golem::worker::LogEvent;
 
@@ -124,6 +125,18 @@ pub trait WorkerService {
             .client()
             .await?
             .invoke_and_await(request)
+            .await?
+            .into_inner())
+    }
+
+    async fn invoke_and_await_typed(
+        &self,
+        request: InvokeAndAwaitRequest,
+    ) -> crate::Result<InvokeAndAwaitTypedResponse> {
+        Ok(self
+            .client()
+            .await?
+            .invoke_and_await_typed(request)
             .await?
             .into_inner())
     }
