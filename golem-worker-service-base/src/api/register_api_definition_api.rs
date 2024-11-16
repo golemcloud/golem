@@ -427,7 +427,7 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 middleware: None,
             }),
             GatewayBinding::Static(StaticBinding::HttpAuthCallBack(_)) => {
-               unimplemented!("AuthCallBack is not supported in GatewayBindingData")
+                unimplemented!("AuthCallBack is not supported in GatewayBindingData")
             }
         }
     }

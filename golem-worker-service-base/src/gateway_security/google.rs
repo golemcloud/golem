@@ -13,16 +13,15 @@ pub struct GoogleIdentityProvider {
 }
 
 impl GoogleIdentityProvider {
-    pub fn new () -> Self {
+    pub fn new() -> Self {
         GoogleIdentityProvider {
-            default_provider: DefaultIdentityProvider{}
+            default_provider: DefaultIdentityProvider {},
         }
     }
 }
 
 #[async_trait]
 impl IdentityProvider for GoogleIdentityProvider {
-
     async fn get_provider_metadata(
         &self,
         issuer_url: &IssuerUrl,
@@ -59,11 +58,7 @@ impl IdentityProvider for GoogleIdentityProvider {
             .get_claims(client, core_token_response, nonce)
     }
 
-    fn get_authorization_url(
-        &self,
-        client: &OpenIdClient,
-        scopes: Vec<Scope>,
-    ) -> Result<AuthorizationUrl, IdentityProviderError> {
+    fn get_authorization_url(&self, client: &OpenIdClient, scopes: Vec<Scope>) -> AuthorizationUrl {
         self.default_provider.get_authorization_url(client, scopes)
     }
 }

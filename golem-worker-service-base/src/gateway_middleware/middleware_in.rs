@@ -2,6 +2,7 @@ use crate::gateway_binding::GatewayRequestDetails;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_middleware::HttpAuthorizer;
 use async_trait::async_trait;
+use golem_common::SafeDisplay;
 
 // Implementation note: We have multiple `Middleware` (see `Middlewares`).
 // Some middlewares are specific to `MiddlewareIn` or `MiddlewareOut`.
@@ -18,16 +19,28 @@ pub trait MiddlewareIn<Out> {
         &self,
         input: &GatewayRequestDetails,
         session_store: &GatewaySessionStore,
-    ) -> Result<MiddlewareResult<Out>, String>;
+    ) -> Result<MiddlewareSuccess<Out>, MiddlewareFailure>;
 }
 
-pub enum MiddlewareResult<Out> {
+pub enum MiddlewareFailure {
+    Unauthorized(String),
+    InternalServerError(String),
+}
+
+impl SafeDisplay for MiddlewareFailure {
+    fn to_safe_string(&self) -> String {
+        match self {
+            MiddlewareFailure::Unauthorized(msg) => format!("Unauthorized: {}", msg),
+            MiddlewareFailure::InternalServerError(msg) => {
+                format!("Internal Server Error: {}", msg)
+            }
+        }
+    }
+}
+
+pub enum MiddlewareSuccess<Out> {
     PassThrough,
     Redirect(Out),
-}
-
-pub struct PassThroughMetadata {
-    value: serde_json::Value,
 }
 
 #[async_trait]
@@ -36,7 +49,7 @@ impl MiddlewareIn<poem::Response> for HttpAuthorizer {
         &self,
         input: &GatewayRequestDetails,
         session_store: &GatewaySessionStore,
-    ) -> Result<MiddlewareResult<poem::Response>, String> {
+    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareFailure> {
         match input {
             GatewayRequestDetails::Http(http_request) => {
                 self.apply_http_auth(http_request, session_store).await

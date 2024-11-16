@@ -107,7 +107,7 @@ impl ToResponse<poem::Response> for RibResult {
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
             Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
-            Err(e) => e.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
+            Err(e) => e.to_failed_response(|_| StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
@@ -132,7 +132,7 @@ impl ToResponse<poem::Response> for AuthCallBackResult {
                 )
                 .body(()),
 
-            Err(err) => err.to_failed_response(&StatusCode::UNAUTHORIZED),
+            Err(err) => err.to_failed_response(|_| StatusCode::UNAUTHORIZED),
         }
     }
 }
@@ -148,7 +148,6 @@ mod internal {
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
     use crate::path::Path;
 
-    
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use poem::{Body, IntoResponse, ResponseParts};
@@ -329,7 +328,7 @@ mod test {
 
         let http_response: poem::Response = evaluation_result.to_response(
             &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
-            &Middlewares::default(),
+            &GatewaySessionStore::in_memory(),
         );
 
         let (response_parts, body) = http_response.into_parts();

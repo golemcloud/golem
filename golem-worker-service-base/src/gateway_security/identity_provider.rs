@@ -1,7 +1,7 @@
 use crate::gateway_security::open_id_client::OpenIdClient;
 use crate::gateway_security::{GolemIdentityProviderMetadata, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
-use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreTokenResponse};
+use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
 use std::fmt::Display;
 use url::Url;
@@ -51,11 +51,7 @@ pub trait IdentityProvider {
 
     // This gets called during the redirect to the provider's login page,
     // and this is the first step in the OAuth2 workflow in serving a protected route.
-    fn get_authorization_url(
-        &self,
-        client: &OpenIdClient,
-        scopes: Vec<Scope>,
-    ) -> Result<AuthorizationUrl, IdentityProviderError>;
+    fn get_authorization_url(&self, client: &OpenIdClient, scopes: Vec<Scope>) -> AuthorizationUrl;
 }
 
 pub struct AuthorizationUrl {
@@ -63,7 +59,6 @@ pub struct AuthorizationUrl {
     pub csrf_state: CsrfToken,
     pub nonce: Nonce,
 }
-
 
 #[derive(Clone)]
 pub enum IdentityProviderError {
@@ -91,4 +86,3 @@ impl Display for IdentityProviderError {
         }
     }
 }
-

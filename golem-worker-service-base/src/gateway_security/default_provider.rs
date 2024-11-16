@@ -75,11 +75,7 @@ impl IdentityProvider for DefaultIdentityProvider {
         Ok(id_token_claims.clone())
     }
 
-    fn get_authorization_url(
-        &self,
-        client: &OpenIdClient,
-        scopes: Vec<Scope>,
-    ) -> Result<AuthorizationUrl, IdentityProviderError> {
+    fn get_authorization_url(&self, client: &OpenIdClient, scopes: Vec<Scope>) -> AuthorizationUrl {
         let builder = client.client.authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
             CsrfToken::new_random,
@@ -92,10 +88,10 @@ impl IdentityProvider for DefaultIdentityProvider {
 
         let (auth_url, csrf_state, nonce) = builder.url();
 
-        Ok(AuthorizationUrl {
+        AuthorizationUrl {
             url: auth_url,
             csrf_state,
             nonce,
-        })
+        }
     }
 }

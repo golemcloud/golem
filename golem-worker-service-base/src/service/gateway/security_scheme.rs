@@ -1,10 +1,10 @@
-use std::hash::Hash;
 use crate::gateway_security::{
     IdentityProvider, IdentityProviderError, SchemeIdentifier, SecurityScheme,
     SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
 use golem_common::cache::{Cache, SimpleCache};
+use std::hash::Hash;
 use std::sync::Arc;
 
 // The controller phase can decide whether the developer of API deployment
@@ -53,7 +53,9 @@ impl<Namespace> DefaultSecuritySchemeService<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static> SecuritySchemeService<Namespace> for DefaultSecuritySchemeService<Namespace> {
+impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
+    SecuritySchemeService<Namespace> for DefaultSecuritySchemeService<Namespace>
+{
     async fn get(
         &self,
         security_scheme_identifier: &SchemeIdentifier,
@@ -61,7 +63,8 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static> SecurityS
     ) -> Option<SecuritySchemeWithProviderMetadata> {
         // TODO; get_or_insert_simple with Repo
         self.cache
-            .get(&(namespace, security_scheme_identifier.clone())).await
+            .get(&(namespace, security_scheme_identifier.clone()))
+            .await
     }
 
     async fn create(
@@ -83,12 +86,9 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static> SecurityS
                 // TODO: get_or_insert_simple with Repo
                 let result = self
                     .cache
-                    .get_or_insert_simple(
-                        &(namespace, security_scheme.scheme_identifier()),
-                        || {
-                            Box::pin(async move { Ok(security_scheme_with_provider_metadata) })
-                        },
-                    )
+                    .get_or_insert_simple(&(namespace, security_scheme.scheme_identifier()), || {
+                        Box::pin(async move { Ok(security_scheme_with_provider_metadata) })
+                    })
                     .await?;
 
                 Ok(result)

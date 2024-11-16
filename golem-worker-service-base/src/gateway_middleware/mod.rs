@@ -36,7 +36,7 @@ impl Middlewares {
         &self,
         session_store: &GatewaySessionStore,
         input: &GatewayRequestDetails,
-    ) -> Result<MiddlewareResult<R>, String>
+    ) -> Result<MiddlewareSuccess<R>, MiddlewareFailure>
     where
         HttpAuthorizer: MiddlewareIn<R>,
     {
@@ -47,17 +47,17 @@ impl Middlewares {
                     HttpMiddleware::AuthenticateRequest(auth) => {
                         let result = auth.process_input(input, session_store).await?;
                         match result {
-                            MiddlewareResult::Redirect(response) => {
-                                return Ok(MiddlewareResult::Redirect(response))
+                            MiddlewareSuccess::Redirect(response) => {
+                                return Ok(MiddlewareSuccess::Redirect(response))
                             }
-                            MiddlewareResult::PassThrough => {}
+                            MiddlewareSuccess::PassThrough => {}
                         }
                     }
                 },
             }
         }
 
-        Ok(MiddlewareResult::PassThrough)
+        Ok(MiddlewareSuccess::PassThrough)
     }
 
     pub async fn process_middleware_out<Out>(
