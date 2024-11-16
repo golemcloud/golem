@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod metrics;
 pub mod mysql;
 pub mod postgres;
 pub(crate) mod sqlx_common;
@@ -25,12 +26,12 @@ use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::types::{DbResultSet, DbValue, Error};
 use async_trait::async_trait;
 use golem_common::model::WorkerId;
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::sync::Arc;
-use itertools::Itertools;
 
 lazy_static! {
     static ref MASK_ADDRESS_REGEX: Regex = Regex::new(r"(?i)([a-z]+)://([^:]+):([^@]+)@")

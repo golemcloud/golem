@@ -58,7 +58,10 @@ async fn postgres_test(postgres: &DockerPostgresRdbs) {
         assert!(result.is_ok());
     }
 
-    println!("status: {}", rdbms_service.postgres().status());
+    let status = rdbms_service.postgres().status();
+    assert!(status.pools.len() == postgres.rdbs.len());
+
+    println!("status: {}", status);
 
     let address = postgres.rdbs[0].host_connection_string();
     println!("address: {}", address);

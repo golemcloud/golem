@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::rdbms::metrics::{record_rdbms_failure, record_rdbms_success};
 use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, Error};
 use crate::services::rdbms::{
     Rdbms, RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey, RdbmsStatus, RdbmsType,
@@ -27,6 +28,7 @@ use sqlx::{Database, Pool, Row};
 use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
+use std::time::Instant;
 use tracing::{error, info};
 
 #[derive(Clone)]
@@ -79,7 +81,7 @@ where
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     info!(
-                        "{}  pool: {}, connections: {}",
+                        "{} pool: {}, connections: {}",
                         name, key_clone, pool_config.max_connections
                     );
                     let result = key_clone.create_pool(&pool_config).await.map_err(|e| {
@@ -111,6 +113,25 @@ where
             Ok(true)
         } else {
             Ok(false)
+        }
+    }
+
+    fn record_metrics<R>(
+        &self,
+        name: &'static str,
+        start: Instant,
+        result: Result<R, Error>,
+    ) -> Result<R, Error> {
+        let end = Instant::now();
+        match result {
+            Ok(result) => {
+                record_rdbms_success(self.name, name, end.duration_since(start));
+                Ok(result)
+            }
+            Err(err) => {
+                record_rdbms_failure(self.name, name);
+                Err(err)
+            }
         }
     }
 }
@@ -150,6 +171,7 @@ where
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<u64, Error> {
+        let start = Instant::now();
         info!(
             "{} execute - pool: {}, statement: {}",
             self.name, key, statement
@@ -160,13 +182,14 @@ where
             pool.deref().execute(statement, params).await
         };
 
-        result.map_err(|e| {
+        let result = result.map_err(|e| {
             error!(
                 "{} execute - pool: {}, statement: {} - error: {}",
                 self.name, key, statement, e
             );
             e
-        })
+        });
+        self.record_metrics("execute", start, result)
     }
 
     async fn query(
@@ -176,6 +199,7 @@ where
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
+        let start = Instant::now();
         info!(
             "{} query - pool: {}, statement: {}",
             self.name, key, statement
@@ -188,13 +212,14 @@ where
                 .await
         };
 
-        result.map_err(|e| {
+        let result = result.map_err(|e| {
             error!(
                 "{} query - pool: {}, statement: {} - error: {}",
                 self.name, key, statement, e
             );
             e
-        })
+        });
+        self.record_metrics("query", start, result)
     }
 
     fn status(&self) -> RdbmsStatus {
