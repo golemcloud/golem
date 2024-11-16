@@ -1,6 +1,6 @@
 use crate::api::WorkerApiBaseError;
 use crate::gateway_binding::GatewayRequestDetails;
-use crate::gateway_execution::auth_call_back_binding_handler::AuthorisationResult;
+use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackResult;
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
 };
@@ -115,7 +115,7 @@ impl ToResponse<poem::Response> for RibResult {
 }
 
 #[async_trait]
-impl ToResponse<poem::Response> for AuthorisationResult {
+impl ToResponse<poem::Response> for AuthCallBackResult {
     async fn to_response(
         self,
         _request_details: &GatewayRequestDetails,

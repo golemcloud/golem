@@ -2,7 +2,7 @@ use crate::gateway_binding::{
     GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding,
     RibInputTypeMismatch, RibInputValueResolver, StaticBinding,
 };
-use crate::gateway_execution::auth_call_back_binding_handler::AuthCallBackBindingHandler;
+use crate::gateway_execution::auth_call_back_binding_handler::{AuthCallBackBindingHandler, AuthCallBackResult};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
@@ -28,11 +28,14 @@ pub trait GatewayBindingExecutor<Namespace, Response> {
         session: GatewaySessionStore,
     ) -> Response
     where
-        RibResult: ToResponse<Response>,
         EvaluationError: ToResponseFailure<Response>,
         RibInputTypeMismatch: ToResponseFailure<Response>,
+        RibResult: ToResponse<Response>,
         FileServerBindingResult: ToResponse<Response>,
-        CorsPreflight: ToResponse<Response>;
+        CorsPreflight: ToResponse<Response>,
+        AuthCallBackResult: ToResponse<Response>,
+        HttpAuthorizer: MiddlewareIn<Response>,
+        CorsPreflight: MiddlewareOut<Response>;
 }
 
 pub struct DefaultGatewayBindingExecutor<Namespace> {
@@ -154,7 +157,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                             worker_response,
                         )
                         .await
-                        .to_response(&binding.request_details, session_store),
+                        .to_response(&binding.request_details, session_store).await,
                     Err(err) => err.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
                 }
             }
@@ -162,12 +165,12 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         }
     }
 
-    async fn handle_http_auth_call_binding(
+    async fn handle_http_auth_call_binding<R>(
         &self,
         binding: &ResolvedGatewayBinding<N>,
         auth_call_back: &SecuritySchemeInternal,
         session_store: &GatewaySessionStore,
-    ) {
+    ) -> R where AuthCallBackResult: ToResponse<R> {
         match &binding.request_details {
             GatewayRequestDetails::Http(http_request) => {
                 let authorisation_result = self
@@ -175,7 +178,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                     .handle_auth_call_back(&http_request, &auth_call_back, &session_store)
                     .await;
 
-                authorisation_result.to_response(&binding.request_details, session_store)
+                authorisation_result.to_response(&binding.request_details, session_store).await
             }
         }
     }
@@ -196,7 +199,7 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
         RibInputTypeMismatch: ToResponseFailure<R>,
         FileServerBindingResult: ToResponse<R>, // FileServerBindingResult can be a direct response in a file server endpoint
         CorsPreflight: ToResponse<R>, // Cors can be a direct response in a cors preflight endpoint
-        SecuritySchemeInternal: ToResponse<R>, // SecuritySchemeInternal can be a direct response in auth callback endpoint
+        AuthCallBackResult: ToResponse<R>, // AuthCallBackResult can be a direct response in auth callback endpoint
         HttpAuthorizer: MiddlewareIn<R>,       // HttpAuthorizer can authorise input
         CorsPreflight: MiddlewareOut<R>, // CorsPreflight can be a middleware in other endpoints
     {
@@ -204,13 +207,13 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
             ResolvedBinding::Worker(resolved_worker_binding) => {
                 resolved_worker_binding
                     .middlewares
-                    .process_middleware_in(&session, &binding.request_details);
+                    .process_middleware_in(&session, &binding.request_details).await;
                 let mut response = self
                     .handle_worker_binding::<R>(binding, resolved_worker_binding, &session)
                     .await;
                 resolved_worker_binding
                     .middlewares
-                    .process_middleware_out(&session, &mut response);
+                    .process_middleware_out(&session, &mut response).await?;
                 response
             }
             ResolvedBinding::FileServer(resolved_file_server_binding) => {
@@ -233,7 +236,7 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
                 // There is no middleware for a static binding nor a middleware out
                 cors_preflight
                     .clone()
-                    .to_response(&binding.request_details, &session)
+                    .to_response(&binding.request_details, &session).await
             }
 
             ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {

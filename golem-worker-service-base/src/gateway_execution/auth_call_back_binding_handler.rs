@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
@@ -7,15 +8,16 @@ use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
 
-pub type AuthorisationResult = Result<AuthorisationSuccess, AuthorisationError>;
+pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 
+#[async_trait]
 pub trait AuthCallBackBindingHandler {
     async fn handle_auth_call_back(
         &self,
         http_request_details: &HttpRequestDetails,
         security_scheme_internal: &SecuritySchemeInternal,
         session: &GatewaySessionStore,
-    ) -> AuthorisationResult;
+    ) -> AuthCallBackResult;
 }
 
 pub struct AuthorisationSuccess {
@@ -83,6 +85,7 @@ impl SafeDisplay for AuthorisationError {
 
 pub struct DefaultAuthCallBack;
 
+#[async_trait]
 impl AuthCallBackBindingHandler for DefaultAuthCallBack {
     async fn handle_auth_call_back(
         &self,

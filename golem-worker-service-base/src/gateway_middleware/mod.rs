@@ -32,36 +32,49 @@ impl Middlewares {
             .collect()
     }
 
-    pub fn process_middleware_in<R>(
+    pub async fn process_middleware_in<R>(
         &self,
         session_store: &GatewaySessionStore,
         input: &GatewayRequestDetails,
-    ) where
+    ) -> Result<MiddlewareResult<R>, String> where
         HttpAuthorizer: MiddlewareIn<R>,
     {
-        for middleware in self.http_middlewares() {
+        let  result = MiddlewareResult::PassThrough;
+        for middleware in self.0 {
             match middleware {
                 HttpMiddleware::AddCorsHeaders(_) => {}
                 HttpMiddleware::AuthenticateRequest(auth) => {
-                    auth.process_input(input, session_store)
+                    let result = auth.process_input(input, session_store).await?;
+                    match result {
+                        MiddlewareResult::Redirect(response) =>
+                            return Ok(MiddlewareResult::Redirect(response)),
+                        Ok(MiddlewareResult::PassThrough) => {}
+                    }
+
                 }
             }
         }
+
+        Ok(result)
     }
 
-    pub fn process_middleware_out<Out>(
+    pub async fn process_middleware_out<Out>(
         &self,
         session_store: &GatewaySessionStore,
         response: &mut Out,
-    ) where
+    ) -> Result<(), String> where
         Cors: MiddlewareOut<Out>,
     {
-        for middleware in self.http_middlewares() {
+        for middleware in self.0 {
             match middleware {
-                HttpMiddleware::AddCorsHeaders(cors) => cors.process(session_store, response),
+                HttpMiddleware::AddCorsHeaders(cors) => {
+                    cors.process_output(session_store, response).await?;
+                },
                 HttpMiddleware::AuthenticateRequest(_) => {}
             }
         }
+
+        Ok(())
     }
 
     pub fn add(&mut self, middleware: Middleware) {
