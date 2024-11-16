@@ -51,7 +51,8 @@ use golem_common::model::{
     WorkerResourceDescription, WorkerStatusRecord,
 };
 use golem_service_base::model::PublicOplogEntryWithIndex;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -193,27 +194,27 @@ pub trait TestDsl {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
-    ) -> crate::Result<Result<Vec<ValueAndType>, Error>>;
+    ) -> crate::Result<Result<TypeAnnotatedValue, Error>>;
     async fn invoke_and_await_typed_custom(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
-    ) -> crate::Result<Result<Vec<ValueAndType>, Error>>;
+    ) -> crate::Result<Result<TypeAnnotatedValue, Error>>;
     async fn invoke_and_await_typed_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> crate::Result<Result<Vec<ValueAndType>, Error>>;
+    ) -> crate::Result<Result<TypeAnnotatedValue, Error>>;
     async fn invoke_and_await_typed_custom_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> crate::Result<Result<Vec<ValueAndType>, Error>>;
+    ) -> crate::Result<Result<TypeAnnotatedValue, Error>>;
     async fn invoke_and_await_json(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -673,7 +674,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
-    ) -> crate::Result<Result<Vec<ValueAndType>, Error>> {
+    ) -> crate::Result<Result<TypeAnnotatedValue, Error>> {
         TestDsl::invoke_and_await_typed_custom(self, worker_id, function_name, params).await
     }
 
@@ -682,7 +683,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
-    ) -> crate::Result<Result<Vec<ValueAndType>, Error>> {
+    ) -> crate::Result<Result<TypeAnnotatedValue, Error>> {
         let idempotency_key = IdempotencyKey::fresh();
         TestDsl::invoke_and_await_typed_custom_with_key(
             self,
@@ -700,7 +701,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> crate::Result<Result<Vec<ValueAndType>, Error>> {
+    ) -> crate::Result<Result<TypeAnnotatedValue, Error>> {
         TestDsl::invoke_and_await_typed_custom_with_key(
             self,
             worker_id,
@@ -717,7 +718,7 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> crate::Result<Result<Vec<ValueAndType>, Error>> {
+    ) -> crate::Result<Result<TypeAnnotatedValue, Error>> {
         let target_worker_id: TargetWorkerId = worker_id.into();
         let invoke_response = self
             .worker_service()
@@ -734,12 +735,12 @@ impl<T: TestDependencies + Send + Sync> TestDsl for T {
 
         match invoke_response.result {
             None => Err(anyhow!("No response from invoke_and_await_typed")),
-            Some(invoke_and_await_typed_response::Result::Success(response)) => Ok(Ok(response
-                .result
-                .into_iter()
-                .map(|v| v.try_into())
-                .collect::<Result<Vec<ValueAndType>, String>>()
-                .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?)),
+            Some(invoke_and_await_typed_response::Result::Success(response)) => {
+                match response.result.and_then(|v| v.type_annotated_value) {
+                    None => Err(anyhow!("Empty error response from invoke_and_await_typed")),
+                    Some(v) => Ok(Ok(v)),
+                }
+            }
             Some(invoke_and_await_typed_response::Result::Error(WorkerError {
                 error: Some(error),
             })) => Ok(Err(error)),
@@ -1637,14 +1638,14 @@ pub trait TestDslUnsafe {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<ValueAndType>, Error>;
+    ) -> Result<TypeAnnotatedValue, Error>;
     async fn invoke_and_await_typed_with_key(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<ValueAndType>, Error>;
+    ) -> Result<TypeAnnotatedValue, Error>;
     async fn invoke_and_await_json(
         &self,
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
@@ -1897,7 +1898,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         worker_id: impl Into<TargetWorkerId> + Send + Sync,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<ValueAndType>, Error> {
+    ) -> Result<TypeAnnotatedValue, Error> {
         <T as TestDsl>::invoke_and_await_typed(self, worker_id, function_name, params)
             .await
             .expect("Failed to invoke function")
@@ -1908,7 +1909,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<Value>,
-    ) -> Result<Vec<ValueAndType>, Error> {
+    ) -> Result<TypeAnnotatedValue, Error> {
         <T as TestDsl>::invoke_and_await_typed_with_key(
             self,
             worker_id,

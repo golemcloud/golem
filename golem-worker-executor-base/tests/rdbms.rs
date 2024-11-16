@@ -24,7 +24,10 @@ use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::RdbConnectionString;
 use golem_test_framework::dsl::TestDslUnsafe;
+use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
+use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
+use serde_json::json;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -53,13 +56,14 @@ async fn rdbms_postgres_select1(
     let mut worker_ids: Vec<WorkerId> = Vec::new();
     let component_id = executor.store_component("rdbms-service").await;
 
+    let wc = 3;
     for (db_index, rdb) in postgres.rdbs.iter().enumerate() {
         let db_address = rdb.host_connection_string();
 
         let mut env = HashMap::new();
         env.insert("DB_POSTGRES_URL".to_string(), db_address);
 
-        for i in 0..3 {
+        for i in 0..wc {
             let worker_name = format!("rdbms-service-postgres-{db_index}-{i}");
             let worker_id = executor
                 .start_worker_with(&component_id, &worker_name, vec![], env.clone())
@@ -74,7 +78,7 @@ async fn rdbms_postgres_select1(
 
     let mut results_execute: HashMap<WorkerId, Result<Vec<Value>, Error>> = HashMap::new(); // <worker_id, result>
 
-    let mut results_query: HashMap<WorkerId, Result<Vec<Value>, Error>> = HashMap::new(); // <worker_id, result>
+    let mut results_query: HashMap<WorkerId, Result<TypeAnnotatedValue, Error>> = HashMap::new(); // <worker_id, result>
 
     for worker_id in worker_ids {
         let result_execute: Result<Vec<Value>, Error> = executor
@@ -84,16 +88,15 @@ async fn rdbms_postgres_select1(
                 vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
             )
             .await;
-
         results_execute.insert(worker_id.clone(), result_execute);
+
         let result_query = executor
-            .invoke_and_await(
+            .invoke_and_await_typed(
                 &worker_id,
                 "golem:it/api.{postgres-query}",
                 vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
             )
             .await;
-
         results_query.insert(worker_id.clone(), result_query);
     }
 
@@ -111,14 +114,41 @@ async fn rdbms_postgres_select1(
             result.is_ok(),
             "result query for worker {worker_id} is error"
         );
-        // match result.unwrap()[0].clone() {
-        //     Value::Result(Ok(Some(Box::new(Value::List(values))))) if !values.is_empty() => {},
-        //     _ => {
-        //         check!(false, "result query for worker {worker_id} not match");
-        //     },
-        // }
-
-        // check!(result.unwrap() == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![])))))]);
+        let expected = json!(
+                [
+                   {
+                      "ok":{
+                         "columns":[
+                            {
+                               "db-type":{
+                                  "primitive":{
+                                     "int32":null
+                                  }
+                               },
+                               "db-type-name":"INT4",
+                               "name":"?column?",
+                               "ordinal":0
+                            }
+                         ],
+                         "rows":[
+                            {
+                               "values":[
+                                  {
+                                     "primitive":{
+                                        "int32":1
+                                     }
+                                  }
+                               ]
+                            }
+                         ]
+                      }
+                   }
+                ]
+        );
+        check!(
+            result.unwrap().to_json_value() == expected,
+            "result query for worker {worker_id}"
+        );
     }
 }
 
@@ -134,14 +164,14 @@ async fn rdbms_mysql_select1(
     let executor = start(deps, &context).await.unwrap();
     let mut worker_ids: Vec<WorkerId> = Vec::new();
     let component_id = executor.store_component("rdbms-service").await;
-
+    let wc = 1;
     for (db_index, rdb) in mysql.rdbs.iter().enumerate() {
         let db_address = rdb.host_connection_string();
 
         let mut env = HashMap::new();
         env.insert("DB_MYSQL_URL".to_string(), db_address);
 
-        for i in 0..3 {
+        for i in 0..wc {
             let worker_name = format!("rdbms-service-mysql-{db_index}-{i}");
             let worker_id = executor
                 .start_worker_with(&component_id, &worker_name, vec![], env.clone())
@@ -156,7 +186,7 @@ async fn rdbms_mysql_select1(
 
     let mut results_execute: HashMap<WorkerId, Result<Vec<Value>, Error>> = HashMap::new(); // <worker_id, result>
 
-    let mut results_query: HashMap<WorkerId, Result<Vec<Value>, Error>> = HashMap::new(); // <worker_id, result>
+    let mut results_query: HashMap<WorkerId, Result<TypeAnnotatedValue, Error>> = HashMap::new(); // <worker_id, result>
 
     for worker_id in worker_ids {
         let result_execute: Result<Vec<Value>, Error> = executor
@@ -166,16 +196,15 @@ async fn rdbms_mysql_select1(
                 vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
             )
             .await;
-
         results_execute.insert(worker_id.clone(), result_execute);
+
         let result_query = executor
-            .invoke_and_await(
+            .invoke_and_await_typed(
                 &worker_id,
                 "golem:it/api.{mysql-query}",
                 vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
             )
             .await;
-
         results_query.insert(worker_id.clone(), result_query);
     }
 
@@ -190,11 +219,40 @@ async fn rdbms_mysql_select1(
 
     for (worker_id, result) in results_query {
         check!(result.is_ok(), "result query for worker {worker_id}");
-        // match result.unwrap()[0].clone() {
-        //     Value::Result(Ok(Some(Box::new(Value::List(values))))) if !values.is_empty() => {},
-        //     _ => {
-        //         check!(false, "result query for worker {worker_id} not match");
-        //     },
-        // }
+        let expected = json!(
+                [
+                   {
+                      "ok":{
+                         "columns":[
+                            {
+                               "db-type":{
+                                  "primitive":{
+                                     "int64":null
+                                  }
+                               },
+                               "db-type-name":"BIGINT",
+                               "name":"1",
+                               "ordinal":0
+                            }
+                         ],
+                         "rows":[
+                            {
+                               "values":[
+                                  {
+                                     "primitive":{
+                                        "int64":1
+                                     }
+                                  }
+                               ]
+                            }
+                         ]
+                      }
+                   }
+                ]
+        );
+        check!(
+            result.unwrap().to_json_value() == expected,
+            "result query for worker {worker_id}"
+        );
     }
 }
