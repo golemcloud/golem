@@ -21,8 +21,6 @@ use async_trait::async_trait;
 use http::StatusCode;
 use rib::{RibInput, RibResult};
 use std::fmt::Debug;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 #[async_trait]

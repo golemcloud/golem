@@ -114,12 +114,11 @@ impl SecurityScheme {
         })
     }
 
-    pub fn google_default_scope(
+    pub fn google_with_default_scope(
         scheme_id: &str,
         client_id: &str,
         client_secret: &str,
         redirect_uri: &str,
-        scope: &str,
     ) -> Result<SecurityScheme, String> {
         let issuer_url =
             IssuerUrl::new("https://accounts.google.com".to_string()).map_err(|err| {

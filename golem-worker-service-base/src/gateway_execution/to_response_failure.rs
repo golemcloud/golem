@@ -1,8 +1,6 @@
-use crate::gateway_execution::to_response::ToResponse;
 use golem_common::SafeDisplay;
 use http::StatusCode;
 use poem::Body;
-use std::fmt::Display;
 
 pub trait ToResponseFailure<A> {
     fn to_failed_response(&self, status_code: &StatusCode) -> A;

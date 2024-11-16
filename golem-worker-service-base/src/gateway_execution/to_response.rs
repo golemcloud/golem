@@ -7,7 +7,6 @@ use crate::gateway_execution::file_server_binding_handler::{
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response_failure::ToResponseFailure;
 use crate::gateway_middleware::Cors as CorsPreflight;
-use crate::gateway_security::IdentityProvider;
 use async_trait::async_trait;
 use http::header::*;
 use http::StatusCode;
@@ -15,7 +14,6 @@ use openidconnect::OAuth2TokenResponse;
 use poem::Body;
 use poem::IntoResponse;
 use rib::RibResult;
-use std::fmt::Display;
 
 #[async_trait]
 pub trait ToResponse<A> {
@@ -33,7 +31,7 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
         _request_details: &GatewayRequestDetails,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
-        let mut response = match self {
+        let response = match self {
             Ok(data) => Body::from_bytes_stream(data.data)
                 .with_content_type(data.binding_details.content_type.to_string())
                 .with_status(data.binding_details.status_code)
@@ -150,7 +148,7 @@ mod internal {
     use crate::getter::{get_response_headers_or_default, get_status_code_or_ok, GetterExt};
     use crate::path::Path;
 
-    use crate::gateway_execution::to_response::ToResponse;
+    
     use crate::headers::ResolvedResponseHeaders;
     use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
     use poem::{Body, IntoResponse, ResponseParts};
@@ -209,7 +207,7 @@ mod internal {
             let content_type =
                 ContentTypeHeaders::from(response_content_type, accepted_content_types);
 
-            let mut response = match evaluation_result {
+            let response = match evaluation_result {
                 Some(type_annotated_value) => {
                     match type_annotated_value.to_http_resp_with_content_type(content_type) {
                         Ok(body_with_header) => {

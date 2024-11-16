@@ -117,7 +117,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .0
             .get_params(SessionId(obtained_state.to_string()))
             .await
-            .map_err(|err| AuthorisationError::MissingParametersInSession)?
+            .map_err(|_| AuthorisationError::MissingParametersInSession)?
             .ok_or(AuthorisationError::InvalidSession)?;
 
         let nonce = session_params

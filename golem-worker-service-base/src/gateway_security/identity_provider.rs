@@ -92,7 +92,3 @@ impl Display for IdentityProviderError {
     }
 }
 
-#[derive(Clone)]
-pub struct OAuthClient {
-    client: CoreClient,
-}

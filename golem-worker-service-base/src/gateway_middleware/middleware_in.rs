@@ -41,7 +41,6 @@ impl MiddlewareIn<poem::Response> for HttpAuthorizer {
             GatewayRequestDetails::Http(http_request) => {
                 self.apply_http_auth(http_request, session_store).await
             }
-            _ => Ok(MiddlewareResult::PassThrough),
         }
     }
 }

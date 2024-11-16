@@ -1,4 +1,4 @@
-use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
+use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::MiddlewareResult;
 use crate::gateway_security::SecuritySchemeInternal;
@@ -136,7 +136,7 @@ mod internal {
             .await
             .map_err(|err| err.to_string())?;
 
-        let mut response = poem::Response::builder();
+        let response = poem::Response::builder();
         let result = response
             .header("Location", authorization.url.to_string())
             .status(StatusCode::FOUND)

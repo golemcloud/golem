@@ -1,6 +1,4 @@
-use crate::gateway_security::identity_provider::IdentityProviderError;
-use openidconnect::core::{CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreTokenResponse};
-use openidconnect::Nonce;
+use openidconnect::core::{CoreClient, CoreIdTokenVerifier};
 
 #[derive(Clone, Debug)]
 pub struct OpenIdClient {
