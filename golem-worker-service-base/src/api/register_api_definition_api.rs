@@ -15,6 +15,8 @@ use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
 use std::result::Result;
 use std::time::SystemTime;
+use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
+use crate::gateway_security::{ProviderName, SchemeIdentifier, SecurityScheme};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -215,6 +217,28 @@ impl GatewayBindingData {
 #[oai(rename_all = "camelCase")]
 pub struct MiddlewareData {
     pub cors: Option<Cors>,
+}
+
+// SecurityScheme shouldn't have Serialize or Deserialize
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct SecuritySchemeData {
+    provider_name: String,
+    scheme_identifier: SchemeIdentifier,
+    redirect_url: RedirectUrl,
+    scopes: Vec<Scope>,
+}
+
+impl From<SecurityScheme> for SecuritySchemeData {
+    fn from(value: SecurityScheme) -> Self {
+        Self {
+            provider_name: value.provider_name().to_string(),
+            scheme_identifier: value.scheme_identifier(),
+            redirect_url: value.redirect_url(),
+            scopes: value.scopes(),
+        }
+    }
 }
 
 // GolemWorkerBindingWithTypeInfo is a subset of CompiledGolemWorkerBinding
@@ -426,7 +450,7 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 allow_credentials: cors.get_allow_credentials(),
                 middleware: None,
             }),
-            GatewayBinding::Static(StaticBinding::HttpAuthCallBack(_)) => {
+            GatewayBinding::Static(StaticBinding::HttpAuthCallBack(auth)) => {
                 unimplemented!("AuthCallBack is not supported in GatewayBindingData")
             }
         }

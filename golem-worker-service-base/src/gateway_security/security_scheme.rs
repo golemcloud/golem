@@ -1,7 +1,9 @@
+use std::fmt::Display;
 use crate::gateway_security::google::GoogleIdentityProvider;
 use crate::gateway_security::IdentityProvider;
 use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
 
+// SecurityScheme shouldn't have Serialize or Deserialize
 #[derive(Debug, Clone)]
 pub struct SecurityScheme {
     provider_name: ProviderName,
@@ -16,6 +18,10 @@ pub struct SecurityScheme {
 impl SecurityScheme {
     pub fn issue_url(&self) -> IssuerUrl {
         self.issuer_url.clone()
+    }
+
+    pub fn provider_name(&self) -> ProviderName {
+        self.provider_name.clone()
     }
 
     pub fn provider(&self) -> impl IdentityProvider {
@@ -50,6 +56,12 @@ impl PartialEq for SecurityScheme {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProviderName(String);
 
+impl Display for ProviderName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct SchemeIdentifier(String);
 
@@ -58,8 +70,8 @@ impl SecurityScheme {
         &self.issuer_url
     }
 
-    pub fn redirect_url(&self) -> &RedirectUrl {
-        &self.redirect_url
+    pub fn redirect_url(&self) -> RedirectUrl {
+        self.redirect_url.clone()
     }
 
     pub fn client_id(&self) -> &ClientId {
