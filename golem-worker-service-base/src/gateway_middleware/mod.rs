@@ -42,15 +42,18 @@ impl Middlewares {
         let  result = MiddlewareResult::PassThrough;
         for middleware in self.0 {
             match middleware {
-                HttpMiddleware::AddCorsHeaders(_) => {}
-                HttpMiddleware::AuthenticateRequest(auth) => {
-                    let result = auth.process_input(input, session_store).await?;
-                    match result {
-                        MiddlewareResult::Redirect(response) =>
-                            return Ok(MiddlewareResult::Redirect(response)),
-                        Ok(MiddlewareResult::PassThrough) => {}
+                Middleware::Http(http_middleware) => {
+                    match http_middleware {
+                        HttpMiddleware::AddCorsHeaders(_) => {}
+                        HttpMiddleware::AuthenticateRequest(auth) => {
+                            let result = auth.process_input(input, session_store).await?;
+                            match result {
+                                MiddlewareResult::Redirect(response) =>
+                                    return Ok(MiddlewareResult::Redirect(response)),
+                                Ok(MiddlewareResult::PassThrough) => {}
+                            }
+                        }
                     }
-
                 }
             }
         }
@@ -67,10 +70,12 @@ impl Middlewares {
     {
         for middleware in self.0 {
             match middleware {
-                HttpMiddleware::AddCorsHeaders(cors) => {
-                    cors.process_output(session_store, response).await?;
-                },
-                HttpMiddleware::AuthenticateRequest(_) => {}
+                Middleware::Http(http_middleware) => match http_middleware {
+                    HttpMiddleware::AddCorsHeaders(cors) => {
+                        cors.process_output(session_store, response).await?;
+                    }
+                    HttpMiddleware::AuthenticateRequest(_) => {}
+                }
             }
         }
 
