@@ -2,7 +2,7 @@ use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
-use crate::gateway_security::{IdentityProviderError, SecuritySchemeInternal};
+use crate::gateway_security::{IdentityProviderError, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
@@ -15,7 +15,7 @@ pub trait AuthCallBackBindingHandler {
     async fn handle_auth_call_back(
         &self,
         http_request_details: &HttpRequestDetails,
-        security_scheme_internal: &SecuritySchemeInternal,
+        security_scheme_internal: &SecuritySchemeWithProviderMetadata,
         session: &GatewaySessionStore,
     ) -> AuthCallBackResult;
 }
@@ -90,7 +90,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
     async fn handle_auth_call_back(
         &self,
         http_request_details: &HttpRequestDetails,
-        security_scheme_internal: &SecuritySchemeInternal,
+        security_scheme_internal: &SecuritySchemeWithProviderMetadata,
         session_store: &GatewaySessionStore,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
         let query_params = &http_request_details.request_path_values;
@@ -128,7 +128,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
 
         let open_id_client = security_scheme_internal
             .identity_provider()
-            .get_client(&security_scheme_internal.security_scheme)
+            .get_client(&security_scheme_internal)
             .map_err(|err| AuthorisationError::IdentityProviderError(err))?;
 
         let token_response = security_scheme_internal

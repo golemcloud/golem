@@ -16,12 +16,12 @@ use crate::gateway_middleware::{
     MiddlewareSuccess, Middlewares,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
-use crate::gateway_security::SecuritySchemeInternal;
 use async_trait::async_trait;
 use http::StatusCode;
 use rib::{RibInput, RibResult};
 use std::fmt::Debug;
 use std::sync::Arc;
+use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 
 // Response is type parameterised here, mainly to support
 // other protocols.
@@ -184,7 +184,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     async fn handle_http_auth_call_binding<R>(
         &self,
         binding: &ResolvedGatewayBinding<N>,
-        auth_call_back: &SecuritySchemeInternal,
+        security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         session_store: &GatewaySessionStore,
     ) -> R
     where
@@ -194,7 +194,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
             GatewayRequestDetails::Http(http_request) => {
                 let authorisation_result = self
                     .auth_call_back_binding_handler
-                    .handle_auth_call_back(&http_request, &auth_call_back, &session_store)
+                    .handle_auth_call_back(&http_request, &security_scheme_with_metadata, &session_store)
                     .await;
 
                 authorisation_result
@@ -260,7 +260,7 @@ impl<N: Send + Sync + Clone, R: Debug + Send + Sync> GatewayBindingExecutor<N, R
             ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
                 self.handle_http_auth_call_binding(
                     binding,
-                    &auth_call_back.scheme_internal,
+                    &auth_call_back.security_scheme,
                     &session,
                 )
                 .await

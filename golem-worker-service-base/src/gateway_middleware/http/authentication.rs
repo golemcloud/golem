@@ -1,20 +1,19 @@
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::{MiddlewareFailure, MiddlewareSuccess};
-use crate::gateway_security::SecuritySchemeInternal;
+use crate::gateway_security::{SecuritySchemeWithProviderMetadata};
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
 use openidconnect::{ClaimsVerificationError, Nonce, Scope};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpAuthorizer {
-    pub scheme_internal: SecuritySchemeInternal,
+    pub security_scheme: SecuritySchemeWithProviderMetadata,
 }
 
 impl HttpAuthorizer {
     pub fn get_scopes(&self) -> Vec<Scope> {
-        self.scheme_internal
-            .security_scheme
+        self.security_scheme
             .security_scheme
             .scopes()
     }
@@ -24,10 +23,10 @@ impl HttpAuthorizer {
         input: &HttpRequestDetails,
         session_store: &GatewaySessionStore,
     ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareFailure> {
-        let identity_provider = &self.scheme_internal.identity_provider();
+        let identity_provider = &self.security_scheme.identity_provider();
 
         let open_id_client = identity_provider
-            .get_client(&self.scheme_internal.security_scheme)
+            .get_client(&self.security_scheme)
             .map_err(|err| MiddlewareFailure::Unauthorized(err.to_string()))?;
 
         let id_token = input.get_id_token_from_cookie();
