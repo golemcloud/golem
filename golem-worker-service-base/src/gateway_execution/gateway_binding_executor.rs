@@ -200,22 +200,37 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     }
 
     async fn redirect_or_continue<R>(
-        incoming_middleware_result: MiddlewareResult<R>,
+        request_details: &GatewayRequestDetails,
         session: &GatewaySessionStore,
-        continue_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = Result<R, poem::Error>> + Send>>,
+        continue_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = R> + Send>>,
         middlewares: Middlewares, // To process any middleware-out if any
-    ) -> R {
-        match incoming_middleware_result {
-            MiddlewareResult::Redirect(response) => response,
-            MiddlewareResult::PassThrough => {
-                let mut response = continue_fn().await?;
+    ) -> R
+    where
+        CorsPreflight: MiddlewareOut<R>,
+        String: ToResponseFailure<R>,
+    {
+        let input_middleware_result = middlewares
+            .process_middleware_in(session, request_details)
+            .await;
 
-                middlewares
-                    .process_middleware_out(session, &mut response)
-                    .await?;
+        match input_middleware_result {
+            Ok(incoming_middleware_result) => match incoming_middleware_result {
+                MiddlewareResult::Redirect(response) => response,
+                MiddlewareResult::PassThrough => {
+                    let mut response = continue_fn().await;
 
-                Ok(response)
-            }
+                    let middleware_out_result = middlewares
+                        .process_middleware_out(session, &mut response)
+                        .await;
+
+                    match middleware_out_result {
+                        Ok(_) => response,
+                        Err(err) => err.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
+                    }
+                }
+            },
+
+            Err(err) => err.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
@@ -257,13 +272,8 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
             }
 
             ResolvedBinding::Worker(resolved_worker_binding) => {
-                let input_middleware_result = resolved_worker_binding
-                    .middlewares
-                    .process_middleware_in(&session, &binding.request_details)
-                    .await?;
-
                 Self::redirect_or_continue(
-                    input_middleware_result,
+                    &binding.request_details,
                     &session,
                     || async {
                         let response = self
@@ -277,12 +287,8 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
             }
 
             ResolvedBinding::FileServer(resolved_file_server_binding) => {
-                let input_middleware_result = resolved_file_server_binding
-                    .middlewares
-                    .process_middleware_in(&session, &binding.request_details);
-
                 Self::redirect_or_continue(
-                    input_middleware_result,
+                    &binding.request_details,
                     &session,
                     || async {
                         let response = self

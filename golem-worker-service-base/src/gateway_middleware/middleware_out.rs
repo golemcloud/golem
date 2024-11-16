@@ -17,7 +17,7 @@ pub trait MiddlewareOut<R> {
         &self,
         session_store: &GatewaySessionStore,
         input: &mut R,
-    ) -> Result<(), String>;
+    ) -> Result<(), String>; // TODO; Avoid String error and make it more specific. Internal, Authorisation etc can be generic
 }
 
 #[async_trait]
