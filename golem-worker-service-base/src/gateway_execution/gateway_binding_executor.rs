@@ -206,8 +206,9 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         middlewares: Middlewares, // To process any middleware-out if any
     ) -> R
     where
+        HttpAuthorizer: MiddlewareIn<R>,
         CorsPreflight: MiddlewareOut<R>,
-        String: ToResponseFailure<R>,
+        EvaluationError: ToResponseFailure<R>,
     {
         let input_middleware_result = middlewares
             .process_middleware_in(session, request_details)
@@ -225,12 +226,12 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 
                     match middleware_out_result {
                         Ok(_) => response,
-                        Err(err) => err.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
+                        Err(err) => EvaluationError(err).to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
                     }
                 }
             },
 
-            Err(err) => err.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
+            Err(err) =>  EvaluationError(err).to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
