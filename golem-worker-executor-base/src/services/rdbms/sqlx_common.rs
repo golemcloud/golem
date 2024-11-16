@@ -145,9 +145,11 @@ where
     RdbmsPoolKey: PoolCreator<DB>,
 {
     async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error> {
+        let start = Instant::now();
         let key = RdbmsPoolKey::new(address.to_string());
         info!("{} create connection - pool: {}", self.name, key);
-        let _pool = self.get_or_create(worker_id, &key).await?;
+        let result = self.get_or_create(worker_id, &key).await;
+        let _ = self.record_metrics("create", start, result)?;
         Ok(key)
     }
 
@@ -173,8 +175,11 @@ where
     ) -> Result<u64, Error> {
         let start = Instant::now();
         info!(
-            "{} execute - pool: {}, statement: {}",
-            self.name, key, statement
+            "{} execute - pool: {}, statement: {}, params count: {}",
+            self.name,
+            key,
+            statement,
+            params.len()
         );
 
         let result = {
@@ -201,8 +206,11 @@ where
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
         let start = Instant::now();
         info!(
-            "{} query - pool: {}, statement: {}",
-            self.name, key, statement
+            "{} query - pool: {}, statement: {}, params count: {}",
+            self.name,
+            key,
+            statement,
+            params.len()
         );
 
         let result = {

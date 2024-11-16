@@ -14,9 +14,9 @@
 
 use std::time::Duration;
 
+use golem_common::metrics::DEFAULT_TIME_BUCKETS;
 use lazy_static::lazy_static;
 use prometheus::*;
-use golem_common::metrics::DEFAULT_TIME_BUCKETS;
 
 lazy_static! {
     static ref RDBMS_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
