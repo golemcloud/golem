@@ -1,9 +1,9 @@
-use async_trait::async_trait;
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
 use crate::gateway_security::{IdentityProviderError, SecuritySchemeInternal};
+use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};

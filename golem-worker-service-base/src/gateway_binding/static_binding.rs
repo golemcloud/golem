@@ -1,9 +1,4 @@
-use crate::gateway_middleware::{Cors, HttpAuthorizer, SecuritySchemeWithProviderMetadata};
-use crate::gateway_security::{
-    GolemIdentityProviderMetadata, IdentityProvider, OpenIdClient, SecurityScheme,
-};
-use openidconnect::{AuthorizationCode, ClientId, ClientSecret};
-use std::sync::Arc;
+use crate::gateway_middleware::{Cors, HttpAuthorizer};
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
 // as it may introduce unnecessary latency

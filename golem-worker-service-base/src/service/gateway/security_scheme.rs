@@ -1,4 +1,7 @@
-use crate::gateway_security::{IdentityProvider, IdentityProviderError, SchemeIdentifier, SecurityScheme, SecuritySchemeWithProviderMetadata};
+use crate::gateway_security::{
+    IdentityProvider, IdentityProviderError, SchemeIdentifier, SecurityScheme,
+    SecuritySchemeWithProviderMetadata,
+};
 use async_trait::async_trait;
 use golem_common::cache::{Cache, SimpleCache};
 use std::sync::Arc;
@@ -47,9 +50,8 @@ impl<Namespace> DefaultSecuritySchemeService<Namespace> {
     }
 }
 
-impl<Namespace> SecuritySchemeService<Namespace>
-    for DefaultSecuritySchemeService<Namespace>
-{
+#[async_trait]
+impl<Namespace> SecuritySchemeService<Namespace> for DefaultSecuritySchemeService<Namespace> {
     async fn get(
         &self,
         security_scheme_identifier: &SchemeIdentifier,

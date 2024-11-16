@@ -36,46 +36,46 @@ impl Middlewares {
         &self,
         session_store: &GatewaySessionStore,
         input: &GatewayRequestDetails,
-    ) -> Result<MiddlewareResult<R>, String> where
+    ) -> Result<MiddlewareResult<R>, String>
+    where
         HttpAuthorizer: MiddlewareIn<R>,
     {
-        let  result = MiddlewareResult::PassThrough;
-        for middleware in self.0 {
+        for middleware in self.0.iter() {
             match middleware {
-                Middleware::Http(http_middleware) => {
-                    match http_middleware {
-                        HttpMiddleware::AddCorsHeaders(_) => {}
-                        HttpMiddleware::AuthenticateRequest(auth) => {
-                            let result = auth.process_input(input, session_store).await?;
-                            match result {
-                                MiddlewareResult::Redirect(response) =>
-                                    return Ok(MiddlewareResult::Redirect(response)),
-                                Ok(MiddlewareResult::PassThrough) => {}
+                Middleware::Http(http_middleware) => match http_middleware {
+                    HttpMiddleware::AddCorsHeaders(_) => {}
+                    HttpMiddleware::AuthenticateRequest(auth) => {
+                        let result = auth.process_input(input, session_store).await?;
+                        match result {
+                            MiddlewareResult::Redirect(response) => {
+                                return Ok(MiddlewareResult::Redirect(response))
                             }
+                            MiddlewareResult::PassThrough => {}
                         }
                     }
-                }
+                },
             }
         }
 
-        Ok(result)
+        Ok(MiddlewareResult::PassThrough)
     }
 
     pub async fn process_middleware_out<Out>(
         &self,
         session_store: &GatewaySessionStore,
         response: &mut Out,
-    ) -> Result<(), String> where
+    ) -> Result<(), String>
+    where
         Cors: MiddlewareOut<Out>,
     {
-        for middleware in self.0 {
+        for middleware in self.0.iter() {
             match middleware {
                 Middleware::Http(http_middleware) => match http_middleware {
                     HttpMiddleware::AddCorsHeaders(cors) => {
                         cors.process_output(session_store, response).await?;
                     }
                     HttpMiddleware::AuthenticateRequest(_) => {}
-                }
+                },
             }
         }
 

@@ -1,11 +1,11 @@
 use crate::gateway_binding::{GatewayRequestDetails, WorkerDetail};
+use golem_common::SafeDisplay;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use rib::{RibInput, RibInputTypeInfo};
 use std::collections::HashMap;
 use std::fmt::Display;
 use tracing::warn;
-use golem_common::SafeDisplay;
 
 // `RibInputValueResolver` is responsible
 // for extracting `RibInputValue` from any input, given the requirements as `RibInputTypeInfo`.

@@ -13,12 +13,20 @@ use async_trait::async_trait;
 // `middlewares.process_output(protocol_independent_response)` for output.
 #[async_trait]
 pub trait MiddlewareOut<R> {
-    async fn process_output(&self, session_store: &GatewaySessionStore, input: &mut R) -> Result<(), String>;
+    async fn process_output(
+        &self,
+        session_store: &GatewaySessionStore,
+        input: &mut R,
+    ) -> Result<(), String>;
 }
 
 #[async_trait]
 impl MiddlewareOut<poem::Response> for Cors {
-    async fn process_output(&self, _session_store: &GatewaySessionStore, input: &mut poem::Response) -> Result<(), String> {
+    async fn process_output(
+        &self,
+        _session_store: &GatewaySessionStore,
+        input: &mut poem::Response,
+    ) -> Result<(), String> {
         HttpMiddleware::apply_cors(input, self);
         Ok(())
     }

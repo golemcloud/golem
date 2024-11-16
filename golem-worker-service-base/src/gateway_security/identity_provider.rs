@@ -1,4 +1,3 @@
-use crate::gateway_middleware::SecuritySchemeWithProviderMetadata;
 use crate::gateway_security::open_id_client::OpenIdClient;
 use crate::gateway_security::{GolemIdentityProviderMetadata, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;

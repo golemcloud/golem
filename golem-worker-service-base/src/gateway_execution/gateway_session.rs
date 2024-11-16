@@ -85,7 +85,11 @@ impl GatewayData for InMemoryGatewaySession {
         Ok(())
     }
 
-    async fn get(&self, session_id: SessionId, data_key: DataKey) -> Result<Option<DataValue>, String> {
+    async fn get(
+        &self,
+        session_id: SessionId,
+        data_key: DataKey,
+    ) -> Result<Option<DataValue>, String> {
         let data = self.data.lock().await;
         match data.get(&session_id) {
             Some(session_data) => match session_data.get(&data_key) {

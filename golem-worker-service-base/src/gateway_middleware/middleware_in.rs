@@ -1,5 +1,5 @@
 use crate::gateway_binding::GatewayRequestDetails;
-use crate::gateway_execution::gateway_session::{GatewaySessionStore};
+use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_middleware::HttpAuthorizer;
 use async_trait::async_trait;
 

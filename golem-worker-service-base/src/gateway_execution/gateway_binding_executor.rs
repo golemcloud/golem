@@ -2,7 +2,9 @@ use crate::gateway_binding::{
     GatewayRequestDetails, ResolvedBinding, ResolvedGatewayBinding, ResolvedWorkerBinding,
     RibInputTypeMismatch, RibInputValueResolver, StaticBinding,
 };
-use crate::gateway_execution::auth_call_back_binding_handler::{AuthCallBackBindingHandler, AuthCallBackResult};
+use crate::gateway_execution::auth_call_back_binding_handler::{
+    AuthCallBackBindingHandler, AuthCallBackResult,
+};
 use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingHandler, FileServerBindingResult,
 };
@@ -10,7 +12,8 @@ use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::ToResponse;
 use crate::gateway_execution::to_response_failure::ToResponseFailure;
 use crate::gateway_middleware::{
-    Cors as CorsPreflight, HttpAuthorizer, MiddlewareIn, MiddlewareOut, Middlewares,
+    Cors as CorsPreflight, HttpAuthorizer, MiddlewareIn, MiddlewareOut, MiddlewareResult,
+    Middlewares,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::SecuritySchemeInternal;
@@ -18,6 +21,8 @@ use async_trait::async_trait;
 use http::StatusCode;
 use rib::{RibInput, RibResult};
 use std::fmt::Debug;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 #[async_trait]
@@ -120,7 +125,11 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                     .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
                     .await
                 {
-                    Ok(result) => result.to_response(&binding.request_details, session_store).await,
+                    Ok(result) => {
+                        result
+                            .to_response(&binding.request_details, session_store)
+                            .await
+                    }
                     Err(err) => err.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
                 }
             }
@@ -149,15 +158,17 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                     .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
                     .await
                 {
-                    Ok(worker_response) => self
-                        .file_server_binding_handler
-                        .handle_file_server_binding_result(
-                            &resolved_binding.namespace,
-                            &resolved_binding.worker_detail,
-                            worker_response,
-                        )
-                        .await
-                        .to_response(&binding.request_details, session_store).await,
+                    Ok(worker_response) => {
+                        self.file_server_binding_handler
+                            .handle_file_server_binding_result(
+                                &resolved_binding.namespace,
+                                &resolved_binding.worker_detail,
+                                worker_response,
+                            )
+                            .await
+                            .to_response(&binding.request_details, session_store)
+                            .await
+                    }
                     Err(err) => err.to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
                 }
             }
@@ -170,7 +181,10 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         binding: &ResolvedGatewayBinding<N>,
         auth_call_back: &SecuritySchemeInternal,
         session_store: &GatewaySessionStore,
-    ) -> R where AuthCallBackResult: ToResponse<R> {
+    ) -> R
+    where
+        AuthCallBackResult: ToResponse<R>,
+    {
         match &binding.request_details {
             GatewayRequestDetails::Http(http_request) => {
                 let authorisation_result = self
@@ -178,7 +192,29 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                     .handle_auth_call_back(&http_request, &auth_call_back, &session_store)
                     .await;
 
-                authorisation_result.to_response(&binding.request_details, session_store).await
+                authorisation_result
+                    .to_response(&binding.request_details, session_store)
+                    .await
+            }
+        }
+    }
+
+    async fn redirect_or_continue<R>(
+        incoming_middleware_result: MiddlewareResult<R>,
+        session: &GatewaySessionStore,
+        continue_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = Result<R, poem::Error>> + Send>>,
+        middlewares: Middlewares, // To process any middleware-out if any
+    ) -> R {
+        match incoming_middleware_result {
+            MiddlewareResult::Redirect(response) => response,
+            MiddlewareResult::PassThrough => {
+                let mut response = continue_fn().await?;
+
+                middlewares
+                    .process_middleware_out(session, &mut response)
+                    .await?;
+
+                Ok(response)
             }
         }
     }
@@ -200,43 +236,15 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
         FileServerBindingResult: ToResponse<R>, // FileServerBindingResult can be a direct response in a file server endpoint
         CorsPreflight: ToResponse<R>, // Cors can be a direct response in a cors preflight endpoint
         AuthCallBackResult: ToResponse<R>, // AuthCallBackResult can be a direct response in auth callback endpoint
-        HttpAuthorizer: MiddlewareIn<R>,       // HttpAuthorizer can authorise input
-        CorsPreflight: MiddlewareOut<R>, // CorsPreflight can be a middleware in other endpoints
+        HttpAuthorizer: MiddlewareIn<R>,   // HttpAuthorizer can authorise input
+        CorsPreflight: MiddlewareOut<R>,   // CorsPreflight can be a middleware in other endpoints
     {
         match &binding.resolved_binding {
-            ResolvedBinding::Worker(resolved_worker_binding) => {
-                resolved_worker_binding
-                    .middlewares
-                    .process_middleware_in(&session, &binding.request_details).await;
-                let mut response = self
-                    .handle_worker_binding::<R>(binding, resolved_worker_binding, &session)
-                    .await;
-                resolved_worker_binding
-                    .middlewares
-                    .process_middleware_out(&session, &mut response).await?;
-                response
-            }
-            ResolvedBinding::FileServer(resolved_file_server_binding) => {
-                resolved_file_server_binding
-                    .middlewares
-                    .process_middleware_in(&session, &binding.request_details);
-                let mut response = self
-                    .handle_file_server_binding::<R>(
-                        binding,
-                        resolved_file_server_binding,
-                        &session,
-                    )
-                    .await;
-                resolved_file_server_binding
-                    .middlewares
-                    .process_middleware_out(&session, &mut response);
-                response
-            }
             ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
-                // There is no middleware for a static binding nor a middleware out
                 cors_preflight
                     .clone()
-                    .to_response(&binding.request_details, &session).await
+                    .to_response(&binding.request_details, &session)
+                    .await
             }
 
             ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
@@ -244,6 +252,49 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
                     binding,
                     &auth_call_back.scheme_internal,
                     &session,
+                )
+                .await
+            }
+
+            ResolvedBinding::Worker(resolved_worker_binding) => {
+                let input_middleware_result = resolved_worker_binding
+                    .middlewares
+                    .process_middleware_in(&session, &binding.request_details)
+                    .await?;
+
+                Self::redirect_or_continue(
+                    input_middleware_result,
+                    &session,
+                    || async {
+                        let response = self
+                            .handle_worker_binding::<R>(binding, resolved_worker_binding, &session)
+                            .await;
+                        Ok(response)
+                    },
+                    resolved_worker_binding.middlewares.clone(),
+                )
+                .await
+            }
+
+            ResolvedBinding::FileServer(resolved_file_server_binding) => {
+                let input_middleware_result = resolved_file_server_binding
+                    .middlewares
+                    .process_middleware_in(&session, &binding.request_details);
+
+                Self::redirect_or_continue(
+                    input_middleware_result,
+                    &session,
+                    || async {
+                        let response = self
+                            .handle_file_server_binding::<R>(
+                                binding,
+                                resolved_file_server_binding,
+                                &session,
+                            )
+                            .await;
+                        Ok(response)
+                    },
+                    resolved_file_server_binding.middlewares.clone(),
                 )
                 .await
             }

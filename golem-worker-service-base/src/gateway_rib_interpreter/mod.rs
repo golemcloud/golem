@@ -42,7 +42,6 @@ impl SafeDisplay for EvaluationError {
     }
 }
 
-
 impl From<String> for EvaluationError {
     fn from(err: String) -> Self {
         EvaluationError(err)

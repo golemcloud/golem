@@ -13,6 +13,7 @@ use tracing::{error, info};
 use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 
 use crate::gateway_binding::GatewayBindingResolver;
+use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use crate::gateway_execution::gateway_binding_executor::{
     DefaultGatewayBindingExecutor, GatewayBindingExecutor,
 };
@@ -42,15 +43,18 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                 + Sync
                 + Send,
         >,
-        fileserver_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
+        file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     ) -> Self {
         let evaluator = Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             worker_request_executor_service.clone(),
         ));
 
+        let auth_call_back_binding_handler = Arc::new(DefaultAuthCallBack);
+
         let gateway_binding_executor = Arc::new(DefaultGatewayBindingExecutor {
-            evaluator: evaluator.clone(),
-            file_server_binding_handler: fileserver_binding_handler.clone(),
+            evaluator,
+            file_server_binding_handler,
+            auth_call_back_binding_handler,
         });
 
         let gateway_session_store = GatewaySessionStore::in_memory();
