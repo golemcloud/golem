@@ -68,7 +68,9 @@ impl IdentityProvider for DefaultIdentityProvider {
         let id_token_claims: &CoreIdTokenClaims = core_token_response
             .extra_fields()
             .id_token()
-            .expect("Server did not return an ID token")
+            .ok_or(IdentityProviderError::IdTokenVerificationError(
+                "Failed to get ID token".to_string(),
+            ))
             .claims(&id_token_verifier, nonce)
             .map_err(|err| IdentityProviderError::IdTokenVerificationError(err.to_string()))?;
 
