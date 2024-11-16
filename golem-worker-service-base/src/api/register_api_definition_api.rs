@@ -426,6 +426,9 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 allow_credentials: cors.get_allow_credentials(),
                 middleware: None,
             }),
+            GatewayBinding::Static(StaticBinding::HttpAuthCallBack(_)) => {
+               unimplemented!("AuthCallBack is not supported in GatewayBindingData")
+            }
         }
     }
 }

@@ -24,7 +24,7 @@ impl HttpAuthorizer {
         input: &HttpRequestDetails,
         session_store: &GatewaySessionStore,
     ) -> Result<MiddlewareResult<poem::Response>, String> {
-        let identity_provider = &self.scheme_internal.identity_provider;
+        let identity_provider = &self.scheme_internal.identity_provider();
 
         let open_id_client = identity_provider
             .get_client(&self.scheme_internal.security_scheme)

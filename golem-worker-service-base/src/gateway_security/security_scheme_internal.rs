@@ -6,5 +6,10 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq)]
 pub struct SecuritySchemeInternal {
     pub security_scheme: SecuritySchemeWithProviderMetadata,
-    pub identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
+}
+
+impl SecuritySchemeInternal {
+    pub fn identity_provider(&self) -> Arc<dyn IdentityProvider + Send + Sync> {
+        Arc::new(self.security_scheme.security_scheme.provider())
+    }
 }

@@ -12,8 +12,17 @@ pub struct GoogleIdentityProvider {
     default_provider: DefaultIdentityProvider,
 }
 
+impl GoogleIdentityProvider {
+    pub fn new () -> Self {
+        GoogleIdentityProvider {
+            default_provider: DefaultIdentityProvider{}
+        }
+    }
+}
+
 #[async_trait]
 impl IdentityProvider for GoogleIdentityProvider {
+
     async fn get_provider_metadata(
         &self,
         issuer_url: &IssuerUrl,

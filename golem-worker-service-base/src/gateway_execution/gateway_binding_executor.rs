@@ -202,9 +202,8 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     async fn redirect_or_continue<R>(
         request_details: &GatewayRequestDetails,
         session: &GatewaySessionStore,
-        continue_fn: impl FnOnce() -> Pin<Box<dyn Future<Output = R> + Send>>,
-        middlewares: Middlewares, // To process any middleware-out if any
-    ) -> R
+        middlewares: Middlewares,
+    ) -> Option<R>
     where
         HttpAuthorizer: MiddlewareIn<R>,
         CorsPreflight: MiddlewareOut<R>,
@@ -216,28 +215,17 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 
         match input_middleware_result {
             Ok(incoming_middleware_result) => match incoming_middleware_result {
-                MiddlewareResult::Redirect(response) => response,
-                MiddlewareResult::PassThrough => {
-                    let mut response = continue_fn().await;
-
-                    let middleware_out_result = middlewares
-                        .process_middleware_out(session, &mut response)
-                        .await;
-
-                    match middleware_out_result {
-                        Ok(_) => response,
-                        Err(err) => EvaluationError(err).to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
-                    }
-                }
+                MiddlewareResult::Redirect(response) => Some(response),
+                MiddlewareResult::PassThrough => None,
             },
 
-            Err(err) =>  EvaluationError(err).to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
+            Err(err) => Some(EvaluationError(err).to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR)),
         }
     }
 }
 
 #[async_trait]
-impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
+impl<N: Send + Sync + Clone, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
     for DefaultGatewayBindingExecutor<N>
 {
     async fn execute_binding(
@@ -273,37 +261,53 @@ impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
             }
 
             ResolvedBinding::Worker(resolved_worker_binding) => {
-                Self::redirect_or_continue(
+                let result = Self::redirect_or_continue(
                     &binding.request_details,
                     &session,
-                    || async {
-                        let response = self
-                            .handle_worker_binding::<R>(binding, resolved_worker_binding, &session)
-                            .await;
-                        Ok(response)
-                    },
                     resolved_worker_binding.middlewares.clone(),
                 )
-                .await
+                .await;
+
+                match result {
+                    Some(r) => r,
+                    None => {
+                        let mut response = self
+                            .handle_worker_binding::<R>(binding, resolved_worker_binding, &session)
+                            .await;
+
+                        let middleware_out_result = resolved_worker_binding
+                            .middlewares
+                            .process_middleware_out(&session, &mut response)
+                            .await;
+
+                        match middleware_out_result {
+                            Ok(_) => response,
+                            Err(err) => EvaluationError(err)
+                                .to_failed_response(&StatusCode::INTERNAL_SERVER_ERROR),
+                        }
+                    }
+                }
             }
 
             ResolvedBinding::FileServer(resolved_file_server_binding) => {
-                Self::redirect_or_continue(
+                let result = Self::redirect_or_continue(
                     &binding.request_details,
                     &session,
-                    || async {
-                        let response = self
-                            .handle_file_server_binding::<R>(
-                                binding,
-                                resolved_file_server_binding,
-                                &session,
-                            )
-                            .await;
-                        Ok(response)
-                    },
                     resolved_file_server_binding.middlewares.clone(),
                 )
-                .await
+                .await;
+
+                match result {
+                    Some(r) => r,
+                    None => {
+                        self.handle_file_server_binding::<R>(
+                            binding,
+                            resolved_file_server_binding,
+                            &session,
+                        )
+                        .await
+                    }
+                }
             }
         }
     }

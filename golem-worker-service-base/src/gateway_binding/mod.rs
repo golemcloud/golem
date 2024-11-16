@@ -32,6 +32,7 @@ impl GatewayBinding {
             Self::Default(_) => false,
             Self::Static(StaticBinding::HttpCorsPreflight(_)) => true,
             Self::FileServer(_) => false,
+            Self::Static(StaticBinding::HttpAuthCallBack(_)) => false,
         }
     }
     pub fn get_worker_binding(&self) -> Option<WorkerBinding> {

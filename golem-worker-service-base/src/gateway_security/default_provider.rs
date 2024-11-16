@@ -50,9 +50,9 @@ impl IdentityProvider for DefaultIdentityProvider {
         let client = CoreClient::from_provider_metadata(
             security_scheme.provider_metadata.clone(),
             security_scheme.security_scheme.client_id().clone(),
-            Some(security_scheme.client_secret().clone()),
+            Some(security_scheme.security_scheme.client_secret().clone()),
         )
-        .set_redirect_uri(security_scheme.redirect_url().clone());
+        .set_redirect_uri(security_scheme.security_scheme.redirect_url().clone());
 
         Ok(OpenIdClient { client })
     }

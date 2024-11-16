@@ -1,3 +1,4 @@
+use std::hash::Hash;
 use crate::gateway_security::{
     IdentityProvider, IdentityProviderError, SchemeIdentifier, SecurityScheme,
     SecuritySchemeWithProviderMetadata,
@@ -22,6 +23,7 @@ pub trait SecuritySchemeService<Namespace> {
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
 }
 
+#[derive(Clone)]
 pub enum SecuritySchemeServiceError {
     IdentityProviderError(IdentityProviderError),
     InternalError(String),
@@ -51,7 +53,7 @@ impl<Namespace> DefaultSecuritySchemeService<Namespace> {
 }
 
 #[async_trait]
-impl<Namespace> SecuritySchemeService<Namespace> for DefaultSecuritySchemeService<Namespace> {
+impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static> SecuritySchemeService<Namespace> for DefaultSecuritySchemeService<Namespace> {
     async fn get(
         &self,
         security_scheme_identifier: &SchemeIdentifier,
@@ -59,7 +61,7 @@ impl<Namespace> SecuritySchemeService<Namespace> for DefaultSecuritySchemeServic
     ) -> Option<SecuritySchemeWithProviderMetadata> {
         // TODO; get_or_insert_simple with Repo
         self.cache
-            .get(&(namespace, security_scheme_identifier.clone()))
+            .get(&(namespace, security_scheme_identifier.clone())).await
     }
 
     async fn create(
@@ -83,7 +85,9 @@ impl<Namespace> SecuritySchemeService<Namespace> for DefaultSecuritySchemeServic
                     .cache
                     .get_or_insert_simple(
                         &(namespace, security_scheme.scheme_identifier()),
-                        security_scheme_with_provider_metadata.clone(),
+                        || {
+                            Box::pin(async move { Ok(security_scheme_with_provider_metadata) })
+                        },
                     )
                     .await?;
 

@@ -64,6 +64,8 @@ pub struct AuthorizationUrl {
     pub nonce: Nonce,
 }
 
+
+#[derive(Clone)]
 pub enum IdentityProviderError {
     ClientInitError(String),
     InvalidIssuerUrl(String),

@@ -1,4 +1,6 @@
 use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
+use crate::gateway_security::google::GoogleIdentityProvider;
+use crate::gateway_security::IdentityProvider;
 
 #[derive(Debug, Clone)]
 pub struct SecurityScheme {
@@ -14,6 +16,15 @@ pub struct SecurityScheme {
 impl SecurityScheme {
     pub fn issue_url(&self) -> IssuerUrl {
         self.issuer_url.clone()
+    }
+
+    pub fn provider(&self) -> impl IdentityProvider {
+        if self.provider_name.0 == "google" {
+            GoogleIdentityProvider::new()
+
+        } else {
+            panic!("Make it ADT"); // TODO
+        }
     }
 
     pub fn scheme_identifier(&self) -> SchemeIdentifier {

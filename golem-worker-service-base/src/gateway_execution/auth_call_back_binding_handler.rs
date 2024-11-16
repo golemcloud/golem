@@ -127,18 +127,18 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .ok_or(AuthorisationError::NonceNotFound)?;
 
         let open_id_client = security_scheme_internal
-            .identity_provider
+            .identity_provider()
             .get_client(&security_scheme_internal.security_scheme)
             .map_err(|err| AuthorisationError::IdentityProviderError(err))?;
 
         let token_response = security_scheme_internal
-            .identity_provider
+            .identity_provider()
             .exchange_code_for_tokens(&open_id_client, &authorisation_code)
             .await
             .map_err(|err| AuthorisationError::FailedCodeExchange(err))?;
 
         let claims = security_scheme_internal
-            .identity_provider
+            .identity_provider()
             .get_claims(
                 &open_id_client,
                 token_response.clone(),
