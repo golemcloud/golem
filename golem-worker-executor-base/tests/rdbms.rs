@@ -28,6 +28,7 @@ use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
 use serde_json::json;
+use std::ops::Deref;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -49,107 +50,61 @@ async fn rdbms_postgres_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     postgres: &DockerPostgresRdbs,
-    _tracing: &Tracing,
+    tracing: &Tracing,
 ) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap();
-    let mut worker_ids: Vec<WorkerId> = Vec::new();
-    let component_id = executor.store_component("rdbms-service").await;
-
-    let wc = 3;
-    for (db_index, rdb) in postgres.rdbs.iter().enumerate() {
-        let db_address = rdb.host_connection_string();
-
-        let mut env = HashMap::new();
-        env.insert("DB_POSTGRES_URL".to_string(), db_address);
-
-        for i in 0..wc {
-            let worker_name = format!("rdbms-service-postgres-{db_index}-{i}");
-            let worker_id = executor
-                .start_worker_with(&component_id, &worker_name, vec![], env.clone())
-                .await;
-            worker_ids.push(worker_id.clone());
-            let _result = executor
-                .invoke_and_await(&worker_id, "golem:it/api.{check}", vec![])
-                .await
-                .unwrap();
-        }
-    }
-
-    let mut results_execute: HashMap<WorkerId, Result<Vec<Value>, Error>> = HashMap::new(); // <worker_id, result>
-
-    let mut results_query: HashMap<WorkerId, Result<TypeAnnotatedValue, Error>> = HashMap::new(); // <worker_id, result>
-
-    for worker_id in worker_ids {
-        let result_execute: Result<Vec<Value>, Error> = executor
-            .invoke_and_await(
-                &worker_id,
-                "golem:it/api.{postgres-execute}",
-                vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
-            )
-            .await;
-        results_execute.insert(worker_id.clone(), result_execute);
-
-        let result_query = executor
-            .invoke_and_await_typed(
-                &worker_id,
-                "golem:it/api.{postgres-query}",
-                vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
-            )
-            .await;
-        results_query.insert(worker_id.clone(), result_query);
-    }
-
-    drop(executor);
-
-    for (worker_id, result) in results_execute {
-        check!(
-            result.unwrap() == vec![Value::Result(Ok(Some(Box::new(Value::U64(1)))))],
-            "result execute for worker {worker_id}"
-        );
-    }
-
-    for (worker_id, result) in results_query {
-        check!(
-            result.is_ok(),
-            "result query for worker {worker_id} is error"
-        );
-        let expected = json!(
-                [
-                   {
-                      "ok":{
-                         "columns":[
-                            {
-                               "db-type":{
-                                  "primitive":{
-                                     "int32":null
-                                  }
-                               },
-                               "db-type-name":"INT4",
-                               "name":"?column?",
-                               "ordinal":0
-                            }
-                         ],
-                         "rows":[
-                            {
-                               "values":[
-                                  {
-                                     "primitive":{
-                                        "int32":1
-                                     }
-                                  }
-                               ]
-                            }
-                         ]
-                      }
-                   }
-                ]
-        );
-        check!(
-            result.unwrap().to_json_value() == expected,
-            "result query for worker {worker_id}"
-        );
-    }
+    rdbms_execute_test(
+        last_unique_id,
+        deps,
+        tracing,
+        postgres.rdbs[0].deref(),
+        "postgres",
+        "SELECT 1",
+        vec![],
+        Some(1),
+    )
+    .await;
+    let expected = json!(
+            [
+               {
+                  "ok":{
+                     "columns":[
+                        {
+                           "db-type":{
+                              "primitive":{
+                                 "int32":null
+                              }
+                           },
+                           "db-type-name":"INT4",
+                           "name":"?column?",
+                           "ordinal":0
+                        }
+                     ],
+                     "rows":[
+                        {
+                           "values":[
+                              {
+                                 "primitive":{
+                                    "int32":1
+                                 }
+                              }
+                           ]
+                        }
+                     ]
+                  }
+               }
+            ]
+    );
+    rdbms_query_test(
+        last_unique_id,
+        deps,
+        tracing,
+        postgres.rdbs[0].deref(),
+        "postgres",
+        "SELECT 1",
+        vec![],
+        Some(expected),
+    )
+    .await;
 }
 
 #[test]
@@ -158,101 +113,195 @@ async fn rdbms_mysql_select1(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdbs,
+    tracing: &Tracing,
+) {
+    rdbms_execute_test(
+        last_unique_id,
+        deps,
+        tracing,
+        mysql.rdbs[0].deref(),
+        "mysql",
+        "SELECT 1",
+        vec![],
+        Some(0),
+    )
+    .await;
+    let expected = json!(
+            [
+               {
+                  "ok":{
+                     "columns":[
+                        {
+                           "db-type":{
+                              "primitive":{
+                                 "int64":null
+                              }
+                           },
+                           "db-type-name":"BIGINT",
+                           "name":"1",
+                           "ordinal":0
+                        }
+                     ],
+                     "rows":[
+                        {
+                           "values":[
+                              {
+                                 "primitive":{
+                                    "int64":1
+                                 }
+                              }
+                           ]
+                        }
+                     ]
+                  }
+               }
+            ]
+    );
+    rdbms_query_test(
+        last_unique_id,
+        deps,
+        tracing,
+        mysql.rdbs[0].deref(),
+        "mysql",
+        "SELECT 1",
+        vec![],
+        Some(expected),
+    )
+    .await;
+}
+
+async fn rdbms_execute_test(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
+    rdb: &impl RdbConnectionString,
+    db_type: &'static str,
+    query: &'static str,
+    params: Vec<String>,
+    expected: Option<u64>,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let mut worker_ids: Vec<WorkerId> = Vec::new();
     let component_id = executor.store_component("rdbms-service").await;
-    let wc = 1;
-    for (db_index, rdb) in mysql.rdbs.iter().enumerate() {
-        let db_address = rdb.host_connection_string();
 
-        let mut env = HashMap::new();
-        env.insert("DB_MYSQL_URL".to_string(), db_address);
+    let db_env_var = format!("DB_{}_URL", db_type.to_uppercase());
+    let execute_fn_name = format!("golem:it/api.{{{db_type}-execute}}");
 
-        for i in 0..wc {
-            let worker_name = format!("rdbms-service-mysql-{db_index}-{i}");
-            let worker_id = executor
-                .start_worker_with(&component_id, &worker_name, vec![], env.clone())
-                .await;
-            worker_ids.push(worker_id.clone());
-            let _result = executor
-                .invoke_and_await(&worker_id, "golem:it/api.{check}", vec![])
-                .await
-                .unwrap();
-        }
+    let wc = 3;
+    let db_address = rdb.host_connection_string();
+
+    let mut env = HashMap::new();
+    env.insert(db_env_var.clone(), db_address);
+
+    for i in 0..wc {
+        let worker_name = format!("rdbms-service-{db_type}-{i}");
+        let worker_id = executor
+            .start_worker_with(&component_id, &worker_name, vec![], env.clone())
+            .await;
+        worker_ids.push(worker_id.clone());
+        let _result = executor
+            .invoke_and_await(&worker_id, "golem:it/api.{check}", vec![])
+            .await
+            .unwrap();
     }
 
     let mut results_execute: HashMap<WorkerId, Result<Vec<Value>, Error>> = HashMap::new(); // <worker_id, result>
 
-    let mut results_query: HashMap<WorkerId, Result<TypeAnnotatedValue, Error>> = HashMap::new(); // <worker_id, result>
+    let params = Value::List(params.into_iter().map(Value::String).collect());
 
     for worker_id in worker_ids {
         let result_execute: Result<Vec<Value>, Error> = executor
             .invoke_and_await(
                 &worker_id,
-                "golem:it/api.{mysql-execute}",
-                vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
+                execute_fn_name.as_str(),
+                vec![Value::String(query.to_string()), params.clone()],
             )
             .await;
         results_execute.insert(worker_id.clone(), result_execute);
-
-        let result_query = executor
-            .invoke_and_await_typed(
-                &worker_id,
-                "golem:it/api.{mysql-query}",
-                vec![Value::String("SELECT 1;".to_string()), Value::List(vec![])],
-            )
-            .await;
-        results_query.insert(worker_id.clone(), result_query);
     }
 
     drop(executor);
 
     for (worker_id, result) in results_execute {
         check!(
-            result.unwrap() == vec![Value::Result(Ok(Some(Box::new(Value::U64(0)))))],
+            result.is_ok(),
             "result execute for worker {worker_id} is error"
         );
+
+        if let Some(expected) = expected {
+            check!(
+                result.unwrap() == vec![Value::Result(Ok(Some(Box::new(Value::U64(expected)))))],
+                "result execute for worker {worker_id}"
+            );
+        }
+    }
+}
+
+async fn rdbms_query_test(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    rdb: &impl RdbConnectionString,
+    db_type: &'static str,
+    query: &'static str,
+    params: Vec<String>,
+    expected: Option<serde_json::Value>,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap();
+    let mut worker_ids: Vec<WorkerId> = Vec::new();
+    let component_id = executor.store_component("rdbms-service").await;
+
+    let db_env_var = format!("DB_{}_URL", db_type.to_uppercase());
+    let query_fn_name = format!("golem:it/api.{{{db_type}-query}}");
+
+    let wc = 3;
+    let db_address = rdb.host_connection_string();
+
+    let mut env = HashMap::new();
+    env.insert(db_env_var.clone(), db_address);
+
+    for i in 0..wc {
+        let worker_name = format!("rdbms-service-{db_type}-{i}");
+        let worker_id = executor
+            .start_worker_with(&component_id, &worker_name, vec![], env.clone())
+            .await;
+        worker_ids.push(worker_id.clone());
+        let _result = executor
+            .invoke_and_await(&worker_id, "golem:it/api.{check}", vec![])
+            .await
+            .unwrap();
     }
 
+    let mut results_query: HashMap<WorkerId, Result<TypeAnnotatedValue, Error>> = HashMap::new(); // <worker_id, result>
+
+    let params = Value::List(params.into_iter().map(Value::String).collect());
+
+    for worker_id in worker_ids {
+        let result_execute = executor
+            .invoke_and_await_typed(
+                &worker_id,
+                query_fn_name.as_str(),
+                vec![Value::String(query.to_string()), params.clone()],
+            )
+            .await;
+        results_query.insert(worker_id.clone(), result_execute);
+    }
+
+    drop(executor);
+
     for (worker_id, result) in results_query {
-        check!(result.is_ok(), "result query for worker {worker_id}");
-        let expected = json!(
-                [
-                   {
-                      "ok":{
-                         "columns":[
-                            {
-                               "db-type":{
-                                  "primitive":{
-                                     "int64":null
-                                  }
-                               },
-                               "db-type-name":"BIGINT",
-                               "name":"1",
-                               "ordinal":0
-                            }
-                         ],
-                         "rows":[
-                            {
-                               "values":[
-                                  {
-                                     "primitive":{
-                                        "int64":1
-                                     }
-                                  }
-                               ]
-                            }
-                         ]
-                      }
-                   }
-                ]
-        );
         check!(
-            result.unwrap().to_json_value() == expected,
-            "result query for worker {worker_id}"
+            result.is_ok(),
+            "result query for worker {worker_id} is error"
         );
+
+        if let Some(expected) = expected.clone() {
+            check!(
+                result.unwrap().to_json_value() == expected,
+                "result query for worker {worker_id}"
+            );
+        }
     }
 }
