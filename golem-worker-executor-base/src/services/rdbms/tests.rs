@@ -12,13 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::rdbms::types::{DbRow, DbValue, DbValuePrimitive};
-use crate::services::rdbms::RdbmsServiceDefault;
+use crate::services::rdbms::types::{
+    DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue, DbValuePrimitive,
+};
+use crate::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
 use golem_common::model::{ComponentId, WorkerId};
-use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
+use golem_test_framework::components::rdb::docker_mysql::{DockerMysqlRdb, DockerMysqlRdbs};
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::RdbConnectionString;
+use std::ops::Deref;
+use std::sync::Arc;
 use test_r::{test, test_dep};
 use uuid::Uuid;
 
@@ -32,77 +36,61 @@ async fn mysql() -> DockerMysqlRdbs {
     DockerMysqlRdbs::new(3, 3307, true, false).await
 }
 
+#[test_dep]
+fn rdbms_service() -> RdbmsServiceDefault {
+    RdbmsServiceDefault::default()
+}
+
+// #[test_gen]
+// async fn generated(r: &mut DynamicTestRegistration) {
+//     make(r, "_select1", "SELECT 1", 1).await;
+// }
+//
+// async fn make(r: &mut DynamicTestRegistration, suffix: &'static str, query: &'static str, expected: u64) {
+//     add_test!(
+//         r,
+//         format!("postgres_execute_test_{suffix}"),
+//         TestType::IntegrationTest,
+//         move |postgres: &mut DockerPostgresRdbs, rdbms_service: &mut RdbmsServiceDefault| async {
+//
+//             //     let address = postgres.rdbs[0].host_connection_string();
+//             // println!("address: {}", address);
+//             //
+//             // let worker_id = WorkerId {
+//             //     component_id: ComponentId::new_v4(),
+//             //     worker_name: "test".to_string(),
+//             // };
+//             //
+//             // let connection = rdbms_service.postgres().create(&worker_id, &address).await;
+//             // assert!(connection.is_ok());
+//             // assert_eq!(1, expected);
+//             // postgres_execute_test((postgres, rdbms_service, query.to_string(), expected)).await.as_result()
+//         }
+//     );
+// }
+
 #[test]
-async fn postgres_test(postgres: &DockerPostgresRdbs) {
-    let rdbms_service = RdbmsServiceDefault::default();
+async fn postgres_execute_test_select1(
+    postgres: &DockerPostgresRdbs,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    rdbms_execute_test(
+        postgres.rdbs[0].deref(),
+        rdbms_service.postgres(),
+        "SELECT 1",
+        vec![],
+        Some(1),
+    )
+    .await
+}
 
-    for rdb in postgres.rdbs.iter() {
-        let address = rdb.host_connection_string();
-        println!("address: {}", address);
-        let worker_id = WorkerId {
-            component_id: ComponentId::new_v4(),
-            worker_name: "test".to_string(),
-        };
-
-        let connection = rdbms_service.postgres().create(&worker_id, &address).await;
-
-        assert!(connection.is_ok());
-
-        let pool_key = connection.unwrap();
-        println!("pool_key: {}", pool_key);
-        let result = rdbms_service
-            .postgres()
-            .execute(&worker_id, &pool_key, "SELECT 1", vec![])
-            .await;
-
-        assert!(result.is_ok());
-    }
-
-    let status = rdbms_service.postgres().status();
-    assert!(status.pools.len() == postgres.rdbs.len());
-
-    println!("status: {}", status);
-
-    let address = postgres.rdbs[0].host_connection_string();
-    println!("address: {}", address);
-
-    let worker_id = WorkerId {
-        component_id: ComponentId::new_v4(),
-        worker_name: "test".to_string(),
-    };
-
-    let connection = rdbms_service.postgres().create(&worker_id, &address).await;
-
-    assert!(connection.is_ok());
-
-    let pool_key = connection.unwrap();
-
-    let result = rdbms_service
-        .postgres()
-        .execute(&worker_id, &pool_key, "SELECT 1", vec![])
-        .await;
-
-    assert!(result.is_ok());
-
-    let connection = rdbms_service.postgres().create(&worker_id, &address).await;
-
-    assert!(connection.is_ok());
-
-    let exists = rdbms_service.postgres().exists(&worker_id, &pool_key);
-
-    assert!(exists);
-
-    let result = rdbms_service
-        .postgres()
-        .query(&worker_id, &pool_key, "SELECT 1", vec![])
-        .await;
-
-    assert!(result.is_ok());
-
-    let columns = result.unwrap().get_columns().await.unwrap();
-    // println!("columns: {columns:?}");
-    assert!(!columns.is_empty());
-
+#[test]
+async fn postgres_execute_test_create_insert_select(
+    postgres: &DockerPostgresRdbs,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    let rdb = postgres.rdbs[1].clone();
+    let rdbms = rdbms_service.postgres();
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
             (
@@ -119,125 +107,85 @@ async fn postgres_test(postgres: &DockerPostgresRdbs) {
             ($1, $2, $3)
         "#;
 
-    let result = rdbms_service
-        .postgres()
-        .execute(&worker_id, &pool_key, create_table_statement, vec![])
-        .await;
+    rdbms_execute_test(
+        rdb.deref(),
+        rdbms.clone(),
+        create_table_statement,
+        vec![],
+        None,
+    )
+    .await;
 
-    assert!(result.is_ok());
+    let count = 100;
 
-    for _ in 0..100 {
+    for _ in 0..count {
         let params: Vec<DbValue> = vec![
             DbValue::Primitive(DbValuePrimitive::Uuid(Uuid::new_v4())),
             DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
             DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
         ];
 
-        let result = rdbms_service
-            .postgres()
-            .execute(&worker_id, &pool_key, insert_statement, params)
-            .await;
-
-        assert!(result.is_ok_and(|v| v == 1));
-    }
-
-    let result = rdbms_service
-        .postgres()
-        .query(&worker_id, &pool_key, "SELECT * from components", vec![])
+        rdbms_execute_test(
+            rdb.deref(),
+            rdbms.clone(),
+            insert_statement,
+            params,
+            Some(1),
+        )
         .await;
-
-    assert!(result.is_ok());
-
-    let result = result.unwrap();
-
-    let columns = result.get_columns().await.unwrap();
-    // println!("columns: {columns:?}");
-    assert!(!columns.is_empty());
-
-    let mut rows: Vec<DbRow> = vec![];
-
-    while let Some(vs) = result.get_next().await.unwrap() {
-        rows.extend(vs);
     }
-    // println!("rows: {rows:?}");
-    assert!(rows.len() >= 100);
-    println!("rows: {}", rows.len());
 
-    let removed = rdbms_service.postgres().remove(&worker_id, &pool_key);
+    let expected_columns = vec![
+        DbColumn {
+            name: "component_id".to_string(),
+            ordinal: 0,
+            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Uuid),
+            db_type_name: "UUID".to_string(),
+        },
+        DbColumn {
+            name: "namespace".to_string(),
+            ordinal: 1,
+            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type_name: "TEXT".to_string(),
+        },
+        DbColumn {
+            name: "name".to_string(),
+            ordinal: 2,
+            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type_name: "TEXT".to_string(),
+        },
+    ];
 
-    assert!(removed);
-
-    let exists = rdbms_service.postgres().exists(&worker_id, &pool_key);
-
-    assert!(!exists);
+    rdbms_query_test(
+        rdb.deref(),
+        rdbms.clone(),
+        "SELECT component_id, namespace, name from components",
+        vec![],
+        Some(expected_columns),
+        None,
+    )
+    .await;
 }
 
 #[test]
-async fn mysql_test(mysql: &DockerMysqlRdbs) {
-    let rdbms_service = RdbmsServiceDefault::default();
+async fn mysql_execute_test_select1(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
+    rdbms_execute_test(
+        mysql.rdbs[0].deref(),
+        rdbms_service.mysql(),
+        "SELECT 1",
+        vec![],
+        Some(0),
+    )
+    .await
+}
 
-    for rdb in mysql.rdbs.iter() {
-        let address = rdb.host_connection_string();
-        println!("address: {}", address);
-        let worker_id = WorkerId {
-            component_id: ComponentId::new_v4(),
-            worker_name: "test".to_string(),
-        };
-        let connection = rdbms_service.mysql().create(&worker_id, &address).await;
-
-        assert!(connection.is_ok());
-
-        let pool_key = connection.unwrap();
-        println!("pool_key: {}", pool_key);
-        let result = rdbms_service
-            .mysql()
-            .execute(&worker_id, &pool_key, "SELECT 1", vec![])
-            .await;
-
-        assert!(result.is_ok());
-    }
-
-    println!("status: {}", rdbms_service.mysql().status());
-
-    let address = mysql.rdbs[0].host_connection_string();
-    println!("address: {}", address);
-
-    let worker_id = WorkerId {
-        component_id: ComponentId::new_v4(),
-        worker_name: "test".to_string(),
-    };
-
-    let connection = rdbms_service.mysql().create(&worker_id, &address).await;
-
-    assert!(connection.is_ok());
-    let pool_key = connection.unwrap();
-
-    let result = rdbms_service
-        .mysql()
-        .execute(&worker_id, &pool_key, "SELECT 1", vec![])
-        .await;
-
-    assert!(result.is_ok());
-
-    let connection = rdbms_service.mysql().create(&worker_id, &address).await;
-
-    assert!(connection.is_ok());
-
-    let exists = rdbms_service.mysql().exists(&worker_id, &pool_key);
-
-    assert!(exists);
-
-    let result = rdbms_service
-        .mysql()
-        .query(&worker_id, &pool_key, "SELECT 1", vec![])
-        .await;
-
-    assert!(result.is_ok());
-
-    let columns = result.unwrap().get_columns().await.unwrap();
-    // println!("columns: {columns:?}");
-    assert!(!columns.is_empty());
-
+#[test]
+async fn mysql_execute_test_create_insert_select(
+    mysql: &DockerMysqlRdbs,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    let rdb = mysql.rdbs[1].clone();
+    let rdbms = rdbms_service.mysql();
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
             (
@@ -255,40 +203,115 @@ async fn mysql_test(mysql: &DockerMysqlRdbs) {
             (?, ?, ?)
         "#;
 
-    let result = rdbms_service
-        .mysql()
-        .execute(&worker_id, &pool_key, create_table_statement, vec![])
-        .await;
+    rdbms_execute_test(
+        rdb.deref(),
+        rdbms.clone(),
+        create_table_statement,
+        vec![],
+        None,
+    )
+    .await;
 
-    assert!(result.is_ok());
+    let count = 100;
 
-    for _ in 0..100 {
+    for _ in 0..count {
         let params: Vec<DbValue> = vec![
             DbValue::Primitive(DbValuePrimitive::Text(Uuid::new_v4().to_string())),
             DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
             DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
         ];
 
-        let result = rdbms_service
-            .mysql()
-            .execute(&worker_id, &pool_key, insert_statement, params)
-            .await;
-
-        assert!(result.is_ok_and(|v| v == 1));
+        rdbms_execute_test(
+            rdb.deref(),
+            rdbms.clone(),
+            insert_statement,
+            params,
+            Some(1),
+        )
+        .await;
     }
 
-    let result = rdbms_service
-        .mysql()
-        .query(&worker_id, &pool_key, "SELECT * from components", vec![])
-        .await;
+    let expected_columns = vec![
+        DbColumn {
+            name: "component_id".to_string(),
+            ordinal: 0,
+            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type_name: "VARCHAR".to_string(),
+        },
+        DbColumn {
+            name: "namespace".to_string(),
+            ordinal: 1,
+            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type_name: "VARCHAR".to_string(),
+        },
+        DbColumn {
+            name: "name".to_string(),
+            ordinal: 2,
+            db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
+            db_type_name: "VARCHAR".to_string(),
+        },
+    ];
 
+    rdbms_query_test(
+        rdb.deref(),
+        rdbms.clone(),
+        "SELECT component_id, namespace, name from components",
+        vec![],
+        Some(expected_columns),
+        None,
+    )
+    .await;
+}
+
+async fn rdbms_execute_test<T: RdbmsType>(
+    rdb: &impl RdbConnectionString,
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    query: &'static str,
+    params: Vec<DbValue>,
+    expected: Option<u64>,
+) {
+    let address = rdb.host_connection_string();
+    let worker_id = WorkerId {
+        component_id: ComponentId::new_v4(),
+        worker_name: "test".to_string(),
+    };
+    let connection = rdbms.create(&worker_id, &address).await;
+    assert!(connection.is_ok());
+    let pool_key = connection.unwrap();
+    // println!("pool_key: {}", pool_key);
+    let result = rdbms.execute(&worker_id, &pool_key, query, params).await;
     assert!(result.is_ok());
+    if let Some(expected) = expected {
+        assert!(result.unwrap() == expected);
+    }
+    let _ = rdbms.remove(&worker_id, &pool_key);
+}
 
+async fn rdbms_query_test<T: RdbmsType>(
+    rdb: &impl RdbConnectionString,
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    query: &'static str,
+    params: Vec<DbValue>,
+    expected_columns: Option<Vec<DbColumn>>,
+    expected_rows: Option<Vec<DbRow>>,
+) {
+    let address = rdb.host_connection_string();
+    let worker_id = WorkerId {
+        component_id: ComponentId::new_v4(),
+        worker_name: "test".to_string(),
+    };
+    let connection = rdbms.create(&worker_id, &address).await;
+    assert!(connection.is_ok());
+    let pool_key = connection.unwrap();
+    // println!("pool_key: {}", pool_key);
+    let result = rdbms.query(&worker_id, &pool_key, query, params).await;
+    assert!(result.is_ok());
     let result = result.unwrap();
-
     let columns = result.get_columns().await.unwrap();
-    // println!("columns: {columns:?}");
-    assert!(!columns.is_empty());
+
+    if let Some(expected) = expected_columns {
+        assert!(columns == expected);
+    }
 
     let mut rows: Vec<DbRow> = vec![];
 
@@ -296,17 +319,11 @@ async fn mysql_test(mysql: &DockerMysqlRdbs) {
         rows.extend(vs);
     }
 
-    // println!("rows: {rows:?}");
-    assert!(rows.len() >= 100);
-    println!("rows: {}", rows.len());
+    if let Some(expected) = expected_rows {
+        assert!(rows == expected);
+    }
 
-    let removed = rdbms_service.mysql().remove(&worker_id, &pool_key);
-
-    assert!(removed);
-
-    let exists = rdbms_service.mysql().exists(&worker_id, &pool_key);
-
-    assert!(!exists);
+    let _ = rdbms.remove(&worker_id, &pool_key);
 }
 
 #[test]

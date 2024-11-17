@@ -74,7 +74,7 @@ impl DbResultSet for EmptyDbResultSet {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DbColumnTypePrimitive {
     Int8,
     Int16,
@@ -95,13 +95,13 @@ pub enum DbColumnTypePrimitive {
     Uuid,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DbColumnType {
     Primitive(DbColumnTypePrimitive),
     Array(DbColumnTypePrimitive),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DbValuePrimitive {
     Int8(i8),
     Int16(i16),
@@ -123,18 +123,18 @@ pub enum DbValuePrimitive {
     DbNull,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DbValue {
     Primitive(DbValuePrimitive),
     Array(Vec<DbValuePrimitive>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DbRow {
     pub values: Vec<DbValue>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DbColumn {
     pub ordinal: u64,
     pub name: String,
