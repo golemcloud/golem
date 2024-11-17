@@ -65,6 +65,12 @@ impl Display for ProviderName {
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct SecuritySchemeIdentifier(String);
 
+impl SecuritySchemeIdentifier {
+    pub fn new(value: String) -> Self {
+        SecuritySchemeIdentifier(value)
+    }
+}
+
 impl Display for SecuritySchemeIdentifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)

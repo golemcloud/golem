@@ -4,7 +4,7 @@ use golem_service_base::api_tags::ApiTags;
 use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
 use golem_worker_service_base::api::ApiEndpointError;
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
-use golem_worker_service_base::api::HttpApiDefinitionResponse;
+use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::CompiledHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::http::OpenApiDefinitionRequest;
@@ -46,7 +46,7 @@ impl RegisterApiDefinitionApi {
     async fn create_or_update_open_api(
         &self,
         payload: JsonOrYaml<OpenApiDefinitionRequest>,
-    ) -> Result<Json<HttpApiDefinitionResponse>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!("import_open_api",);
 
         let response = {
@@ -60,7 +60,7 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            Ok(Json(HttpApiDefinitionResponse::from(result)))
+            Ok(Json(HttpApiDefinitionResponseData::from(result)))
         };
 
         record.result(response)
@@ -74,7 +74,7 @@ impl RegisterApiDefinitionApi {
     async fn create(
         &self,
         payload: JsonOrYaml<HttpApiDefinitionRequest>,
-    ) -> Result<Json<HttpApiDefinitionResponse>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "create_definition",
             api_definition_id = payload.0.id.to_string(),
@@ -93,7 +93,7 @@ impl RegisterApiDefinitionApi {
                 .instrument(record.span.clone())
                 .await?;
 
-            Ok(Json(HttpApiDefinitionResponse::from(result)))
+            Ok(Json(HttpApiDefinitionResponseData::from(result)))
         };
 
         record.result(response)
@@ -112,7 +112,7 @@ impl RegisterApiDefinitionApi {
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
         payload: JsonOrYaml<HttpApiDefinitionRequest>,
-    ) -> Result<Json<HttpApiDefinitionResponse>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "update_definition",
             api_definition_id = id.0.to_string(),
@@ -145,7 +145,7 @@ impl RegisterApiDefinitionApi {
                     .instrument(record.span.clone())
                     .await?;
 
-                Ok(Json(HttpApiDefinitionResponse::from(result)))
+                Ok(Json(HttpApiDefinitionResponseData::from(result)))
             }
         };
 
@@ -164,7 +164,7 @@ impl RegisterApiDefinitionApi {
         &self,
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
-    ) -> Result<Json<HttpApiDefinitionResponse>, ApiEndpointError> {
+    ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "get_definition",
             api_definition_id = id.0.to_string(),
@@ -191,7 +191,7 @@ impl RegisterApiDefinitionApi {
                 "Can't find api definition with id {api_definition_id}, and version {api_version}"
             ))))?;
 
-            let result = HttpApiDefinitionResponse::from(definition);
+            let result = HttpApiDefinitionResponseData::from(definition);
             Ok(Json(result))
         };
 
@@ -244,7 +244,7 @@ impl RegisterApiDefinitionApi {
     async fn list(
         &self,
         #[oai(name = "api-definition-id")] api_definition_id_query: Query<Option<ApiDefinitionId>>,
-    ) -> Result<Json<Vec<HttpApiDefinitionResponse>>, ApiEndpointError> {
+    ) -> Result<Json<Vec<HttpApiDefinitionResponseData>>, ApiEndpointError> {
         let record = recorded_http_api_request!(
             "list_definitions",
             api_definition_id = api_definition_id_query.0.as_ref().map(|id| id.to_string()),
@@ -265,8 +265,8 @@ impl RegisterApiDefinitionApi {
 
             let values = data
                 .into_iter()
-                .map(HttpApiDefinitionResponse::from)
-                .collect::<Vec<HttpApiDefinitionResponse>>();
+                .map(HttpApiDefinitionResponseData::from)
+                .collect::<Vec<HttpApiDefinitionResponseData>>();
 
             Ok(Json(values))
         };

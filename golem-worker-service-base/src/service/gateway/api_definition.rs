@@ -331,7 +331,8 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
-        let mut definition = HttpApiDefinition::from_http_api_definition_request(definition.clone(), created_at);
+        let mut definition =
+            HttpApiDefinition::from_http_api_definition_request(definition.clone(), created_at);
 
         let _ = definition.transform().map_err(|error| {
             ApiDefinitionError::ValidationError(ValidationErrors {

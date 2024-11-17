@@ -1,5 +1,5 @@
 use crate::gateway_api_definition::http::{
-    AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern, RouteRequest,
+    AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern, Route, RouteRequest,
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
@@ -56,7 +56,7 @@ pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub security: Option<SecuritySchemeReferenceData>,
-    pub routes: Vec<RouteData>,
+    pub routes: Vec<RouteRequestData>,
     #[serde(default)]
     pub draft: bool,
 }
@@ -67,10 +67,10 @@ pub struct HttpApiDefinitionRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct HttpApiDefinition {
+pub struct HttpApiDefinitionRequestData {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub routes: Vec<RouteData>,
+    pub routes: Vec<RouteRequestData>,
     #[serde(default)]
     pub draft: bool,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -80,7 +80,7 @@ pub struct HttpApiDefinition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct HttpApiDefinitionResponse {
+pub struct HttpApiDefinitionResponseData {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
     pub security: Option<SecuritySchemeReferenceData>,
@@ -90,7 +90,7 @@ pub struct HttpApiDefinitionResponse {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionResponse {
+impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionResponseData {
     fn from(value: CompiledHttpApiDefinition<Namespace>) -> Self {
         let routes = value.routes.into_iter().map(|route| route.into()).collect();
 
@@ -98,9 +98,7 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
             id: value.id,
             version: value.version,
             routes,
-            security: value.security.map(|s| SecuritySchemeReferenceData {
-                security_scheme: s.security_scheme.scheme_identifier(),
-            }),
+            security: value.security.map(|s| SecuritySchemeReferenceData::from(s)),
             draft: value.draft,
             created_at: Some(value.created_at),
         }
@@ -108,19 +106,51 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct RouteData {
+pub struct RouteRequestData {
     pub method: MethodPattern,
     pub path: String,
     pub binding: GatewayBindingData,
     pub security: Option<SecuritySchemeReferenceData>,
 }
 
-impl TryFrom<RouteData> for RouteRequest {
+impl TryFrom<RouteRequestData> for RouteRequest {
     type Error = String;
-    fn try_from(value: RouteData) -> Result<Self, String> {
+    fn try_from(value: RouteRequestData) -> Result<Self, String> {
         let path = AllPathPatterns::parse(value.path.as_str())?;
         let binding = GatewayBinding::try_from(value.binding)?;
         let security = value.security.map(|s| SecuritySchemeReference::from(s));
+        Ok(Self {
+            method: value.method,
+            path,
+            binding,
+            security,
+        })
+    }
+}
+
+impl TryFrom<Route> for RouteRequestData {
+    type Error = String;
+    fn try_from(value: Route) -> Result<Self, String> {
+        let method = value.method;
+        let path = value.path.to_string();
+        let binding = GatewayBindingData::try_from(value.binding)?;
+        let security = value.security.map(|s| SecuritySchemeReferenceData::from(s));
+        Ok(Self {
+            method,
+            path,
+            binding,
+            security,
+        })
+    }
+}
+
+impl TryFrom<RouteRequest> for RouteRequestData {
+    type Error = String;
+
+    fn try_from(value: RouteRequest) -> Result<Self, Self::Error> {
+        let path = value.path.to_string();
+        let binding = GatewayBindingData::try_from(value.binding)?;
+        let security = value.security.map(|s| SecuritySchemeReferenceData::from(s));
         Ok(Self {
             method: value.method,
             path,
@@ -217,7 +247,6 @@ impl GatewayBindingData {
         let mut cors = None;
         let mut auth = None;
 
-
         let middleware = if let Some(middlewares) = worker_binding.middleware {
             for m in middlewares.0.iter() {
                 match m {
@@ -226,20 +255,18 @@ impl GatewayBindingData {
                             cors = Some(cors0.clone());
                         }
                         HttpMiddleware::AuthenticateRequest(http_authorizer) => {
-                            auth = Some(SecuritySchemeReferenceData::from(http_authorizer.security_scheme.clone()))
+                            auth = Some(SecuritySchemeReferenceData::from(
+                                http_authorizer.security_scheme.clone(),
+                            ))
                         }
-                    }
+                    },
                 }
             }
 
-            Some(MiddlewareData {
-                cors,
-                auth
-            })
+            Some(MiddlewareData { cors, auth })
         } else {
             None
         };
-
 
         Ok(Self {
             binding_type: Some(binding_type),
@@ -298,7 +325,7 @@ impl From<SecuritySchemeReference> for SecuritySchemeReferenceData {
 impl From<SecuritySchemeReferenceData> for SecuritySchemeReference {
     fn from(value: SecuritySchemeReferenceData) -> Self {
         Self {
-            security_scheme_identifier: value.security_scheme,
+            security_scheme_identifier: SecuritySchemeIdentifier::new(value.security_scheme),
         }
     }
 }
@@ -406,7 +433,9 @@ impl<N> From<crate::gateway_api_deployment::ApiDeployment<N>> for ApiDeployment 
     }
 }
 
-impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition> for HttpApiDefinition {
+impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition>
+    for HttpApiDefinitionRequestData
+{
     type Error = String;
 
     fn try_from(
@@ -414,7 +443,7 @@ impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition> for HttpApi
     ) -> Result<Self, Self::Error> {
         let mut routes = Vec::new();
         for route in value.routes {
-            let v = RouteData::try_from(route)?;
+            let v = RouteRequestData::try_from(route)?;
             routes.push(v);
         }
 
@@ -439,7 +468,7 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
         let mut routes = Vec::new();
 
         for route_data in self.routes {
-            let v = RouteRequest::from(route_data);
+            let v = RouteRequest::try_from(route_data)?;
             routes.push(v);
         }
 
@@ -455,32 +484,19 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
     }
 }
 
-impl TryFrom<crate::gateway_api_definition::http::Route> for RouteData {
+impl TryInto<crate::gateway_api_definition::http::RouteRequest> for RouteRequestData {
     type Error = String;
 
-    fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
-        let path = value.path.to_string();
-        let binding = GatewayBindingData::try_from(value.binding)?;
-
-        Ok(Self {
-            method: value.method,
-            path,
-            binding,
-        })
-    }
-}
-
-impl TryInto<crate::gateway_api_definition::http::Route> for RouteData {
-    type Error = String;
-
-    fn try_into(self) -> Result<crate::gateway_api_definition::http::Route, Self::Error> {
+    fn try_into(self) -> Result<crate::gateway_api_definition::http::RouteRequest, Self::Error> {
         let path = AllPathPatterns::parse(self.path.as_str()).map_err(|e| e.to_string())?;
         let binding = GatewayBinding::try_from(self.binding.clone())?;
+        let security = self.security.map(|s| SecuritySchemeReference::from(s));
 
-        Ok(crate::gateway_api_definition::http::Route {
+        Ok(RouteRequest {
             method: self.method,
             path,
             binding,
+            security,
         })
     }
 }

@@ -5,7 +5,9 @@ use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled};
 use crate::gateway_middleware::Cors;
 use crate::gateway_security::{SecuritySchemeReference, SecuritySchemeWithProviderMetadata};
 use crate::service::gateway::api_definition::ApiDefinitionError;
+use crate::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
+use crate::service::gateway::http_api_definition_validator::RouteValidationError;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
 use derive_more::Display;
@@ -22,8 +24,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use Iterator;
-use crate::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
-use crate::service::gateway::http_api_definition_validator::RouteValidationError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinitionRequest {
@@ -65,7 +65,9 @@ impl HttpApiDefinition {
                         security_scheme.clone(),
                     );
                 } else {
-                    return Err(ApiDefinitionError::SecuritySchemeNotFound(security.security_scheme_identifier.to_string()))
+                    return Err(ApiDefinitionError::SecuritySchemeNotFound(
+                        security.security_scheme_identifier.to_string(),
+                    ));
                 }
             }
             None => {}
@@ -94,7 +96,9 @@ impl HttpApiDefinition {
                         path: route.path,
                     })
                 } else {
-                    return Err(ApiDefinitionError::SecuritySchemeNotFound(security.security_scheme_identifier.to_string()));
+                    return Err(ApiDefinitionError::SecuritySchemeNotFound(
+                        security.security_scheme_identifier.to_string(),
+                    ));
                 }
             } else {
                 routes.push(Route {
@@ -115,7 +119,6 @@ impl HttpApiDefinition {
             created_at,
         };
 
-
         http_api_definition.transform().map_err(|error| {
             ApiDefinitionError::ValidationError(ValidationErrors {
                 errors: vec![RouteValidationError::from(error)],
@@ -132,7 +135,11 @@ impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
             id: value.id,
             version: value.version,
             security: value.security.map(|x| SecuritySchemeReference::from(x)),
-            routes: value.routes.iter().map(|x| RouteRequest::from(x.clone())).collect(),
+            routes: value
+                .routes
+                .iter()
+                .map(|x| RouteRequest::from(x.clone()))
+                .collect(),
             draft: value.draft,
         }
     }
@@ -597,12 +604,12 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
     use crate::api;
-    use chrono::{DateTime, Utc};
-    use test_r::core::ShouldPanic::No;
-    use test_r::test;
-    use golem_service_base::auth::DefaultNamespace;
     use crate::gateway_security::{SecurityScheme, SecuritySchemeIdentifier};
     use crate::service::gateway::security_scheme::SecuritySchemeServiceError;
+    use chrono::{DateTime, Utc};
+    use golem_service_base::auth::DefaultNamespace;
+    use test_r::core::ShouldPanic::No;
+    use test_r::test;
 
     #[test]
     fn split_path_works_with_single_value() {
@@ -811,14 +818,23 @@ mod tests {
         serde_yaml::Value::deserialize(de).unwrap()
     }
 
-    struct NoopSecuritySchemeService{}
+    struct NoopSecuritySchemeService {}
 
     impl SecuritySchemeService<DefaultNamespace> for NoopSecuritySchemeService {
-        async fn get(&self, security_scheme_name: &SecuritySchemeIdentifier, namespace: &DefaultNamespace) -> Result<Option<SecuritySchemeWithProviderMetadata>, SecuritySchemeServiceError> {
+        async fn get(
+            &self,
+            security_scheme_name: &SecuritySchemeIdentifier,
+            namespace: &DefaultNamespace,
+        ) -> Result<Option<SecuritySchemeWithProviderMetadata>, SecuritySchemeServiceError>
+        {
             unimplemented!("Test service")
         }
 
-        async fn create(&self, namespace: &DefaultNamespace, security_scheme: &SecurityScheme) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
+        async fn create(
+            &self,
+            namespace: &DefaultNamespace,
+            security_scheme: &SecurityScheme,
+        ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
             unimplemented!("Test service")
         }
     }
@@ -826,15 +842,19 @@ mod tests {
     #[test]
     fn test_api_spec_proto_conversion() {
         fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
-            let security_scheme_service = Arc::new(NoopSecuritySchemeService{});
+            let security_scheme_service = Arc::new(NoopSecuritySchemeService {});
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let api_http_definition_request: api::HttpApiDefinitionRequest =
                 serde_yaml::from_value(yaml.clone()).unwrap();
             let core_http_definition_request: HttpApiDefinitionRequest =
                 api_http_definition_request.try_into().unwrap();
             let timestamp: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-            let core_http_definition =
-                HttpApiDefinition::from_http_api_definition_request(&DefaultNamespace(), core_http_definition_request, timestamp, &security_scheme_service);
+            let core_http_definition = HttpApiDefinition::from_http_api_definition_request(
+                &DefaultNamespace(),
+                core_http_definition_request,
+                timestamp,
+                &security_scheme_service,
+            );
             let proto: grpc_apidefinition::ApiDefinition =
                 core_http_definition.clone().try_into().unwrap();
             let decoded: HttpApiDefinition = proto.try_into().unwrap();
