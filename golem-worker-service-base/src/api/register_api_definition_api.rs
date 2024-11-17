@@ -1,5 +1,5 @@
 use crate::gateway_api_definition::http::{
-    AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern,
+    AllPathPatterns, CompiledHttpApiDefinition, CompiledRoute, MethodPattern, RouteRequest,
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
@@ -7,16 +7,18 @@ use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
 };
 use crate::gateway_middleware::{Cors, CorsPreflightExpr, HttpMiddleware, Middleware};
+use crate::gateway_security::{
+    ProviderName, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeReference,
+};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_common::model::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
+use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
 use poem_openapi::*;
 use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
 use std::result::Result;
 use std::time::SystemTime;
-use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
-use crate::gateway_security::{ProviderName, SchemeIdentifier, SecurityScheme};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -52,6 +54,7 @@ pub struct ApiDefinitionInfo {
 pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
+    pub security: Option<SecuritySchemeReferenceData>,
     pub routes: Vec<RouteData>,
     #[serde(default)]
     pub draft: bool,
@@ -72,20 +75,21 @@ pub struct HttpApiDefinition {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-// HttpApiDefinitionWithTypeInfo is CompiledHttpApiDefinition minus rib-byte-code
+// HttpApiDefinitionResponse is a trimmed down version of CompiledHttpApiDefinition
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct HttpApiDefinitionWithTypeInfo {
+pub struct HttpApiDefinitionResponse {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
+    pub security: Option<SecuritySchemeReferenceData>,
     pub routes: Vec<RouteWithTypeInfo>,
     #[serde(default)]
     pub draft: bool,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionWithTypeInfo {
+impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinitionResponse {
     fn from(value: CompiledHttpApiDefinition<Namespace>) -> Self {
         let routes = value.routes.into_iter().map(|route| route.into()).collect();
 
@@ -93,6 +97,9 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
             id: value.id,
             version: value.version,
             routes,
+            security: value.security.map(|s| SecuritySchemeReferenceData {
+                scheme_identifier: s.security_scheme.scheme_identifier(),
+            }),
             draft: value.draft,
             created_at: Some(value.created_at),
         }
@@ -104,12 +111,28 @@ pub struct RouteData {
     pub method: MethodPattern,
     pub path: String,
     pub binding: GatewayBindingData,
+    pub security: Option<SecuritySchemeReferenceData>,
+}
+
+impl From<RouteData> for RouteRequest {
+    fn from(value: RouteData) -> Self {
+        let path = AllPathPatterns::parse(value.path.as_str()).unwrap();
+        let binding = value.binding.into();
+        let security = value.security.map(|s| SecuritySchemeReference::from(s));
+        Self {
+            method: value.method,
+            path,
+            binding,
+            security,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 pub struct RouteWithTypeInfo {
     pub method: MethodPattern,
     pub path: String,
+    pub security: SecuritySchemeReferenceData,
     pub binding: GatewayBindingWithTypeInfo,
 }
 
@@ -217,26 +240,34 @@ impl GatewayBindingData {
 #[oai(rename_all = "camelCase")]
 pub struct MiddlewareData {
     pub cors: Option<Cors>,
+    pub auth: SecuritySchemeReferenceData,
 }
 
-// SecurityScheme shouldn't have Serialize or Deserialize
+// Security Scheme data that's exposed to the users of API definition registration
+// and deployment. Here we don't care any other part other than specifying the
+// name of the security scheme. It is expected that this scheme is already registered with golem.
+// Probably scopes are needed here as this is dynamic to each operation.
+// Even provider name is not needed as golem can look up the provider type from the database.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
-pub struct SecuritySchemeData {
-    provider_name: String,
-    scheme_identifier: SchemeIdentifier,
-    redirect_url: RedirectUrl,
-    scopes: Vec<Scope>,
+pub struct SecuritySchemeReferenceData {
+    scheme_identifier: SecuritySchemeIdentifier,
+    // Additional scope support can go in future
 }
 
-impl From<SecurityScheme> for SecuritySchemeData {
-    fn from(value: SecurityScheme) -> Self {
+impl From<SecuritySchemeReference> for SecuritySchemeReferenceData {
+    fn from(value: SecuritySchemeReference) -> Self {
         Self {
-            provider_name: value.provider_name().to_string(),
-            scheme_identifier: value.scheme_identifier(),
-            redirect_url: value.redirect_url(),
-            scopes: value.scopes(),
+            scheme_identifier: value.security_scheme_identifier,
+        }
+    }
+}
+
+impl From<SecuritySchemeReferenceData> for SecuritySchemeReference {
+    fn from(value: SecuritySchemeReferenceData) -> Self {
+        Self {
+            security_scheme_identifier: value.scheme_identifier,
         }
     }
 }
@@ -377,7 +408,7 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
         let mut routes = Vec::new();
 
         for route_data in self.routes {
-            let v = route_data.try_into()?;
+            let v = RouteRequest::from(route_data);
             routes.push(v);
         }
 
@@ -385,6 +416,7 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
             crate::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: self.id,
                 version: self.version,
+                security: self.security.map(|s| SecuritySchemeReference::from(s)),
                 routes,
                 draft: self.draft,
             },

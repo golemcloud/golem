@@ -29,6 +29,7 @@ use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
+use prost::Name;
 use tracing::{error, info};
 
 use crate::service::component::ComponentService;
@@ -38,6 +39,7 @@ use crate::service::gateway::api_definition_transformer::{
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
+use crate::service::gateway::security_scheme::SecuritySchemeService;
 
 pub type ApiResult<T, E> = Result<T, ApiDefinitionError<E>>;
 
@@ -160,19 +162,23 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
     ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError>;
 }
 
-pub struct ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
+pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError> {
     pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
     pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
+    pub security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
     pub api_definition_validator:
         Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send>,
 }
 
-impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationError> {
+impl<AuthCtx, Namespace, ValidationError>
+    ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError>
+{
     pub fn new(
         component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
         deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
+        security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
         api_definition_validator: Arc<
             dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send,
         >,
@@ -180,6 +186,7 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
         Self {
             component_service,
             definition_repo,
+            security_scheme_service,
             deployment_repo,
             api_definition_validator,
         }
@@ -233,7 +240,7 @@ impl<AuthCtx, ValidationError> ApiDefinitionServiceDefault<AuthCtx, ValidationEr
 
 #[async_trait]
 impl<AuthCtx, Namespace, ValidationError> ApiDefinitionService<AuthCtx, Namespace, ValidationError>
-    for ApiDefinitionServiceDefault<AuthCtx, ValidationError>
+    for ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError>
 where
     AuthCtx: Send + Sync,
     Namespace: Display + Clone + Send + Sync + TryFrom<String>,
@@ -264,7 +271,17 @@ where
             ));
         }
 
-        let mut definition = HttpApiDefinition::new(definition.clone(), created_at);
+        let mut definition = HttpApiDefinition::from_request(
+            namespace,
+            definition.clone(),
+            created_at,
+            &self.security_scheme_service,
+        )
+        .await
+        .map_err(|e| {
+            // TODO; not internal
+            ApiDefinitionError::Internal(format!("Failed to create API definition: {e}"))
+        })?;
 
         let _ = definition.transform().map_err(|error| {
             ApiDefinitionError::ValidationError(ValidationErrors {
@@ -322,7 +339,7 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
-        let mut definition = HttpApiDefinition::new(definition.clone(), created_at);
+        let mut definition = HttpApiDefinition::from_request(definition.clone(), created_at);
 
         let _ = definition.transform().map_err(|error| {
             ApiDefinitionError::ValidationError(ValidationErrors {

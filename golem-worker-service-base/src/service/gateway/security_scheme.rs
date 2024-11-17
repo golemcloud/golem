@@ -1,9 +1,10 @@
 use crate::gateway_security::{
-    IdentityProvider, IdentityProviderError, SchemeIdentifier, SecurityScheme,
+    IdentityProvider, IdentityProviderError, SecurityScheme, SecuritySchemeIdentifier,
     SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
 use golem_common::cache::{Cache, SimpleCache};
+use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
 
@@ -13,9 +14,9 @@ use std::sync::Arc;
 pub trait SecuritySchemeService<Namespace> {
     async fn get(
         &self,
-        security_scheme_name: &SchemeIdentifier,
+        security_scheme_name: &SecuritySchemeIdentifier,
         namespace: Namespace,
-    ) -> Option<SecuritySchemeWithProviderMetadata>;
+    ) -> Result<Option<SecuritySchemeWithProviderMetadata>, SecuritySchemeServiceError>;
     async fn create(
         &self,
         namespace: Namespace,
@@ -29,8 +30,21 @@ pub enum SecuritySchemeServiceError {
     InternalError(String),
 }
 
+impl Display for SecuritySchemeServiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SecuritySchemeServiceError::IdentityProviderError(err) => {
+                write!(f, "IdentityProviderError: {}", err)
+            }
+            SecuritySchemeServiceError::InternalError(err) => {
+                write!(f, "InternalError: {}", err)
+            }
+        }
+    }
+}
+
 pub type SecuritySchemeCache<N> = Cache<
-    (N, SchemeIdentifier),
+    (N, SecuritySchemeIdentifier),
     (),
     SecuritySchemeWithProviderMetadata,
     SecuritySchemeServiceError,
@@ -58,13 +72,16 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
 {
     async fn get(
         &self,
-        security_scheme_identifier: &SchemeIdentifier,
+        security_scheme_identifier: &SecuritySchemeIdentifier,
         namespace: Namespace,
-    ) -> Option<SecuritySchemeWithProviderMetadata> {
+    ) -> Result<Option<SecuritySchemeWithProviderMetadata>, SecuritySchemeServiceError> {
         // TODO; get_or_insert_simple with Repo
-        self.cache
+        let result = self
+            .cache
             .get(&(namespace, security_scheme_identifier.clone()))
-            .await
+            .await;
+
+        Ok(result)
     }
 
     async fn create(

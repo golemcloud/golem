@@ -1,7 +1,7 @@
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::{MiddlewareFailure, MiddlewareSuccess};
-use crate::gateway_security::{SecuritySchemeWithProviderMetadata};
+use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
 use openidconnect::{ClaimsVerificationError, Nonce, Scope};
 use std::str::FromStr;
@@ -13,9 +13,7 @@ pub struct HttpAuthorizer {
 
 impl HttpAuthorizer {
     pub fn get_scopes(&self) -> Vec<Scope> {
-        self.security_scheme
-            .security_scheme
-            .scopes()
+        self.security_scheme.security_scheme.scopes()
     }
 
     pub async fn apply_http_auth(

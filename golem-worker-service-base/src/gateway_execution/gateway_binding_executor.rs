@@ -16,12 +16,12 @@ use crate::gateway_middleware::{
     MiddlewareSuccess, Middlewares,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
+use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 use async_trait::async_trait;
 use http::StatusCode;
 use rib::{RibInput, RibResult};
 use std::fmt::Debug;
 use std::sync::Arc;
-use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 
 // Response is type parameterised here, mainly to support
 // other protocols.
@@ -194,7 +194,11 @@ impl<N> DefaultGatewayBindingExecutor<N> {
             GatewayRequestDetails::Http(http_request) => {
                 let authorisation_result = self
                     .auth_call_back_binding_handler
-                    .handle_auth_call_back(&http_request, &security_scheme_with_metadata, &session_store)
+                    .handle_auth_call_back(
+                        &http_request,
+                        &security_scheme_with_metadata,
+                        &session_store,
+                    )
                     .await;
 
                 authorisation_result

@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use crate::gateway_security::{GolemIdentityProviderMetadata, IdentityProvider, SecurityScheme};
+use std::sync::Arc;
 
 // This can exist as part of the middleware to initiate the authorisation workflow
 // redirecting user to provider login page, or it can be part of the static binding

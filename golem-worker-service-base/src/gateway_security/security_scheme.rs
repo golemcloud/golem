@@ -1,13 +1,13 @@
-use std::fmt::Display;
 use crate::gateway_security::google::GoogleIdentityProvider;
 use crate::gateway_security::IdentityProvider;
 use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
+use std::fmt::Display;
 
 // SecurityScheme shouldn't have Serialize or Deserialize
 #[derive(Debug, Clone)]
 pub struct SecurityScheme {
     provider_name: ProviderName,
-    scheme_identifier: SchemeIdentifier,
+    scheme_identifier: SecuritySchemeIdentifier,
     client_id: ClientId,
     client_secret: ClientSecret, // secret type macros and therefore already redacted
     redirect_url: RedirectUrl,
@@ -32,7 +32,7 @@ impl SecurityScheme {
         }
     }
 
-    pub fn scheme_identifier(&self) -> SchemeIdentifier {
+    pub fn scheme_identifier(&self) -> SecuritySchemeIdentifier {
         self.scheme_identifier.clone()
     }
 
@@ -63,7 +63,13 @@ impl Display for ProviderName {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-pub struct SchemeIdentifier(String);
+pub struct SecuritySchemeIdentifier(String);
+
+impl Display for SecuritySchemeIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 impl SecurityScheme {
     pub fn issuer_url(&self) -> &IssuerUrl {
@@ -95,7 +101,7 @@ impl SecurityScheme {
             .map_err(|err| format!("Invalid redirect URL, {} {}", redirect_uri, err))?;
 
         let scheme_identifier = if !scheme_id.is_empty() {
-            SchemeIdentifier(scheme_id.to_string())
+            SecuritySchemeIdentifier(scheme_id.to_string())
         } else {
             return Err("Invalid scheme identifier".to_string());
         };

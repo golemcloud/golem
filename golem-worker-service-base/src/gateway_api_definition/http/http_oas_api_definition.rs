@@ -188,7 +188,7 @@ mod internal {
 
                 match (&binding_type, &method) {
                     (GatewayBindingType::CorsPreflight, MethodPattern::Options) => {
-                        let binding = get_cors_binding(worker_gateway_info)?;
+                        let binding = get_cors_static_binding(worker_gateway_info)?;
 
                         Ok(Route {
                             method,
@@ -196,6 +196,7 @@ mod internal {
                             binding: GatewayBinding::Static(binding),
                         })
                     }
+
                     (GatewayBindingType::Default, _) => {
                         let binding = get_worker_binding(worker_gateway_info)?;
 
@@ -214,6 +215,7 @@ mod internal {
                             binding: GatewayBinding::Default(binding),
                         })
                     }
+
 
                     (GatewayBindingType::CorsPreflight, method) => {
                         Err(format!("cors-preflight binding type is supported only for 'options' method, but found method '{}'", method))
@@ -264,7 +266,9 @@ mod internal {
         Ok(binding)
     }
 
-    pub(crate) fn get_cors_binding(worker_gateway_info: &Value) -> Result<StaticBinding, String> {
+    pub(crate) fn get_cors_static_binding(
+        worker_gateway_info: &Value,
+    ) -> Result<StaticBinding, String> {
         match worker_gateway_info {
             Value::Object(map) => match map.get("response") {
                 Some(value) => {
@@ -326,6 +330,9 @@ mod internal {
     ) -> Result<Vec<HttpMiddleware>, String> {
         let mut middlewares = vec![];
         if let Some(middleware_value) = worker_gateway_info.get("middlewares") {
+            // Users hardly need to specify the auth middleware in an open API spec as this is not a standard
+            // pattern. Even cors is not needed in the standard pattern as it gets auto injected if there
+            // is a preflight endpoint that corresponds to a static binding of cors.
             match middleware_value {
                 Value::Object(map) => {
                     let cors_preflight: Option<Cors> = map
