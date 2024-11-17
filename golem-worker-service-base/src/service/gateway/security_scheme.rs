@@ -15,11 +15,11 @@ pub trait SecuritySchemeService<Namespace> {
     async fn get(
         &self,
         security_scheme_name: &SecuritySchemeIdentifier,
-        namespace: Namespace,
+        namespace: &Namespace,
     ) -> Result<Option<SecuritySchemeWithProviderMetadata>, SecuritySchemeServiceError>;
     async fn create(
         &self,
-        namespace: Namespace,
+        namespace: &Namespace,
         security_scheme: &SecurityScheme,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
 }
@@ -73,7 +73,7 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
     async fn get(
         &self,
         security_scheme_identifier: &SecuritySchemeIdentifier,
-        namespace: Namespace,
+        namespace: &Namespace,
     ) -> Result<Option<SecuritySchemeWithProviderMetadata>, SecuritySchemeServiceError> {
         // TODO; get_or_insert_simple with Repo
         let result = self
@@ -86,7 +86,7 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
 
     async fn create(
         &self,
-        namespace: Namespace,
+        namespace: &Namespace,
         security_scheme: &SecurityScheme,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
         let provider_metadata = self

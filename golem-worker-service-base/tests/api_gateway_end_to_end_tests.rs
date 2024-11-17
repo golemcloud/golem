@@ -650,7 +650,7 @@ fn get_api_spec_worker_binding(
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_request(core_request, create_at)
+    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
 }
 
 fn get_api_spec_cors_preflight_binding_default_response(path_pattern: &str) -> HttpApiDefinition {
@@ -676,7 +676,7 @@ fn get_api_spec_cors_preflight_binding_default_response(path_pattern: &str) -> H
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_request(core_request, create_at)
+    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
 }
 
 fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) -> HttpApiDefinition {
@@ -717,7 +717,7 @@ fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) -> HttpA
         { http_api_definition_request.try_into().unwrap() };
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_request(core_request, create_at)
+    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
 }
 
 fn get_api_spec_for_cors_preflight_and_actual_endpoint(
@@ -776,7 +776,7 @@ fn get_api_spec_for_cors_preflight_and_actual_endpoint(
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_request(core_request, create_at)
+    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
 }
 
 fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
@@ -816,7 +816,7 @@ fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_request(core_request, create_at)
+    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
 }
 
 mod internal {

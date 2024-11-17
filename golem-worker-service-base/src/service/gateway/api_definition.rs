@@ -59,6 +59,8 @@ pub enum ApiDefinitionError<E> {
     ComponentNotFoundError(Vec<VersionedComponentId>),
     #[error("Rib compilation error: {0}")]
     RibCompilationErrors(String),
+    #[error("Security Scheme not found: {0}")]
+    SecuritySchemeNotFound(String),
     #[error("API definition not found: {0}")]
     ApiDefinitionNotFound(ApiDefinitionId),
     #[error("API definition is not draft: {0}")]
@@ -271,23 +273,13 @@ where
             ));
         }
 
-        let mut definition = HttpApiDefinition::from_request(
+        let definition = HttpApiDefinition::from_http_api_definition_request(
             namespace,
             definition.clone(),
             created_at,
             &self.security_scheme_service,
         )
-        .await
-        .map_err(|e| {
-            // TODO; not internal
-            ApiDefinitionError::Internal(format!("Failed to create API definition: {e}"))
-        })?;
-
-        let _ = definition.transform().map_err(|error| {
-            ApiDefinitionError::ValidationError(ValidationErrors {
-                errors: vec![error.into()],
-            })
-        })?;
+        .await?;
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
@@ -339,7 +331,7 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
-        let mut definition = HttpApiDefinition::from_request(definition.clone(), created_at);
+        let mut definition = HttpApiDefinition::from_http_api_definition_request(definition.clone(), created_at);
 
         let _ = definition.transform().map_err(|error| {
             ApiDefinitionError::ValidationError(ValidationErrors {

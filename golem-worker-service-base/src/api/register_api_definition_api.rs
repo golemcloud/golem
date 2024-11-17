@@ -9,6 +9,7 @@ use crate::gateway_binding::{
 use crate::gateway_middleware::{Cors, CorsPreflightExpr, HttpMiddleware, Middleware};
 use crate::gateway_security::{
     ProviderName, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeReference,
+    SecuritySchemeWithProviderMetadata,
 };
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_common::model::GatewayBindingType;
@@ -98,7 +99,7 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
             version: value.version,
             routes,
             security: value.security.map(|s| SecuritySchemeReferenceData {
-                scheme_identifier: s.security_scheme.scheme_identifier(),
+                security_scheme: s.security_scheme.scheme_identifier(),
             }),
             draft: value.draft,
             created_at: Some(value.created_at),
@@ -114,17 +115,18 @@ pub struct RouteData {
     pub security: Option<SecuritySchemeReferenceData>,
 }
 
-impl From<RouteData> for RouteRequest {
-    fn from(value: RouteData) -> Self {
-        let path = AllPathPatterns::parse(value.path.as_str()).unwrap();
-        let binding = value.binding.into();
+impl TryFrom<RouteData> for RouteRequest {
+    type Error = String;
+    fn try_from(value: RouteData) -> Result<Self, String> {
+        let path = AllPathPatterns::parse(value.path.as_str())?;
+        let binding = GatewayBinding::try_from(value.binding)?;
         let security = value.security.map(|s| SecuritySchemeReference::from(s));
-        Self {
+        Ok(Self {
             method: value.method,
             path,
             binding,
             security,
-        }
+        })
     }
 }
 
@@ -132,7 +134,7 @@ impl From<RouteData> for RouteRequest {
 pub struct RouteWithTypeInfo {
     pub method: MethodPattern,
     pub path: String,
-    pub security: SecuritySchemeReferenceData,
+    pub security: Option<SecuritySchemeReferenceData>,
     pub binding: GatewayBindingWithTypeInfo,
 }
 
@@ -141,10 +143,12 @@ impl From<CompiledRoute> for RouteWithTypeInfo {
         let method = value.method;
         let path = value.path.to_string();
         let binding = value.binding.into();
+        let security = value.security.map(|s| SecuritySchemeReferenceData::from(s));
         Self {
             method,
             path,
             binding,
+            security,
         }
     }
 }
@@ -210,13 +214,32 @@ impl GatewayBindingData {
             None
         };
 
-        let middleware = worker_binding.middleware.and_then(|x| {
-            x.0.iter().find_map(|m| {
-                m.get_cors().map(|c| MiddlewareData {
-                    cors: Some(c.clone()),
-                })
+        let mut cors = None;
+        let mut auth = None;
+
+
+        let middleware = if let Some(middlewares) = worker_binding.middleware {
+            for m in middlewares.0.iter() {
+                match m {
+                    Middleware::Http(http_middleware) => match http_middleware {
+                        HttpMiddleware::AddCorsHeaders(cors0) => {
+                            cors = Some(cors0.clone());
+                        }
+                        HttpMiddleware::AuthenticateRequest(http_authorizer) => {
+                            auth = Some(SecuritySchemeReferenceData::from(http_authorizer.security_scheme.clone()))
+                        }
+                    }
+                }
+            }
+
+            Some(MiddlewareData {
+                cors,
+                auth
             })
-        });
+        } else {
+            None
+        };
+
 
         Ok(Self {
             binding_type: Some(binding_type),
@@ -240,7 +263,7 @@ impl GatewayBindingData {
 #[oai(rename_all = "camelCase")]
 pub struct MiddlewareData {
     pub cors: Option<Cors>,
-    pub auth: SecuritySchemeReferenceData,
+    pub auth: Option<SecuritySchemeReferenceData>,
 }
 
 // Security Scheme data that's exposed to the users of API definition registration
@@ -252,14 +275,22 @@ pub struct MiddlewareData {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct SecuritySchemeReferenceData {
-    scheme_identifier: SecuritySchemeIdentifier,
+    security_scheme: String,
     // Additional scope support can go in future
+}
+
+impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeReferenceData {
+    fn from(value: SecuritySchemeWithProviderMetadata) -> Self {
+        Self {
+            security_scheme: value.security_scheme.scheme_identifier().to_string(),
+        }
+    }
 }
 
 impl From<SecuritySchemeReference> for SecuritySchemeReferenceData {
     fn from(value: SecuritySchemeReference) -> Self {
         Self {
-            scheme_identifier: value.security_scheme_identifier,
+            security_scheme: value.security_scheme_identifier.to_string(),
         }
     }
 }
@@ -267,7 +298,7 @@ impl From<SecuritySchemeReference> for SecuritySchemeReferenceData {
 impl From<SecuritySchemeReferenceData> for SecuritySchemeReference {
     fn from(value: SecuritySchemeReferenceData) -> Self {
         Self {
-            security_scheme_identifier: value.scheme_identifier,
+            security_scheme_identifier: value.security_scheme,
         }
     }
 }
