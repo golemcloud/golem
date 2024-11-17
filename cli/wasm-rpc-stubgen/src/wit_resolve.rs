@@ -411,11 +411,11 @@ impl ResolvedWitApplication {
                         .push_context("referenced package name", dep_package_name.to_string());
 
                     validation.add_error(formatdoc!("
-                      Direct WIT package reference to component ({}) main package ({}) is not supported.
+                      Direct WIT package reference to component {} main package {} is not supported.
                       For using component stubs, declare them in the app manifest.
                       For using exported types from another component, use the component interface package (e.g.: ns:package-name-interface).",
-                      dep_component_name.to_string().log_color_error_highlight(),
-                      dep_package_name.to_string().log_color_highlight()
+                      dep_component_name.to_string().log_color_highlight(),
+                      dep_package_name.to_string().log_color_error_highlight()
                     ));
 
                     validation.pop_context();
@@ -431,11 +431,11 @@ impl ResolvedWitApplication {
                         .push_context("referenced package name", dep_package_name.to_string());
 
                     validation.add_error(formatdoc!("
-                      Direct WIT package reference to component ({}) stub packages ({}) is not supported.
+                      Direct WIT package reference to component {} stub packages {} is not supported.
                       For using component stubs, declare them in the app manifest.
                       For using exported types from another component, use the component interface package (e.g.: ns:package-name-interface).",
-                      dep_component_name.to_string().log_color_error_highlight(),
-                      dep_package_name.to_string().log_color_highlight()
+                      dep_component_name.to_string().log_color_highlight(),
+                      dep_package_name.to_string().log_color_error_highlight()
                     ));
 
                     validation.pop_context();
