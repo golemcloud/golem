@@ -161,6 +161,13 @@ impl DockerMysqlRdbs {
 
         Self { rdbs }
     }
+
+    pub fn host_connection_strings(&self) -> Vec<String> {
+        self.rdbs
+            .iter()
+            .map(|rdb| rdb.host_connection_string())
+            .collect()
+    }
 }
 
 impl Debug for DockerMysqlRdbs {

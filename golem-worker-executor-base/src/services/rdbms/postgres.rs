@@ -28,7 +28,7 @@ use std::fmt::Display;
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PostgresType;
 
 impl PostgresType {

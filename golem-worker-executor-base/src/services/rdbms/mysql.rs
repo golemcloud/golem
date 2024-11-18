@@ -26,7 +26,7 @@ use sqlx::{Column, Pool, Row, TypeInfo};
 use std::fmt::Display;
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MysqlType;
 
 impl MysqlType {
