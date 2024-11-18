@@ -101,7 +101,7 @@ pub trait PluginInstallationRepoQueries<
         owner: &'a Owner::Row,
         target: &'a Target::Row,
         id: &'a Uuid,
-        new_priority: i16,
+        new_priority: i32,
         new_parameters: Vec<u8>,
     ) -> QueryBuilder<'a, DB>;
 
@@ -216,7 +216,7 @@ impl<Owner: PluginOwner, Target: PluginInstallationTarget>
         owner: &'a Owner::Row,
         target: &'a Target::Row,
         id: &'a Uuid,
-        new_priority: i16,
+        new_priority: i32,
         new_parameters: Vec<u8>,
     ) -> QueryBuilder<'a, sqlx::Postgres> {
         let mut query = QueryBuilder::new("UPDATE ");
