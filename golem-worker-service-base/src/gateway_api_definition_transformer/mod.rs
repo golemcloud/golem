@@ -2,18 +2,17 @@ use crate::gateway_api_definition::http::HttpApiDefinition;
 pub use api_definition_transformer::*;
 pub use auth_transformer::*;
 pub use cors_transformer::*;
-use std::sync::Arc;
 
 mod api_definition_transformer;
 mod auth_transformer;
 mod cors_transformer;
 
-pub fn auth_transformer() -> Arc<dyn ApiDefinitionTransformer> {
-    Arc::new(AuthTransformer)
+pub fn auth_transformer() -> Box<dyn ApiDefinitionTransformer> {
+    Box::new(AuthTransformer)
 }
 
-pub fn cors_transformer() -> Arc<dyn ApiDefinitionTransformer> {
-    Arc::new(CorsTransformer)
+pub fn cors_transformer() -> Box<dyn ApiDefinitionTransformer> {
+    Box::new(CorsTransformer)
 }
 
 // A curated list of transformations that gets applied to HttpApiDefinition
