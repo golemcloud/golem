@@ -596,7 +596,7 @@ impl CompiledRoute {
             GatewayBinding::Static(static_binding) => Ok(CompiledRoute {
                 method: route.method.clone(),
                 path: route.path.clone(),
-                binding: GatewayBindingCompiled::Static(*static_binding.clone()),
+                binding: GatewayBindingCompiled::Static(static_binding.clone()),
                 security: route.security.clone(),
             }),
         }

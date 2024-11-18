@@ -11,7 +11,7 @@ use golem_common::model::GatewayBindingType;
 #[derive(Debug, Clone, PartialEq)]
 pub enum GatewayBindingCompiled {
     Worker(WorkerBindingCompiled),
-    Static(StaticBinding),
+    Static(Box<StaticBinding>),
     FileServer(WorkerBindingCompiled),
 }
 
@@ -19,7 +19,7 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
     fn from(value: GatewayBindingCompiled) -> Self {
         match value {
             GatewayBindingCompiled::Static(static_binding) => {
-                GatewayBinding::static_binding(static_binding)
+                GatewayBinding::Static(static_binding)
             }
             GatewayBindingCompiled::Worker(value) => {
                 let worker_binding = value.clone();
@@ -72,7 +72,7 @@ impl From<GatewayBindingCompiled>
                     response_rib_input: None,
                     worker_functions_in_response: None,
                     binding_type: Some(1),
-                    static_binding: Some(static_binding.into()),
+                    static_binding: Some(golem_api_grpc::proto::golem::apidefinition::StaticBinding::from(*static_binding)),
                     middleware: None,
                 }
             }
@@ -177,7 +177,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
                     .static_binding
                     .ok_or("Missing static_binding for Static")?;
 
-                Ok(GatewayBindingCompiled::Static(static_binding.try_into()?))
+                Ok(GatewayBindingCompiled::Static(Box::new(static_binding.try_into()?)))
             }
             _ => Err("Unknown binding type".to_string()),
         }
