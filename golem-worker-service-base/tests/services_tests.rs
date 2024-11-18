@@ -22,9 +22,7 @@ use golem_worker_service_base::service::gateway::api_definition::{
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentError, ApiDeploymentService, ApiDeploymentServiceDefault,
 };
-use golem_worker_service_base::service::gateway::http_api_definition_validator::{
-    HttpApiDefinitionValidator, RouteValidationError,
-};
+use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 
 use chrono::Utc;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
