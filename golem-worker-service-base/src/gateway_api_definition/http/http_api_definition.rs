@@ -618,13 +618,9 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
     use crate::api;
-    use crate::gateway_security::{
-        GoogleIdentityProvider, SecurityScheme, SecuritySchemeIdentifier,
-    };
-    use crate::service::gateway::security_scheme::{
-        DefaultSecuritySchemeService, SecuritySchemeServiceError,
-    };
-    use async_trait::async_trait;
+    use crate::gateway_security::GoogleIdentityProvider;
+    use crate::service::gateway::security_scheme::DefaultSecuritySchemeService;
+    
     use chrono::{DateTime, Utc};
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
     use golem_service_base::auth::DefaultNamespace;
