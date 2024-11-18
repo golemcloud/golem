@@ -70,7 +70,6 @@ impl Default for InMemoryGatewaySession {
     }
 }
 
-
 #[async_trait]
 impl GatewayData for InMemoryGatewaySession {
     async fn insert(

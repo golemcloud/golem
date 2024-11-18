@@ -5,33 +5,33 @@ use async_trait::async_trait;
 use golem_common::SafeDisplay;
 
 // Implementation note: We have multiple `Middleware` (see `Middlewares`).
-// Some middlewares are specific to `MiddlewareIn` or `MiddlewareOut`.
-// This separation ensures input middlewares aren't used for outgoing responses, and vice versa.
-// When adding new middlewares (see `Middlewares`), we follow the compiler to create the correct instance.
-// These middlewares are protocol-independent. `GatewayRequestDetails` serves as input,
-// with its enum defining the protocol type. The middleware decides which protocol to process.
-// This approach centralizes middleware management, making it easy to add new ones without protocol-specific logic.
-// Simply use `middlewares.process_input(gateway_request_details)` for input, and
-// `middlewares.process_output(protocol_independent_response)` for output.
+// While some middlewares are  specific to `MiddlewareIn` other are specific to `MiddlewareOut`.
+// This ensures orthogonality in middleware usages, such that, at type level, we distinguish whether it is
+// used only to process input (of api gateway) or used only to manipulate the output (of probably rib evaluation result)
+// These middlewares are protocol-independent. It's input `GatewayRequestDetails`,
+// with is an enum of different types (protocols) of input the protocol type.
+// An `enum` over type parameter is used merely for simplicity.
+// The middleware decides which protocol out of `GatewayRequestDetails` to process.
+// This approach centralizes middleware management, and easy to add new middlewares without worrying about protocols.
 #[async_trait]
 pub trait MiddlewareIn<Out> {
     async fn process_input(
         &self,
         input: &GatewayRequestDetails,
         session_store: &GatewaySessionStore,
-    ) -> Result<MiddlewareSuccess<Out>, MiddlewareFailure>;
+    ) -> Result<MiddlewareSuccess<Out>, MiddlewareInError>;
 }
 
-pub enum MiddlewareFailure {
+pub enum MiddlewareInError {
     Unauthorized(String),
     InternalServerError(String),
 }
 
-impl SafeDisplay for MiddlewareFailure {
+impl SafeDisplay for MiddlewareInError {
     fn to_safe_string(&self) -> String {
         match self {
-            MiddlewareFailure::Unauthorized(msg) => format!("Unauthorized: {}", msg),
-            MiddlewareFailure::InternalServerError(msg) => {
+            MiddlewareInError::Unauthorized(msg) => format!("Unauthorized: {}", msg),
+            MiddlewareInError::InternalServerError(msg) => {
                 format!("Internal Server Error: {}", msg)
             }
         }
@@ -49,7 +49,7 @@ impl MiddlewareIn<poem::Response> for HttpAuthorizer {
         &self,
         input: &GatewayRequestDetails,
         session_store: &GatewaySessionStore,
-    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareFailure> {
+    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
         match input {
             GatewayRequestDetails::Http(http_request) => {
                 self.apply_http_auth(http_request, session_store).await

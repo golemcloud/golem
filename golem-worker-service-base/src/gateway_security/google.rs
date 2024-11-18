@@ -12,8 +12,8 @@ pub struct GoogleIdentityProvider {
     default_provider: DefaultIdentityProvider,
 }
 
-impl GoogleIdentityProvider {
-    pub fn new() -> Self {
+impl Default for GoogleIdentityProvider {
+    fn default() -> Self {
         GoogleIdentityProvider {
             default_provider: DefaultIdentityProvider {},
         }

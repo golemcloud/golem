@@ -26,7 +26,7 @@ impl SecurityScheme {
 
     pub fn provider(&self) -> impl IdentityProvider {
         if self.provider_name.0 == "google" {
-            GoogleIdentityProvider::new()
+            GoogleIdentityProvider::default()
         } else {
             panic!("Make it ADT"); // TODO
         }

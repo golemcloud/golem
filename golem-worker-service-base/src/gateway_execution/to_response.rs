@@ -5,7 +5,7 @@ use crate::gateway_execution::file_server_binding_handler::{
     FileServerBindingError, FileServerBindingResult,
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
-use crate::gateway_execution::to_response_failure::ToResponseFailure;
+use crate::gateway_execution::to_response_failure::ToResponseFromSafeDisplay;
 use crate::gateway_middleware::Cors as CorsPreflight;
 use async_trait::async_trait;
 use http::header::*;
@@ -105,7 +105,7 @@ impl ToResponse<poem::Response> for RibResult {
     ) -> poem::Response {
         match internal::IntermediateHttpResponse::from(&self) {
             Ok(intermediate_response) => intermediate_response.to_http_response(request_details),
-            Err(e) => e.to_failed_response(|_| StatusCode::INTERNAL_SERVER_ERROR),
+            Err(e) => e.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
         }
     }
 }
@@ -130,7 +130,7 @@ impl ToResponse<poem::Response> for AuthCallBackResult {
                 )
                 .body(()),
 
-            Err(err) => err.to_failed_response(|_| StatusCode::UNAUTHORIZED),
+            Err(err) => err.to_response_from_safe_display(|_| StatusCode::UNAUTHORIZED),
         }
     }
 }

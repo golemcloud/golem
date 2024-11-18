@@ -217,7 +217,9 @@ async fn test_services(
 
     let security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> =
         Arc::new(DefaultSecuritySchemeService::new(
-            Arc::new(golem_worker_service_base::gateway_security::GoogleIdentityProvider::new()),
+            Arc::new(
+                golem_worker_service_base::gateway_security::GoogleIdentityProvider::default(),
+            ),
             Cache::new(
                 Some(100),
                 FullCacheEvictionMode::None,

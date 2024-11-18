@@ -10,10 +10,10 @@ use crate::gateway_execution::file_server_binding_handler::{
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::ToResponse;
-use crate::gateway_execution::to_response_failure::ToResponseFailure;
+use crate::gateway_execution::to_response_failure::ToResponseFromSafeDisplay;
 use crate::gateway_middleware::{
-    Cors as CorsPreflight, HttpAuthorizer, MiddlewareFailure, MiddlewareIn, MiddlewareOut,
-    MiddlewareSuccess, Middlewares,
+    Cors as CorsPreflight, HttpAuthorizer, MiddlewareIn, MiddlewareInError, MiddlewareOut,
+    MiddlewareOutError, MiddlewareSuccess, Middlewares,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
@@ -37,9 +37,10 @@ pub trait GatewayBindingExecutor<Namespace, Response> {
         session: GatewaySessionStore,
     ) -> Response
     where
-        EvaluationError: ToResponseFailure<Response>,
-        RibInputTypeMismatch: ToResponseFailure<Response>,
-        MiddlewareFailure: ToResponseFailure<Response>,
+        EvaluationError: ToResponseFromSafeDisplay<Response>,
+        RibInputTypeMismatch: ToResponseFromSafeDisplay<Response>,
+        MiddlewareInError: ToResponseFromSafeDisplay<Response>,
+        MiddlewareOutError: ToResponseFromSafeDisplay<Response>,
         RibResult: ToResponse<Response>,
         FileServerBindingResult: ToResponse<Response>,
         CorsPreflight: ToResponse<Response>,
@@ -73,16 +74,16 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         resolved_worker_binding: &ResolvedWorkerBinding<N>,
     ) -> Result<(RibInput, RibInput), R>
     where
-        RibInputTypeMismatch: ToResponseFailure<R>,
+        RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
     {
         let request_rib_input = request_details
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-            .map_err(|err| err.to_failed_response(|_| StatusCode::BAD_REQUEST))?;
+            .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
 
         let worker_rib_input = resolved_worker_binding
             .worker_detail
             .resolve_rib_input_value(&resolved_worker_binding.compiled_response_mapping.rib_input)
-            .map_err(|err| err.to_failed_response(|_| StatusCode::BAD_REQUEST))?;
+            .map_err(|err| err.to_response_from_safe_display(|_| StatusCode::BAD_REQUEST))?;
 
         Ok((request_rib_input, worker_rib_input))
     }
@@ -118,8 +119,8 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     ) -> R
     where
         RibResult: ToResponse<R>,
-        EvaluationError: ToResponseFailure<R>,
-        RibInputTypeMismatch: ToResponseFailure<R>,
+        EvaluationError: ToResponseFromSafeDisplay<R>,
+        RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
     {
         match self
             .resolve_rib_inputs(&binding.request_details, resolved_binding)
@@ -135,7 +136,9 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                             .to_response(&binding.request_details, session_store)
                             .await
                     }
-                    Err(err) => err.to_failed_response(|_| StatusCode::INTERNAL_SERVER_ERROR),
+                    Err(err) => {
+                        err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                    }
                 }
             }
             Err(err_response) => err_response,
@@ -151,8 +154,8 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     where
         FileServerBindingResult: ToResponse<R>,
         RibResult: ToResponse<R>,
-        EvaluationError: ToResponseFailure<R>,
-        RibInputTypeMismatch: ToResponseFailure<R>,
+        EvaluationError: ToResponseFromSafeDisplay<R>,
+        RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
     {
         match self
             .resolve_rib_inputs(&binding.request_details, resolved_binding)
@@ -174,7 +177,9 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                             .to_response(&binding.request_details, session_store)
                             .await
                     }
-                    Err(err) => err.to_failed_response(|_| StatusCode::INTERNAL_SERVER_ERROR),
+                    Err(err) => {
+                        err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                    }
                 }
             }
             Err(err_response) => err_response,
@@ -216,7 +221,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     where
         HttpAuthorizer: MiddlewareIn<R>,
         CorsPreflight: MiddlewareOut<R>,
-        MiddlewareFailure: ToResponseFailure<R>,
+        MiddlewareInError: ToResponseFromSafeDisplay<R>,
     {
         let input_middleware_result = middlewares
             .process_middleware_in(session, request_details)
@@ -228,7 +233,9 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                 MiddlewareSuccess::PassThrough => None,
             },
 
-            Err(err) => Some(err.to_failed_response(|_| StatusCode::INTERNAL_SERVER_ERROR)),
+            Err(err) => {
+                Some(err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR))
+            }
         }
     }
 }
@@ -244,9 +251,10 @@ impl<N: Send + Sync + Clone, R: Debug + Send + Sync> GatewayBindingExecutor<N, R
     ) -> R
     where
         RibResult: ToResponse<R>,
-        EvaluationError: ToResponseFailure<R>,
-        RibInputTypeMismatch: ToResponseFailure<R>,
-        MiddlewareFailure: ToResponseFailure<R>,
+        EvaluationError: ToResponseFromSafeDisplay<R>,
+        RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
+        MiddlewareInError: ToResponseFromSafeDisplay<R>,
+        MiddlewareOutError: ToResponseFromSafeDisplay<R>,
         FileServerBindingResult: ToResponse<R>, // FileServerBindingResult can be a direct response in a file server endpoint
         CorsPreflight: ToResponse<R>, // Cors can be a direct response in a cors preflight endpoint
         AuthCallBackResult: ToResponse<R>, // AuthCallBackResult can be a direct response in auth callback endpoint
@@ -292,8 +300,9 @@ impl<N: Send + Sync + Clone, R: Debug + Send + Sync> GatewayBindingExecutor<N, R
 
                         match middleware_out_result {
                             Ok(_) => response,
-                            Err(err) => EvaluationError(err)
-                                .to_failed_response(|_| StatusCode::INTERNAL_SERVER_ERROR),
+                            Err(err) => err.to_response_from_safe_display(|_| {
+                                StatusCode::INTERNAL_SERVER_ERROR
+                            }),
                         }
                     }
                 }

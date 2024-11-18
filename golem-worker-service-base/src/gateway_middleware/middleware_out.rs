@@ -1,23 +1,36 @@
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_middleware::{Cors, HttpMiddleware};
 use async_trait::async_trait;
+use golem_common::SafeDisplay;
 
 // Implementation note: We have multiple `Middleware` (see `Middlewares`).
-// Some middlewares are specific to `MiddlewareIn` or `MiddlewareOut`.
-// This separation ensures input middlewares aren't used for outgoing responses, and vice versa.
-// When adding new middlewares (see `Middlewares`), we follow the compiler to create the correct instance.
-// These middlewares are protocol-independent. `GatewayRequestDetails` serves as input,
-// with its enum defining the protocol type. The middleware decides which protocol to process.
-// This approach centralizes middleware management, making it easy to add new ones without protocol-specific logic.
-// Simply use `middlewares.process_input(gateway_request_details)` for input, and
-// `middlewares.process_output(protocol_independent_response)` for output.
+// While some middlewares are  specific to `MiddlewareIn` other are specific to `MiddlewareOut`.
+// This ensures orthogonality in middleware usages, such that, at type level, we distinguish whether it is
+// used only to process input (of api gateway) or used only to manipulate the output (of probably rib evaluation result)
+// These middlewares are protocol-independent. It's input `GatewayRequestDetails`,
+// with is an enum of different types (protocols) of input the protocol type.
+// An `enum` over type parameter is used merely for simplicity.
+// The middleware decides which protocol out of `GatewayRequestDetails` to process.
+// This approach centralizes middleware management, and easy to add new middlewares without worrying about protocols.
 #[async_trait]
 pub trait MiddlewareOut<R> {
     async fn process_output(
         &self,
         session_store: &GatewaySessionStore,
         input: &mut R,
-    ) -> Result<(), String>; // TODO; Avoid String error and make it more specific. Internal, Authorisation etc can be generic
+    ) -> Result<(), MiddlewareOutError>;
+}
+
+pub enum MiddlewareOutError {
+    InternalError(String),
+}
+
+impl SafeDisplay for MiddlewareOutError {
+    fn to_safe_string(&self) -> String {
+        match self {
+            MiddlewareOutError::InternalError(error) => error.to_string(),
+        }
+    }
 }
 
 #[async_trait]
@@ -26,7 +39,7 @@ impl MiddlewareOut<poem::Response> for Cors {
         &self,
         _session_store: &GatewaySessionStore,
         input: &mut poem::Response,
-    ) -> Result<(), String> {
+    ) -> Result<(), MiddlewareOutError> {
         HttpMiddleware::apply_cors(input, self);
         Ok(())
     }

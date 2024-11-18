@@ -36,7 +36,7 @@ impl Middlewares {
         &self,
         session_store: &GatewaySessionStore,
         input: &GatewayRequestDetails,
-    ) -> Result<MiddlewareSuccess<R>, MiddlewareFailure>
+    ) -> Result<MiddlewareSuccess<R>, MiddlewareInError>
     where
         HttpAuthorizer: MiddlewareIn<R>,
     {
@@ -64,7 +64,7 @@ impl Middlewares {
         &self,
         session_store: &GatewaySessionStore,
         response: &mut Out,
-    ) -> Result<(), String>
+    ) -> Result<(), MiddlewareOutError>
     where
         Cors: MiddlewareOut<Out>,
     {

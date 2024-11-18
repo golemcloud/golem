@@ -906,7 +906,7 @@ mod internal {
     pub(crate) fn get_security_scheme_service(
     ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
         Arc::new(DefaultSecuritySchemeService::new(
-            Arc::new(GoogleIdentityProvider::new()),
+            Arc::new(GoogleIdentityProvider::default()),
             Cache::new(
                 Some(100),
                 FullCacheEvictionMode::None,

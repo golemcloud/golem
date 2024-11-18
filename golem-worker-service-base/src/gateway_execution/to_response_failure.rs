@@ -2,16 +2,17 @@ use golem_common::SafeDisplay;
 use http::StatusCode;
 use poem::Body;
 
-pub trait ToResponseFailure<A> {
-    fn to_failed_response<F>(&self, get_status_code: F) -> A
+pub trait ToResponseFromSafeDisplay<A> {
+    fn to_response_from_safe_display<F>(&self, get_status_code: F) -> A
     where
+        Self: SafeDisplay,
         F: Fn(&Self) -> StatusCode,
         Self: Sized;
 }
 
-// Only SafeDisplay'd errors are allowed for embedding in any output response
-impl<E: SafeDisplay> ToResponseFailure<poem::Response> for E {
-    fn to_failed_response<F>(&self, get_status_code: F) -> poem::Response
+// Only SafeDisplay'd errors are allowed to be embedded in any output response
+impl<E: SafeDisplay> ToResponseFromSafeDisplay<poem::Response> for E {
+    fn to_response_from_safe_display<F>(&self, get_status_code: F) -> poem::Response
     where
         F: Fn(&Self) -> StatusCode,
         Self: Sized,

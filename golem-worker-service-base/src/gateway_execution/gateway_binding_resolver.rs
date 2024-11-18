@@ -2,7 +2,7 @@ use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, VarInfo};
 use crate::gateway_binding::{GatewayBindingCompiled, StaticBinding};
 use crate::gateway_binding::{GatewayRequestDetails, ResponseMappingCompiled};
 use crate::gateway_execution::router::RouterPattern;
-use crate::gateway_middleware::{Middlewares};
+use crate::gateway_middleware::Middlewares;
 use crate::gateway_request::http_request::{router, InputHttpRequest};
 use crate::gateway_security::OpenIdClient;
 use async_trait::async_trait;

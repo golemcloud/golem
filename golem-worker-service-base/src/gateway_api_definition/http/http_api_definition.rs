@@ -620,7 +620,7 @@ mod tests {
     use crate::api;
     use crate::gateway_security::GoogleIdentityProvider;
     use crate::service::gateway::security_scheme::DefaultSecuritySchemeService;
-    
+
     use chrono::{DateTime, Utc};
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
     use golem_service_base::auth::DefaultNamespace;
@@ -839,7 +839,7 @@ mod tests {
             let security_scheme_service: Arc<
                 dyn SecuritySchemeService<DefaultNamespace> + Send + Sync,
             > = Arc::new(DefaultSecuritySchemeService::new(
-                Arc::new(GoogleIdentityProvider::new()),
+                Arc::new(GoogleIdentityProvider::default()),
                 Cache::new(
                     Some(100),
                     FullCacheEvictionMode::None,

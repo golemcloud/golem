@@ -7,22 +7,12 @@ use http::header::{
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {
     AddCorsHeaders(Cors),
-    AuthenticateRequest(HttpAuthorizer), // Middleware to authenticate before feeding the input to the binding executor
+    AuthenticateRequest(Box<HttpAuthorizer>), // Middleware to authenticate before feeding the input to the binding executor
 }
 
 impl HttpMiddleware {
     pub fn cors(cors: Cors) -> Self {
         HttpMiddleware::AddCorsHeaders(cors)
-    }
-
-    pub fn transform_response(&self, response: &mut poem::Response) {
-        match self {
-            // if CORS is applied as a middleware, we need to return a response with specific CORS headers
-            HttpMiddleware::AddCorsHeaders(cors) => {
-                Self::apply_cors(response, cors);
-            }
-            HttpMiddleware::AuthenticateRequest(_) => {}
-        }
     }
 
     pub fn apply_cors(response: &mut poem::Response, cors: &Cors) {

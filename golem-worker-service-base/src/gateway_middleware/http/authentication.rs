@@ -1,6 +1,6 @@
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
-use crate::gateway_middleware::{MiddlewareFailure, MiddlewareSuccess};
+use crate::gateway_middleware::{MiddlewareInError, MiddlewareSuccess};
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
 use openidconnect::{ClaimsVerificationError, Nonce, Scope};
@@ -20,12 +20,12 @@ impl HttpAuthorizer {
         &self,
         input: &HttpRequestDetails,
         session_store: &GatewaySessionStore,
-    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareFailure> {
+    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
         let identity_provider = &self.security_scheme.identity_provider();
 
         let open_id_client = identity_provider
             .get_client(&self.security_scheme)
-            .map_err(|err| MiddlewareFailure::Unauthorized(err.to_string()))?;
+            .map_err(|err| MiddlewareInError::Unauthorized(err.to_string()))?;
 
         let id_token = input.get_id_token_from_cookie();
 
@@ -33,13 +33,13 @@ impl HttpAuthorizer {
 
         if let (Some(id_token), Some(state)) = (id_token, state) {
             let id_token = CoreIdToken::from_str(&id_token)
-                .map_err(|err| MiddlewareFailure::Unauthorized(err.to_string()))?;
+                .map_err(|err| MiddlewareInError::Unauthorized(err.to_string()))?;
 
             let nonce = session_store
                 .0
                 .get(SessionId(state.clone()), DataKey::nonce())
                 .await
-                .map_err(MiddlewareFailure::InternalServerError)?;
+                .map_err(MiddlewareInError::InternalServerError)?;
 
             if let Some(nonce) = nonce.and_then(|x| x.as_string()) {
                 let result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
@@ -58,22 +58,22 @@ impl HttpAuthorizer {
                     Err(ClaimsVerificationError::Expired(_)) => {
                         internal::redirect(
                             session_store,
-                            &input,
+                            input,
                             identity_provider,
                             &open_id_client,
                             self,
                         )
                         .await
                     }
-                    Err(_) => Err(MiddlewareFailure::Unauthorized("Invalid token".to_string())),
+                    Err(_) => Err(MiddlewareInError::Unauthorized("Invalid token".to_string())),
                 }
             } else {
-                Err(MiddlewareFailure::Unauthorized("Invalid nonce".to_string()))
+                Err(MiddlewareInError::Unauthorized("Invalid nonce".to_string()))
             }
         } else {
             internal::redirect(
-                &session_store,
-                &input,
+                session_store,
+                input,
                 identity_provider,
                 &open_id_client,
                 self,
@@ -89,7 +89,7 @@ mod internal {
         DataKey, DataValue, GatewaySessionStore, SessionId,
     };
     use crate::gateway_middleware::middleware_in::MiddlewareSuccess;
-    use crate::gateway_middleware::{HttpAuthorizer, MiddlewareFailure};
+    use crate::gateway_middleware::{HttpAuthorizer, MiddlewareInError};
     use crate::gateway_security::{IdentityProvider, OpenIdClient};
     use http::StatusCode;
     use openidconnect::core::CoreIdTokenClaims;
@@ -101,11 +101,11 @@ mod internal {
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
         client: &OpenIdClient,
         http_authorizer: &HttpAuthorizer,
-    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareFailure> {
+    ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
         let redirect_uri = input.get_uri();
 
         let authorization =
-            identity_provider.get_authorization_url(&client, http_authorizer.get_scopes());
+            identity_provider.get_authorization_url(client, http_authorizer.get_scopes());
 
         let state = authorization.csrf_state.secret();
 
@@ -124,12 +124,12 @@ mod internal {
             .0
             .insert(session_id.clone(), nonce_data_key, nonce_data_value)
             .await
-            .map_err(MiddlewareFailure::InternalServerError)?;
+            .map_err(MiddlewareInError::InternalServerError)?;
         session_store
             .0
             .insert(session_id, redirect_url_data_key, redirect_url_data_value)
             .await
-            .map_err(MiddlewareFailure::InternalServerError)?;
+            .map_err(MiddlewareInError::InternalServerError)?;
 
         let response = poem::Response::builder();
         let result = response
@@ -144,7 +144,7 @@ mod internal {
         session_id: &SessionId,
         claims: &CoreIdTokenClaims,
         session_store: &GatewaySessionStore,
-    ) -> Result<(), MiddlewareFailure> {
+    ) -> Result<(), MiddlewareInError> {
         let claims_data_key = DataKey("claims".to_string());
         let json = serde_json::to_value(claims)
             .map_err(|err| err.to_string())
@@ -155,6 +155,6 @@ mod internal {
             .0
             .insert(session_id.clone(), claims_data_key, claims_data_value)
             .await
-            .map_err(MiddlewareFailure::InternalServerError)
+            .map_err(MiddlewareInError::InternalServerError)
     }
 }
