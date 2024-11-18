@@ -13,6 +13,10 @@ pub enum StaticBinding {
 }
 
 impl StaticBinding {
+    pub fn http_auth_call_back(value: HttpRequestAuthentication) -> StaticBinding {
+        StaticBinding::HttpAuthCallBack(Box::new(value))
+    }
+
     pub fn from_http_cors(cors: Cors) -> Self {
         StaticBinding::HttpCorsPreflight(Box::new(cors))
     }

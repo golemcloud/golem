@@ -10,19 +10,31 @@ pub trait ApiDefinitionTransformer {
 }
 
 #[derive(Debug)]
-pub struct ApiDefTransformationError {
-    pub method: MethodPattern,
-    pub path: String,
-    pub detail: String,
+pub enum ApiDefTransformationError {
+    InvalidRoute {
+        method: MethodPattern,
+        path: String,
+        detail: String,
+    },
+    Custom(String),
 }
 
 impl Display for ApiDefTransformationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "RouteValidationError: method: {}, path: {}, detail: {}",
-            self.method, self.path, self.detail
-        )?;
+        match self {
+            ApiDefTransformationError::InvalidRoute {
+                method,
+                path,
+                detail,
+            } => write!(
+                f,
+                "ApiDefinitionTransformationError: method: {}, path: {}, detail: {}",
+                method, path, detail
+            )?,
+            ApiDefTransformationError::Custom(msg) => {
+                write!(f, "ApiDefinitionTransformationError: {}", msg)?
+            }
+        }
 
         Ok(())
     }
@@ -30,7 +42,7 @@ impl Display for ApiDefTransformationError {
 
 impl ApiDefTransformationError {
     pub fn new(method: MethodPattern, path: String, detail: String) -> Self {
-        ApiDefTransformationError {
+        ApiDefTransformationError::InvalidRoute {
             method,
             path,
             detail,

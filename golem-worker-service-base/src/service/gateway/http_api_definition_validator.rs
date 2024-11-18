@@ -21,16 +21,16 @@ pub struct RouteValidationError {
     pub detail: String,
 }
 
-impl From<ApiDefTransformationError> for RouteValidationError {
-    fn from(value: ApiDefTransformationError) -> Self {
-        RouteValidationError {
-            method: value.method,
-            path: value.path,
-            component: None,
-            detail: value.detail,
-        }
-    }
-}
+// impl From<ApiDefTransformationError> for RouteValidationError {
+//     fn from(value: ApiDefTransformationError) -> Self {
+//         RouteValidationError {
+//             method: value.method,
+//             path: value.path,
+//             component: None,
+//             detail: value.detail,
+//         }
+//     }
+// }
 
 impl Display for RouteValidationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
