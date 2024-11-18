@@ -711,18 +711,17 @@ fn extract_main_interface_package(
     let mut interface_package = package.clone();
     interface_package.set_name(naming::wit::interface_encoder_package_name(package.name()));
 
-    let interface_export_prefix = format!(
+    let interface_prefix = format!(
         "{}:{}/",
         package.name().namespace(),
         interface_package.name().name()
     );
-    let interface_export_suffix = package
+    let interface_suffix = package
         .name()
         .version()
         .map(|version| format!("@{}", version))
         .unwrap_or_default();
 
-    // TODO: is import and exporting the same interface allowed?
     let mut exported_interface_identifiers = HashSet::<Ident>::new();
     let mut inline_interface_exports = BTreeMap::<Ident, Vec<Interface>>::new();
     let mut inline_function_exports = BTreeMap::<Ident, Vec<StandaloneFunc>>::new();
@@ -772,11 +771,11 @@ fn extract_main_interface_package(
             if inline_function_exports.contains_key(&world_name) {
                 world.named_interface_export(format!(
                     "{}{}{}",
-                    interface_export_prefix,
+                    interface_prefix,
                     naming::wit::interface_package_world_inline_functions_interface_name(
                         &world_name
                     ),
-                    interface_export_suffix
+                    interface_suffix
                 ));
             }
         }
@@ -799,17 +798,26 @@ fn extract_main_interface_package(
         PackageItem::World(_) => false,
     });
 
-    // Rename named self imports to use the extracted interface names
+    // Rename named self export and imports to use the extracted interface names
     for package_item in package.items_mut() {
         if let PackageItem::World(world) = package_item {
             for world_item in world.items_mut() {
-                if let WorldItem::NamedInterfaceExport(export) = world_item {
+                if let WorldItem::NamedInterfaceImport(import) = world_item {
+                    if !import.name().raw_name().contains("/") {
+                        import.set_name(format!(
+                            "{}{}{}",
+                            interface_prefix,
+                            import.name(),
+                            interface_suffix
+                        ));
+                    }
+                } else if let WorldItem::NamedInterfaceExport(export) = world_item {
                     if !export.name().raw_name().contains("/") {
                         export.set_name(format!(
                             "{}{}{}",
-                            interface_export_prefix,
+                            interface_prefix,
                             export.name(),
-                            interface_export_suffix
+                            interface_suffix
                         ));
                     }
                 }
