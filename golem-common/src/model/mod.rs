@@ -2860,6 +2860,7 @@ pub enum GatewayBindingType {
     Default,
     FileServer,
     CorsPreflight,
+    AuthCallBack
 }
 
 // To keep backward compatibility as we documented wit-worker to be default

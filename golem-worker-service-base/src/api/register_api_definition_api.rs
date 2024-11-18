@@ -207,7 +207,7 @@ pub struct GatewayBindingData {
     // Optional only to keep backward compatibility
     pub middleware: Option<MiddlewareData>,
 
-    // CORS
+    // CORS binding type
     //  For binding type - cors-middleware
     // Optional only to keep backward compatibility
     pub allow_origin: Option<String>,
@@ -223,6 +223,10 @@ pub struct GatewayBindingData {
     pub max_age: Option<u64>,
     //  For binding type - cors-middleware
     pub allow_credentials: Option<bool>,
+
+    // HttpAuthCallBack Static binding type
+    pub auth: Option<SecuritySchemeReference>
+
 }
 
 impl GatewayBindingData {
@@ -281,6 +285,7 @@ impl GatewayBindingData {
             max_age: None,
             allow_credentials: None,
             middleware,
+            auth: None
         })
     }
 }
@@ -498,7 +503,7 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 GatewayBindingType::FileServer,
             ),
 
-            GatewayBinding::Static(StaticBinding::HttpCorsPreflight(cors)) => Ok(Self {
+            GatewayBinding::Static(StaticBinding::HttpCorsPreflight(cors)) => Ok(GatewayBindingData {
                 binding_type: Some(GatewayBindingType::CorsPreflight),
                 component_id: None,
                 worker_name: None,
@@ -511,9 +516,27 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 max_age: cors.get_max_age(),
                 allow_credentials: cors.get_allow_credentials(),
                 middleware: None,
+                auth: None,
             }),
             GatewayBinding::Static(StaticBinding::HttpAuthCallBack(auth)) => {
-                unimplemented!("AuthCallBack is not supported in GatewayBindingData")
+                Ok(GatewayBindingData {
+                    binding_type: Some(GatewayBindingType::AuthCallBack),
+                    component_id: None,
+                    worker_name: None,
+                    idempotency_key: None,
+                    response: None,
+                    allow_origin: None,
+                    allow_methods: None,
+                    allow_headers: None,
+                    expose_headers: None,
+                    max_age: None,
+                    allow_credentials: None,
+                    middleware: None,
+                    auth: Some(SecuritySchemeReference {
+                        security_scheme_identifier: auth.security_scheme.security_scheme.scheme_identifier()
+                    })
+
+                })
             }
         }
     }
