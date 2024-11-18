@@ -30,16 +30,14 @@ impl ApiDefinitionTransformer for AuthTransformer {
         }
 
         let auth_call_back_routes = internal::get_auth_call_back_routes(distinct_auth_middlewares)
-            .map_err(|err| ApiDefTransformationError::Custom(err))?;
+            .map_err(ApiDefTransformationError::Custom)?;
 
         let routes = &mut api_definition.routes;
 
         // Add if doesn't exist
         for r in auth_call_back_routes.iter() {
-            if routes
-                .iter()
-                .find(|x| (x.path == r.path) && (x.method == r.method))
-                .is_none()
+            if !routes
+                .iter().any(|x| (x.path == r.path) && (x.method == r.method))
             {
                 routes.push(r.clone())
             }
