@@ -3,8 +3,7 @@ use crate::gateway_api_definition_transformer::{
     ApiDefTransformationError, ApiDefinitionTransformer,
 };
 
-// Auth transformer ensures that to have auth-call-back endpoint route
-// corresponding to every security scheme that is in use in ApiDefinition
+// Auth transformer ensures that for all security schemes
 pub struct AuthTransformer;
 
 impl ApiDefinitionTransformer for AuthTransformer {
@@ -12,6 +11,12 @@ impl ApiDefinitionTransformer for AuthTransformer {
         &self,
         _api_definition: &mut HttpApiDefinition,
     ) -> Result<(), ApiDefTransformationError> {
+        //let security_schemes = vec![];
+
+        // for route in api_definition.routes {
+        //
+        // }
+
         Ok(())
     }
 }

@@ -1,4 +1,4 @@
-use crate::gateway_middleware::{Cors, HttpAuthorizer};
+use crate::gateway_middleware::{Cors, HttpRequestAuthentication};
 
 // Static bindings must NOT contain Rib, in either pre-compiled or raw form,
 // as it may introduce unnecessary latency
@@ -9,7 +9,7 @@ use crate::gateway_middleware::{Cors, HttpAuthorizer};
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticBinding {
     HttpCorsPreflight(Box<Cors>),
-    HttpAuthCallBack(Box<HttpAuthorizer>),
+    HttpAuthCallBack(Box<HttpRequestAuthentication>),
 }
 
 impl StaticBinding {

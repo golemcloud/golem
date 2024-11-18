@@ -15,6 +15,20 @@ pub enum GatewayBindingCompiled {
     FileServer(WorkerBindingCompiled),
 }
 
+impl GatewayBindingCompiled {
+    pub fn get_middlewares(&self) -> Option<Middlewares> {
+        match self {
+            GatewayBindingCompiled::Worker(worker_binding_compiled) => {
+                worker_binding_compiled.middlewares.clone()
+            }
+            GatewayBindingCompiled::Static(_) => None,
+            GatewayBindingCompiled::FileServer(worker_binding_compiled) => {
+                worker_binding_compiled.middlewares.clone()
+            }
+        }
+    }
+}
+
 impl From<GatewayBindingCompiled> for GatewayBinding {
     fn from(value: GatewayBindingCompiled) -> Self {
         match value {
@@ -192,7 +206,10 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding
 
 mod internal {
     use crate::gateway_binding::WorkerBindingCompiled;
+    use crate::gateway_middleware::{HttpMiddleware, Middleware};
+    use golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata;
     use golem_common::model::GatewayBindingType;
+    use std::ops::Deref;
 
     pub(crate) fn to_gateway_binding_compiled_proto(
         worker_binding: WorkerBindingCompiled,
@@ -238,15 +255,31 @@ mod internal {
             .worker_calls
             .map(|x| x.into());
 
-        let middleware = worker_binding
-            .middlewares
-            .iter()
-            .map(
-                |m| golem_api_grpc::proto::golem::apidefinition::Middleware {
-                    cors: m.get_cors().map(|x| x.into()),
-                },
-            )
-            .next();
+        let mut cors = None;
+        let mut auth = None;
+
+        let middleware = if let Some(m) = worker_binding.middlewares {
+            for m in m.0.iter() {
+                match m {
+                    Middleware::Http(HttpMiddleware::AuthenticateRequest(auth0)) => {
+                        let auth0 = auth0.deref().clone().security_scheme;
+                        auth = Some(SecurityWithProviderMetadata::try_from(auth0).unwrap());
+                    }
+                    Middleware::Http(HttpMiddleware::AddCorsHeaders(cors0)) => {
+                        let cors0 = cors0.clone();
+                        cors = Some(
+                            golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors0),
+                        )
+                    }
+                }
+            }
+            Some(golem_api_grpc::proto::golem::apidefinition::Middleware {
+                cors,
+                http_authentication: auth,
+            })
+        } else {
+            None
+        };
 
         let binding_type = match binding_type {
             GatewayBindingType::Default => 0,

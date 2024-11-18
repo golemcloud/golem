@@ -7,11 +7,11 @@ use openidconnect::{ClaimsVerificationError, Nonce, Scope};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct HttpAuthorizer {
+pub struct HttpRequestAuthentication {
     pub security_scheme: SecuritySchemeWithProviderMetadata,
 }
 
-impl HttpAuthorizer {
+impl HttpRequestAuthentication {
     pub fn get_scopes(&self) -> Vec<Scope> {
         self.security_scheme.security_scheme.scopes()
     }
@@ -89,7 +89,7 @@ mod internal {
         DataKey, DataValue, GatewaySessionStore, SessionId,
     };
     use crate::gateway_middleware::middleware_in::MiddlewareSuccess;
-    use crate::gateway_middleware::{HttpAuthorizer, MiddlewareInError};
+    use crate::gateway_middleware::{HttpRequestAuthentication, MiddlewareInError};
     use crate::gateway_security::{IdentityProvider, OpenIdClient};
     use http::StatusCode;
     use openidconnect::core::CoreIdTokenClaims;
@@ -100,7 +100,7 @@ mod internal {
         input: &HttpRequestDetails,
         identity_provider: &Arc<dyn IdentityProvider + Send + Sync>,
         client: &OpenIdClient,
-        http_authorizer: &HttpAuthorizer,
+        http_authorizer: &HttpRequestAuthentication,
     ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
         let redirect_uri = input.get_uri();
 

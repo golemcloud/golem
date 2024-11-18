@@ -52,7 +52,6 @@ message HttpRoute {
   HttpMethod method = 1;
   string path = 2;
   GatewayBinding binding = 3;
-  optional SecurityWithProviderMetadata security = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -60,7 +59,6 @@ message CompiledHttpRoute {
    HttpMethod method = 1;
    string path = 2;
    CompiledGatewayBinding binding = 3;
-   optional SecurityWithProviderMetadata security = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -121,6 +119,7 @@ enum GatewayBindingType {
 // Used in api definition repo and needs to be backward compatible
 message Middleware {
   optional CorsPreflight cors = 1;
+  optional SecurityWithProviderMetadata http_authentication = 2;
 }
 
 // Used in api definition repo and needs to be backward compatible

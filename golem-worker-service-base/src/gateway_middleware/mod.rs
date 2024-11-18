@@ -1,8 +1,10 @@
 use crate::gateway_binding::GatewayRequestDetails;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
+use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 pub use http::*;
 pub use middleware_in::*;
 pub use middleware_out::*;
+use std::ops::Deref;
 
 mod http;
 mod middleware_in;
@@ -38,7 +40,7 @@ impl Middlewares {
         input: &GatewayRequestDetails,
     ) -> Result<MiddlewareSuccess<R>, MiddlewareInError>
     where
-        HttpAuthorizer: MiddlewareIn<R>,
+        HttpRequestAuthentication: MiddlewareIn<R>,
     {
         for middleware in self.0.iter() {
             match middleware {
@@ -89,6 +91,10 @@ impl Middlewares {
     pub fn get_cors(&self) -> Option<Cors> {
         self.0.iter().find_map(|m| m.get_cors())
     }
+
+    pub fn get_http_authentication(&self) -> Option<HttpRequestAuthentication> {
+        self.0.iter().find_map(|m| m.get_http_authentication())
+    }
 }
 
 // A middleware will not add, remove or update the input to worker what-so-ever,
@@ -116,6 +122,15 @@ impl Middleware {
         }
     }
 
+    pub fn get_http_authentication(&self) -> Option<HttpRequestAuthentication> {
+        match self {
+            Middleware::Http(HttpMiddleware::AuthenticateRequest(auth)) => {
+                Some(auth.deref().clone())
+            }
+            _ => None,
+        }
+    }
+
     pub fn http(http_middleware: HttpMiddleware) -> Middleware {
         Middleware::Http(http_middleware)
     }
@@ -132,14 +147,38 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::Middleware> for Middle
             let cors = Cors::try_from(cors)?;
             middlewares.push(Middleware::http(HttpMiddleware::cors(cors)));
         }
+
+        if let Some(http) = value.http_authentication {
+            let auth = SecuritySchemeWithProviderMetadata::try_from(http)?;
+            middlewares.push(Middleware::Http(HttpMiddleware::authenticate_request(auth)))
+        }
+
         Ok(Middlewares(middlewares))
     }
 }
 
-impl From<Middlewares> for golem_api_grpc::proto::golem::apidefinition::Middleware {
-    fn from(value: Middlewares) -> Self {
-        golem_api_grpc::proto::golem::apidefinition::Middleware {
-            cors: value.0.iter().find_map(|m| m.get_cors().map(|c| c.into())),
+impl TryFrom<Middlewares> for golem_api_grpc::proto::golem::apidefinition::Middleware {
+    type Error = String;
+    fn try_from(value: Middlewares) -> Result<Self, String> {
+        let mut cors = None;
+        let mut auth = None;
+
+        for middleware in value.0.iter() {
+            match middleware {
+                Middleware::Http(http_middleware) => match http_middleware {
+                    HttpMiddleware::AddCorsHeaders(cors0) => {
+                        cors = Some(golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors0.clone()));
+                    }
+                    HttpMiddleware::AuthenticateRequest(http_request_authentication) => {
+                        auth = Some(golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(http_request_authentication.security_scheme.clone())?)
+                    }
+                }
+            }
         }
+
+        Ok(golem_api_grpc::proto::golem::apidefinition::Middleware {
+            cors,
+            http_authentication: auth,
+        })
     }
 }

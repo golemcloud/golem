@@ -126,7 +126,6 @@ mod tests {
             method: MethodPattern::Options,
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors())),
-            security: None,
         }
     }
 
@@ -135,7 +134,6 @@ mod tests {
             method: MethodPattern::Get, // Should be OPTIONS
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors())),
-            security: None,
         }
     }
 
@@ -155,7 +153,6 @@ mod tests {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Default(worker_binding.clone()),
-            security: None,
         }
     }
 
@@ -177,7 +174,6 @@ mod tests {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Default(worker_binding.clone()),
-            security: None,
         }
     }
 

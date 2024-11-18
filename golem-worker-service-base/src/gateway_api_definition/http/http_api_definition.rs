@@ -74,10 +74,11 @@ impl HttpApiDefinition {
         for route in request.routes {
             if let Some(security) = route.security {
                 if let Some(security_scheme) = registry.get(&security.security_scheme_identifier) {
+                    let mut binding = route.binding;
+                    binding.add_authenticate_request_middleware(security_scheme.clone());
                     routes.push(Route {
                         method: route.method,
-                        security: Some(security_scheme.clone()),
-                        binding: route.binding,
+                        binding,
                         path: route.path,
                     })
                 } else if let Some(security_scheme) = security_scheme_service
@@ -85,10 +86,12 @@ impl HttpApiDefinition {
                     .await
                     .map_err(|e| ApiDefinitionError::Internal(e.to_string()))?
                 {
+                    let mut binding = route.binding;
+                    binding.add_authenticate_request_middleware(security_scheme.clone());
+
                     routes.push(Route {
                         method: route.method,
-                        security: Some(security_scheme),
-                        binding: route.binding,
+                        binding,
                         path: route.path,
                     })
                 } else {
@@ -99,7 +102,6 @@ impl HttpApiDefinition {
             } else {
                 routes.push(Route {
                     method: route.method,
-                    security: None,
                     binding: route.binding,
                     path: route.path,
                 })
@@ -470,11 +472,13 @@ pub struct RouteRequest {
 
 impl From<Route> for RouteRequest {
     fn from(value: Route) -> Self {
+        let security = value.binding.get_authenticate_request_middleware();
+
         RouteRequest {
             method: value.method,
             path: value.path,
             binding: value.binding,
-            security: value.security.map(SecuritySchemeReference::from),
+            security: security.map(|x| SecuritySchemeReference::from(x.security_scheme)),
         }
     }
 }
@@ -484,7 +488,6 @@ pub struct Route {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
     pub binding: GatewayBinding,
-    pub security: Option<SecuritySchemeWithProviderMetadata>,
 }
 
 impl TryFrom<HttpRoute> for Route {
@@ -497,10 +500,6 @@ impl TryFrom<HttpRoute> for Route {
             method: MethodPattern::try_from(value.method)?,
             path: AllPathPatterns::from_str(value.path.as_str())?,
             binding: GatewayBinding::try_from(binding)?,
-            security: value
-                .security
-                .map(SecuritySchemeWithProviderMetadata::try_from)
-                .transpose()?,
         })
     }
 }
@@ -518,7 +517,6 @@ impl Route {
 pub struct CompiledRoute {
     pub method: MethodPattern,
     pub path: AllPathPatterns,
-    pub security: Option<SecuritySchemeWithProviderMetadata>,
     pub binding: GatewayBindingCompiled,
 }
 
@@ -569,7 +567,6 @@ impl CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
                     binding: GatewayBindingCompiled::Worker(binding),
-                    security: route.security.clone(),
                 })
             }
 
@@ -589,7 +586,6 @@ impl CompiledRoute {
                     method: route.method.clone(),
                     path: route.path.clone(),
                     binding: GatewayBindingCompiled::FileServer(binding),
-                    security: route.security.clone(),
                 })
             }
 
@@ -597,7 +593,6 @@ impl CompiledRoute {
                 method: route.method.clone(),
                 path: route.path.clone(),
                 binding: GatewayBindingCompiled::Static(static_binding.clone()),
-                security: route.security.clone(),
             }),
         }
     }
@@ -608,8 +603,7 @@ impl From<CompiledRoute> for Route {
         Route {
             method: compiled_route.method,
             path: compiled_route.path,
-            binding: compiled_route.binding.into(),
-            security: compiled_route.security,
+            binding: GatewayBinding::from(compiled_route.binding),
         }
     }
 }

@@ -1,7 +1,10 @@
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
 pub(crate) use crate::gateway_execution::rib_input_value_resolver::*;
-use crate::gateway_middleware::{HttpMiddleware, Middlewares};
+use crate::gateway_middleware::{
+    HttpMiddleware, HttpRequestAuthentication, Middleware, Middlewares,
+};
 pub(crate) use crate::gateway_request::request_details::*;
+use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 pub(crate) use gateway_binding_compiled::*;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
@@ -28,6 +31,28 @@ pub enum GatewayBinding {
 }
 
 impl GatewayBinding {
+    pub fn add_authenticate_request_middleware(
+        &mut self,
+        security_scheme: SecuritySchemeWithProviderMetadata,
+    ) {
+        match self {
+            GatewayBinding::Static(_) => {}
+            GatewayBinding::FileServer(worker_binding) => worker_binding.add_middleware(
+                Middleware::Http(HttpMiddleware::authenticate_request(security_scheme)),
+            ),
+            GatewayBinding::Default(worker_binding) => worker_binding.add_middleware(
+                Middleware::Http(HttpMiddleware::authenticate_request(security_scheme)),
+            ),
+        }
+    }
+
+    pub fn get_authenticate_request_middleware(&self) -> Option<HttpRequestAuthentication> {
+        match self {
+            GatewayBinding::Default(binding) => binding.get_auth_middleware(),
+            GatewayBinding::FileServer(binding) => binding.get_auth_middleware(),
+            GatewayBinding::Static(_) => None,
+        }
+    }
     pub fn is_http_cors_binding(&self) -> bool {
         match self {
             Self::Default(_) => false,
@@ -58,23 +83,15 @@ impl GatewayBinding {
             Self::Static(_) => None,
         }
     }
-
-    pub fn get_http_cors(&self) -> Option<HttpMiddleware> {
-        match self {
-            Self::Default(_) => None,
-            Self::FileServer(_) => None,
-            Self::Static(static_binding) => static_binding
-                .get_cors_preflight()
-                .map(HttpMiddleware::cors),
-        }
-    }
 }
 
 impl From<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
     fn from(value: GatewayBinding) -> Self {
         match value {
             GatewayBinding::Default(worker_binding) => {
-                let middleware = worker_binding.middleware.map(|x| x.into());
+                let middleware = worker_binding.middleware.map(|x| {
+                    golem_api_grpc::proto::golem::apidefinition::Middleware::try_from(x).unwrap()
+                });
 
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
                     binding_type: Some(0),
@@ -87,7 +104,9 @@ impl From<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Gatew
                 }
             }
             GatewayBinding::FileServer(worker_binding) => {
-                let middleware = worker_binding.middleware.map(|x| x.into());
+                let middleware = worker_binding.middleware.map(|x| {
+                    golem_api_grpc::proto::golem::apidefinition::Middleware::try_from(x).unwrap()
+                });
 
                 golem_api_grpc::proto::golem::apidefinition::GatewayBinding {
                     binding_type: Some(1),

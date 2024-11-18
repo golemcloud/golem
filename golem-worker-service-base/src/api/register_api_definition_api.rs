@@ -109,15 +109,25 @@ pub struct RouteRequestData {
     pub method: MethodPattern,
     pub path: String,
     pub binding: GatewayBindingData,
-    pub security: Option<SecuritySchemeReferenceData>,
 }
 
 impl TryFrom<RouteRequestData> for RouteRequest {
     type Error = String;
     fn try_from(value: RouteRequestData) -> Result<Self, String> {
         let path = AllPathPatterns::parse(value.path.as_str())?;
-        let binding = GatewayBinding::try_from(value.binding)?;
-        let security = value.security.map(SecuritySchemeReference::from);
+        let binding = GatewayBinding::try_from(value.binding.clone())?;
+
+        let mut security = None;
+
+        // The partial info about auth is fed to the security field of RouteRequest
+        // before it goes in as a middleware, which requires full info about auth
+        // This is to reduce significant amount of code changes
+        if let Some(middleware_data) = value.binding.middleware {
+            if let Some(auth) = middleware_data.auth {
+                security = Some(SecuritySchemeReference::from(auth))
+            }
+        }
+
         Ok(Self {
             method: value.method,
             path,
@@ -133,12 +143,10 @@ impl TryFrom<Route> for RouteRequestData {
         let method = value.method;
         let path = value.path.to_string();
         let binding = GatewayBindingData::try_from(value.binding)?;
-        let security = value.security.map(SecuritySchemeReferenceData::from);
         Ok(Self {
             method,
             path,
             binding,
-            security,
         })
     }
 }
@@ -149,12 +157,10 @@ impl TryFrom<RouteRequest> for RouteRequestData {
     fn try_from(value: RouteRequest) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
         let binding = GatewayBindingData::try_from(value.binding)?;
-        let security = value.security.map(SecuritySchemeReferenceData::from);
         Ok(Self {
             method: value.method,
             path,
             binding,
-            security,
         })
     }
 }
@@ -171,13 +177,16 @@ impl From<CompiledRoute> for RouteWithTypeInfo {
     fn from(value: CompiledRoute) -> Self {
         let method = value.method;
         let path = value.path.to_string();
-        let binding = value.binding.into();
-        let security = value.security.map(SecuritySchemeReferenceData::from);
+        let binding = value.binding;
+        let security = binding
+            .get_middlewares()
+            .and_then(|x| x.get_http_authentication());
+
         Self {
             method,
             path,
-            binding,
-            security,
+            binding: binding.into(),
+            security: security.map(|x| SecuritySchemeReferenceData::from(x.security_scheme)),
         }
     }
 }
@@ -553,10 +562,14 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                 };
 
                 let mut middlewares = Vec::new();
-                if let Some(middle_ware_daa) = gateway_binding_data.middleware {
-                    if let Some(cors) = middle_ware_daa.cors {
+                if let Some(middleware_data) = gateway_binding_data.middleware {
+                    if let Some(cors) = middleware_data.cors {
                         middlewares.push(Middleware::http(HttpMiddleware::cors(cors)));
                     }
+
+                    // Impossible to form authentication middleware. This needs  a slight redesign.
+                    // For now, please refer api definition transformations, where we hold this information
+                    // in the security field of RouteRequest, which later gets fed into the middleware
                 }
 
                 let worker_binding = WorkerBinding {
@@ -679,22 +692,13 @@ impl TryFrom<crate::gateway_api_definition::http::Route> for grpc_apidefinition:
 
     fn try_from(value: crate::gateway_api_definition::http::Route) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
-        let binding = value.binding.into();
+        let binding = grpc_apidefinition::GatewayBinding::from(value.binding);
         let method: grpc_apidefinition::HttpMethod = value.method.into();
-        let security = value
-            .security
-            .map(|x| {
-                golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(
-                    x,
-                )
-            })
-            .transpose()?;
 
         let result = grpc_apidefinition::HttpRoute {
             method: method as i32,
             path,
             binding: Some(binding),
-            security,
         };
 
         Ok(result)
@@ -711,20 +715,10 @@ impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Com
             value.binding,
         );
 
-        let security = value
-            .security
-            .map(|x| {
-                golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(
-                    x,
-                )
-            })
-            .transpose()?;
-
         Ok(Self {
             method,
             path,
             binding: Some(binding),
-            security,
         })
     }
 }
@@ -737,17 +731,13 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
     ) -> Result<Self, Self::Error> {
         let method = MethodPattern::try_from(value.method)?;
         let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
-        let binding = value.binding.ok_or("binding is missing")?.try_into()?;
-        let security = value
-            .security
-            .map(SecuritySchemeWithProviderMetadata::try_from)
-            .transpose()?;
+        let binding_prot = value.binding.ok_or("binding is missing")?;
+        let binding = GatewayBindingCompiled::try_from(binding_prot)?;
 
         Ok(CompiledRoute {
             method,
             path,
             binding,
-            security,
         })
     }
 }
@@ -773,26 +763,25 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::h
 
     fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
         let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
-        let binding = value.binding.ok_or("binding is missing")?.try_into()?;
-
+        let binding = value.binding.ok_or("binding is missing")?;
         let method: MethodPattern = value.method.try_into()?;
 
-        let security = value
-            .security
-            .map(|x| {
-                let security_scheme_result = x
+        let gateway_binding = GatewayBinding::try_from(binding)?;
+        let security = gateway_binding.get_authenticate_request_middleware();
+
+        let security = security.map(|x| {
+            let security_scheme_result = x.security_scheme;
+            SecuritySchemeReference {
+                security_scheme_identifier: security_scheme_result
                     .security_scheme
-                    .ok_or("Missing security scheme".to_string());
-                security_scheme_result.map(|x| SecuritySchemeReference {
-                    security_scheme_identifier: SecuritySchemeIdentifier::new(x.scheme_identifier),
-                })
-            })
-            .transpose()?;
+                    .scheme_identifier(),
+            }
+        });
 
         let result = crate::gateway_api_definition::http::RouteRequest {
             method,
             path,
-            binding,
+            binding: gateway_binding,
             security,
         };
 

@@ -12,8 +12,8 @@ use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::to_response::ToResponse;
 use crate::gateway_execution::to_response_failure::ToResponseFromSafeDisplay;
 use crate::gateway_middleware::{
-    Cors as CorsPreflight, HttpAuthorizer, MiddlewareIn, MiddlewareInError, MiddlewareOut,
-    MiddlewareOutError, MiddlewareSuccess, Middlewares,
+    Cors as CorsPreflight, HttpRequestAuthentication, MiddlewareIn, MiddlewareInError,
+    MiddlewareOut, MiddlewareOutError, MiddlewareSuccess, Middlewares,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
@@ -45,7 +45,7 @@ pub trait GatewayBindingExecutor<Namespace, Response> {
         FileServerBindingResult: ToResponse<Response>,
         CorsPreflight: ToResponse<Response>,
         AuthCallBackResult: ToResponse<Response>,
-        HttpAuthorizer: MiddlewareIn<Response>,
+        HttpRequestAuthentication: MiddlewareIn<Response>,
         CorsPreflight: MiddlewareOut<Response>;
 }
 
@@ -219,7 +219,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         middlewares: Middlewares,
     ) -> Option<R>
     where
-        HttpAuthorizer: MiddlewareIn<R>,
+        HttpRequestAuthentication: MiddlewareIn<R>,
         CorsPreflight: MiddlewareOut<R>,
         MiddlewareInError: ToResponseFromSafeDisplay<R>,
     {
@@ -258,7 +258,7 @@ impl<N: Send + Sync + Clone, R: Debug + Send + Sync> GatewayBindingExecutor<N, R
         FileServerBindingResult: ToResponse<R>, // FileServerBindingResult can be a direct response in a file server endpoint
         CorsPreflight: ToResponse<R>, // Cors can be a direct response in a cors preflight endpoint
         AuthCallBackResult: ToResponse<R>, // AuthCallBackResult can be a direct response in auth callback endpoint
-        HttpAuthorizer: MiddlewareIn<R>,   // HttpAuthorizer can authorise input
+        HttpRequestAuthentication: MiddlewareIn<R>, // HttpAuthorizer can authorise input
         CorsPreflight: MiddlewareOut<R>,   // CorsPreflight can be a middleware in other endpoints
     {
         match &binding.resolved_binding {

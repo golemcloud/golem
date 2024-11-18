@@ -1,5 +1,6 @@
-use crate::gateway_middleware::http::authentication::HttpAuthorizer;
+use crate::gateway_middleware::http::authentication::HttpRequestAuthentication;
 use crate::gateway_middleware::http::cors::Cors;
+use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 use http::header::{
     ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
 };
@@ -7,10 +8,15 @@ use http::header::{
 #[derive(Debug, Clone, PartialEq)]
 pub enum HttpMiddleware {
     AddCorsHeaders(Cors),
-    AuthenticateRequest(Box<HttpAuthorizer>), // Middleware to authenticate before feeding the input to the binding executor
+    AuthenticateRequest(Box<HttpRequestAuthentication>), // Middleware to authenticate before feeding the input to the binding executor
 }
 
 impl HttpMiddleware {
+    pub fn authenticate_request(
+        security_scheme: SecuritySchemeWithProviderMetadata,
+    ) -> HttpMiddleware {
+        HttpMiddleware::AuthenticateRequest(Box::new(HttpRequestAuthentication { security_scheme }))
+    }
     pub fn cors(cors: Cors) -> Self {
         HttpMiddleware::AddCorsHeaders(cors)
     }

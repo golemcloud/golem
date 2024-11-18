@@ -1,8 +1,11 @@
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 
 use crate::gateway_binding::WorkerBindingCompiled;
-use crate::gateway_middleware::{Cors, Middleware, Middlewares};
+use crate::gateway_middleware::{
+    Cors, HttpMiddleware, HttpRequestAuthentication, Middleware, Middlewares,
+};
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 
@@ -16,6 +19,19 @@ pub struct WorkerBinding {
 }
 
 impl WorkerBinding {
+    pub fn get_auth_middleware(&self) -> Option<HttpRequestAuthentication> {
+        self.clone().middleware.and_then(|x| {
+            x.0.iter().find_map(|x| match x {
+                Middleware::Http(http) => match http {
+                    HttpMiddleware::AuthenticateRequest(authorizer) => {
+                        Some(authorizer.deref().clone())
+                    }
+                    _ => None,
+                },
+            })
+        })
+    }
+
     pub fn add_middleware(&mut self, middleware: Middleware) {
         if let Some(middlewares) = &mut self.middleware {
             middlewares.add(middleware);

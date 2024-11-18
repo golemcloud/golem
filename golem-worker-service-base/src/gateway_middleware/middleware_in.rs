@@ -1,6 +1,6 @@
 use crate::gateway_binding::GatewayRequestDetails;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
-use crate::gateway_middleware::HttpAuthorizer;
+use crate::gateway_middleware::HttpRequestAuthentication;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 
@@ -44,7 +44,7 @@ pub enum MiddlewareSuccess<Out> {
 }
 
 #[async_trait]
-impl MiddlewareIn<poem::Response> for HttpAuthorizer {
+impl MiddlewareIn<poem::Response> for HttpRequestAuthentication {
     async fn process_input(
         &self,
         input: &GatewayRequestDetails,
