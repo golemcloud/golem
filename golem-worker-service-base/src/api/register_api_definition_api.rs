@@ -223,9 +223,6 @@ pub struct GatewayBindingData {
     pub max_age: Option<u64>,
     //  For binding type - cors-middleware
     pub allow_credentials: Option<bool>,
-
-    // HttpAuthCallBack Static binding type
-    pub auth: Option<SecuritySchemeReference>,
 }
 
 impl GatewayBindingData {
@@ -284,7 +281,6 @@ impl GatewayBindingData {
             max_age: None,
             allow_credentials: None,
             middleware,
-            auth: None,
         })
     }
 }
@@ -516,30 +512,10 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     max_age: cors.get_max_age(),
                     allow_credentials: cors.get_allow_credentials(),
                     middleware: None,
-                    auth: None,
                 })
             }
-            GatewayBinding::Static(StaticBinding::HttpAuthCallBack(auth)) => {
-                Ok(GatewayBindingData {
-                    binding_type: Some(GatewayBindingType::AuthCallBack),
-                    component_id: None,
-                    worker_name: None,
-                    idempotency_key: None,
-                    response: None,
-                    allow_origin: None,
-                    allow_methods: None,
-                    allow_headers: None,
-                    expose_headers: None,
-                    max_age: None,
-                    allow_credentials: None,
-                    middleware: None,
-                    auth: Some(SecuritySchemeReference {
-                        security_scheme_identifier: auth
-                            .security_scheme
-                            .security_scheme
-                            .scheme_identifier(),
-                    }),
-                })
+            GatewayBinding::Static(StaticBinding::HttpAuthCallBack(_)) => {
+                Err("Auth call back static binding not to be exposed to users".to_string())
             }
         }
     }
