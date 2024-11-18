@@ -18,7 +18,6 @@ use golem_worker_service_base::gateway_execution::gateway_binding_resolver::Gate
 use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessionStore;
 use golem_worker_service_base::gateway_middleware::Cors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
-use golem_worker_service_base::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::{HeaderMap, HeaderValue, Method};
 use serde_json::Value;
