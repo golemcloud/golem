@@ -1,8 +1,8 @@
-use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern, Route};
+use crate::gateway_api_definition::http::HttpApiDefinition;
 use crate::gateway_api_definition_transformer::{
     ApiDefTransformationError, ApiDefinitionTransformer,
 };
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 // Auth transformer ensures that for all security schemes
 pub struct AuthTransformer;
@@ -19,18 +19,28 @@ impl ApiDefinitionTransformer for AuthTransformer {
             let auth_middleware = binding.get_authenticate_request_middleware();
 
             if let Some(auth_middleware) = auth_middleware {
-                distinct_auth_middlewares.insert(auth_middleware.security_scheme.security_scheme.scheme_identifier(), auth_middleware.security_scheme);
+                distinct_auth_middlewares.insert(
+                    auth_middleware
+                        .security_scheme
+                        .security_scheme
+                        .scheme_identifier(),
+                    auth_middleware.security_scheme,
+                );
             }
         }
 
         let auth_call_back_routes = internal::get_auth_call_back_routes(distinct_auth_middlewares)
             .map_err(|err| ApiDefTransformationError::Custom(err))?;
 
-        let mut routes = &mut api_definition.routes;
+        let routes = &mut api_definition.routes;
 
         // Add if doesn't exist
         for r in auth_call_back_routes.iter() {
-            if routes.iter().find(|x| (x.path == r.path) && (x.method == r.method)).is_none() {
+            if routes
+                .iter()
+                .find(|x| (x.path == r.path) && (x.method == r.method))
+                .is_none()
+            {
                 routes.push(r.clone())
             }
         }
@@ -44,7 +54,7 @@ mod internal {
     use crate::gateway_binding::{GatewayBinding, StaticBinding};
     use crate::gateway_middleware::HttpRequestAuthentication;
     use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata};
-    use std::collections::{HashMap};
+    use std::collections::HashMap;
 
     pub(crate) fn get_auth_call_back_routes(
         security_schemes: HashMap<SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata>,

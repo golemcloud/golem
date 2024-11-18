@@ -53,7 +53,6 @@ impl SecurityScheme {
     }
 }
 
-
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ProviderName(String);
 
