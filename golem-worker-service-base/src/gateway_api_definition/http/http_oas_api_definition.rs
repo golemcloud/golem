@@ -103,9 +103,7 @@ impl poem_openapi::types::Type for OpenApiDefinitionRequest {
 }
 
 mod internal {
-    use crate::gateway_api_definition::http::{
-        AllPathPatterns, MethodPattern, Route, RouteRequest,
-    };
+    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
     use golem_common::model::{ComponentId, GatewayBindingType};
     use openapiv3::{OpenAPI, Operation, Paths, ReferenceOr};
     use rib::Expr;

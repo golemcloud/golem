@@ -8,13 +8,11 @@ use crate::gateway_binding::{
 };
 use crate::gateway_middleware::{Cors, CorsPreflightExpr, HttpMiddleware, Middleware};
 use crate::gateway_security::{
-    ProviderName, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeReference,
-    SecuritySchemeWithProviderMetadata,
+    SecuritySchemeIdentifier, SecuritySchemeReference, SecuritySchemeWithProviderMetadata,
 };
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_common::model::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
-use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
 use poem_openapi::*;
 use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};

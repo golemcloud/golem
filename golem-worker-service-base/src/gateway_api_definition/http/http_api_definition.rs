@@ -15,7 +15,6 @@ use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
-use prost::Name;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;

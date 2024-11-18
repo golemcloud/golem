@@ -1,5 +1,4 @@
 use crate::gateway_security::{SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata};
-use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SecuritySchemeReference {

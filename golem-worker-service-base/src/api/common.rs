@@ -1,6 +1,5 @@
 use std::fmt::{Debug, Formatter};
 
-use crate::service::gateway::http_api_definition_validator::RouteValidationError;
 use golem_api_grpc::proto::golem::apidefinition::v1::{api_definition_error, ApiDefinitionError};
 use golem_api_grpc::proto::golem::worker;
 use golem_common::metrics::api::TraceErrorKind;
@@ -150,11 +149,9 @@ mod conversion {
     use crate::service::gateway::api_definition::ApiDefinitionError as ApiDefinitionServiceError;
     use crate::service::gateway::api_definition_validator::ValidationErrors;
     use crate::service::gateway::api_deployment::ApiDeploymentError;
-    use crate::service::gateway::http_api_definition_validator::RouteValidationError;
-    use futures_util::future::err;
+
     use golem_api_grpc::proto::golem::common::ErrorsBody;
     use golem_api_grpc::proto::golem::{
-        apidefinition,
         apidefinition::v1::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
         common::ErrorBody,
     };

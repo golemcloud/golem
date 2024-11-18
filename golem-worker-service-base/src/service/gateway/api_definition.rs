@@ -29,13 +29,9 @@ use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
-use prost::Name;
 use tracing::{error, info};
 
 use crate::service::component::ComponentService;
-use crate::service::gateway::api_definition_transformer::{
-    ApiDefTransformationError, ApiDefinitionTransformer,
-};
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
@@ -329,7 +325,7 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
-        let mut definition = HttpApiDefinition::from_http_api_definition_request(
+        let definition = HttpApiDefinition::from_http_api_definition_request(
             namespace,
             definition.clone(),
             created_at,
