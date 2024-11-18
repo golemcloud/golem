@@ -52,24 +52,21 @@ impl HttpApiDefinition {
     ) -> Result<Self, ApiDefinitionError> {
         let mut registry = HashMap::new();
 
-        match request.security {
-            Some(security) => {
-                if let Some(security_scheme) = security_scheme_service
-                    .get(&security.security_scheme_identifier, namespace)
-                    .await
-                    .map_err(|e| ApiDefinitionError::Internal(e.to_string()))?
-                {
-                    registry.insert(
-                        security.security_scheme_identifier.clone(),
-                        security_scheme.clone(),
-                    );
-                } else {
-                    return Err(ApiDefinitionError::SecuritySchemeNotFound(
-                        security.security_scheme_identifier.to_string(),
-                    ));
-                }
+        if let Some(security) = request.security {
+            if let Some(security_scheme) = security_scheme_service
+                .get(&security.security_scheme_identifier, namespace)
+                .await
+                .map_err(|e| ApiDefinitionError::Internal(e.to_string()))?
+            {
+                registry.insert(
+                    security.security_scheme_identifier.clone(),
+                    security_scheme.clone(),
+                );
+            } else {
+                return Err(ApiDefinitionError::SecuritySchemeNotFound(
+                    security.security_scheme_identifier.to_string(),
+                ));
             }
-            None => {}
         };
 
         let mut routes = vec![];
@@ -133,7 +130,7 @@ impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
         Self {
             id: value.id,
             version: value.version,
-            security: value.security.map(|x| SecuritySchemeReference::from(x)),
+            security: value.security.map(SecuritySchemeReference::from),
             routes: value
                 .routes
                 .iter()
@@ -477,9 +474,7 @@ impl From<Route> for RouteRequest {
             method: value.method,
             path: value.path,
             binding: value.binding,
-            security: value
-                .security
-                .map(|security| SecuritySchemeReference::from(security)),
+            security: value.security.map(SecuritySchemeReference::from),
         }
     }
 }
@@ -504,7 +499,7 @@ impl TryFrom<HttpRoute> for Route {
             binding: GatewayBinding::try_from(binding)?,
             security: value
                 .security
-                .map(|x| SecuritySchemeWithProviderMetadata::try_from(x))
+                .map(SecuritySchemeWithProviderMetadata::try_from)
                 .transpose()?,
         })
     }
@@ -601,7 +596,7 @@ impl CompiledRoute {
             GatewayBinding::Static(static_binding) => Ok(CompiledRoute {
                 method: route.method.clone(),
                 path: route.path.clone(),
-                binding: GatewayBindingCompiled::Static(static_binding.clone()),
+                binding: GatewayBindingCompiled::Static(*static_binding.clone()),
                 security: route.security.clone(),
             }),
         }
@@ -633,7 +628,6 @@ mod tests {
     use chrono::{DateTime, Utc};
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
     use golem_service_base::auth::DefaultNamespace;
-    use test_r::core::ShouldPanic::No;
     use test_r::test;
 
     #[test]
@@ -843,28 +837,6 @@ mod tests {
         serde_yaml::Value::deserialize(de).unwrap()
     }
 
-    struct NoopSecuritySchemeService {}
-
-    #[async_trait]
-    impl SecuritySchemeService<DefaultNamespace> for NoopSecuritySchemeService {
-        async fn get(
-            &self,
-            security_scheme_name: &SecuritySchemeIdentifier,
-            namespace: &DefaultNamespace,
-        ) -> Result<Option<SecuritySchemeWithProviderMetadata>, SecuritySchemeServiceError>
-        {
-            unimplemented!("Test service")
-        }
-
-        async fn create(
-            &self,
-            namespace: &DefaultNamespace,
-            security_scheme: &SecurityScheme,
-        ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
-            unimplemented!("Test service")
-        }
-    }
-
     #[test]
     async fn test_api_spec_proto_conversion() {
         async fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
@@ -903,21 +875,21 @@ mod tests {
             "foo/{user-id}",
             "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
+        ).await;
         test_encode_decode(
             "foo/{user-id}",
             "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
+        ).await;
         test_encode_decode(
             "foo/{user-id}",
             "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
+        ).await;
         test_encode_decode(
             "foo",
             "let x: str = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
-        );
+        ).await;
     }
 }

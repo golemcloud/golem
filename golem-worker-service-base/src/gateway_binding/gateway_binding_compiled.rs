@@ -19,7 +19,7 @@ impl From<GatewayBindingCompiled> for GatewayBinding {
     fn from(value: GatewayBindingCompiled) -> Self {
         match value {
             GatewayBindingCompiled::Static(static_binding) => {
-                GatewayBinding::Static(static_binding)
+                GatewayBinding::static_binding(static_binding)
             }
             GatewayBindingCompiled::Worker(value) => {
                 let worker_binding = value.clone();

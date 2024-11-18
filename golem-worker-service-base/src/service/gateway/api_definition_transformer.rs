@@ -146,7 +146,7 @@ mod tests {
         Route {
             method: MethodPattern::Options,
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Static(StaticBinding::from_http_cors(cors())),
+            binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors())),
             security: None,
         }
     }
@@ -155,7 +155,7 @@ mod tests {
         Route {
             method: MethodPattern::Get, // Should be OPTIONS
             path: AllPathPatterns::parse("/test").unwrap(),
-            binding: GatewayBinding::Static(StaticBinding::from_http_cors(cors())),
+            binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors())),
             security: None,
         }
     }

@@ -247,8 +247,6 @@ mod test {
     use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
     use crate::gateway_execution::gateway_session::GatewaySessionStore;
     use crate::gateway_execution::to_response::ToResponse;
-    use crate::gateway_execution::to_response_failure::ToResponseFailure;
-    use crate::gateway_middleware::Middlewares;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;

@@ -16,6 +16,7 @@ use golem_service_base::model::VersionedComponentId;
 use poem_openapi::*;
 use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::result::Result;
 use std::time::SystemTime;
 
@@ -96,7 +97,7 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
             id: value.id,
             version: value.version,
             routes,
-            security: value.security.map(|s| SecuritySchemeReferenceData::from(s)),
+            security: value.security.map(SecuritySchemeReferenceData::from),
             draft: value.draft,
             created_at: Some(value.created_at),
         }
@@ -116,7 +117,7 @@ impl TryFrom<RouteRequestData> for RouteRequest {
     fn try_from(value: RouteRequestData) -> Result<Self, String> {
         let path = AllPathPatterns::parse(value.path.as_str())?;
         let binding = GatewayBinding::try_from(value.binding)?;
-        let security = value.security.map(|s| SecuritySchemeReference::from(s));
+        let security = value.security.map(SecuritySchemeReference::from);
         Ok(Self {
             method: value.method,
             path,
@@ -132,7 +133,7 @@ impl TryFrom<Route> for RouteRequestData {
         let method = value.method;
         let path = value.path.to_string();
         let binding = GatewayBindingData::try_from(value.binding)?;
-        let security = value.security.map(|s| SecuritySchemeReferenceData::from(s));
+        let security = value.security.map(SecuritySchemeReferenceData::from);
         Ok(Self {
             method,
             path,
@@ -148,7 +149,7 @@ impl TryFrom<RouteRequest> for RouteRequestData {
     fn try_from(value: RouteRequest) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
         let binding = GatewayBindingData::try_from(value.binding)?;
-        let security = value.security.map(|s| SecuritySchemeReferenceData::from(s));
+        let security = value.security.map(SecuritySchemeReferenceData::from);
         Ok(Self {
             method: value.method,
             path,
@@ -171,7 +172,7 @@ impl From<CompiledRoute> for RouteWithTypeInfo {
         let method = value.method;
         let path = value.path.to_string();
         let binding = value.binding.into();
-        let security = value.security.map(|s| SecuritySchemeReferenceData::from(s));
+        let security = value.security.map(SecuritySchemeReferenceData::from);
         Self {
             method,
             path,
@@ -474,7 +475,7 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
             crate::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: self.id,
                 version: self.version,
-                security: self.security.map(|s| SecuritySchemeReference::from(s)),
+                security: self.security.map(SecuritySchemeReference::from),
                 routes,
                 draft: self.draft,
             },
@@ -496,8 +497,8 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 GatewayBindingType::FileServer,
             ),
 
-            GatewayBinding::Static(StaticBinding::HttpCorsPreflight(cors)) => {
-                Ok(GatewayBindingData {
+            GatewayBinding::Static(static_binding) => match static_binding.deref() {
+                StaticBinding::HttpCorsPreflight(cors) => Ok(GatewayBindingData {
                     binding_type: Some(GatewayBindingType::CorsPreflight),
                     component_id: None,
                     worker_name: None,
@@ -510,11 +511,12 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     max_age: cors.get_max_age(),
                     allow_credentials: cors.get_allow_credentials(),
                     middleware: None,
-                })
-            }
-            GatewayBinding::Static(StaticBinding::HttpAuthCallBack(_)) => {
-                Err("Auth call back static binding not to be exposed to users".to_string())
-            }
+                }),
+
+                StaticBinding::HttpAuthCallBack(_) => {
+                    Err("Auth call back static binding not to be exposed to users".to_string())
+                }
+            },
         }
     }
 }
@@ -584,11 +586,15 @@ impl TryFrom<GatewayBindingData> for GatewayBinding {
                         let expr = rib::from_string(expr_str).map_err(|e| e.to_string())?;
                         let cors_preflight_expr = CorsPreflightExpr(expr);
                         let cors = Cors::from_cors_preflight_expr(&cors_preflight_expr)?;
-                        Ok(GatewayBinding::Static(StaticBinding::from_http_cors(cors)))
+                        Ok(GatewayBinding::static_binding(
+                            StaticBinding::from_http_cors(cors),
+                        ))
                     }
                     None => {
                         let cors = Cors::default();
-                        Ok(GatewayBinding::Static(StaticBinding::from_http_cors(cors)))
+                        Ok(GatewayBinding::static_binding(
+                            StaticBinding::from_http_cors(cors),
+                        ))
                     }
                 }
             }
@@ -659,7 +665,7 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
         let result = crate::gateway_api_definition::http::HttpApiDefinitionRequest {
             id: ApiDefinitionId(id.value),
             version: ApiVersion(value.version),
-            routes: routes,
+            routes,
             draft: value.draft,
             security: None, //
         };
@@ -734,7 +740,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
         let binding = value.binding.ok_or("binding is missing")?.try_into()?;
         let security = value
             .security
-            .map(|x| SecuritySchemeWithProviderMetadata::try_from(x))
+            .map(SecuritySchemeWithProviderMetadata::try_from)
             .transpose()?;
 
         Ok(CompiledRoute {

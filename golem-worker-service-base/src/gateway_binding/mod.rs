@@ -6,6 +6,7 @@ pub(crate) use gateway_binding_compiled::*;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
 pub(crate) use static_binding::*;
+use std::ops::Deref;
 pub(crate) use worker_binding::*;
 pub(crate) use worker_binding_compiled::*;
 
@@ -23,18 +24,25 @@ mod worker_binding_compiled;
 pub enum GatewayBinding {
     Default(WorkerBinding),
     FileServer(WorkerBinding),
-    Static(StaticBinding),
+    Static(Box<StaticBinding>),
 }
 
 impl GatewayBinding {
     pub fn is_http_cors_binding(&self) -> bool {
         match self {
             Self::Default(_) => false,
-            Self::Static(StaticBinding::HttpCorsPreflight(_)) => true,
             Self::FileServer(_) => false,
-            Self::Static(StaticBinding::HttpAuthCallBack(_)) => false,
+            Self::Static(s) => match s.deref() {
+                StaticBinding::HttpCorsPreflight(_) => true,
+                StaticBinding::HttpAuthCallBack(_) => false,
+            },
         }
     }
+
+    pub fn static_binding(value: StaticBinding) -> GatewayBinding {
+        GatewayBinding::Static(Box::new(value))
+    }
+
     pub fn get_worker_binding(&self) -> Option<WorkerBinding> {
         match self {
             Self::Default(worker_binding) => Some(worker_binding.clone()),
@@ -99,7 +107,7 @@ impl From<GatewayBinding> for golem_api_grpc::proto::golem::apidefinition::Gatew
                     response: None,
                     idempotency_key: None,
                     middleware: None,
-                    static_binding: Some(static_binding.into()),
+                    static_binding: Some(static_binding.deref().clone().into()),
                 }
             }
         }
@@ -158,7 +166,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::GatewayBinding> for Ga
             golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
                 let static_binding = value.static_binding.ok_or("Missing static binding")?;
 
-                Ok(GatewayBinding::Static(static_binding.try_into()?))
+                Ok(GatewayBinding::static_binding(static_binding.try_into()?))
             }
         }
     }

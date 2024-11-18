@@ -232,7 +232,7 @@ mod internal {
                         Ok(RouteRequest {
                             method,
                             path: path_pattern.clone(),
-                            binding: GatewayBinding::Static(binding),
+                            binding: GatewayBinding::static_binding(binding),
                             security
                         })
                     }
@@ -272,7 +272,7 @@ mod internal {
                     Ok(RouteRequest {
                         path: path_pattern.clone(),
                         method,
-                        binding: GatewayBinding::Static(binding),
+                        binding: GatewayBinding::static_binding(binding),
                         security,
                     })
                 } else {
@@ -459,9 +459,7 @@ mod tests {
     use test_r::test;
 
     use super::*;
-    use crate::gateway_api_definition::http::{
-        AllPathPatterns, MethodPattern, Route, RouteRequest,
-    };
+    use crate::gateway_api_definition::http::{AllPathPatterns, MethodPattern, RouteRequest};
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware, Middlewares};
     use golem_common::model::ComponentId;
@@ -564,7 +562,7 @@ mod tests {
         RouteRequest {
             path: path_pattern.clone(),
             method: MethodPattern::Options,
-            binding: GatewayBinding::Static(StaticBinding::from_http_cors(Cors::default())),
+            binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(Cors::default())),
             security: None,
         }
     }
@@ -575,7 +573,7 @@ mod tests {
         RouteRequest {
             path: path_pattern.clone(),
             method: MethodPattern::Options,
-            binding: GatewayBinding::Static(StaticBinding::from_http_cors(cors_preflight)),
+            binding: GatewayBinding::static_binding(StaticBinding::from_http_cors(cors_preflight)),
             security: None,
         }
     }
