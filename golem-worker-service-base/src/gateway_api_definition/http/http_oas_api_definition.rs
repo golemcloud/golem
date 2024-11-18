@@ -7,9 +7,9 @@ use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromYAML, ParseResult}
 use serde_json::Value;
 use std::borrow::Cow;
 
-pub struct OpenApiDefinitionRequest(pub OpenAPI);
+pub struct OpenApiHttpApiDefinitionRequest(pub OpenAPI);
 
-impl OpenApiDefinitionRequest {
+impl OpenApiHttpApiDefinitionRequest {
     pub fn to_http_api_definition_request(&self) -> Result<HttpApiDefinitionRequest, String> {
         let open_api = &self.0;
         let api_definition_id = ApiDefinitionId(get_root_extension_str(
@@ -36,11 +36,11 @@ impl OpenApiDefinitionRequest {
     }
 }
 
-impl ParseFromJSON for OpenApiDefinitionRequest {
+impl ParseFromJSON for OpenApiHttpApiDefinitionRequest {
     fn parse_from_json(value: Option<serde_json::Value>) -> ParseResult<Self> {
         match value {
             Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
-                Ok(openapi) => Ok(OpenApiDefinitionRequest(openapi)),
+                Ok(openapi) => Ok(OpenApiHttpApiDefinitionRequest(openapi)),
                 Err(e) => Err(ParseError::<Self>::custom(format!(
                     "Failed to parse OpenAPI: {}",
                     e
@@ -54,11 +54,11 @@ impl ParseFromJSON for OpenApiDefinitionRequest {
     }
 }
 
-impl ParseFromYAML for OpenApiDefinitionRequest {
+impl ParseFromYAML for OpenApiHttpApiDefinitionRequest {
     fn parse_from_yaml(value: Option<Value>) -> ParseResult<Self> {
         match value {
             Some(value) => match serde_json::from_value::<openapiv3::OpenAPI>(value) {
-                Ok(openapi) => Ok(OpenApiDefinitionRequest(openapi)),
+                Ok(openapi) => Ok(OpenApiHttpApiDefinitionRequest(openapi)),
                 Err(e) => Err(ParseError::<Self>::custom(format!(
                     "Failed to parse OpenAPI: {}",
                     e
@@ -72,7 +72,7 @@ impl ParseFromYAML for OpenApiDefinitionRequest {
     }
 }
 
-impl poem_openapi::types::Type for OpenApiDefinitionRequest {
+impl poem_openapi::types::Type for OpenApiHttpApiDefinitionRequest {
     const IS_REQUIRED: bool = true;
 
     type RawValueType = Self;

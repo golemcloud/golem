@@ -6,7 +6,7 @@ use crate::gateway_api_deployment::ApiSite;
 use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
 };
-use crate::gateway_middleware::{Cors, CorsPreflightExpr, HttpMiddleware, Middleware};
+use crate::gateway_middleware::{Cors, CorsPreflightExpr, HttpMiddleware, Middleware, Middlewares};
 use crate::gateway_security::{
     SecuritySchemeIdentifier, SecuritySchemeReference, SecuritySchemeWithProviderMetadata,
 };
@@ -82,7 +82,6 @@ pub struct HttpApiDefinitionRequestData {
 pub struct HttpApiDefinitionResponseData {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub security: Option<SecuritySchemeReferenceData>,
     pub routes: Vec<RouteWithTypeInfo>,
     #[serde(default)]
     pub draft: bool,
@@ -97,7 +96,6 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
             id: value.id,
             version: value.version,
             routes,
-            security: value.security.map(SecuritySchemeReferenceData::from),
             draft: value.draft,
             created_at: Some(value.created_at),
         }
@@ -169,7 +167,6 @@ impl TryFrom<RouteRequest> for RouteRequestData {
 pub struct RouteWithTypeInfo {
     pub method: MethodPattern,
     pub path: String,
-    pub security: Option<SecuritySchemeReferenceData>,
     pub binding: GatewayBindingWithTypeInfo,
 }
 
@@ -177,16 +174,10 @@ impl From<CompiledRoute> for RouteWithTypeInfo {
     fn from(value: CompiledRoute) -> Self {
         let method = value.method;
         let path = value.path.to_string();
-        let binding = value.binding;
-        let security = binding
-            .get_middlewares()
-            .and_then(|x| x.get_http_authentication());
-
         Self {
             method,
             path,
-            binding: binding.into(),
-            security: security.map(|x| SecuritySchemeReferenceData::from(x.security_scheme)),
+            binding: GatewayBindingWithTypeInfo::from(value.binding),
         }
     }
 }
@@ -301,6 +292,28 @@ pub struct MiddlewareData {
     pub auth: Option<SecuritySchemeReferenceData>,
 }
 
+impl From<Middlewares> for MiddlewareData {
+    fn from(value: Middlewares) -> Self {
+        let mut cors = None;
+        let mut auth = None;
+
+        for i in value.0.iter() {
+            match i {
+                Middleware::Http(HttpMiddleware::AddCorsHeaders(cors0)) => {
+                    cors = Some(cors0.clone())
+                }
+                Middleware::Http(HttpMiddleware::AuthenticateRequest(auth0)) => {
+                    let security_scheme_reference =
+                        SecuritySchemeReferenceData::from(auth0.security_scheme.clone());
+                    auth = Some(security_scheme_reference)
+                }
+            }
+        }
+
+        MiddlewareData { cors, auth }
+    }
+}
+
 // Security Scheme data that's exposed to the users of API definition registration
 // and deployment. Here we don't care any other part other than specifying the
 // name of the security scheme. It is expected that this scheme is already registered with golem.
@@ -346,15 +359,16 @@ impl From<SecuritySchemeReferenceData> for SecuritySchemeReference {
 #[oai(rename_all = "camelCase")]
 pub struct GatewayBindingWithTypeInfo {
     pub component_id: Option<VersionedComponentId>, // Optional to keep it backward compatible
-    pub worker_name: Option<String>,
-    pub idempotency_key: Option<String>,
-    pub response: Option<String>, // Optional to keep it backward compatible
+    pub worker_name: Option<String>,                // If bindingType is Default or FileServer
+    pub idempotency_key: Option<String>,            // If bindingType is Default or FileServer
+    pub response: Option<String>, // Optional to keep it backward compatible. If bindingType is Default or FileServer
     #[oai(rename = "bindingType")]
-    pub worker_binding_type: Option<GatewayBindingType>,
-    pub response_mapping_input: Option<RibInputTypeInfo>,
-    pub worker_name_input: Option<RibInputTypeInfo>,
-    pub idempotency_key_input: Option<RibInputTypeInfo>,
-    pub cors_preflight: Option<Cors>,
+    pub binding_type: Option<GatewayBindingType>,
+    pub response_mapping_input: Option<RibInputTypeInfo>, // If bindingType is Default or FileServer
+    pub worker_name_input: Option<RibInputTypeInfo>,      // If bindingType is Default or FileServer
+    pub idempotency_key_input: Option<RibInputTypeInfo>, // If bindingType is Default or FilerServer
+    pub cors_preflight: Option<Cors>, // If bindingType is CorsPreflight (internally, a static binding)
+    pub middleware: Option<MiddlewareData>, // If bindingType is FileServer or Default, middleware is not applicable for static binding like CorsPreflight
 }
 
 impl GatewayBindingWithTypeInfo {
@@ -377,7 +391,7 @@ impl GatewayBindingWithTypeInfo {
                     .response_mapping_expr
                     .to_string(),
             ),
-            worker_binding_type: Some(binding_type),
+            binding_type: Some(binding_type),
             response_mapping_input: Some(worker_binding.response_compiled.rib_input),
             worker_name_input: worker_binding
                 .worker_name_compiled
@@ -386,6 +400,7 @@ impl GatewayBindingWithTypeInfo {
                 .idempotency_key_compiled
                 .map(|idempotency_key_compiled| idempotency_key_compiled.rib_input),
             cors_preflight: None,
+            middleware: worker_binding.middlewares.map(MiddlewareData::from),
         }
     }
 }
@@ -412,11 +427,12 @@ impl From<GatewayBindingCompiled> for GatewayBindingWithTypeInfo {
                 worker_name: None,
                 idempotency_key: None,
                 response: None,
-                worker_binding_type: None, // TODO; Remove worker_binding_type to not expose worker_function
+                binding_type: None, // TODO; Remove worker_binding_type to not expose worker_function
                 response_mapping_input: None,
                 worker_name_input: None,
                 idempotency_key_input: None,
                 cors_preflight: static_binding.get_cors_preflight(),
+                middleware: None,
             },
         }
     }

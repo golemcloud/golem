@@ -1,4 +1,5 @@
 use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
+use crate::gateway_api_definition::http::HttpApiDefinitionRequest;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
 use crate::gateway_api_definition_transformer::transform_http_api_definition;
 use crate::gateway_binding::WorkerBindingCompiled;
@@ -23,15 +24,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use Iterator;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct HttpApiDefinitionRequest {
-    pub id: ApiDefinitionId,
-    pub security: Option<SecuritySchemeReference>, // This is needed at global level only for request (user facing http api definition)
-    pub version: ApiVersion,
-    pub routes: Vec<RouteRequest>,
-    pub draft: bool,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {

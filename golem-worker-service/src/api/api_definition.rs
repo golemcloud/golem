@@ -7,7 +7,7 @@ use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionResponseData;
 use golem_worker_service_base::gateway_api_definition::http::CompiledHttpApiDefinition;
 use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
-use golem_worker_service_base::gateway_api_definition::http::OpenApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
 use golem_worker_service_base::service::gateway::http_api_definition_validator::RouteValidationError;
@@ -39,7 +39,7 @@ impl RegisterApiDefinitionApi {
     #[oai(path = "/import", method = "put", operation_id = "import_open_api")]
     async fn create_or_update_open_api(
         &self,
-        payload: JsonOrYaml<OpenApiDefinitionRequest>,
+        payload: JsonOrYaml<OpenApiHttpApiDefinitionRequest>,
     ) -> Result<Json<HttpApiDefinitionResponseData>, ApiEndpointError> {
         let record = recorded_http_api_request!("import_open_api",);
 
