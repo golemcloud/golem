@@ -225,8 +225,7 @@ pub struct GatewayBindingData {
     pub allow_credentials: Option<bool>,
 
     // HttpAuthCallBack Static binding type
-    pub auth: Option<SecuritySchemeReference>
-
+    pub auth: Option<SecuritySchemeReference>,
 }
 
 impl GatewayBindingData {
@@ -285,7 +284,7 @@ impl GatewayBindingData {
             max_age: None,
             allow_credentials: None,
             middleware,
-            auth: None
+            auth: None,
         })
     }
 }
@@ -503,21 +502,23 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                 GatewayBindingType::FileServer,
             ),
 
-            GatewayBinding::Static(StaticBinding::HttpCorsPreflight(cors)) => Ok(GatewayBindingData {
-                binding_type: Some(GatewayBindingType::CorsPreflight),
-                component_id: None,
-                worker_name: None,
-                idempotency_key: None,
-                response: None,
-                allow_origin: Some(cors.get_allow_origin()),
-                allow_methods: Some(cors.get_allow_methods()),
-                allow_headers: Some(cors.get_allow_headers()),
-                expose_headers: cors.get_expose_headers(),
-                max_age: cors.get_max_age(),
-                allow_credentials: cors.get_allow_credentials(),
-                middleware: None,
-                auth: None,
-            }),
+            GatewayBinding::Static(StaticBinding::HttpCorsPreflight(cors)) => {
+                Ok(GatewayBindingData {
+                    binding_type: Some(GatewayBindingType::CorsPreflight),
+                    component_id: None,
+                    worker_name: None,
+                    idempotency_key: None,
+                    response: None,
+                    allow_origin: Some(cors.get_allow_origin()),
+                    allow_methods: Some(cors.get_allow_methods()),
+                    allow_headers: Some(cors.get_allow_headers()),
+                    expose_headers: cors.get_expose_headers(),
+                    max_age: cors.get_max_age(),
+                    allow_credentials: cors.get_allow_credentials(),
+                    middleware: None,
+                    auth: None,
+                })
+            }
             GatewayBinding::Static(StaticBinding::HttpAuthCallBack(auth)) => {
                 Ok(GatewayBindingData {
                     binding_type: Some(GatewayBindingType::AuthCallBack),
@@ -533,9 +534,11 @@ impl TryFrom<GatewayBinding> for GatewayBindingData {
                     allow_credentials: None,
                     middleware: None,
                     auth: Some(SecuritySchemeReference {
-                        security_scheme_identifier: auth.security_scheme.security_scheme.scheme_identifier()
-                    })
-
+                        security_scheme_identifier: auth
+                            .security_scheme
+                            .security_scheme
+                            .scheme_identifier(),
+                    }),
                 })
             }
         }
