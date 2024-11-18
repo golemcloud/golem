@@ -70,7 +70,7 @@ impl IdentityProvider for DefaultIdentityProvider {
             .id_token()
             .ok_or(IdentityProviderError::IdTokenVerificationError(
                 "Failed to get ID token".to_string(),
-            ))
+            ))?
             .claims(&id_token_verifier, nonce)
             .map_err(|err| IdentityProviderError::IdTokenVerificationError(err.to_string()))?;
 

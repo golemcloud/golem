@@ -52,7 +52,7 @@ pub struct Services {
     pub worker_service: worker::WorkerService,
     pub component_service: component::ComponentService,
     pub definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace>
             + Sync
             + Send,
     >,
@@ -189,7 +189,7 @@ impl Services {
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace>
                 + Sync
                 + Send,
         > = Arc::new(ApiDefinitionServiceDefault::new(

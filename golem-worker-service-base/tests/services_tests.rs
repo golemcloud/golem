@@ -214,9 +214,7 @@ async fn test_services(
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
     let definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
+        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
     > = Arc::new(ApiDefinitionServiceDefault::new(
         component_service.clone(),
         api_definition_repo.clone(),
@@ -239,11 +237,7 @@ async fn test_services(
 }
 
 async fn test_deployment(
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let def1 = get_api_definition(
@@ -475,11 +469,7 @@ async fn test_deployment(
 }
 
 async fn test_deployment_conflict(
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     deployment_service: Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let def1 = get_api_definition(
@@ -569,11 +559,7 @@ async fn test_deployment_conflict(
 }
 
 async fn test_definition_crud(
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let def1v1 = get_api_definition(
             &Uuid::new_v4().to_string(),
@@ -721,11 +707,7 @@ async fn test_definition_crud(
 }
 
 async fn test_delete_non_existing(
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 ) {
     let delete_result = definition_service
         .delete(

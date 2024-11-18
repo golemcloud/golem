@@ -7,7 +7,6 @@ use crate::gateway_security::{SecuritySchemeReference, SecuritySchemeWithProvide
 use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
-use crate::service::gateway::http_api_definition_validator::RouteValidationError;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
 use derive_more::Display;
@@ -51,7 +50,7 @@ impl HttpApiDefinition {
         request: HttpApiDefinitionRequest,
         created_at: chrono::DateTime<chrono::Utc>,
         security_scheme_service: &Arc<dyn SecuritySchemeService<Namespace> + Send + Sync>,
-    ) -> Result<Self, ApiDefinitionError<RouteValidationError>> {
+    ) -> Result<Self, ApiDefinitionError> {
         let mut registry = HashMap::new();
 
         match request.security {
@@ -122,7 +121,7 @@ impl HttpApiDefinition {
 
         http_api_definition.transform().map_err(|error| {
             ApiDefinitionError::ValidationError(ValidationErrors {
-                errors: vec![RouteValidationError::from(error)],
+                errors: vec![error.to_string()],
             })
         })?;
 

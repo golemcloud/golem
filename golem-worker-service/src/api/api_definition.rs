@@ -20,7 +20,7 @@ use tracing::{error, Instrument};
 
 pub struct RegisterApiDefinitionApi {
     definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace>
             + Sync
             + Send,
     >,
@@ -30,7 +30,7 @@ pub struct RegisterApiDefinitionApi {
 impl RegisterApiDefinitionApi {
     pub fn new(
         definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace, RouteValidationError>
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace>
                 + Sync
                 + Send,
         >,

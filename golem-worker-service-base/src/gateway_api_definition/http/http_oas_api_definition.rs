@@ -128,8 +128,13 @@ mod internal {
     pub(crate) const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
     pub(crate) fn get_global_security(open_api: &OpenAPI) -> Option<SecuritySchemeReference> {
-        let global_security = open_api.security.clone().and_then(|x| x.first());
-        let global_security_name = global_security.and_then(|x| x.first().map(|x| x.0.to_string()));
+        let global_security = match &open_api.security {
+            Some(requirements) => requirements.first().cloned(),
+            None => None,
+        };
+
+        let global_security_name =
+            global_security.and_then(|x| x.clone().first().map(|x| x.0.to_string()));
 
         global_security_name.map(|x| SecuritySchemeReference {
             security_scheme_identifier: SecuritySchemeIdentifier::new(x),
@@ -199,7 +204,10 @@ mod internal {
 
         let method = method_res?;
 
-        let security = method_operation.security.clone().and_then(|x| x.first());
+        let security = method_operation
+            .security
+            .clone()
+            .and_then(|x| x.clone().first().cloned());
 
         // Custom scopes to be supported later
         // Multiple security schemes to be supported later

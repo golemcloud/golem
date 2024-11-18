@@ -1,4 +1,6 @@
 use crate::gateway_api_definition::http::{HttpApiDefinition, MethodPattern};
+use crate::service::gateway::http_api_definition_validator::RouteValidationError;
+use std::fmt::{Display, Formatter};
 
 // Any pre-processing required for ApiDefinition
 pub trait ApiDefinitionTransformer {
@@ -10,6 +12,18 @@ pub struct ApiDefTransformationError {
     pub method: MethodPattern,
     pub path: String,
     pub detail: String,
+}
+
+impl Display for ApiDefTransformationError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "RouteValidationError: method: {}, path: {}, detail: {}",
+            self.method, self.path, self.detail
+        )?;
+
+        Ok(())
+    }
 }
 
 impl ApiDefTransformationError {

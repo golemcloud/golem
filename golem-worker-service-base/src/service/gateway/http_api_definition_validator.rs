@@ -58,20 +58,21 @@ impl SafeDisplay for RouteValidationError {
 #[derive(Clone)]
 pub struct HttpApiDefinitionValidator {}
 
-impl ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError>
-    for HttpApiDefinitionValidator
-{
+impl ApiDefinitionValidatorService<HttpApiDefinition> for HttpApiDefinitionValidator {
     fn validate(
         &self,
         api: &HttpApiDefinition,
         _components: &[Component],
-    ) -> Result<(), ValidationErrors<RouteValidationError>> {
+    ) -> Result<(), ValidationErrors> {
         let errors = unique_routes(api.routes.as_slice());
+        let errors_string = errors.iter().map(|x| x.to_string()).collect::<Vec<_>>();
 
-        if errors.is_empty() {
+        if errors_string.is_empty() {
             Ok(())
         } else {
-            Err(ValidationErrors { errors })
+            Err(ValidationErrors {
+                errors: errors_string,
+            })
         }
     }
 }

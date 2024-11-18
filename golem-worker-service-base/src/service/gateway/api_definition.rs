@@ -41,7 +41,7 @@ use crate::service::gateway::api_definition_validator::{
 };
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 
-pub type ApiResult<T, E> = Result<T, ApiDefinitionError<E>>;
+pub type ApiResult<T> = Result<T, ApiDefinitionError>;
 
 #[derive(
     Eq, Hash, PartialEq, Clone, Debug, serde::Deserialize, bincode::Encode, bincode::Decode,
@@ -52,9 +52,9 @@ pub struct ApiDefinitionIdWithVersion {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ApiDefinitionError<E> {
+pub enum ApiDefinitionError {
     #[error(transparent)]
-    ValidationError(#[from] ValidationErrors<E>),
+    ValidationError(#[from] ValidationErrors),
     #[error("Unable to fetch component: {}", .0.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(", "))]
     ComponentNotFoundError(Vec<VersionedComponentId>),
     #[error("Rib compilation error: {0}")]
@@ -75,15 +75,15 @@ pub enum ApiDefinitionError<E> {
     Internal(String),
 }
 
-impl<T> ApiDefinitionError<T> {}
+impl ApiDefinitionError {}
 
-impl<E> From<RepoError> for ApiDefinitionError<E> {
+impl From<RepoError> for ApiDefinitionError {
     fn from(error: RepoError) -> Self {
         ApiDefinitionError::InternalRepoError(error)
     }
 }
 
-impl<E: SafeDisplay + Display> SafeDisplay for ApiDefinitionError<E> {
+impl SafeDisplay for ApiDefinitionError {
     fn to_safe_string(&self) -> String {
         match self {
             ApiDefinitionError::ValidationError(inner) => inner.to_safe_string(),
@@ -95,11 +95,12 @@ impl<E: SafeDisplay + Display> SafeDisplay for ApiDefinitionError<E> {
             ApiDefinitionError::ApiDefinitionDeployed(_) => self.to_string(),
             ApiDefinitionError::InternalRepoError(inner) => inner.to_safe_string(),
             ApiDefinitionError::Internal(_) => self.to_string(),
+            ApiDefinitionError::SecuritySchemeNotFound(inner) => inner.to_string(),
         }
     }
 }
 
-impl<E> From<RouteCompilationErrors> for ApiDefinitionError<E> {
+impl From<RouteCompilationErrors> for ApiDefinitionError {
     fn from(error: RouteCompilationErrors) -> Self {
         match error {
             RouteCompilationErrors::RibCompilationError(e) => {
@@ -119,20 +120,20 @@ impl<E> From<RouteCompilationErrors> for ApiDefinitionError<E> {
 // Ideally a repo service and its implementation with a different service impl that takes care of
 // validations, authorisations etc is the right approach. However we are keeping it simple for now.
 #[async_trait]
-pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
+pub trait ApiDefinitionService<AuthCtx, Namespace> {
     async fn create(
         &self,
         definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>, ValidationError>;
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
 
     async fn update(
         &self,
         definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>, ValidationError>;
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>>;
 
     async fn get(
         &self,
@@ -140,7 +141,7 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
         version: &ApiVersion,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<CompiledHttpApiDefinition<Namespace>>, ValidationError>;
+    ) -> ApiResult<Option<CompiledHttpApiDefinition<Namespace>>>;
 
     async fn delete(
         &self,
@@ -148,41 +149,39 @@ pub trait ApiDefinitionService<AuthCtx, Namespace, ValidationError> {
         version: &ApiVersion,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<(), ValidationError>;
+    ) -> ApiResult<()>;
 
     async fn get_all(
         &self,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError>;
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>>;
 
     async fn get_all_versions(
         &self,
         id: &ApiDefinitionId,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError>;
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>>;
 }
 
-pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError> {
+pub struct ApiDefinitionServiceDefault<AuthCtx, Namespace> {
     pub component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     pub definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
     pub deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
     pub security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
     pub api_definition_validator:
-        Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send>,
+        Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
 }
 
-impl<AuthCtx, Namespace, ValidationError>
-    ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError>
-{
+impl<AuthCtx, Namespace> ApiDefinitionServiceDefault<AuthCtx, Namespace> {
     pub fn new(
         component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         definition_repo: Arc<dyn ApiDefinitionRepo + Sync + Send>,
         deployment_repo: Arc<dyn ApiDeploymentRepo + Sync + Send>,
         security_scheme_service: Arc<dyn SecuritySchemeService<Namespace> + Sync + Send>,
         api_definition_validator: Arc<
-            dyn ApiDefinitionValidatorService<HttpApiDefinition, ValidationError> + Sync + Send,
+            dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send,
         >,
     ) -> Self {
         Self {
@@ -198,7 +197,7 @@ impl<AuthCtx, Namespace, ValidationError>
         &self,
         definition: &HttpApiDefinition,
         auth_ctx: &AuthCtx,
-    ) -> Result<Vec<Component>, ApiDefinitionError<ValidationError>> {
+    ) -> Result<Vec<Component>, ApiDefinitionError> {
         let get_components = definition
             .get_bindings()
             .iter()
@@ -241,20 +240,19 @@ impl<AuthCtx, Namespace, ValidationError>
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace, ValidationError> ApiDefinitionService<AuthCtx, Namespace, ValidationError>
-    for ApiDefinitionServiceDefault<AuthCtx, Namespace, ValidationError>
+impl<AuthCtx, Namespace> ApiDefinitionService<AuthCtx, Namespace>
+    for ApiDefinitionServiceDefault<AuthCtx, Namespace>
 where
     AuthCtx: Send + Sync,
     Namespace: Display + Clone + Send + Sync + TryFrom<String>,
     <Namespace as TryFrom<String>>::Error: Display,
-    ValidationError: From<ApiDefTransformationError>,
 {
     async fn create(
         &self,
         definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>, ValidationError> {
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>> {
         info!(namespace = %namespace, "Create API definition");
         let created_at = Utc::now();
 
@@ -273,7 +271,7 @@ where
             ));
         }
 
-        let definition = HttpApiDefinition::from_http_api_definition_request(
+        let definition = HttpApiDefinition::from_http_api_definition_request::<Namespace>(
             namespace,
             definition.clone(),
             created_at,
@@ -310,7 +308,7 @@ where
         definition: &HttpApiDefinitionRequest,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>, ValidationError> {
+    ) -> ApiResult<CompiledHttpApiDefinition<Namespace>> {
         info!(namespace = %namespace, "Update API definition");
 
         let existing_record = self
@@ -331,14 +329,13 @@ where
             )),
             Some(record) => Ok(record.created_at),
         }?;
-        let mut definition =
-            HttpApiDefinition::from_http_api_definition_request(definition.clone(), created_at);
-
-        let _ = definition.transform().map_err(|error| {
-            ApiDefinitionError::ValidationError(ValidationErrors {
-                errors: vec![error.into()],
-            })
-        })?;
+        let mut definition = HttpApiDefinition::from_http_api_definition_request(
+            namespace,
+            definition.clone(),
+            created_at,
+            &self.security_scheme_service,
+        )
+        .await?;
 
         let components = self.get_all_components(&definition, auth_ctx).await?;
 
@@ -370,7 +367,7 @@ where
         version: &ApiVersion,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Option<CompiledHttpApiDefinition<Namespace>>, ValidationError> {
+    ) -> ApiResult<Option<CompiledHttpApiDefinition<Namespace>>> {
         info!(namespace = %namespace, "Get API definition");
         let value = self
             .definition_repo
@@ -396,7 +393,7 @@ where
         version: &ApiVersion,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<(), ValidationError> {
+    ) -> ApiResult<()> {
         info!(namespace = %namespace, "Delete API definition");
 
         let deployments = self
@@ -430,7 +427,7 @@ where
         &self,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError> {
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>> {
         info!(namespace = %namespace, "Get all API definitions");
         let records = self.definition_repo.get_all(&namespace.to_string()).await?;
 
@@ -452,7 +449,7 @@ where
         id: &ApiDefinitionId,
         namespace: &Namespace,
         _auth_ctx: &AuthCtx,
-    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>, ValidationError> {
+    ) -> ApiResult<Vec<CompiledHttpApiDefinition<Namespace>>> {
         info!(namespace = %namespace, "Get all API definitions versions");
 
         let records = self
@@ -485,7 +482,7 @@ mod tests {
     #[test]
     pub fn test_repo_error_to_service_error() {
         let repo_err = RepoError::Internal("some sql error".to_string());
-        let service_err: ApiDefinitionError<SafeString> = repo_err.into();
+        let service_err: ApiDefinitionError = repo_err.into();
         assert_eq!(
             service_err.to_safe_string(),
             "Internal repository error".to_string()

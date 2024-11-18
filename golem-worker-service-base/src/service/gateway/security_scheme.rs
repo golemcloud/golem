@@ -78,7 +78,7 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
         // TODO; get_or_insert_simple with Repo
         let result = self
             .cache
-            .get(&(namespace, security_scheme_identifier.clone()))
+            .get(&(namespace.clone(), security_scheme_identifier.clone()))
             .await;
 
         Ok(result)
@@ -103,9 +103,10 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
                 // TODO: get_or_insert_simple with Repo
                 let result = self
                     .cache
-                    .get_or_insert_simple(&(namespace, security_scheme.scheme_identifier()), || {
-                        Box::pin(async move { Ok(security_scheme_with_provider_metadata) })
-                    })
+                    .get_or_insert_simple(
+                        &(namespace.clone(), security_scheme.scheme_identifier()),
+                        || Box::pin(async move { Ok(security_scheme_with_provider_metadata) }),
+                    )
                     .await?;
 
                 Ok(result)

@@ -25,7 +25,7 @@ pub struct MessagesErrorsBody {
 
 #[derive(Clone, Debug, Object)]
 pub struct ValidationErrorsBody {
-    errors: Vec<RouteValidationError>,
+    errors: Vec<String>,
 }
 
 #[derive(ApiResponse, Clone, Debug)]
@@ -151,6 +151,7 @@ mod conversion {
     use crate::service::gateway::api_definition_validator::ValidationErrors;
     use crate::service::gateway::api_deployment::ApiDeploymentError;
     use crate::service::gateway::http_api_definition_validator::RouteValidationError;
+    use futures_util::future::err;
     use golem_api_grpc::proto::golem::common::ErrorsBody;
     use golem_api_grpc::proto::golem::{
         apidefinition,
@@ -161,8 +162,8 @@ mod conversion {
     use poem_openapi::payload::Json;
     use std::fmt::Display;
 
-    impl From<ApiDefinitionServiceError<RouteValidationError>> for ApiEndpointError {
-        fn from(error: ApiDefinitionServiceError<RouteValidationError>) -> Self {
+    impl From<ApiDefinitionServiceError> for ApiEndpointError {
+        fn from(error: ApiDefinitionServiceError) -> Self {
             match error {
                 ApiDefinitionServiceError::ValidationError(e) => e.into(),
                 ApiDefinitionServiceError::ComponentNotFoundError(_) => {
@@ -185,6 +186,9 @@ mod conversion {
                 }
                 ApiDefinitionServiceError::InternalRepoError(_) => {
                     ApiEndpointError::internal(error)
+                }
+                ApiDefinitionServiceError::SecuritySchemeNotFound(_) => {
+                    ApiEndpointError::bad_request(error)
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
             }
@@ -217,45 +221,33 @@ mod conversion {
         }
     }
 
-    impl From<ValidationErrors<RouteValidationError>> for ApiEndpointError {
-        fn from(error: ValidationErrors<RouteValidationError>) -> Self {
+    impl From<ValidationErrors> for ApiEndpointError {
+        fn from(error: ValidationErrors) -> Self {
             let error = WorkerServiceErrorsBody::Validation(ValidationErrorsBody {
-                errors: error
-                    .errors
-                    .into_iter()
-                    .map(|e| RouteValidationError {
-                        method: e.method,
-                        path: e.path.to_string(),
-                        component: e.component,
-                        detail: e.detail,
-                    })
-                    .collect(),
+                errors: error.errors,
             });
 
             ApiEndpointError::BadRequest(Json(error))
         }
     }
 
-    impl From<ApiDefinitionServiceError<RouteValidationError>> for ApiDefinitionError {
-        fn from(error: ApiDefinitionServiceError<RouteValidationError>) -> ApiDefinitionError {
+    impl From<ApiDefinitionServiceError> for ApiDefinitionError {
+        fn from(error: ApiDefinitionServiceError) -> ApiDefinitionError {
             match error {
                 ApiDefinitionServiceError::ValidationError(e) => {
-                    let errors = e
-                        .errors
-                        .into_iter()
-                        .map(|r| apidefinition::v1::RouteValidationError {
-                            method: r.method.to_string(),
-                            path: r.path.to_string(),
-                            component: r.component.map(|x| x.component_id.into()),
-                            detail: r.detail,
-                        })
-                        .collect();
+                    let errors = e.errors;
+
                     ApiDefinitionError {
                         error: Some(api_definition_error::Error::InvalidRoutes(
                             RouteValidationErrorsBody { errors },
                         )),
                     }
                 }
+                ApiDefinitionServiceError::SecuritySchemeNotFound(_) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
                 ApiDefinitionServiceError::RibCompilationErrors(_) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
                         error: error.to_safe_string(),

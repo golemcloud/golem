@@ -37,7 +37,6 @@ pub struct GrpcApiDefinitionService {
         dyn golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService<
                 EmptyAuthCtx,
                 DefaultNamespace,
-                RouteValidationError,
             > + Sync
             + Send,
     >,
@@ -49,7 +48,6 @@ impl GrpcApiDefinitionService {
             dyn golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService<
                     EmptyAuthCtx,
                     DefaultNamespace,
-                    RouteValidationError,
                 > + Sync
                 + Send,
         >,

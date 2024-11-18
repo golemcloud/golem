@@ -19,38 +19,38 @@ use std::fmt::{Display, Formatter};
 
 // TODO; This is more specific to specific protocol validations
 // There should be a separate validator for worker binding as it is a common to validation to all protocols
-pub trait ApiDefinitionValidatorService<ApiDefinition, E> {
+pub trait ApiDefinitionValidatorService<ApiDefinition> {
     fn validate(
         &self,
         api: &ApiDefinition,
         components: &[Component],
-    ) -> Result<(), ValidationErrors<E>>;
+    ) -> Result<(), ValidationErrors>;
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, thiserror::Error)]
-pub struct ValidationErrors<E> {
-    pub errors: Vec<E>,
+pub struct ValidationErrors {
+    pub errors: Vec<String>,
 }
 
-impl<E: Display> Display for ValidationErrors<E> {
+impl Display for ValidationErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "Validation errors: {}",
             self.errors
                 .iter()
-                .map(|e| e.to_string())
+                .map(|x| x.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
         )
     }
 }
 
-impl<E: SafeDisplay> SafeDisplay for ValidationErrors<E> {
+impl SafeDisplay for ValidationErrors {
     fn to_safe_string(&self) -> String {
         self.errors
             .iter()
-            .map(|e| e.to_safe_string())
+            .map(|x| x.to_string())
             .collect::<Vec<_>>()
             .join(", ")
     }
