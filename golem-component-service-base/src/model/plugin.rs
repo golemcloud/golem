@@ -14,8 +14,10 @@
 
 use crate::service::plugin::PluginError;
 use async_trait::async_trait;
-use golem_common::model::plugin::{DefaultPluginScope, PluginInstallationTarget, PluginOwner};
-use golem_common::model::{AccountId, ComponentId, ComponentVersion, HasAccountId};
+use golem_common::model::plugin::{
+    DefaultPluginOwner, DefaultPluginScope, PluginInstallationTarget, PluginOwner,
+};
+use golem_common::model::{ComponentId, ComponentVersion};
 use golem_common::repo::RowMeta;
 use http::Uri;
 use poem_openapi::types::{ParseFromJSON, ToJSON, Type};
@@ -25,7 +27,6 @@ use sqlx::postgres::PgRow;
 use sqlx::sqlite::SqliteRow;
 use sqlx::{Postgres, Sqlite};
 use std::fmt::{Debug, Display, Formatter};
-use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -318,37 +319,4 @@ impl PluginInstallationTarget for ComponentPluginInstallationTarget {
     fn table_name() -> &'static str {
         "component_plugin_installation"
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct DefaultPluginOwner;
-
-impl Display for DefaultPluginOwner {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "default")
-    }
-}
-
-impl FromStr for DefaultPluginOwner {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "default" {
-            Ok(DefaultPluginOwner)
-        } else {
-            Err("Failed to parse empty namespace".to_string())
-        }
-    }
-}
-
-impl HasAccountId for DefaultPluginOwner {
-    fn account_id(&self) -> AccountId {
-        AccountId::placeholder()
-    }
-}
-
-impl PluginOwner for DefaultPluginOwner {
-    type Row = crate::repo::plugin::DefaultPluginOwnerRow;
 }

@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::model::{
-    ComponentTransformerDefinition, DefaultPluginOwner, OplogProcessorDefinition, PluginDefinition,
-    PluginScope, PluginTypeSpecificDefinition,
+    ComponentTransformerDefinition, OplogProcessorDefinition, PluginDefinition, PluginScope,
+    PluginTypeSpecificDefinition,
 };
 use async_trait::async_trait;
 use conditional_trait_gen::trait_gen;
@@ -209,39 +209,6 @@ where
     fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>) {
         builder.push_bind(self.scope_component_id);
     }
-}
-
-#[derive(sqlx::FromRow, Debug, Clone)]
-pub struct DefaultPluginOwnerRow {}
-
-impl Display for DefaultPluginOwnerRow {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "default")
-    }
-}
-
-impl From<DefaultPluginOwner> for DefaultPluginOwnerRow {
-    fn from(_: DefaultPluginOwner) -> Self {
-        Self {}
-    }
-}
-
-impl TryFrom<DefaultPluginOwnerRow> for DefaultPluginOwner {
-    type Error = String;
-
-    fn try_from(_: DefaultPluginOwnerRow) -> Result<Self, Self::Error> {
-        Ok(DefaultPluginOwner {})
-    }
-}
-
-impl<DB: Database> RowMeta<DB> for DefaultPluginOwnerRow {
-    fn add_column_list<Sep: Display>(_builder: &mut Separated<DB, Sep>) {}
-
-    fn add_where_clause(&self, builder: &mut QueryBuilder<DB>) {
-        builder.push("1 = 1");
-    }
-
-    fn push_bind<'a, Sep: Display>(&'a self, _builder: &mut Separated<'_, 'a, DB, Sep>) {}
 }
 
 #[async_trait]

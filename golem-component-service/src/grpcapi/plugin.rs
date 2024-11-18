@@ -23,10 +23,9 @@ use golem_api_grpc::proto::golem::component::v1::{
     ListPluginsSuccessResponse,
 };
 use golem_api_grpc::proto::golem::component::PluginDefinition;
-use golem_common::model::plugin::DefaultPluginScope;
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::recorded_grpc_api_request;
 use golem_component_service_base::api::common::ComponentTraceErrorKind;
-use golem_component_service_base::model::DefaultPluginOwner;
 use golem_component_service_base::service::plugin::PluginService;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};

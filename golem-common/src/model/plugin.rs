@@ -1,4 +1,4 @@
-use crate::model::{ComponentId, Empty, HasAccountId, PluginInstallationId};
+use crate::model::{AccountId, ComponentId, Empty, HasAccountId, PluginInstallationId};
 use crate::repo::RowMeta;
 use poem_openapi::types::{
     ParseError, ParseFromJSON, ParseFromParameter, ParseResult, ToJSON, Type,
@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgRow;
 use sqlx::sqlite::SqliteRow;
 use std::collections::HashMap;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -220,4 +220,37 @@ pub trait PluginOwner:
         + Sync
         + Unpin
         + 'static;
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct DefaultPluginOwner;
+
+impl Display for DefaultPluginOwner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "default")
+    }
+}
+
+impl FromStr for DefaultPluginOwner {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "default" {
+            Ok(DefaultPluginOwner)
+        } else {
+            Err("Failed to parse empty namespace".to_string())
+        }
+    }
+}
+
+impl HasAccountId for DefaultPluginOwner {
+    fn account_id(&self) -> AccountId {
+        AccountId::placeholder()
+    }
+}
+
+impl PluginOwner for DefaultPluginOwner {
+    type Row = crate::repo::plugin::DefaultPluginOwnerRow;
 }

@@ -1126,9 +1126,10 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         component_version: ComponentVersion,
     ) -> Result<Vec<PluginInstallation>, PluginError> {
         let owner_record: Owner::Row = owner.clone().into();
+        let plugin_owner_record = owner_record.into();
         let records = self
             .component_repo
-            .get_installed_plugins(&owner_record, &component_id.0, component_version)
+            .get_installed_plugins(&plugin_owner_record, &component_id.0, component_version)
             .await?;
 
         records
@@ -1145,10 +1146,11 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         installation: PluginInstallationCreation,
     ) -> Result<PluginInstallation, PluginError> {
         let owner: Owner::Row = owner.clone().into();
+        let plugin_owner = owner.into();
 
         let latest = self
             .component_repo
-            .get_latest_version(&owner.to_string(), &component_id.0)
+            .get_latest_version(&plugin_owner.to_string(), &component_id.0)
             .await?;
 
         if let Some(latest) = latest {
@@ -1166,7 +1168,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
                     component_version: latest.version as u64,
                 }
                 .into(),
-                owner,
+                owner: plugin_owner,
             };
 
             self.component_repo.install_plugin(&record).await?;
@@ -1186,7 +1188,8 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         component_id: &ComponentId,
         update: PluginInstallationUpdate,
     ) -> Result<(), PluginError> {
-        let owner_record = owner.clone().into();
+        let owner_record: Owner::Row = owner.clone().into();
+        let plugin_owner_record = owner_record.into();
 
         let latest = self
             .component_repo
@@ -1196,7 +1199,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         if latest.is_some() {
             self.component_repo
                 .update_plugin_installation(
-                    &owner_record,
+                    &plugin_owner_record,
                     &component_id.0,
                     &installation_id.0,
                     update.priority,
@@ -1223,7 +1226,9 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), PluginError> {
-        let owner_record = owner.clone().into();
+        let owner_record: Owner::Row = owner.clone().into();
+        let plugin_owner_record = owner_record.into();
+
         let latest = self
             .component_repo
             .get_latest_version(&owner.to_string(), &component_id.0)
@@ -1231,7 +1236,7 @@ impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<
 
         if latest.is_some() {
             self.component_repo
-                .uninstall_plugin(&owner_record, &component_id.0, &installation_id.0)
+                .uninstall_plugin(&plugin_owner_record, &component_id.0, &installation_id.0)
                 .await?;
 
             Ok(())

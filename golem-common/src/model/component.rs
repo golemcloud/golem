@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::plugin::{DefaultPluginOwner, PluginOwner};
 use crate::model::{AccountId, HasAccountId};
 use crate::repo::RowMeta;
 use poem_openapi::types::{ParseFromJSON, ToJSON};
@@ -45,12 +46,15 @@ pub trait ComponentOwner:
         + for<'r> sqlx::FromRow<'r, PgRow>
         + From<Self>
         + TryInto<Self, Error = String>
+        + Into<<Self::PluginOwner as PluginOwner>::Row>
         + Clone
         + Display
         + Send
         + Sync
         + Unpin
         + 'static;
+
+    type PluginOwner: PluginOwner;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -84,4 +88,5 @@ impl HasAccountId for DefaultComponentOwner {
 
 impl ComponentOwner for DefaultComponentOwner {
     type Row = crate::repo::component::DefaultComponentOwnerRow;
+    type PluginOwner = DefaultPluginOwner;
 }

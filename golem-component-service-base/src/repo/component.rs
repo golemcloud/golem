@@ -21,6 +21,7 @@ use futures::future::try_join_all;
 use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::plugin::PluginOwner;
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
@@ -280,26 +281,29 @@ pub trait ComponentRepo<Owner: ComponentOwner>: Debug {
 
     async fn get_installed_plugins(
         &self,
-        owner: &Owner::Row,
+        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         version: u64,
-    ) -> Result<Vec<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>, RepoError>;
+    ) -> Result<
+        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
+        RepoError,
+    >;
 
     async fn install_plugin(
         &self,
-        record: &PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>,
+        record: &PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>,
     ) -> Result<(), RepoError>;
 
     async fn uninstall_plugin(
         &self,
-        owner: &Owner::Row,
+        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
     ) -> Result<(), RepoError>;
 
     async fn update_plugin_installation(
         &self,
-        owner: &Owner::Row,
+        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
         new_priority: i32,
@@ -481,11 +485,13 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 
     async fn get_installed_plugins(
         &self,
-        owner: &Owner::Row,
+        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         version: u64,
-    ) -> Result<Vec<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>, RepoError>
-    {
+    ) -> Result<
+        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
+        RepoError,
+    > {
         let result = self
             .repo
             .get_installed_plugins(owner, component_id, version)
@@ -495,7 +501,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 
     async fn install_plugin(
         &self,
-        record: &PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>,
+        record: &PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>,
     ) -> Result<(), RepoError> {
         let result = self.repo.install_plugin(record).await;
         Self::logged_with_id("install_plugin", &record.target.component_id, result)
@@ -503,7 +509,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 
     async fn uninstall_plugin(
         &self,
-        owner: &Owner::Row,
+        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
     ) -> Result<(), RepoError> {
@@ -516,7 +522,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 
     async fn update_plugin_installation(
         &self,
-        owner: &Owner::Row,
+        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
         new_priority: i32,
@@ -539,7 +545,7 @@ impl<Owner: ComponentOwner, Repo: ComponentRepo<Owner> + Send + Sync> ComponentR
 pub struct DbComponentRepo<DB: Database, Owner: ComponentOwner> {
     db_pool: Arc<Pool<DB>>,
     plugin_installation_queries: Arc<
-        dyn PluginInstallationRepoQueries<DB, Owner, ComponentPluginInstallationTarget>
+        dyn PluginInstallationRepoQueries<DB, Owner::PluginOwner, ComponentPluginInstallationTarget>
             + Send
             + Sync,
     >,
@@ -548,7 +554,7 @@ pub struct DbComponentRepo<DB: Database, Owner: ComponentOwner> {
 impl<DB: Database + Sync, Owner: ComponentOwner> DbComponentRepo<DB, Owner>
 where
     DbPluginInstallationRepoQueries<DB>:
-        PluginInstallationRepoQueries<DB, Owner, ComponentPluginInstallationTarget>,
+        PluginInstallationRepoQueries<DB, Owner::PluginOwner, ComponentPluginInstallationTarget>,
 {
     pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
         let plugin_installation_queries = Arc::new(DbPluginInstallationRepoQueries::<DB>::new());
@@ -768,12 +774,20 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
                     component_id: *component_id,
                     component_version: new_version - 1,
                 };
-                let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
 
-                let existing_installations = query
-                    .build_query_as::<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>()
-                    .fetch_all(&mut *transaction)
-                    .await?;
+                let plugin_owner = owner.clone().into();
+                let mut query = self
+                    .plugin_installation_queries
+                    .get_all(&plugin_owner, &old_target);
+
+                let existing_installations =
+                    query
+                        .build_query_as::<PluginInstallationRecord<
+                            Owner::PluginOwner,
+                            ComponentPluginInstallationTarget,
+                        >>()
+                        .fetch_all(&mut *transaction)
+                        .await?;
 
                 let new_target = ComponentPluginInstallationRow {
                     component_id: *component_id,
@@ -1377,11 +1391,13 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
     async fn get_installed_plugins(
         &self,
-        owner: &Owner::Row,
+        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         version: u64,
-    ) -> Result<Vec<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>, RepoError>
-    {
+    ) -> Result<
+        Vec<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>,
+        RepoError,
+    > {
         let target = ComponentPluginInstallationRow {
             component_id: *component_id,
             component_version: version as i64,
@@ -1389,14 +1405,14 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         let mut query = self.plugin_installation_queries.get_all(owner, &target);
 
         Ok(query
-            .build_query_as::<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>()
+            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>()
             .fetch_all(self.db_pool.deref())
             .await?)
     }
 
     async fn install_plugin(
         &self,
-        record: &PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>,
+        record: &PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>,
     ) -> Result<(), RepoError> {
         let component_id = record.target.component_id;
 
@@ -1430,7 +1446,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
             .get_all(&record.owner, &old_target);
 
         let existing_installations = query
-            .build_query_as::<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>()
+            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>()
             .fetch_all(&mut *transaction)
             .await?;
 
@@ -1474,7 +1490,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
     async fn uninstall_plugin(
         &self,
-        owner: &Owner::Row,
+        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
     ) -> Result<(), RepoError> {
@@ -1506,7 +1522,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
 
         let existing_installations = query
-            .build_query_as::<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>()
+            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>()
             .fetch_all(&mut *transaction)
             .await?;
 
@@ -1545,7 +1561,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
 
     async fn update_plugin_installation(
         &self,
-        owner: &Owner::Row,
+        owner: &<<Owner as ComponentOwner>::PluginOwner as PluginOwner>::Row,
         component_id: &Uuid,
         plugin_installation_id: &Uuid,
         new_priority: i32,
@@ -1581,7 +1597,7 @@ impl<Owner: ComponentOwner> ComponentRepo<Owner> for DbComponentRepo<sqlx::Postg
         let mut query = self.plugin_installation_queries.get_all(owner, &old_target);
 
         let existing_installations = query
-            .build_query_as::<PluginInstallationRecord<Owner, ComponentPluginInstallationTarget>>()
+            .build_query_as::<PluginInstallationRecord<Owner::PluginOwner, ComponentPluginInstallationTarget>>()
             .fetch_all(&mut *transaction)
             .await?;
 

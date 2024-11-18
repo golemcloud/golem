@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod component;
+pub mod plugin;
 
 use sqlx::query_builder::Separated;
 use sqlx::{Database, QueryBuilder};

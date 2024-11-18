@@ -13,12 +13,10 @@
 // limitations under the License.
 
 use crate::api::{ComponentError, Result};
-use golem_common::model::plugin::DefaultPluginScope;
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_common::model::Empty;
 use golem_common::recorded_http_api_request;
-use golem_component_service_base::model::{
-    DefaultPluginOwner, PluginDefinition, PluginDefinitionWithoutOwner,
-};
+use golem_component_service_base::model::{PluginDefinition, PluginDefinitionWithoutOwner};
 use golem_component_service_base::service::plugin::PluginService;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::ErrorBody;

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use conditional_trait_gen::trait_gen;
-use golem_common::model::component::ComponentOwner;
+use golem_common::model::plugin::PluginOwner;
 use golem_common::model::plugin::{PluginInstallation, PluginInstallationTarget};
 use golem_common::model::PluginInstallationId;
 use golem_common::repo::RowMeta;
@@ -25,7 +25,7 @@ use tracing::debug;
 use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
-pub struct PluginInstallationRecord<Owner: ComponentOwner, Target: PluginInstallationTarget> {
+pub struct PluginInstallationRecord<Owner: PluginOwner, Target: PluginInstallationTarget> {
     pub installation_id: Uuid,
     pub plugin_name: String,
     pub plugin_version: String,
@@ -37,9 +37,7 @@ pub struct PluginInstallationRecord<Owner: ComponentOwner, Target: PluginInstall
     pub owner: Owner::Row,
 }
 
-impl<Owner: ComponentOwner, Target: PluginInstallationTarget>
-    PluginInstallationRecord<Owner, Target>
-{
+impl<Owner: PluginOwner, Target: PluginInstallationTarget> PluginInstallationRecord<Owner, Target> {
     pub fn try_from(
         installation: PluginInstallation,
         owner: Owner::Row,
@@ -58,7 +56,7 @@ impl<Owner: ComponentOwner, Target: PluginInstallationTarget>
     }
 }
 
-impl<Owner: ComponentOwner, Target: PluginInstallationTarget>
+impl<Owner: PluginOwner, Target: PluginInstallationTarget>
     TryFrom<PluginInstallationRecord<Owner, Target>> for PluginInstallation
 {
     type Error = String;
@@ -87,7 +85,7 @@ impl<Owner: ComponentOwner, Target: PluginInstallationTarget>
 /// the target repo.
 pub trait PluginInstallationRepoQueries<
     DB: Database,
-    Owner: ComponentOwner,
+    Owner: PluginOwner,
     Target: PluginInstallationTarget,
 >
 {
@@ -132,7 +130,7 @@ impl<DB: Database> DbPluginInstallationRepoQueries<DB> {
 }
 
 #[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
-impl<Owner: ComponentOwner, Target: PluginInstallationTarget>
+impl<Owner: PluginOwner, Target: PluginInstallationTarget>
     PluginInstallationRepoQueries<sqlx::Postgres, Owner, Target>
     for DbPluginInstallationRepoQueries<sqlx::Postgres>
 {
