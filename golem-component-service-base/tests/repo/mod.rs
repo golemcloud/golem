@@ -15,20 +15,21 @@
 use crate::Tracing;
 use golem_common::model::component::{ComponentOwner, DefaultComponentOwner};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
-use golem_common::model::plugin::{ComponentPluginScope, DefaultPluginScope, PluginInstallation};
+use golem_common::model::plugin::{
+    ComponentPluginScope, DefaultPluginOwner, DefaultPluginScope, PluginInstallation, PluginOwner,
+};
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, Empty, HasAccountId, PluginInstallationId,
 };
 use golem_common::repo::component::DefaultComponentOwnerRow;
+use golem_common::repo::plugin::DefaultPluginOwnerRow;
 use golem_common::repo::RowMeta;
 use golem_component_service_base::model::{
     Component, ComponentPluginInstallationTarget, ComponentTransformerDefinition,
-    DefaultPluginOwner, OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
+    OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
 };
 use golem_component_service_base::repo::component::{ComponentRecord, ComponentRepo};
-use golem_component_service_base::repo::plugin::{
-    DefaultPluginOwnerRow, DefaultPluginScopeRow, PluginRepo,
-};
+use golem_component_service_base::repo::plugin::{DefaultPluginScopeRow, PluginRepo};
 use golem_component_service_base::repo::plugin_installation::ComponentPluginInstallationRow;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
@@ -77,6 +78,11 @@ impl HasAccountId for UuidOwner {
 }
 
 impl ComponentOwner for UuidOwner {
+    type Row = UuidOwnerRow;
+    type PluginOwner = UuidOwner;
+}
+
+impl PluginOwner for UuidOwner {
     type Row = UuidOwnerRow;
 }
 
@@ -532,6 +538,7 @@ async fn test_default_component_plugin_installation(
 ) -> Result<(), RepoError> {
     let component_owner: DefaultComponentOwner = DefaultComponentOwner;
     let component_owner_row: DefaultComponentOwnerRow = component_owner.clone().into();
+    let plugin_owner_row: DefaultPluginOwnerRow = component_owner_row.into();
 
     let plugin_owner: DefaultPluginOwner = DefaultPluginOwner;
 
@@ -576,7 +583,7 @@ async fn test_default_component_plugin_installation(
     let target1_row: ComponentPluginInstallationRow = target1.clone().into();
 
     let installations1 = component_repo
-        .get_installed_plugins(&component_owner_row, &component_id.0, 0)
+        .get_installed_plugins(&plugin_owner_row, &component_id.0, 0)
         .await?;
 
     let installation1 = PluginInstallation {
@@ -588,7 +595,7 @@ async fn test_default_component_plugin_installation(
     };
     let installation1_row = PluginInstallationRecord::try_from(
         installation1.clone(),
-        component_owner_row.clone(),
+        plugin_owner_row.clone(),
         target1_row.clone(),
     )
     .unwrap();
@@ -604,7 +611,7 @@ async fn test_default_component_plugin_installation(
     };
     let installation2_row = PluginInstallationRecord::try_from(
         installation2.clone(),
-        component_owner_row.clone(),
+        plugin_owner_row.clone(),
         target1_row.clone(),
     )
     .unwrap();
@@ -612,7 +619,7 @@ async fn test_default_component_plugin_installation(
     component_repo.install_plugin(&installation2_row).await?;
 
     let installations2 = component_repo
-        .get_installed_plugins(&component_owner_row, &component_id.0, 2)
+        .get_installed_plugins(&plugin_owner_row, &component_id.0, 2)
         .await?;
 
     println!("{:?}", installations2);
@@ -626,7 +633,7 @@ async fn test_default_component_plugin_installation(
         HashMap::from_iter(vec![("param2".to_string(), "value2".to_string())]);
     component_repo
         .update_plugin_installation(
-            &component_owner_row,
+            &plugin_owner_row,
             &component_id.0,
             &latest_installation2_id,
             600,
@@ -635,7 +642,7 @@ async fn test_default_component_plugin_installation(
         .await?;
 
     let installations3 = component_repo
-        .get_installed_plugins(&component_owner_row, &component_id.0, 3)
+        .get_installed_plugins(&plugin_owner_row, &component_id.0, 3)
         .await?;
 
     let latest_installation1_id = installations3
@@ -644,15 +651,11 @@ async fn test_default_component_plugin_installation(
         .unwrap()
         .installation_id;
     component_repo
-        .uninstall_plugin(
-            &component_owner_row,
-            &component_id.0,
-            &latest_installation1_id,
-        )
+        .uninstall_plugin(&plugin_owner_row, &component_id.0, &latest_installation1_id)
         .await?;
 
     let installations4 = component_repo
-        .get_installed_plugins(&component_owner_row, &component_id.0, 4)
+        .get_installed_plugins(&plugin_owner_row, &component_id.0, 4)
         .await?;
 
     assert_eq!(installations1.len(), 0);
