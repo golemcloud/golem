@@ -8,18 +8,18 @@ use crate::gateway_middleware::{Cors, HttpAuthorizer};
 // don't need to pass through to the backend.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StaticBinding {
-    HttpCorsPreflight(Cors),
-    HttpAuthCallBack(HttpAuthorizer),
+    HttpCorsPreflight(Box<Cors>),
+    HttpAuthCallBack(Box<HttpAuthorizer>),
 }
 
 impl StaticBinding {
     pub fn from_http_cors(cors: Cors) -> Self {
-        StaticBinding::HttpCorsPreflight(cors)
+        StaticBinding::HttpCorsPreflight(Box::new(cors))
     }
 
     pub fn get_cors_preflight(&self) -> Option<Cors> {
         match self {
-            StaticBinding::HttpCorsPreflight(preflight) => Some(preflight.clone()),
+            StaticBinding::HttpCorsPreflight(preflight) => Some(*preflight.clone()),
             _ => None,
         }
     }
@@ -32,7 +32,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::StaticBinding> for Sta
     ) -> Result<Self, String> {
         match value.static_binding {
             Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::HttpCorsPreflight(cors_preflight)) => {
-                Ok(StaticBinding::HttpCorsPreflight(cors_preflight.try_into()?))
+                Ok(StaticBinding::HttpCorsPreflight(Box::new(cors_preflight.try_into()?)))
 
             }
             _ => Err("Unknown static binding type".to_string()),
@@ -46,7 +46,7 @@ impl From<StaticBinding> for golem_api_grpc::proto::golem::apidefinition::Static
             StaticBinding::HttpCorsPreflight(cors) => {
                 golem_api_grpc::proto::golem::apidefinition::StaticBinding {
                     static_binding: Some(golem_api_grpc::proto::golem::apidefinition::static_binding::StaticBinding::HttpCorsPreflight(
-                        golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(cors)
+                        golem_api_grpc::proto::golem::apidefinition::CorsPreflight::from(*cors)
                     )),
                 }
             }
