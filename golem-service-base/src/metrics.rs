@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::VERSION;
-use golem_service_base::metrics::VERSION_INFO;
+use lazy_static::lazy_static;
 use prometheus::*;
 
-pub fn register_all() -> Registry {
-    VERSION_INFO.with_label_values(&[VERSION]).inc();
-
-    default_registry().clone()
+lazy_static! {
+    pub static ref VERSION_INFO: IntCounterVec =
+        register_int_counter_vec!("version_info", "Version info of the server", &["version"])
+            .unwrap();
 }

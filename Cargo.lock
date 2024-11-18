@@ -3466,6 +3466,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem"
+version = "0.0.0"
+dependencies = [
+ "golem-common",
+ "golem-component-compilation-service",
+ "golem-component-service",
+ "golem-service-base",
+ "golem-shard-manager",
+ "golem-worker-executor",
+ "golem-worker-executor-base",
+ "golem-worker-service",
+ "golem-worker-service-base",
+ "opentelemetry",
+ "opentelemetry-prometheus",
+ "opentelemetry_sdk",
+ "prometheus",
+ "rustls 0.23.15",
+ "tokio",
+]
+
+[[package]]
 name = "golem-api-grpc"
 version = "0.0.0"
 dependencies = [
@@ -3834,9 +3855,11 @@ dependencies = [
  "http 1.1.0",
  "humantime-serde",
  "hyper 1.5.0",
+ "lazy_static 1.5.0",
  "num-traits 0.2.19",
  "pin-project 1.1.7",
  "poem-openapi",
+ "prometheus",
  "proptest",
  "prost-types",
  "rand",

@@ -1,0 +1,32 @@
+[package]
+name = "golem"
+version = "0.0.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://golem.cloud/"
+repository = "https://github.com/golemcloud/golem"
+readme = "README.md"
+description = "Single Golem executable for testing"
+
+[[bin]]
+name = "golem"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-component-compilation-service = { path = "../golem-component-compilation-service", version = "0.0.0" }
+golem-component-service = { path = "../golem-component-service", version = "0.0.0" }
+golem-service-base = { path = "../golem-service-base", version = "0.0.0" }
+golem-shard-manager = { path = "../golem-shard-manager", version = "0.0.0" }
+golem-worker-executor = { path = "../golem-worker-executor", version = "0.0.0" }
+golem-worker-executor-base = { path = "../golem-worker-executor-base", version = "0.0.0" }
+golem-worker-service = { path = "../golem-worker-service", version = "0.0.0" }
+golem-worker-service-base = { path = "../golem-worker-service-base", version = "0.0.0" }
+
+opentelemetry = { workspace = true }
+opentelemetry-prometheus = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+prometheus = { workspace = true }
+rustls = { workspace = true }
+tokio = { workspace = true }

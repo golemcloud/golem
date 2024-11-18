@@ -19,7 +19,7 @@ mod model;
 mod persistence;
 mod rebalancing;
 mod shard_management;
-mod shard_manager_config;
+pub mod shard_manager_config;
 mod worker_executor;
 
 use std::env;
@@ -29,7 +29,7 @@ use std::sync::Arc;
 use crate::error::ShardManagerTraceErrorKind;
 use crate::healthcheck::{get_unhealthy_pods, GrpcHealthCheck, HealthCheck};
 use crate::http_server::HttpServerImpl;
-use crate::shard_manager_config::{make_config_loader, HealthCheckK8sConfig, HealthCheckMode};
+use crate::shard_manager_config::{make_config_loader, HealthCheckK8sConfig, HealthCheckMode, PersistenceConfig};
 use error::ShardManagerError;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem;
@@ -40,7 +40,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server
 use golem_common::recorded_grpc_api_request;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use model::{Pod, RoutingTable};
-use persistence::{PersistenceService, PersistenceServiceDefault};
+use persistence::{RoutingTablePersistence, RoutingTableRedisPersistence};
 use prometheus::{default_registry, Registry};
 use shard_management::ShardManagement;
 use shard_manager_config::ShardManagerConfig;
@@ -50,6 +50,7 @@ use tonic::Response;
 use tracing::Instrument;
 use tracing::{debug, info, warn};
 use worker_executor::{WorkerExecutorService, WorkerExecutorServiceDefault};
+use crate::persistence::RoutingTableFileSystemPersistence;
 
 #[cfg(test)]
 test_r::enable!();
@@ -62,7 +63,7 @@ pub struct ShardManagerServiceImpl {
 
 impl ShardManagerServiceImpl {
     async fn new(
-        persistence_service: Arc<dyn PersistenceService + Send + Sync>,
+        persistence_service: Arc<dyn RoutingTablePersistence + Send + Sync>,
         worker_executor_service: Arc<dyn WorkerExecutorService + Send + Sync>,
         shard_manager_config: Arc<ShardManagerConfig>,
         health_check: Arc<dyn HealthCheck + Send + Sync>,
@@ -73,7 +74,7 @@ impl ShardManagerServiceImpl {
             health_check.clone(),
             shard_manager_config.rebalance_threshold,
         )
-        .await?;
+            .await?;
 
         let shard_manager_service = ShardManagerServiceImpl {
             shard_management,
@@ -224,7 +225,7 @@ pub fn server_main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-async fn async_main(
+pub async fn async_main(
     shard_manager_config: &ShardManagerConfig,
     registry: Registry,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -245,20 +246,30 @@ async fn async_main(
         registry,
     );
 
-    info!("Using Redis at {}", shard_manager_config.redis.url());
-    let pool = golem_common::redis::RedisPool::configured(&shard_manager_config.redis).await?;
-
     let shard_manager_config = Arc::new(shard_manager_config.clone());
 
-    let persistence_service = Arc::new(PersistenceServiceDefault::new(
-        &pool,
-        &shard_manager_config.number_of_shards,
-    ));
+    let persistence_service: Arc<dyn RoutingTablePersistence + Send + Sync> = match &shard_manager_config.persistence {
+        PersistenceConfig::Redis(redis) => {
+            info!("Using Redis at {}", redis.url());
+            let pool = golem_common::redis::RedisPool::configured(redis).await?;
+            Arc::new(RoutingTableRedisPersistence::new(
+                &pool,
+                shard_manager_config.number_of_shards,
+            ))
+        }
+        PersistenceConfig::FileSystem(fs) => {
+            info!("Using sharding file {:?}", fs.path);
+            Arc::new(RoutingTableFileSystemPersistence::new(
+                &fs.path,
+                shard_manager_config.number_of_shards,
+            ))
+        }
+    };
     let worker_executors = Arc::new(WorkerExecutorServiceDefault::new(
         shard_manager_config.worker_executors.clone(),
     ));
 
-    let shard_manager_port_str = env::var("GOLEM_SHARD_MANAGER_PORT")?;
+    let shard_manager_port_str = env::var("GOLEM_SHARD_MANAGER_PORT").unwrap_or(shard_manager_config.grpc_port.to_string());
     info!("The port read from env is {}", shard_manager_port_str);
     let shard_manager_port = shard_manager_port_str.parse::<u16>()?;
     let shard_manager_addr = format!("0.0.0.0:{}", shard_manager_port);
@@ -279,8 +290,8 @@ async fn async_main(
                     namespace.clone(),
                     shard_manager_config.worker_executors.retries.clone(),
                 )
-                .await
-                .expect("Failed to initialize K8s health checker"),
+                    .await
+                    .expect("Failed to initialize K8s health checker"),
             ),
         };
 
@@ -290,7 +301,7 @@ async fn async_main(
         shard_manager_config,
         health_check,
     )
-    .await?;
+        .await?;
 
     let service = ShardManagerServiceServer::new(shard_manager);
 
