@@ -1,11 +1,11 @@
 use crate::gateway_api_definition::http::path_pattern_parser::parse_path_pattern;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
+use crate::gateway_api_definition_transformer::transform_http_api_definition;
 use crate::gateway_binding::WorkerBindingCompiled;
 use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled};
 use crate::gateway_middleware::Cors;
 use crate::gateway_security::{SecuritySchemeReference, SecuritySchemeWithProviderMetadata};
 use crate::service::gateway::api_definition::ApiDefinitionError;
-use crate::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
@@ -115,7 +115,7 @@ impl HttpApiDefinition {
             created_at,
         };
 
-        http_api_definition.transform().map_err(|error| {
+        transform_http_api_definition(&mut http_api_definition).map_err(|error| {
             ApiDefinitionError::ValidationError(ValidationErrors {
                 errors: vec![error.to_string()],
             })

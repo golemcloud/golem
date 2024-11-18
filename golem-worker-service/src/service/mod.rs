@@ -51,11 +51,8 @@ use tonic::codec::CompressionEncoding;
 pub struct Services {
     pub worker_service: worker::WorkerService,
     pub component_service: component::ComponentService,
-    pub definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace>
-            + Sync
-            + Send,
-    >,
+    pub definition_service:
+        Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub deployment_service:
         Arc<dyn ApiDeploymentService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub http_definition_lookup_service: Arc<
@@ -189,9 +186,7 @@ impl Services {
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace>
-                + Sync
-                + Send,
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
         > = Arc::new(ApiDefinitionServiceDefault::new(
             component_service.clone(),
             api_definition_repo.clone(),

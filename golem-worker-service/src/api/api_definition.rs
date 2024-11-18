@@ -19,20 +19,14 @@ use std::sync::Arc;
 use tracing::{error, Instrument};
 
 pub struct RegisterApiDefinitionApi {
-    definition_service: Arc<
-        dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace>
-            + Sync
-            + Send,
-    >,
+    definition_service: Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/api/definitions", tag = ApiTags::ApiDefinition)]
 impl RegisterApiDefinitionApi {
     pub fn new(
         definition_service: Arc<
-            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace>
-                + Sync
-                + Send,
+            dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
         >,
     ) -> Self {
         Self { definition_service }

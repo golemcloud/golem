@@ -254,7 +254,9 @@ impl GrpcApiDefinitionService {
                     serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?,
                 );
 
-                value.to_http_api_definition_request().map_err(bad_request)?
+                value
+                    .to_http_api_definition_request()
+                    .map_err(bad_request)?
             }
         };
 
@@ -294,7 +296,9 @@ impl GrpcApiDefinitionService {
                     serde_json::from_str(&definition).map_err(|_| bad_request("Invalid JSON"))?,
                 );
 
-                value.to_http_api_definition_request().map_err(bad_request)?
+                value
+                    .to_http_api_definition_request()
+                    .map_err(bad_request)?
             }
         };
 
