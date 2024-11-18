@@ -23,9 +23,10 @@ use crate::services::rdbms::{Rdbms, RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey, 
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use futures_util::stream::BoxStream;
-use sqlx::postgres::PgTypeKind;
+use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{Column, Pool, Row, TypeInfo};
 use std::fmt::Display;
+use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -53,9 +54,10 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
         &self,
         config: &RdbmsPoolConfig,
     ) -> Result<Pool<sqlx::Postgres>, sqlx::Error> {
+        let options = PgConnectOptions::from_str(&self.address)?;
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(config.max_connections)
-            .connect(&self.address)
+            .connect_with(options)
             .await
     }
 }
@@ -154,7 +156,7 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
-                DbValuePrimitive::Decimal(v) => {
+                DbValuePrimitive::Decimal(_) => {
                     let values: Vec<BigDecimal> = get_plain_values(vs, |v| {
                         if let DbValuePrimitive::Decimal(v) = v {
                             Some(v)

@@ -24,6 +24,7 @@ use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use sqlx::{Column, Pool, Row, TypeInfo};
 use std::fmt::Display;
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default)]
@@ -50,9 +51,10 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
         &self,
         config: &RdbmsPoolConfig,
     ) -> Result<Pool<sqlx::MySql>, sqlx::Error> {
+        let options = sqlx::mysql::MySqlConnectOptions::from_str(&self.address)?;
         sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(config.max_connections)
-            .connect(&self.address)
+            .connect_with(options)
             .await
     }
 }

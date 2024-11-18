@@ -22,6 +22,7 @@ use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::RdbConnectionString;
 use std::ops::Deref;
+use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{test, test_dep};
 use uuid::Uuid;
@@ -46,7 +47,7 @@ fn rdbms_service() -> RdbmsServiceDefault {
 //     make(r, "_select1", "SELECT 1", 1).await;
 // }
 //
-// async fn make(r: &mut DynamicTestRegistration, suffix: &'static str, query: &'static str, expected: u64) {
+// async fn make(r: &mut DynamicTestRegistration, suffix: &str, query: &str, expected: u64) {
 //     add_test!(
 //         r,
 //         format!("postgres_execute_test_{suffix}"),
@@ -75,8 +76,8 @@ async fn postgres_execute_test_select1(
     rdbms_service: &RdbmsServiceDefault,
 ) {
     rdbms_execute_test(
-        postgres.rdbs[0].deref(),
         rdbms_service.postgres(),
+        &postgres.rdbs[0].host_connection_string(),
         "SELECT 1",
         vec![],
         Some(1),
@@ -89,7 +90,7 @@ async fn postgres_execute_test_create_insert_select(
     postgres: &DockerPostgresRdbs,
     rdbms_service: &RdbmsServiceDefault,
 ) {
-    let rdb = postgres.rdbs[1].clone();
+    let db_address = postgres.rdbs[1].host_connection_string();
     let rdbms = rdbms_service.postgres();
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
@@ -108,8 +109,8 @@ async fn postgres_execute_test_create_insert_select(
         "#;
 
     rdbms_execute_test(
-        rdb.deref(),
         rdbms.clone(),
+        &db_address,
         create_table_statement,
         vec![],
         None,
@@ -126,8 +127,8 @@ async fn postgres_execute_test_create_insert_select(
         ];
 
         rdbms_execute_test(
-            rdb.deref(),
             rdbms.clone(),
+            &db_address,
             insert_statement,
             params,
             Some(1),
@@ -157,8 +158,8 @@ async fn postgres_execute_test_create_insert_select(
     ];
 
     rdbms_query_test(
-        rdb.deref(),
         rdbms.clone(),
+        &db_address,
         "SELECT component_id, namespace, name from components",
         vec![],
         Some(expected_columns),
@@ -170,8 +171,8 @@ async fn postgres_execute_test_create_insert_select(
 #[test]
 async fn mysql_execute_test_select1(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
     rdbms_execute_test(
-        mysql.rdbs[0].deref(),
         rdbms_service.mysql(),
+        &mysql.rdbs[0].host_connection_string(),
         "SELECT 1",
         vec![],
         Some(0),
@@ -184,7 +185,7 @@ async fn mysql_execute_test_create_insert_select(
     mysql: &DockerMysqlRdbs,
     rdbms_service: &RdbmsServiceDefault,
 ) {
-    let rdb = mysql.rdbs[1].clone();
+    let db_address = mysql.rdbs[1].clone().host_connection_string();
     let rdbms = rdbms_service.mysql();
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
@@ -204,8 +205,8 @@ async fn mysql_execute_test_create_insert_select(
         "#;
 
     rdbms_execute_test(
-        rdb.deref(),
         rdbms.clone(),
+        &db_address,
         create_table_statement,
         vec![],
         None,
@@ -222,8 +223,8 @@ async fn mysql_execute_test_create_insert_select(
         ];
 
         rdbms_execute_test(
-            rdb.deref(),
             rdbms.clone(),
+            &db_address,
             insert_statement,
             params,
             Some(1),
@@ -253,8 +254,8 @@ async fn mysql_execute_test_create_insert_select(
     ];
 
     rdbms_query_test(
-        rdb.deref(),
         rdbms.clone(),
+        &db_address,
         "SELECT component_id, namespace, name from components",
         vec![],
         Some(expected_columns),
@@ -264,18 +265,17 @@ async fn mysql_execute_test_create_insert_select(
 }
 
 async fn rdbms_execute_test<T: RdbmsType>(
-    rdb: &impl RdbConnectionString,
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
-    query: &'static str,
+    db_address: &str,
+    query: &str,
     params: Vec<DbValue>,
     expected: Option<u64>,
 ) {
-    let address = rdb.host_connection_string();
     let worker_id = WorkerId {
         component_id: ComponentId::new_v4(),
         worker_name: "test".to_string(),
     };
-    let connection = rdbms.create(&worker_id, &address).await;
+    let connection = rdbms.create(&worker_id, db_address).await;
     assert!(connection.is_ok());
     let pool_key = connection.unwrap();
     // println!("pool_key: {}", pool_key);
@@ -288,19 +288,18 @@ async fn rdbms_execute_test<T: RdbmsType>(
 }
 
 async fn rdbms_query_test<T: RdbmsType>(
-    rdb: &impl RdbConnectionString,
     rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
-    query: &'static str,
+    db_address: &str,
+    query: &str,
     params: Vec<DbValue>,
     expected_columns: Option<Vec<DbColumn>>,
     expected_rows: Option<Vec<DbRow>>,
 ) {
-    let address = rdb.host_connection_string();
     let worker_id = WorkerId {
         component_id: ComponentId::new_v4(),
         worker_name: "test".to_string(),
     };
-    let connection = rdbms.create(&worker_id, &address).await;
+    let connection = rdbms.create(&worker_id, db_address).await;
     assert!(connection.is_ok());
     let pool_key = connection.unwrap();
     // println!("pool_key: {}", pool_key);
@@ -324,6 +323,62 @@ async fn rdbms_query_test<T: RdbmsType>(
     }
 
     let _ = rdbms.remove(&worker_id, &pool_key);
+}
+
+#[test]
+async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
+    let rdbms = rdbms_service.postgres();
+    let schema = "test1";
+    let db_address = postgres.rdbs[2].host_connection_string();
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        format!("CREATE SCHEMA IF NOT EXISTS {};", schema).as_str(),
+        vec![],
+        None,
+    )
+    .await;
+
+    let create_table_statement = format!(
+        r#"
+            CREATE TABLE IF NOT EXISTS {schema}.components
+            (
+                component_id        varchar(255)    NOT NULL,
+                namespace           varchar(255)    NOT NULL,
+                name                varchar(255)    NOT NULL,
+                PRIMARY KEY (component_id)
+            );
+        "#
+    );
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        create_table_statement.as_str(),
+        vec![],
+        None,
+    )
+    .await;
+
+    // let db_address_with_schema = format!("{}?currentSchema={}", db_address, schema);
+    //
+    // println!("db_address_with_schema: {}", db_address_with_schema);
+    //
+    // rdbms_execute_test(
+    //     rdbms.clone(),
+    //     &db_address_with_schema,
+    //     "SELECT component_id, namespace, name from components",
+    //     vec![],
+    //     Some(0),
+    // )
+    // .await
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        format!("SELECT component_id, namespace, name from {schema}.components").as_str(),
+        vec![],
+        Some(0),
+    ).await
 }
 
 #[test]
