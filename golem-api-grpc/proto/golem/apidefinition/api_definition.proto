@@ -160,36 +160,3 @@ message SecurityScheme {
 message IdentityProviderMetadata {
   string metadata = 1;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
