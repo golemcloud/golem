@@ -12,6 +12,7 @@ use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
+use golem_api_grpc::proto::golem::apidefinition::HttpRoute;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
@@ -19,7 +20,7 @@ use prost::Name;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fmt::{format, Debug, Display};
+use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -166,6 +167,7 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
                 .collect(),
             draft: compiled_http_api_definition.draft,
             created_at: compiled_http_api_definition.created_at,
+            security: None,
         }
     }
 }
@@ -193,6 +195,7 @@ impl TryFrom<grpc_apidefinition::ApiDefinition>
             routes,
             draft: value.draft,
             created_at: created_at.into(),
+            security: None,
         };
         Ok(result)
     }
@@ -489,6 +492,24 @@ pub struct Route {
     pub path: AllPathPatterns,
     pub binding: GatewayBinding,
     pub security: Option<SecuritySchemeWithProviderMetadata>,
+}
+
+impl TryFrom<HttpRoute> for Route {
+    type Error = String;
+
+    fn try_from(value: HttpRoute) -> Result<Self, Self::Error> {
+        let binding = value.binding.ok_or("Missing binding")?;
+
+        Ok(Route {
+            method: MethodPattern::try_from(value.method)?,
+            path: AllPathPatterns::from_str(value.path.as_str())?,
+            binding: GatewayBinding::try_from(binding)?,
+            security: value
+                .security
+                .map(|x| SecuritySchemeWithProviderMetadata::try_from(x))
+                .transpose()?,
+        })
+    }
 }
 
 impl Route {

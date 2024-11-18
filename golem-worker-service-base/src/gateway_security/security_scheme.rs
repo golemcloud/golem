@@ -62,6 +62,12 @@ impl Display for ProviderName {
     }
 }
 
+impl ProviderName {
+    pub fn new(value: String) -> ProviderName {
+        ProviderName(value)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub struct SecuritySchemeIdentifier(String);
 
@@ -157,5 +163,49 @@ impl SecurityScheme {
             vec!["openid", "email", "profile"],
             issuer_url,
         )
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityScheme> for SecurityScheme {
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::SecurityScheme,
+    ) -> Result<Self, Self::Error> {
+        let client_id = ClientId::new(value.client_id);
+        let client_secret = ClientSecret::new(value.client_secret);
+        let issuer_url =
+            IssuerUrl::new(value.issue_url).map_err(|err| format!("Invalid Issuer. {}", err))?;
+
+        let provider_name = ProviderName::new(value.provider_name);
+        let scheme_identifier = SecuritySchemeIdentifier::new(value.scheme_identifier);
+        let redirect_url = RedirectUrl::new(value.redirect_url)
+            .map_err(|err| format!("Invalid RedirectURL. {}", err))?;
+
+        let scopes: Vec<Scope> = value.scopes.iter().map(|x| Scope::new(x.clone())).collect();
+
+        Ok(SecurityScheme {
+            client_secret,
+            client_id,
+            issuer_url,
+            provider_name,
+            scheme_identifier,
+            redirect_url,
+            scopes,
+        })
+    }
+}
+
+impl From<SecurityScheme> for golem_api_grpc::proto::golem::apidefinition::SecurityScheme {
+    fn from(value: SecurityScheme) -> Self {
+        golem_api_grpc::proto::golem::apidefinition::SecurityScheme {
+            provider_name: value.provider_name.to_string(),
+            scheme_identifier: value.scheme_identifier.to_string(),
+            client_id: value.client_id.to_string(),
+            client_secret: value.client_secret.secret().clone(),
+            redirect_url: value.redirect_url.to_string(),
+            scopes: value.scopes.iter().map(|x| x.to_string()).collect(),
+            issue_url: value.issuer_url.to_string(),
+        }
     }
 }

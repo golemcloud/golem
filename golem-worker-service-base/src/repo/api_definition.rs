@@ -68,6 +68,7 @@ where
             draft: value.draft,
             created_at: value.created_at,
             namespace,
+            security: None,
         })
     }
 }
@@ -88,6 +89,7 @@ impl TryFrom<ApiDefinitionRecord> for HttpApiDefinition {
             routes,
             draft: value.draft,
             created_at: value.created_at,
+            security: None,
         })
     }
 }

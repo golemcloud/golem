@@ -484,23 +484,6 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
     }
 }
 
-impl TryInto<crate::gateway_api_definition::http::RouteRequest> for RouteRequestData {
-    type Error = String;
-
-    fn try_into(self) -> Result<crate::gateway_api_definition::http::RouteRequest, Self::Error> {
-        let path = AllPathPatterns::parse(self.path.as_str()).map_err(|e| e.to_string())?;
-        let binding = GatewayBinding::try_from(self.binding.clone())?;
-        let security = self.security.map(|s| SecuritySchemeReference::from(s));
-
-        Ok(RouteRequest {
-            method: self.method,
-            path,
-            binding,
-            security,
-        })
-    }
-}
-
 impl TryFrom<GatewayBinding> for GatewayBindingData {
     type Error = String;
 
@@ -629,7 +612,16 @@ impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition>
 
         let id = value.id.0;
 
-        let definition = grpc_apidefinition::HttpApiDefinition { routes };
+        let security = value
+            .security
+            .map(|x| {
+                golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(
+                    x,
+                )
+            })
+            .transpose()?;
+
+        let definition = grpc_apidefinition::HttpApiDefinition { security, routes };
 
         let created_at = prost_types::Timestamp::from(SystemTime::from(value.created_at));
 
@@ -653,12 +645,13 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::v1::ApiDefinitionRequest) -> Result<Self, Self::Error> {
-        let routes = match value.definition.ok_or("definition is missing")? {
+        let routes: Vec<RouteRequest> = match value.definition.ok_or("definition is missing")? {
             grpc_apidefinition::v1::api_definition_request::Definition::Http(http) => http
                 .routes
                 .into_iter()
-                .map(crate::gateway_api_definition::http::Route::try_from)
-                .collect::<Result<Vec<crate::gateway_api_definition::http::Route>, String>>()?,
+                .map(crate::gateway_api_definition::http::RouteRequest::try_from)
+                .collect::<Result<Vec<crate::gateway_api_definition::http::RouteRequest>, String>>(
+                )?,
         };
 
         let id = value.id.ok_or("Api Definition ID is missing")?;
@@ -666,8 +659,9 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
         let result = crate::gateway_api_definition::http::HttpApiDefinitionRequest {
             id: ApiDefinitionId(id.value),
             version: ApiVersion(value.version),
-            routes,
+            routes: routes,
             draft: value.draft,
+            security: None, //
         };
 
         Ok(result)
@@ -681,11 +675,20 @@ impl TryFrom<crate::gateway_api_definition::http::Route> for grpc_apidefinition:
         let path = value.path.to_string();
         let binding = value.binding.into();
         let method: grpc_apidefinition::HttpMethod = value.method.into();
+        let security = value
+            .security
+            .map(|x| {
+                golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(
+                    x,
+                )
+            })
+            .transpose()?;
 
         let result = grpc_apidefinition::HttpRoute {
             method: method as i32,
             path,
             binding: Some(binding),
+            security,
         };
 
         Ok(result)
@@ -701,10 +704,21 @@ impl TryFrom<CompiledRoute> for golem_api_grpc::proto::golem::apidefinition::Com
         let binding = golem_api_grpc::proto::golem::apidefinition::CompiledGatewayBinding::from(
             value.binding,
         );
+
+        let security = value
+            .security
+            .map(|x| {
+                golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(
+                    x,
+                )
+            })
+            .transpose()?;
+
         Ok(Self {
             method,
             path,
             binding: Some(binding),
+            security,
         })
     }
 }
@@ -718,10 +732,16 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::CompiledHttpRoute> for
         let method = MethodPattern::try_from(value.method)?;
         let path = AllPathPatterns::parse(value.path.as_str()).map_err(|e| e.to_string())?;
         let binding = value.binding.ok_or("binding is missing")?.try_into()?;
+        let security = value
+            .security
+            .map(|x| SecuritySchemeWithProviderMetadata::try_from(x))
+            .transpose()?;
+
         Ok(CompiledRoute {
             method,
             path,
             binding,
+            security,
         })
     }
 }
@@ -742,7 +762,7 @@ impl From<MethodPattern> for grpc_apidefinition::HttpMethod {
     }
 }
 
-impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::http::Route {
+impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::http::RouteRequest {
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::HttpRoute) -> Result<Self, Self::Error> {
@@ -751,10 +771,23 @@ impl TryFrom<grpc_apidefinition::HttpRoute> for crate::gateway_api_definition::h
 
         let method: MethodPattern = value.method.try_into()?;
 
-        let result = crate::gateway_api_definition::http::Route {
+        let security = value
+            .security
+            .map(|x| {
+                let security_scheme_result = x
+                    .security_scheme
+                    .ok_or("Missing security scheme".to_string());
+                security_scheme_result.map(|x| SecuritySchemeReference {
+                    security_scheme_identifier: SecuritySchemeIdentifier::new(x.scheme_identifier),
+                })
+            })
+            .transpose()?;
+
+        let result = crate::gateway_api_definition::http::RouteRequest {
             method,
             path,
             binding,
+            security,
         };
 
         Ok(result)

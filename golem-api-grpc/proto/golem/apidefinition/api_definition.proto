@@ -29,6 +29,12 @@ message ApiDefinitionList {
 // Used in api definition repo and needs to be backward compatible
 message HttpApiDefinition {
   repeated HttpRoute routes = 1;
+  optional SecurityWithProviderMetadata security = 2;
+}
+
+// Used in api definition repo and needs to be backward compatible
+message SecuritySchemeReference {
+  string security_scheme_identifier = 1;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -46,6 +52,7 @@ message HttpRoute {
   HttpMethod method = 1;
   string path = 2;
   GatewayBinding binding = 3;
+  optional SecurityWithProviderMetadata security = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -53,6 +60,7 @@ message CompiledHttpRoute {
    HttpMethod method = 1;
    string path = 2;
    CompiledGatewayBinding binding = 3;
+   optional SecurityWithProviderMetadata security = 4;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -134,3 +142,55 @@ message CorsPreflight {
   optional uint64 max_age = 5;
   optional bool allow_credentials = 6;
 }
+
+message SecurityWithProviderMetadata {
+  SecurityScheme security_scheme = 1;
+  IdentityProviderMetadata identity_provider_metadata = 2;
+}
+
+message SecurityScheme {
+  string provider_name = 1;
+  string scheme_identifier = 2;
+  string client_id = 3;
+  string client_secret = 4;
+  string redirect_url = 5;
+  repeated string scopes = 6;
+  string issue_url = 7;
+}
+
+message IdentityProviderMetadata {
+  string metadata = 1;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -50,7 +50,7 @@ impl RegisterApiDefinitionApi {
         let record = recorded_http_api_request!("import_open_api",);
 
         let response = {
-            let definition = payload.0.to_http_api_definition().map_err(|e| {
+            let definition = payload.0.to_http_api_definition_request().map_err(|e| {
                 error!("Invalid Spec {}", e);
                 ApiEndpointError::bad_request(safe(e))
             })?;
