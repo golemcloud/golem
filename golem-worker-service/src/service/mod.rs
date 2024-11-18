@@ -28,21 +28,22 @@ use golem_worker_service_base::service::gateway::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceDefault,
 };
 use golem_worker_service_base::service::gateway::api_definition_validator::ApiDefinitionValidatorService;
-use golem_worker_service_base::service::gateway::http_api_definition_validator::{
-    HttpApiDefinitionValidator, RouteValidationError,
-};
+use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 use golem_worker_service_base::service::worker::WorkerServiceDefault;
 
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::RetryConfig;
 
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::config::DbConfig;
 use golem_service_base::db;
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
+use golem_worker_service_base::gateway_security::GoogleIdentityProvider;
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
 };
+use golem_worker_service_base::service::gateway::security_scheme::DefaultSecuritySchemeService;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -61,9 +62,8 @@ pub struct Services {
             + Send,
     >,
     pub worker_to_http_service: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
-    pub api_definition_validator_service: Arc<
-        dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
-    >,
+    pub api_definition_validator_service:
+        Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
     pub fileserver_binding_handler:
         Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send>,
 }
@@ -185,12 +185,23 @@ impl Services {
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
+        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
+            Arc::new(GoogleIdentityProvider::default()),
+            Cache::new(
+                Some(1024),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "security_Scheme",
+            ),
+        ));
+
         let definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
         > = Arc::new(ApiDefinitionServiceDefault::new(
             component_service.clone(),
             api_definition_repo.clone(),
             api_deployment_repo.clone(),
+            security_scheme_service,
             api_definition_validator_service.clone(),
         ));
 

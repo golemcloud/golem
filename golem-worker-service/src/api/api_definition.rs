@@ -10,7 +10,6 @@ use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRe
 use golem_worker_service_base::gateway_api_definition::http::OpenApiHttpApiDefinitionRequest;
 use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionService;
-use golem_worker_service_base::service::gateway::http_api_definition_validator::RouteValidationError;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -300,11 +299,13 @@ mod test {
     use super::*;
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
+    use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
     use golem_common::config::DbSqliteConfig;
     use golem_common::model::component_constraint::FunctionConstraintCollection;
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
+    use golem_worker_service_base::gateway_security::GoogleIdentityProvider;
     use golem_worker_service_base::repo::api_definition::{
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
     };
@@ -312,6 +313,7 @@ mod test {
     use golem_worker_service_base::service::component::ComponentResult;
     use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
+    use golem_worker_service_base::service::gateway::security_scheme::DefaultSecuritySchemeService;
     use http::StatusCode;
     use poem::test::TestClient;
     use std::marker::PhantomData;
@@ -390,11 +392,22 @@ mod test {
                 api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
             ));
 
+        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
+            Arc::new(GoogleIdentityProvider::default()),
+            Cache::new(
+                Some(1024),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "security_Scheme",
+            ),
+        ));
+
         let component_service: ComponentService = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(
             component_service,
             api_definition_repo,
             api_deployment_repo,
+            security_scheme_service,
             Arc::new(HttpApiDefinitionValidator {}),
         );
 
@@ -416,6 +429,7 @@ mod test {
             version: ApiVersion("1.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
 
         let response = client
@@ -445,6 +459,7 @@ mod test {
             version: ApiVersion("42.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
 
         let response = client
@@ -466,6 +481,7 @@ mod test {
             version: ApiVersion("42.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
 
         let response = client
@@ -487,6 +503,7 @@ mod test {
             version: ApiVersion("42.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
 
         let response = client
@@ -511,6 +528,7 @@ mod test {
             version: ApiVersion("1.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
         let response = client
             .post("/v1/api/definitions")
@@ -524,6 +542,7 @@ mod test {
             version: ApiVersion("2.0".to_string()),
             routes: vec![],
             draft: false,
+            security: None,
         };
         let response = client
             .post("/v1/api/definitions")
