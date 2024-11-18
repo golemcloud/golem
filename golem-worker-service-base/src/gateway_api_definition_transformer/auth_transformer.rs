@@ -37,7 +37,8 @@ impl ApiDefinitionTransformer for AuthTransformer {
         // Add if doesn't exist
         for r in auth_call_back_routes.iter() {
             if !routes
-                .iter().any(|x| (x.path == r.path) && (x.method == r.method))
+                .iter()
+                .any(|x| (x.path == r.path) && (x.method == r.method))
             {
                 routes.push(r.clone())
             }

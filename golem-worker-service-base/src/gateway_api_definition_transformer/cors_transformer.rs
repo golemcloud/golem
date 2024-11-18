@@ -114,7 +114,9 @@ mod tests {
         AllPathPatterns, HttpApiDefinition, MethodPattern, Route,
     };
     use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-    use crate::gateway_api_definition_transformer::{ApiDefinitionTransformer, CorsTransformer};
+    use crate::gateway_api_definition_transformer::{
+        ApiDefTransformationError, ApiDefinitionTransformer, CorsTransformer,
+    };
     use crate::gateway_binding::{GatewayBinding, ResponseMapping, StaticBinding, WorkerBinding};
     use crate::gateway_middleware::{Cors, HttpMiddleware, Middleware, Middlewares};
     use golem_common::model::ComponentId;
@@ -251,7 +253,10 @@ mod tests {
 
         let result = transformer
             .transform(&mut api_definition)
-            .map_err(|x| x.detail);
+            .map_err(|x| match x {
+                ApiDefTransformationError::InvalidRoute { detail, .. } => detail,
+                ApiDefTransformationError::Custom(custom) => custom.to_string(),
+            });
 
         assert_eq!(result.err(), Some("Invalid binding for resource '/test' with method 'Get'. CORS binding is only supported for the OPTIONS method.".to_string()));
     }
