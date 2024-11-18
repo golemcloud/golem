@@ -26,7 +26,6 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::Value;
-use golem_worker_executor_base::services::rdbms::RdbmsType;
 use serde_json::json;
 use tokio::task::JoinSet;
 use uuid::Uuid;

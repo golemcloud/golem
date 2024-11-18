@@ -182,3 +182,18 @@ impl Display for Error {
         }
     }
 }
+
+pub(crate) fn get_plain_values<T>(
+    values: Vec<DbValuePrimitive>,
+    f: impl Fn(DbValuePrimitive) -> Option<T>,
+) -> Result<Vec<T>, String> {
+    let mut result: Vec<T> = Vec::new();
+    for value in values {
+        if let Some(v) = f(value.clone()) {
+            result.push(v);
+        } else {
+            Err(format!("Unsupported array value: {:?}", value.clone()))?
+        }
+    }
+    Ok(result)
+}
