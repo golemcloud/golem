@@ -39,7 +39,7 @@ impl HttpAuthorizer {
                 .0
                 .get(SessionId(state.clone()), DataKey::nonce())
                 .await
-                .map_err(|err| MiddlewareFailure::InternalServerError(err))?;
+                .map_err(MiddlewareFailure::InternalServerError)?;
 
             if let Some(nonce) = nonce.and_then(|x| x.as_string()) {
                 let result: Result<&CoreIdTokenClaims, ClaimsVerificationError> =
@@ -50,14 +50,14 @@ impl HttpAuthorizer {
                         internal::store_claims_in_session_store(
                             &SessionId(state.clone()),
                             claims,
-                            &session_store,
+                            session_store,
                         )
                         .await?;
                         Ok(MiddlewareSuccess::PassThrough)
                     }
                     Err(ClaimsVerificationError::Expired(_)) => {
                         internal::redirect(
-                            &session_store,
+                            session_store,
                             &input,
                             identity_provider,
                             &open_id_client,
@@ -124,12 +124,12 @@ mod internal {
             .0
             .insert(session_id.clone(), nonce_data_key, nonce_data_value)
             .await
-            .map_err(|err| MiddlewareFailure::InternalServerError(err))?;
+            .map_err(MiddlewareFailure::InternalServerError)?;
         session_store
             .0
             .insert(session_id, redirect_url_data_key, redirect_url_data_value)
             .await
-            .map_err(|err| MiddlewareFailure::InternalServerError(err))?;
+            .map_err(MiddlewareFailure::InternalServerError)?;
 
         let response = poem::Response::builder();
         let result = response
@@ -155,6 +155,6 @@ mod internal {
             .0
             .insert(session_id.clone(), claims_data_key, claims_data_value)
             .await
-            .map_err(|err| MiddlewareFailure::InternalServerError(err))
+            .map_err(MiddlewareFailure::InternalServerError)
     }
 }

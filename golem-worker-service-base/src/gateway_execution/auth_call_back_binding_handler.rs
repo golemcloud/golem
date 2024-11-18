@@ -90,7 +90,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
     async fn handle_auth_call_back(
         &self,
         http_request_details: &HttpRequestDetails,
-        security_scheme_internal: &SecuritySchemeWithProviderMetadata,
+        security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         session_store: &GatewaySessionStore,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
         let query_params = &http_request_details.request_path_values;
@@ -126,25 +126,25 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .as_string()
             .ok_or(AuthorisationError::NonceNotFound)?;
 
-        let open_id_client = security_scheme_internal
+        let open_id_client = security_scheme_with_metadata
             .identity_provider()
-            .get_client(&security_scheme_internal)
-            .map_err(|err| AuthorisationError::IdentityProviderError(err))?;
+            .get_client(security_scheme_with_metadata)
+            .map_err(AuthorisationError::IdentityProviderError)?;
 
-        let token_response = security_scheme_internal
+        let token_response = security_scheme_with_metadata
             .identity_provider()
             .exchange_code_for_tokens(&open_id_client, &authorisation_code)
             .await
-            .map_err(|err| AuthorisationError::FailedCodeExchange(err))?;
+            .map_err(AuthorisationError::FailedCodeExchange)?;
 
-        let claims = security_scheme_internal
+        let claims = security_scheme_with_metadata
             .identity_provider()
             .get_claims(
                 &open_id_client,
                 token_response.clone(),
                 &Nonce::new(nonce.clone()),
             )
-            .map_err(|err| AuthorisationError::ClaimFetchError(err))?;
+            .map_err(AuthorisationError::ClaimFetchError)?;
 
         let _ = session_store
             .0

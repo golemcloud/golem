@@ -28,7 +28,7 @@ pub struct GatewaySessionStore(pub Arc<dyn GatewayData + Send + Sync>);
 
 impl GatewaySessionStore {
     pub fn in_memory() -> Self {
-        GatewaySessionStore(Arc::new(InMemoryGatewaySession::new()))
+        GatewaySessionStore(Arc::new(InMemoryGatewaySession::default()))
     }
 }
 
@@ -58,18 +58,18 @@ impl DataValue {
 }
 
 // Should be used only for testing
-
 pub struct InMemoryGatewaySession {
     data: Arc<Mutex<HashMap<SessionId, HashMap<DataKey, DataValue>>>>,
 }
 
-impl InMemoryGatewaySession {
-    pub fn new() -> Self {
+impl Default for InMemoryGatewaySession {
+    fn default() -> Self {
         InMemoryGatewaySession {
             data: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
+
 
 #[async_trait]
 impl GatewayData for InMemoryGatewaySession {

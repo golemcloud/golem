@@ -31,7 +31,7 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
         _request_details: &GatewayRequestDetails,
         _session_store: &GatewaySessionStore,
     ) -> poem::Response {
-        let response = match self {
+        match self {
             Ok(data) => Body::from_bytes_stream(data.data)
                 .with_content_type(data.binding_details.content_type.to_string())
                 .with_status(data.binding_details.status_code)
@@ -45,9 +45,7 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
             Err(FileServerBindingError::WorkerServiceError(inner)) => {
                 WorkerApiBaseError::from(inner).into_response()
             }
-        };
-
-        response
+        }
     }
 }
 

@@ -195,9 +195,9 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                 let authorisation_result = self
                     .auth_call_back_binding_handler
                     .handle_auth_call_back(
-                        &http_request,
-                        &security_scheme_with_metadata,
-                        &session_store,
+                        http_request,
+                        security_scheme_with_metadata,
+                        session_store,
                     )
                     .await;
 
