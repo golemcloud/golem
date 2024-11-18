@@ -27,11 +27,15 @@ use golem_worker_service_base::service::gateway::http_api_definition_validator::
 };
 
 use chrono::Utc;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_wasm_ast::analysis::analysed_type::str;
 use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
+};
+use golem_worker_service_base::service::gateway::security_scheme::{
+    DefaultSecuritySchemeService, SecuritySchemeService,
 };
 use std::sync::Arc;
 use testcontainers::runners::AsyncRunner;
@@ -213,12 +217,24 @@ async fn test_services(
 
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
+    let security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> =
+        Arc::new(DefaultSecuritySchemeService::new(
+            Arc::new(golem_worker_service_base::gateway_security::GoogleIdentityProvider::new()),
+            Cache::new(
+                Some(100),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "security_scheme_cache",
+            ),
+        ));
+
     let definition_service: Arc<
         dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
     > = Arc::new(ApiDefinitionServiceDefault::new(
         component_service.clone(),
         api_definition_repo.clone(),
         api_deployment_repo.clone(),
+        security_scheme_service,
         api_definition_validator_service.clone(),
     ));
 
@@ -551,10 +567,7 @@ async fn test_deployment_conflict(
     assert!(delete_result.is_err());
     assert_eq!(
         delete_result.unwrap_err().to_string(),
-        ApiDefinitionError::<RouteValidationError>::ApiDefinitionDeployed(
-            "test-conflict.com".to_string()
-        )
-        .to_string()
+        ApiDefinitionError::ApiDefinitionDeployed("test-conflict.com".to_string()).to_string()
     );
 }
 
@@ -640,8 +653,7 @@ async fn test_definition_crud(
     assert!(update_result.is_err());
     assert_eq!(
         update_result.unwrap_err().to_string(),
-        ApiDefinitionError::<RouteValidationError>::ApiDefinitionNotDraft(def1v1_upd.id)
-            .to_string()
+        ApiDefinitionError::ApiDefinitionNotDraft(def1v1_upd.id).to_string()
     );
 
     let update_result = definition_service

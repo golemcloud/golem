@@ -247,6 +247,7 @@ mod test {
     use crate::gateway_binding::{GatewayRequestDetails, HttpRequestDetails};
     use crate::gateway_execution::gateway_session::GatewaySessionStore;
     use crate::gateway_execution::to_response::ToResponse;
+    use crate::gateway_execution::to_response_failure::ToResponseFailure;
     use crate::gateway_middleware::Middlewares;
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
@@ -326,10 +327,12 @@ mod test {
         let evaluation_result: RibResult =
             RibResult::Val(TypeAnnotatedValue::Str("Healthy".to_string()));
 
-        let http_response: poem::Response = evaluation_result.to_response(
-            &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
-            &GatewaySessionStore::in_memory(),
-        );
+        let http_response: poem::Response = evaluation_result
+            .to_response(
+                &GatewayRequestDetails::Http(HttpRequestDetails::empty()),
+                &GatewaySessionStore::in_memory(),
+            )
+            .await;
 
         let (response_parts, body) = http_response.into_parts();
         let body = body.into_string().await.unwrap();

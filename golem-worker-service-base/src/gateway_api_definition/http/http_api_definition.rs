@@ -623,9 +623,15 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
     use crate::api;
-    use crate::gateway_security::{SecurityScheme, SecuritySchemeIdentifier};
-    use crate::service::gateway::security_scheme::SecuritySchemeServiceError;
+    use crate::gateway_security::{
+        GoogleIdentityProvider, SecurityScheme, SecuritySchemeIdentifier,
+    };
+    use crate::service::gateway::security_scheme::{
+        DefaultSecuritySchemeService, SecuritySchemeServiceError,
+    };
+    use async_trait::async_trait;
     use chrono::{DateTime, Utc};
+    use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
     use golem_service_base::auth::DefaultNamespace;
     use test_r::core::ShouldPanic::No;
     use test_r::test;
@@ -839,6 +845,7 @@ mod tests {
 
     struct NoopSecuritySchemeService {}
 
+    #[async_trait]
     impl SecuritySchemeService<DefaultNamespace> for NoopSecuritySchemeService {
         async fn get(
             &self,
@@ -859,9 +866,20 @@ mod tests {
     }
 
     #[test]
-    fn test_api_spec_proto_conversion() {
-        fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
-            let security_scheme_service = Arc::new(NoopSecuritySchemeService {});
+    async fn test_api_spec_proto_conversion() {
+        async fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
+            let security_scheme_service: Arc<
+                dyn SecuritySchemeService<DefaultNamespace> + Send + Sync,
+            > = Arc::new(DefaultSecuritySchemeService::new(
+                Arc::new(GoogleIdentityProvider::new()),
+                Cache::new(
+                    Some(100),
+                    FullCacheEvictionMode::None,
+                    BackgroundEvictionMode::None,
+                    "security_scheme",
+                ),
+            ));
+
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let api_http_definition_request: api::HttpApiDefinitionRequest =
                 serde_yaml::from_value(yaml.clone()).unwrap();
@@ -873,7 +891,9 @@ mod tests {
                 core_http_definition_request,
                 timestamp,
                 &security_scheme_service,
-            );
+            )
+            .await
+            .unwrap();
             let proto: grpc_apidefinition::ApiDefinition =
                 core_http_definition.clone().try_into().unwrap();
             let decoded: HttpApiDefinition = proto.try_into().unwrap();

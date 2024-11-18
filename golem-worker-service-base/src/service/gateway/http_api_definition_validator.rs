@@ -136,6 +136,7 @@ mod tests {
                     response_mapping: ResponseMapping(Expr::literal("sample")),
                     middleware: None,
                 }),
+                security: None,
             }
         }
 

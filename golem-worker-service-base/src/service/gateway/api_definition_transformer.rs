@@ -147,6 +147,7 @@ mod tests {
             method: MethodPattern::Options,
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Static(StaticBinding::from_http_cors(cors())),
+            security: None,
         }
     }
 
@@ -155,6 +156,7 @@ mod tests {
             method: MethodPattern::Get, // Should be OPTIONS
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Static(StaticBinding::from_http_cors(cors())),
+            security: None,
         }
     }
 
@@ -174,6 +176,7 @@ mod tests {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Default(worker_binding.clone()),
+            security: None,
         }
     }
 
@@ -195,6 +198,7 @@ mod tests {
             method: MethodPattern::Get,
             path: AllPathPatterns::parse("/test").unwrap(),
             binding: GatewayBinding::Default(worker_binding.clone()),
+            security: None,
         }
     }
 
@@ -227,6 +231,7 @@ mod tests {
             version: ApiVersion::new("v1"),
             draft: false,
             created_at: chrono::Utc::now(),
+            security: None,
         };
 
         api_definition.transform().unwrap();
@@ -263,6 +268,7 @@ mod tests {
             version: ApiVersion::new("v1"),
             draft: false,
             created_at: chrono::Utc::now(),
+            security: None,
         };
 
         let result = api_definition.transform().map_err(|x| x.detail);
@@ -290,6 +296,7 @@ mod tests {
             version: ApiVersion::new("v1"),
             draft: false,
             created_at: chrono::Utc::now(),
+            security: None,
         };
 
         let result = api_definition.transform();

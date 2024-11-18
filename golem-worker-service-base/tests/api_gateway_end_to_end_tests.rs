@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use test_r::test;
 
 test_r::enable!();
@@ -9,10 +10,12 @@ use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefi
 use crate::internal::TestResponse;
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
+use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_binding_executor::{
     DefaultGatewayBindingExecutor, GatewayBindingExecutor,
 };
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::GatewayBindingResolver;
+use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessionStore;
 use golem_worker_service_base::gateway_middleware::Cors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
 use golem_worker_service_base::service::gateway::api_definition_transformer::ApiDefinitionTransformer;
@@ -32,11 +35,8 @@ async fn execute(
     api_request: &InputHttpRequest,
     api_specification: &HttpApiDefinition,
 ) -> TestResponse {
-    let mut api_specification = api_specification.clone();
-    api_specification.transform().unwrap();
-
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
-        &api_specification,
+        api_specification,
         &internal::get_component_metadata(),
         &DefaultNamespace::default(),
     )
@@ -50,9 +50,12 @@ async fn execute(
     let test_executor = DefaultGatewayBindingExecutor::new(
         internal::get_test_rib_interpreter(),
         internal::get_test_file_server_binding_handler(),
+        Arc::new(DefaultAuthCallBack),
     );
 
-    let poem_response: poem::Response = test_executor.execute_binding(&resolved_route).await;
+    let poem_response: poem::Response = test_executor
+        .execute_binding(&resolved_route, GatewaySessionStore::in_memory())
+        .await;
     TestResponse::from_live_response(poem_response).await
 }
 
@@ -72,7 +75,7 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -109,7 +112,7 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     .unwrap();
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_cors_preflight_binding("foo/{user-id}", &cors);
+        get_api_spec_cors_preflight_binding("foo/{user-id}", &cors).await;
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -124,7 +127,7 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
         get_preflight_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_cors_preflight_binding_default_response("foo/{user-id}");
+        get_api_spec_cors_preflight_binding_default_response("foo/{user-id}").await;
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -158,7 +161,8 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
             "foo/{user-id}",
             worker_name,
             response_mapping,
-        );
+        )
+        .await;
 
     let preflight_response = execute(&preflight_request, &api_specification).await;
     let actual_response = execute(&api_request, &api_specification).await;
@@ -209,7 +213,8 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
         worker_name,
         response_mapping,
         &cors,
-    );
+    )
+    .await;
 
     let preflight_response = execute(&preflight_request, &api_specification).await;
     let actual_response = execute(&api_request, &api_specification).await;
@@ -252,7 +257,8 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}?{token-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("foo/{user-id}?{token-id}", worker_name, response_mapping)
+            .await;
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -301,7 +307,7 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -349,7 +355,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -411,7 +417,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -471,7 +477,7 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
         "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping);
+        get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -511,7 +517,7 @@ async fn test_api_gateway_rib_input_from_request_details() {
             "#;
 
         let api_specification: HttpApiDefinition =
-            get_api_spec_worker_binding(definition_path, worker_name, response_mapping);
+            get_api_spec_worker_binding(definition_path, worker_name, response_mapping).await;
 
         let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
             &api_specification,
@@ -554,7 +560,8 @@ async fn test_api_gateway_idempotency_key_resolution() {
             "getcartcontent/{cart-id}",
             "${let x: u64 = request.path.cart-id; \"shopping-cart-${x}\"}",
             expression,
-        );
+        )
+        .await;
 
         let compiled_api_spec = CompiledHttpApiDefinition::from_http_api_definition(
             &api_specification,
@@ -617,7 +624,7 @@ fn get_preflight_api_request(
     }
 }
 
-fn get_api_spec_worker_binding(
+async fn get_api_spec_worker_binding(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
@@ -650,10 +657,20 @@ fn get_api_spec_worker_binding(
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
+
+    HttpApiDefinition::from_http_api_definition_request(
+        &DefaultNamespace(),
+        core_request,
+        create_at,
+        &internal::get_security_scheme_service(),
+    )
+    .await
+    .unwrap()
 }
 
-fn get_api_spec_cors_preflight_binding_default_response(path_pattern: &str) -> HttpApiDefinition {
+async fn get_api_spec_cors_preflight_binding_default_response(
+    path_pattern: &str,
+) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
           id: users-api
@@ -676,10 +693,17 @@ fn get_api_spec_cors_preflight_binding_default_response(path_pattern: &str) -> H
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
+    HttpApiDefinition::from_http_api_definition_request(
+        &DefaultNamespace(),
+        core_request,
+        create_at,
+        &internal::get_security_scheme_service(),
+    )
+    .await
+    .unwrap()
 }
 
-fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) -> HttpApiDefinition {
+async fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) -> HttpApiDefinition {
     let yaml_string = format!(
         r#"
           id: users-api
@@ -717,10 +741,17 @@ fn get_api_spec_cors_preflight_binding(path_pattern: &str, cors: &Cors) -> HttpA
         { http_api_definition_request.try_into().unwrap() };
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
+    HttpApiDefinition::from_http_api_definition_request(
+        &DefaultNamespace(),
+        core_request,
+        create_at,
+        &internal::get_security_scheme_service(),
+    )
+    .await
+    .unwrap()
 }
 
-fn get_api_spec_for_cors_preflight_and_actual_endpoint(
+async fn get_api_spec_for_cors_preflight_and_actual_endpoint(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
@@ -776,10 +807,17 @@ fn get_api_spec_for_cors_preflight_and_actual_endpoint(
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
+    HttpApiDefinition::from_http_api_definition_request(
+        &DefaultNamespace(),
+        core_request,
+        create_at,
+        &internal::get_security_scheme_service(),
+    )
+    .await
+    .unwrap()
 }
 
-fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
+async fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
@@ -816,12 +854,21 @@ fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
-    HttpApiDefinition::from_http_api_definition_request(core_request, create_at)
+    HttpApiDefinition::from_http_api_definition_request(
+        &DefaultNamespace(),
+        core_request,
+        create_at,
+        &internal::get_security_scheme_service(),
+    )
+    .await
+    .unwrap()
 }
 
 mod internal {
     use async_trait::async_trait;
+    use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
     use golem_common::model::ComponentId;
+    use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
     use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
     use golem_wasm_ast::analysis::{
@@ -843,6 +890,10 @@ mod internal {
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
+    use golem_worker_service_base::gateway_security::GoogleIdentityProvider;
+    use golem_worker_service_base::service::gateway::security_scheme::{
+        DefaultSecuritySchemeService, SecuritySchemeService,
+    };
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
@@ -852,6 +903,19 @@ mod internal {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
+
+    pub(crate) fn get_security_scheme_service(
+    ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
+        Arc::new(DefaultSecuritySchemeService::new(
+            Arc::new(GoogleIdentityProvider::new()),
+            Cache::new(
+                Some(100),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "secuity_scheme",
+            ),
+        ))
+    }
 
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}
 
