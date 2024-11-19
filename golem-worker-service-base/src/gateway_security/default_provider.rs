@@ -7,17 +7,22 @@ use openidconnect::core::{
 };
 use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
 
-pub struct DefaultIdentityProvider {}
+// All providers can reuse DefaultIdentityProvider if provided internally
+pub struct DefaultIdentityProvider;
 
 #[async_trait]
 impl IdentityProvider for DefaultIdentityProvider {
     // To be called during API definition registration to then store them in the database
     async fn get_provider_metadata(
         &self,
-        issuer_url: &IssuerUrl,
+        provider: &Provider,
     ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
+        let issue_url = provider.issue_url().map_err(|err| {
+            IdentityProviderError::FailedToDiscoverProviderMetadata(err.to_string())
+        })?;
+
         let provide_metadata = CoreProviderMetadata::discover_async(
-            issuer_url.clone(),
+            issue_url,
             openidconnect::reqwest::async_http_client,
         )
         .await

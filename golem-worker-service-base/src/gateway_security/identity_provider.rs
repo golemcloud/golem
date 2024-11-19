@@ -1,5 +1,5 @@
 use crate::gateway_security::open_id_client::OpenIdClient;
-use crate::gateway_security::{GolemIdentityProviderMetadata, SecuritySchemeWithProviderMetadata};
+use crate::gateway_security::{GolemIdentityProviderMetadata, Provider, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
@@ -7,19 +7,17 @@ use std::fmt::Display;
 use url::Url;
 
 // A high level abstraction of an identity-provider, that expose
-// necessary functionalities that gets called at various points in gateway security integration
-// get_provider_metadata: Fetches the provider metadata from the issuer url, and this must be called
-// during the registration of the security scheme with golem
-
+// necessary functionalities that gets called at various points in gateway security integration.
 #[async_trait]
 pub trait IdentityProvider {
+
     // Fetches the provider metadata from the issuer url, and this must be called
     // during the registration of the security scheme with golem.
     // The security scheme regisration stores the provider metadata, along with the security scheme
     // in the security scheme store of Golem
     async fn get_provider_metadata(
         &self,
-        issuer_url: &IssuerUrl,
+        provider: &Provider,
     ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError>;
 
     // Exchange of Code token happens during the auth_call_back phase of the OpenID workflow

@@ -1,46 +1,73 @@
 use crate::gateway_security::google::GoogleIdentityProvider;
 use crate::gateway_security::IdentityProvider;
 use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
+use std::sync::Arc;
+use crate::gateway_security::default_provider::DefaultIdentityProvider;
 
 // SecurityScheme shouldn't have Serialize or Deserialize
 #[derive(Debug, Clone)]
 pub struct SecurityScheme {
-    provider_name: ProviderName,
+    provider: Provider,
     scheme_identifier: SecuritySchemeIdentifier,
     client_id: ClientId,
     client_secret: ClientSecret, // secret type macros and therefore already redacted
     redirect_url: RedirectUrl,
     scopes: Vec<Scope>,
-    issuer_url: IssuerUrl,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Provider {
+    Google,
+    Facebook,
+    Microsoft,
+    Gitlab
+}
+
+impl Provider {
+    pub fn issue_url(&self) -> Result<IssuerUrl, String> {
+        match self {
+            Provider::Google => IssuerUrl::new("https://accounts.google.com".to_string())
+                .map_err(|err| format!("Invalid Issuer URL for Google, {}", err)),
+            Provider::Facebook => IssuerUrl::new("https://www.facebook.com".to_string())
+                .map_err(|err| format!("Invalid Issuer URL for Facebook, {}", err)),
+            Provider::Microsoft => IssuerUrl::new("https://login.microsoftonline.com".to_string())
+                .map_err(|err| format!("Invalid Issuer URL for Microsoft, {}", err)),
+            Provider::Gitlab => IssuerUrl::new("https://gitlab.com".to_string())
+                .map_err(|err| format!("Invalid Issuer URL for Gitlab, {}", err)),
+        }
+    }
+}
+
+impl Display for Provider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Provider::Google => write!(f, "google"),
+            Provider::Facebook => write!(f, "facebook"),
+            Provider::Microsoft => write!(f, "microsoft"),
+            Provider::Gitlab => write!(f, "gitlab"),
+        }
+    }
 }
 
 impl PartialEq for SecurityScheme {
     fn eq(&self, other: &Self) -> bool {
-        self.provider_name == other.provider_name
+        self.provider == other.provider
             && self.scheme_identifier == other.scheme_identifier
             && self.client_id == other.client_id
             && self.client_secret.secret() == other.client_secret.secret()
             && self.redirect_url == other.redirect_url
             && self.scopes == other.scopes
-            && self.issuer_url == other.issuer_url
     }
 }
 
 impl SecurityScheme {
-    pub fn issue_url(&self) -> IssuerUrl {
-        self.issuer_url.clone()
-    }
-
-    pub fn provider_name(&self) -> ProviderName {
-        self.provider_name.clone()
-    }
-
-    pub fn provider(&self) -> impl IdentityProvider {
-        if self.provider_name.0 == "google" {
-            GoogleIdentityProvider::default()
-        } else {
-            panic!("Make it ADT"); // TODO
+    pub fn provider(&self) -> Arc<dyn IdentityProvider + Send + Sync> {
+        match self.provider {
+            Provider::Google => Arc::new(DefaultIdentityProvider),
+            Provider::Facebook => Arc::new(DefaultIdentityProvider),
+            Provider::Gitlab => Arc::new(DefaultIdentityProvider),
+            Provider::Microsoft => Arc::new(DefaultIdentityProvider),
         }
     }
 
@@ -101,13 +128,12 @@ impl SecurityScheme {
     }
 
     fn from(
-        provider_name: ProviderName,
+        provider: Provider,
         scheme_id: &str,
         client_id: &str,
         client_secret: &str,
         redirect_uri: &str,
         scope: Vec<&str>,
-        issuer_url: IssuerUrl,
     ) -> Result<SecurityScheme, String> {
         let redirect_url = RedirectUrl::new(redirect_uri.to_string())
             .map_err(|err| format!("Invalid redirect URL, {} {}", redirect_uri, err))?;
@@ -133,13 +159,12 @@ impl SecurityScheme {
         let scopes = scope.iter().map(|s| Scope::new(s.to_string())).collect();
 
         Ok(SecurityScheme {
-            provider_name,
+            provider,
             scheme_identifier,
             client_id,
             client_secret,
             redirect_url,
             scopes,
-            issuer_url,
         })
     }
 
@@ -155,13 +180,12 @@ impl SecurityScheme {
             })?;
 
         Self::from(
-            ProviderName("google".to_string()),
+            Provider::Google,
             scheme_id,
             client_id,
             client_secret,
             redirect_uri,
             vec!["openid", "email", "profile"],
-            issuer_url,
         )
     }
 }
@@ -185,10 +209,9 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityScheme> for Se
         let scopes: Vec<Scope> = value.scopes.iter().map(|x| Scope::new(x.clone())).collect();
 
         Ok(SecurityScheme {
+            provider,
             client_secret,
             client_id,
-            issuer_url,
-            provider_name,
             scheme_identifier,
             redirect_url,
             scopes,
@@ -199,7 +222,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityScheme> for Se
 impl From<SecurityScheme> for golem_api_grpc::proto::golem::apidefinition::SecurityScheme {
     fn from(value: SecurityScheme) -> Self {
         golem_api_grpc::proto::golem::apidefinition::SecurityScheme {
-            provider_name: value.provider_name.to_string(),
+            provider_name: value.provider.to_string(),
             scheme_identifier: value.scheme_identifier.to_string(),
             client_id: value.client_id.to_string(),
             client_secret: value.client_secret.secret().clone(),

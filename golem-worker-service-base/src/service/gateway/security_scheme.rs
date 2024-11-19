@@ -89,6 +89,7 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
         namespace: &Namespace,
         security_scheme: &SecurityScheme,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
+
         let provider_metadata = self
             .identity_provider
             .get_provider_metadata(&security_scheme.issue_url())

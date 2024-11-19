@@ -94,6 +94,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         session_store: &GatewaySessionStore,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
         let query_params = &http_request_details.request_path_values;
+        let identity_provider = security_scheme_with_metadata.identity_provider();
 
         let code_value = query_params
             .get("code")
@@ -126,19 +127,16 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .as_string()
             .ok_or(AuthorisationError::NonceNotFound)?;
 
-        let open_id_client = security_scheme_with_metadata
-            .identity_provider()
+        let open_id_client = identity_provider
             .get_client(security_scheme_with_metadata)
             .map_err(AuthorisationError::IdentityProviderError)?;
 
-        let token_response = security_scheme_with_metadata
-            .identity_provider()
+        let token_response = identity_provider
             .exchange_code_for_tokens(&open_id_client, &authorisation_code)
             .await
             .map_err(AuthorisationError::FailedCodeExchange)?;
 
-        let claims = security_scheme_with_metadata
-            .identity_provider()
+        let claims = identity_provider
             .get_claims(
                 &open_id_client,
                 token_response.clone(),
