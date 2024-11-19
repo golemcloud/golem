@@ -392,15 +392,8 @@ mod test {
                 api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
             ));
 
-        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
-            Arc::new(GoogleIdentityProvider::default()),
-            Cache::new(
-                Some(1024),
-                FullCacheEvictionMode::None,
-                BackgroundEvictionMode::None,
-                "security_Scheme",
-            ),
-        ));
+        let security_scheme_service =
+            Arc::new(DefaultSecuritySchemeService::new());
 
         let component_service: ComponentService = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(

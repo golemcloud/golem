@@ -1,4 +1,7 @@
-use crate::gateway_security::{GolemIdentityProviderMetadata, IdentityProvider, SecurityScheme};
+use crate::gateway_security::default_provider::DefaultIdentityProvider;
+use crate::gateway_security::{
+    GolemIdentityProviderMetadata, IdentityProvider, Provider, SecurityScheme,
+};
 use std::sync::Arc;
 
 // This can exist as part of the middleware to initiate the authorisation workflow
@@ -12,7 +15,7 @@ pub struct SecuritySchemeWithProviderMetadata {
 
 impl SecuritySchemeWithProviderMetadata {
     pub fn identity_provider(&self) -> Arc<dyn IdentityProvider + Send + Sync> {
-        Arc::new(self.security_scheme.provider())
+        self.identity_provider()
     }
 }
 

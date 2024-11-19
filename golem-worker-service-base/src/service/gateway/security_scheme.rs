@@ -3,7 +3,7 @@ use crate::gateway_security::{
     SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
-use golem_common::cache::{Cache, SimpleCache};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use std::fmt::Display;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -50,18 +50,18 @@ pub type SecuritySchemeCache<N> = Cache<
     SecuritySchemeServiceError,
 >;
 pub struct DefaultSecuritySchemeService<Namespace> {
-    identity_provider: Arc<dyn IdentityProvider + Send + Sync>, // TODO; Avoid this from being here
     cache: SecuritySchemeCache<Namespace>,
 }
 
-impl<Namespace> DefaultSecuritySchemeService<Namespace> {
-    pub fn new(
-        identity_provider: Arc<dyn IdentityProvider + Send + Sync>,
-        cache: SecuritySchemeCache<Namespace>,
-    ) -> Self {
+impl<Namespace: Send + Sync + Clone + Hash + Eq + 'static> DefaultSecuritySchemeService<Namespace> {
+    pub fn new() -> Self {
         DefaultSecuritySchemeService {
-            identity_provider,
-            cache,
+            cache: Cache::new(
+                Some(1024),
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "security_Scheme",
+            ),
         }
     }
 }
@@ -89,10 +89,10 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
         namespace: &Namespace,
         security_scheme: &SecurityScheme,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
+        let identity_provider = security_scheme.identity_provider();
 
-        let provider_metadata = self
-            .identity_provider
-            .get_provider_metadata(&security_scheme.issue_url())
+        let provider_metadata = identity_provider
+            .get_provider_metadata(&security_scheme.provider_type())
             .await;
 
         match provider_metadata {

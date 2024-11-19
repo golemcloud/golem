@@ -1,8 +1,10 @@
 use crate::gateway_security::open_id_client::OpenIdClient;
-use crate::gateway_security::{GolemIdentityProviderMetadata, Provider, SecuritySchemeWithProviderMetadata};
+use crate::gateway_security::{
+    GolemIdentityProviderMetadata, Provider, SecuritySchemeWithProviderMetadata,
+};
 use async_trait::async_trait;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
-use openidconnect::{AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
+use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
 use std::fmt::Display;
 use url::Url;
 
@@ -10,7 +12,6 @@ use url::Url;
 // necessary functionalities that gets called at various points in gateway security integration.
 #[async_trait]
 pub trait IdentityProvider {
-
     // Fetches the provider metadata from the issuer url, and this must be called
     // during the registration of the security scheme with golem.
     // The security scheme regisration stores the provider metadata, along with the security scheme

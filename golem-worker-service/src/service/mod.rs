@@ -186,7 +186,6 @@ impl Services {
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
         let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
-            Arc::new(GoogleIdentityProvider::default()),
             Cache::new(
                 Some(1024),
                 FullCacheEvictionMode::None,

@@ -604,11 +604,9 @@ impl From<CompiledRoute> for Route {
 mod tests {
     use super::*;
     use crate::api;
-    use crate::gateway_security::GoogleIdentityProvider;
     use crate::service::gateway::security_scheme::DefaultSecuritySchemeService;
 
     use chrono::{DateTime, Utc};
-    use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
     use golem_service_base::auth::DefaultNamespace;
     use test_r::test;
 
@@ -824,15 +822,7 @@ mod tests {
         async fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
             let security_scheme_service: Arc<
                 dyn SecuritySchemeService<DefaultNamespace> + Send + Sync,
-            > = Arc::new(DefaultSecuritySchemeService::new(
-                Arc::new(GoogleIdentityProvider::default()),
-                Cache::new(
-                    Some(100),
-                    FullCacheEvictionMode::None,
-                    BackgroundEvictionMode::None,
-                    "security_scheme",
-                ),
-            ));
+            > = Arc::new(DefaultSecuritySchemeService::new());
 
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let api_http_definition_request: api::HttpApiDefinitionRequest =

@@ -1,14 +1,13 @@
-use crate::gateway_security::google::GoogleIdentityProvider;
+use crate::gateway_security::default_provider::DefaultIdentityProvider;
 use crate::gateway_security::IdentityProvider;
 use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use crate::gateway_security::default_provider::DefaultIdentityProvider;
 
 // SecurityScheme shouldn't have Serialize or Deserialize
 #[derive(Debug, Clone)]
 pub struct SecurityScheme {
-    provider: Provider,
+    provider_type: Provider,
     scheme_identifier: SecuritySchemeIdentifier,
     client_id: ClientId,
     client_secret: ClientSecret, // secret type macros and therefore already redacted
@@ -16,12 +15,71 @@ pub struct SecurityScheme {
     scopes: Vec<Scope>,
 }
 
+// May be relaxed to just a string as we make it more configurable
 #[derive(Debug, Clone, PartialEq)]
 pub enum Provider {
     Google,
     Facebook,
     Microsoft,
-    Gitlab
+    Gitlab,
+}
+
+impl From<Provider> for golem_api_grpc::proto::golem::apidefinition::Provider {
+    fn from(value: Provider) -> Self {
+        match value {
+            Provider::Google => golem_api_grpc::proto::golem::apidefinition::Provider {
+                provider: Some(
+                    golem_api_grpc::proto::golem::apidefinition::provider::Provider::Google(
+                        golem_api_grpc::proto::golem::apidefinition::Google {},
+                    ),
+                ),
+            },
+            Provider::Facebook => golem_api_grpc::proto::golem::apidefinition::Provider {
+                provider: Some(
+                    golem_api_grpc::proto::golem::apidefinition::provider::Provider::Facebook(
+                        golem_api_grpc::proto::golem::apidefinition::Facebook {},
+                    ),
+                ),
+            },
+            Provider::Microsoft => golem_api_grpc::proto::golem::apidefinition::Provider {
+                provider: Some(
+                    golem_api_grpc::proto::golem::apidefinition::provider::Provider::Microsoft(
+                        golem_api_grpc::proto::golem::apidefinition::Microsoft {},
+                    ),
+                ),
+            },
+            Provider::Gitlab => golem_api_grpc::proto::golem::apidefinition::Provider {
+                provider: Some(
+                    golem_api_grpc::proto::golem::apidefinition::provider::Provider::Gitlab(
+                        golem_api_grpc::proto::golem::apidefinition::Gitlab {},
+                    ),
+                ),
+            },
+        }
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::apidefinition::Provider> for Provider {
+    type Error = String;
+    fn try_from(
+        value: golem_api_grpc::proto::golem::apidefinition::Provider,
+    ) -> Result<Self, String> {
+        let provider = value.provider.ok_or("Provider name missing".to_string())?;
+        match provider {
+            golem_api_grpc::proto::golem::apidefinition::provider::Provider::Google(_) => {
+                Ok(Provider::Google)
+            }
+            golem_api_grpc::proto::golem::apidefinition::provider::Provider::Facebook(_) => {
+                Ok(Provider::Facebook)
+            }
+            golem_api_grpc::proto::golem::apidefinition::provider::Provider::Microsoft(_) => {
+                Ok(Provider::Microsoft)
+            }
+            golem_api_grpc::proto::golem::apidefinition::provider::Provider::Gitlab(_) => {
+                Ok(Provider::Gitlab)
+            }
+        }
+    }
 }
 
 impl Provider {
@@ -52,7 +110,7 @@ impl Display for Provider {
 
 impl PartialEq for SecurityScheme {
     fn eq(&self, other: &Self) -> bool {
-        self.provider == other.provider
+        self.provider_type == other.provider_type
             && self.scheme_identifier == other.scheme_identifier
             && self.client_id == other.client_id
             && self.client_secret.secret() == other.client_secret.secret()
@@ -62,8 +120,12 @@ impl PartialEq for SecurityScheme {
 }
 
 impl SecurityScheme {
-    pub fn provider(&self) -> Arc<dyn IdentityProvider + Send + Sync> {
-        match self.provider {
+    pub fn provider_type(&self) -> Provider {
+        self.provider_type.clone()
+    }
+
+    pub fn identity_provider(&self) -> Arc<dyn IdentityProvider + Send + Sync> {
+        match self.provider_type() {
             Provider::Google => Arc::new(DefaultIdentityProvider),
             Provider::Facebook => Arc::new(DefaultIdentityProvider),
             Provider::Gitlab => Arc::new(DefaultIdentityProvider),
@@ -111,10 +173,6 @@ impl Display for SecuritySchemeIdentifier {
 }
 
 impl SecurityScheme {
-    pub fn issuer_url(&self) -> &IssuerUrl {
-        &self.issuer_url
-    }
-
     pub fn redirect_url(&self) -> RedirectUrl {
         self.redirect_url.clone()
     }
@@ -159,7 +217,7 @@ impl SecurityScheme {
         let scopes = scope.iter().map(|s| Scope::new(s.to_string())).collect();
 
         Ok(SecurityScheme {
-            provider,
+            provider_type: provider,
             scheme_identifier,
             client_id,
             client_secret,
@@ -198,10 +256,10 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityScheme> for Se
     ) -> Result<Self, Self::Error> {
         let client_id = ClientId::new(value.client_id);
         let client_secret = ClientSecret::new(value.client_secret);
-        let issuer_url =
-            IssuerUrl::new(value.issue_url).map_err(|err| format!("Invalid Issuer. {}", err))?;
+        let provider_proto = value.provider.ok_or("Provider name missing".to_string())?;
 
-        let provider_name = ProviderName::new(value.provider_name);
+        let provider = Provider::try_from(provider_proto)?;
+
         let scheme_identifier = SecuritySchemeIdentifier::new(value.scheme_identifier);
         let redirect_url = RedirectUrl::new(value.redirect_url)
             .map_err(|err| format!("Invalid RedirectURL. {}", err))?;
@@ -209,7 +267,7 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityScheme> for Se
         let scopes: Vec<Scope> = value.scopes.iter().map(|x| Scope::new(x.clone())).collect();
 
         Ok(SecurityScheme {
-            provider,
+            provider_type: provider,
             client_secret,
             client_id,
             scheme_identifier,
@@ -222,13 +280,14 @@ impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityScheme> for Se
 impl From<SecurityScheme> for golem_api_grpc::proto::golem::apidefinition::SecurityScheme {
     fn from(value: SecurityScheme) -> Self {
         golem_api_grpc::proto::golem::apidefinition::SecurityScheme {
-            provider_name: value.provider.to_string(),
+            provider: Some(golem_api_grpc::proto::golem::apidefinition::Provider::from(
+                value.provider_type,
+            )),
             scheme_identifier: value.scheme_identifier.to_string(),
             client_id: value.client_id.to_string(),
             client_secret: value.client_secret.secret().clone(),
             redirect_url: value.redirect_url.to_string(),
             scopes: value.scopes.iter().map(|x| x.to_string()).collect(),
-            issue_url: value.issuer_url.to_string(),
         }
     }
 }
