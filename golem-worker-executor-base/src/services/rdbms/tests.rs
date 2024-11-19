@@ -13,16 +13,19 @@
 // limitations under the License.
 
 use crate::services::rdbms::types::{
-    DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue, DbValuePrimitive,
+    DbColumn, DbColumnType, DbColumnTypePrimitive, DbRow, DbValue, DbValuePrimitive, Error,
 };
 use crate::services::rdbms::{Rdbms, RdbmsServiceDefault, RdbmsType};
 use crate::services::rdbms::{RdbmsPoolKey, RdbmsService};
+use assert2::check;
 use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
-use golem_test_framework::components::rdb::RdbConnectionString;
+use golem_test_framework::components::rdb::{RdbConnection, RdbsConnections};
+use std::collections::HashMap;
 use std::sync::Arc;
 use test_r::{test, test_dep};
+use tokio::task::JoinSet;
 use uuid::Uuid;
 
 #[test_dep]
@@ -61,8 +64,8 @@ fn rdbms_service() -> RdbmsServiceDefault {
 //             // };
 //             //
 //             // let connection = rdbms_service.postgres().create(&worker_id, &address).await;
-//             // assert!(connection.is_ok());
-//             // assert_eq!(1, expected);
+//             // check!(connection.is_ok());
+//             // check!(1, expected);
 //             // postgres_execute_test((postgres, rdbms_service, query.to_string(), expected)).await.as_result()
 //         }
 //     );
@@ -76,6 +79,19 @@ async fn postgres_execute_test_select1(
     rdbms_execute_test(
         rdbms_service.postgres(),
         &postgres.rdbs[0].host_connection_string(),
+        "SELECT 1",
+        vec![],
+        Some(1),
+    )
+    .await
+}
+
+#[test]
+async fn postgres_par_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
+    rdbms_par_test(
+        rdbms_service.postgres(),
+        postgres.host_connection_strings(),
+        3,
         "SELECT 1",
         vec![],
         Some(1),
@@ -164,6 +180,19 @@ async fn postgres_execute_test_create_insert_select(
         None,
     )
     .await;
+}
+
+#[test]
+async fn mysql_par_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
+    rdbms_par_test(
+        rdbms_service.mysql(),
+        mysql.host_connection_strings(),
+        3,
+        "SELECT 1",
+        vec![],
+        Some(0),
+    )
+    .await
 }
 
 #[test]
@@ -269,20 +298,19 @@ async fn rdbms_execute_test<T: RdbmsType>(
     params: Vec<DbValue>,
     expected: Option<u64>,
 ) {
-    let worker_id = WorkerId {
-        component_id: ComponentId::new_v4(),
-        worker_name: "test".to_string(),
-    };
+    let worker_id = new_worker_id();
     let connection = rdbms.create(&worker_id, db_address).await;
-    assert!(connection.is_ok());
+    check!(connection.is_ok());
     let pool_key = connection.unwrap();
     // println!("pool_key: {}", pool_key);
     let result = rdbms.execute(&worker_id, &pool_key, query, params).await;
-    assert!(result.is_ok());
+    check!(result.is_ok());
     if let Some(expected) = expected {
-        assert!(result.unwrap() == expected);
+        check!(result.unwrap() == expected);
     }
     let _ = rdbms.remove(&worker_id, &pool_key);
+    let exists = rdbms.exists(&worker_id, &pool_key);
+    check!(!exists);
 }
 
 async fn rdbms_query_test<T: RdbmsType>(
@@ -293,21 +321,19 @@ async fn rdbms_query_test<T: RdbmsType>(
     expected_columns: Option<Vec<DbColumn>>,
     expected_rows: Option<Vec<DbRow>>,
 ) {
-    let worker_id = WorkerId {
-        component_id: ComponentId::new_v4(),
-        worker_name: "test".to_string(),
-    };
+    let worker_id = new_worker_id();
     let connection = rdbms.create(&worker_id, db_address).await;
-    assert!(connection.is_ok());
+    check!(connection.is_ok());
     let pool_key = connection.unwrap();
-    // println!("pool_key: {}", pool_key);
+
     let result = rdbms.query(&worker_id, &pool_key, query, params).await;
-    assert!(result.is_ok());
+    check!(result.is_ok());
+
     let result = result.unwrap();
     let columns = result.get_columns().await.unwrap();
 
     if let Some(expected) = expected_columns {
-        assert!(columns == expected);
+        check!(columns == expected);
     }
 
     let mut rows: Vec<DbRow> = vec![];
@@ -317,10 +343,76 @@ async fn rdbms_query_test<T: RdbmsType>(
     }
 
     if let Some(expected) = expected_rows {
-        assert!(rows == expected);
+        check!(rows == expected);
     }
 
     let _ = rdbms.remove(&worker_id, &pool_key);
+
+    let exists = rdbms.exists(&worker_id, &pool_key);
+    check!(!exists);
+}
+
+async fn rdbms_par_test<T: RdbmsType + 'static>(
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    db_addresses: Vec<String>,
+    count: u8,
+    query: &'static str,
+    params: Vec<DbValue>,
+    expected: Option<u64>,
+) {
+    let mut fibers = JoinSet::new();
+    for db_address in db_addresses {
+        for _ in 0..count {
+            let rdbms_clone = rdbms.clone();
+            let db_address_clone = db_address.clone();
+            let params_clone = params.clone();
+            let _ = fibers.spawn(async move {
+                let worker_id = new_worker_id();
+
+                let connection = rdbms_clone.create(&worker_id, &db_address_clone).await;
+
+                let pool_key = connection.unwrap();
+
+                let result: Result<u64, Error> = rdbms_clone
+                    .execute(&worker_id, &pool_key, query, params_clone)
+                    .await;
+
+                (worker_id, pool_key, result)
+            });
+        }
+    }
+
+    let mut workers_results: HashMap<WorkerId, Result<u64, Error>> = HashMap::new();
+    let mut workers_pools: HashMap<WorkerId, RdbmsPoolKey> = HashMap::new();
+
+    while let Some(res) = fibers.join_next().await {
+        let (worker_id, pool_key, result_execute) = res.unwrap();
+        workers_results.insert(worker_id.clone(), result_execute);
+        workers_pools.insert(worker_id.clone(), pool_key);
+    }
+
+    let rdbms_status = rdbms.status();
+
+    for (worker_id, pool_key) in workers_pools.clone() {
+        let _ = rdbms.remove(&worker_id, &pool_key);
+    }
+
+    for (worker_id, pool_key) in workers_pools {
+        let worker_ids = rdbms_status.pools.get(&pool_key);
+
+        check!(
+            worker_ids.is_some_and(|ids| ids.contains(&worker_id)),
+            "worker {worker_id} not found in pool {pool_key}"
+        );
+    }
+
+    for (worker_id, result) in workers_results {
+        check!(result.is_ok(), "result for worker {worker_id} is error");
+
+        if let Some(expected) = expected {
+            check!(result.unwrap() == expected, "result for worker {worker_id}");
+        }
+    }
 }
 
 #[test]
@@ -357,19 +449,6 @@ async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &Rdb
     )
     .await;
 
-    // let db_address_with_schema = format!("{}?currentSchema={}", db_address, schema);
-    //
-    // println!("db_address_with_schema: {}", db_address_with_schema);
-    //
-    // rdbms_execute_test(
-    //     rdbms.clone(),
-    //     &db_address_with_schema,
-    //     "SELECT component_id, namespace, name from components",
-    //     vec![],
-    //     Some(0),
-    // )
-    // .await
-
     rdbms_execute_test(
         rdbms.clone(),
         &db_address,
@@ -383,21 +462,21 @@ async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &Rdb
 #[test]
 fn test_rdbms_pool_key_masked_address() {
     let key = RdbmsPoolKey::new("mysql://user:password@localhost:3306".to_string());
-    assert_eq!(
-        key.masked_address(),
-        "mysql://user:*****@localhost:3306".to_string()
-    );
+    check!(key.masked_address() == "mysql://user:*****@localhost:3306".to_string());
     let key = RdbmsPoolKey::new("mysql://user@localhost:3306".to_string());
-    assert_eq!(
-        key.masked_address(),
-        "mysql://user@localhost:3306".to_string()
-    );
+    check!(key.masked_address() == "mysql://user@localhost:3306".to_string());
     let key = RdbmsPoolKey::new("mysql://localhost:3306".to_string());
-    assert_eq!(key.masked_address(), "mysql://localhost:3306".to_string());
+    check!(key.masked_address() == "mysql://localhost:3306".to_string());
     let key =
         RdbmsPoolKey::new("postgres://user:password@localhost:5432?abc=xyz&def=xyz".to_string());
-    assert_eq!(
-        key.masked_address(),
-        "postgres://user:*****@localhost:5432?abc=xyz&def=xyz".to_string()
+    check!(
+        key.masked_address() == "postgres://user:*****@localhost:5432?abc=xyz&def=xyz".to_string()
     );
+}
+
+fn new_worker_id() -> WorkerId {
+    WorkerId {
+        component_id: ComponentId::new_v4(),
+        worker_name: "test".to_string(),
+    }
 }

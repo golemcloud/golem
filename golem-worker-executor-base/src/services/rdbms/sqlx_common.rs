@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::metrics::{record_rdbms_failure, record_rdbms_success};
 use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, Error};
-use crate::services::rdbms::{
-    Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType,
-};
-use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
+use crate::services::rdbms::{Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::stream::BoxStream;
@@ -37,7 +35,7 @@ pub(crate) struct SqlxRdbms<DB>
 where
     DB: Database,
 {
-    name: &'static str,
+    rdbms_type: &'static str,
     config: RdbmsConfig,
     pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, Error>,
     pool_workers_cache: DashMap<RdbmsPoolKey, HashSet<WorkerId>>,
@@ -49,8 +47,8 @@ where
     Pool<DB>: QueryExecutor,
     RdbmsPoolKey: PoolCreator<DB>,
 {
-    pub(crate) fn new(name: &'static str, config: RdbmsConfig) -> Self {
-        let cache_name: &'static str = format!("rdbms-{}-pools", name).leak();
+    pub(crate) fn new(rdbms_type: &'static str, config: RdbmsConfig) -> Self {
+        let cache_name: &'static str = format!("rdbms-{}-pools", rdbms_type).leak();
         let pool_cache = Cache::new(
             None,
             FullCacheEvictionMode::None,
@@ -62,7 +60,7 @@ where
         );
         let pool_workers_cache = DashMap::new();
         Self {
-            name,
+            rdbms_type,
             config,
             pool_cache,
             pool_workers_cache,
@@ -76,18 +74,18 @@ where
     ) -> Result<Arc<Pool<DB>>, Error> {
         let key_clone = key.clone();
         let pool_config = self.config.pool;
-        let name = self.name.to_string();
+        let name = self.rdbms_type.to_string();
         let pool = self
             .pool_cache
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     info!(
-                        "{} pool: {}, connections: {}",
+                        "{} create pool: {}, connections: {}",
                         name, key_clone, pool_config.max_connections
                     );
                     let result = key_clone.create_pool(&pool_config).await.map_err(|e| {
                         error!(
-                            "{} pool: {}, connections: {} - error {}",
+                            "{} create pool: {}, connections: {} - error {}",
                             name, key_clone, pool_config.max_connections, e
                         );
                         Error::ConnectionFailure(e.to_string())
@@ -126,11 +124,11 @@ where
         let end = Instant::now();
         match result {
             Ok(result) => {
-                record_rdbms_success(self.name, name, end.duration_since(start));
+                record_rdbms_success(self.rdbms_type, name, end.duration_since(start));
                 Ok(result)
             }
             Err(err) => {
-                record_rdbms_failure(self.name, name);
+                record_rdbms_failure(self.rdbms_type, name);
                 Err(err)
             }
         }
@@ -148,7 +146,7 @@ where
     async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error> {
         let start = Instant::now();
         let key = RdbmsPoolKey::new(address.to_string());
-        info!("{} create connection - pool: {}", self.name, key);
+        info!("{} create connection - pool: {}", self.rdbms_type, key);
         let result = self.get_or_create(worker_id, &key).await;
         let _ = self.record_metrics("create", start, result)?;
         Ok(key)
@@ -177,7 +175,7 @@ where
         let start = Instant::now();
         info!(
             "{} execute - pool: {}, statement: {}, params count: {}",
-            self.name,
+            self.rdbms_type,
             key,
             statement,
             params.len()
@@ -191,7 +189,7 @@ where
         let result = result.map_err(|e| {
             error!(
                 "{} execute - pool: {}, statement: {} - error: {}",
-                self.name, key, statement, e
+                self.rdbms_type, key, statement, e
             );
             e
         });
@@ -208,7 +206,7 @@ where
         let start = Instant::now();
         info!(
             "{} query - pool: {}, statement: {}, params count: {}",
-            self.name,
+            self.rdbms_type,
             key,
             statement,
             params.len()
@@ -224,7 +222,7 @@ where
         let result = result.map_err(|e| {
             error!(
                 "{} query - pool: {}, statement: {} - error: {}",
-                self.name, key, statement, e
+                self.rdbms_type, key, statement, e
             );
             e
         });
@@ -261,6 +259,7 @@ pub(crate) trait QueryExecutor {
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
 pub struct StreamDbResultSet<'q, DB: Database> {
+    rdbms_type: &'static str,
     columns: Vec<DbColumn>,
     first_rows: Arc<async_mutex::Mutex<Option<Vec<DbRow>>>>,
     row_stream: Arc<async_mutex::Mutex<BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>>>,
@@ -273,11 +272,13 @@ where
     DbColumn: for<'a> TryFrom<&'a DB::Column, Error = String>,
 {
     fn new(
+        rdbms_type: &'static str,
         columns: Vec<DbColumn>,
         first_rows: Vec<DbRow>,
         row_stream: BoxStream<'q, Vec<Result<DB::Row, sqlx::Error>>>,
     ) -> Self {
         Self {
+            rdbms_type,
             columns,
             first_rows: Arc::new(async_mutex::Mutex::new(Some(first_rows))),
             row_stream: Arc::new(async_mutex::Mutex::new(row_stream)),
@@ -285,6 +286,7 @@ where
     }
 
     pub(crate) async fn create(
+        rdbms_type: &'static str,
         stream: BoxStream<'q, Result<DB::Row, sqlx::Error>>,
         batch: usize,
     ) -> Result<StreamDbResultSet<'q, DB>, Error> {
@@ -313,9 +315,16 @@ where
                     .collect::<Result<Vec<_>, String>>()
                     .map_err(Error::QueryResponseFailure)?;
 
-                Ok(StreamDbResultSet::new(columns, first_rows, row_stream))
+                Ok(StreamDbResultSet::new(
+                    rdbms_type, columns, first_rows, row_stream,
+                ))
             }
-            _ => Ok(StreamDbResultSet::new(vec![], vec![], row_stream)),
+            _ => Ok(StreamDbResultSet::new(
+                rdbms_type,
+                vec![],
+                vec![],
+                row_stream,
+            )),
         }
     }
 }
@@ -327,19 +336,19 @@ where
     DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
 {
     async fn get_columns(&self) -> Result<Vec<DbColumn>, Error> {
-        info!("get_columns");
+        info!("{} get columns", self.rdbms_type);
         Ok(self.columns.clone())
     }
 
     async fn get_next(&self) -> Result<Option<Vec<DbRow>>, Error> {
         let mut rows = self.first_rows.lock().await;
         if rows.is_some() {
-            info!("get_next - initial");
+            info!("{} get next - initial", self.rdbms_type);
             let result = rows.clone();
             *rows = None;
             Ok(result)
         } else {
-            info!("get_next");
+            info!("{} get next", self.rdbms_type);
             let mut stream = self.row_stream.lock().await;
             let next = stream.next().await;
 

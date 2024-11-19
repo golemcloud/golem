@@ -16,7 +16,6 @@ use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
-use tracing::info;
 use uuid::Uuid;
 
 #[async_trait]
@@ -44,13 +43,11 @@ impl SimpleDbResultSet {
 #[async_trait]
 impl DbResultSet for SimpleDbResultSet {
     async fn get_columns(&self) -> Result<Vec<DbColumn>, Error> {
-        info!("get_columns");
         Ok(self.columns.clone())
     }
 
     async fn get_next(&self) -> Result<Option<Vec<DbRow>>, Error> {
         let rows = self.rows.lock().unwrap().clone();
-        info!("get_next {}", rows.is_some());
         if rows.is_some() {
             *self.rows.lock().unwrap() = None;
         }
@@ -64,12 +61,10 @@ pub struct EmptyDbResultSet {}
 #[async_trait]
 impl DbResultSet for EmptyDbResultSet {
     async fn get_columns(&self) -> Result<Vec<DbColumn>, Error> {
-        info!("get_columns");
         Ok(vec![])
     }
 
     async fn get_next(&self) -> Result<Option<Vec<DbRow>>, Error> {
-        info!("get_next");
         Ok(None)
     }
 }

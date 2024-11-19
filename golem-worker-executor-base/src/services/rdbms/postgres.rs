@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::sqlx_common::{
     PoolCreator, QueryExecutor, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
 };
@@ -20,7 +21,6 @@ use crate::services::rdbms::types::{
     DbValuePrimitive, Error,
 };
 use crate::services::rdbms::{Rdbms, RdbmsPoolKey, RdbmsType};
-use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use futures_util::stream::BoxStream;
@@ -31,12 +31,14 @@ use std::str::FromStr;
 use std::sync::Arc;
 use uuid::Uuid;
 
+pub(crate) const POSTGRES: &str = "postgres";
+
 #[derive(Debug, Clone, Default)]
 pub struct PostgresType;
 
 impl PostgresType {
     pub fn new_rdbms(config: RdbmsConfig) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
-        let sqlx: SqlxRdbms<sqlx::postgres::Postgres> = SqlxRdbms::new("postgres", config);
+        let sqlx: SqlxRdbms<sqlx::postgres::Postgres> = SqlxRdbms::new(POSTGRES, config);
         Arc::new(sqlx)
     }
 }
@@ -45,7 +47,7 @@ impl RdbmsType for PostgresType {}
 
 impl Display for PostgresType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "postgres")
+        write!(f, "{}", POSTGRES)
     }
 }
 
@@ -88,7 +90,7 @@ impl QueryExecutor for sqlx::Pool<sqlx::Postgres> {
         let stream: BoxStream<Result<sqlx::postgres::PgRow, sqlx::Error>> = query.fetch(self);
 
         let response: StreamDbResultSet<sqlx::postgres::Postgres> =
-            StreamDbResultSet::create(stream, batch).await?;
+            StreamDbResultSet::create(POSTGRES, stream, batch).await?;
         Ok(Arc::new(response))
     }
 }
@@ -593,6 +595,9 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
     }
 }
 
+/**
+ * https://www.postgresql.org/docs/current/catalog-pg-type.html
+ */
 #[allow(dead_code)]
 pub(crate) mod pg_type_name {
     pub(crate) const BOOL: &str = "BOOL";

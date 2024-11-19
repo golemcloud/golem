@@ -22,6 +22,7 @@ use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
+use golem_test_framework::components::rdb::RdbsConnections;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::json::TypeAnnotatedValueJsonExtensions;
 use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
@@ -36,7 +37,7 @@ inherit_test_dep!(Tracing);
 
 #[test_dep]
 async fn postgres() -> DockerPostgresRdbs {
-    DockerPostgresRdbs::new(3, 5444, true, false).await
+    DockerPostgresRdbs::new(3, 5424, true, false).await
 }
 
 #[test_dep]

@@ -23,7 +23,10 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::components::docker::KillContainer;
-use crate::components::rdb::{mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb, RdbConnectionString};
+use crate::components::rdb::docker_postgres::DockerPostgresRdbs;
+use crate::components::rdb::{
+    mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb, RdbConnection, RdbsConnections,
+};
 use crate::components::NETWORK;
 
 pub struct DockerMysqlRdb {
@@ -116,7 +119,7 @@ impl Rdb for DockerMysqlRdb {
     }
 }
 
-impl RdbConnectionString for DockerMysqlRdb {
+impl RdbConnection for DockerMysqlRdb {
     fn connection_string(&self) -> String {
         self.info.connection_string()
     }
@@ -166,6 +169,15 @@ impl DockerMysqlRdbs {
         self.rdbs
             .iter()
             .map(|rdb| rdb.host_connection_string())
+            .collect()
+    }
+}
+
+impl RdbsConnections for DockerMysqlRdbs {
+    fn host_connection_strings(&self) -> Vec<String> {
+        self.rdbs
+            .iter()
+            .map(|rdb| rdb.connection_string())
             .collect()
     }
 }

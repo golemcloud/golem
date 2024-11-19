@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::sqlx_common::{
     PoolCreator, QueryExecutor, QueryParamsBinder, SqlxRdbms, StreamDbResultSet,
 };
@@ -20,7 +21,6 @@ use crate::services::rdbms::types::{
     Error,
 };
 use crate::services::rdbms::{Rdbms, RdbmsPoolKey, RdbmsType};
-use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use sqlx::{Column, Pool, Row, TypeInfo};
@@ -28,12 +28,14 @@ use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
 
+pub(crate) const MYSQL: &str = "mysql";
+
 #[derive(Debug, Clone, Default)]
 pub struct MysqlType;
 
 impl MysqlType {
     pub fn new_rdbms(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
-        let sqlx: SqlxRdbms<sqlx::mysql::MySql> = SqlxRdbms::new("mysql", config);
+        let sqlx: SqlxRdbms<sqlx::mysql::MySql> = SqlxRdbms::new(MYSQL, config);
         Arc::new(sqlx)
     }
 }
@@ -42,7 +44,7 @@ impl RdbmsType for MysqlType {}
 
 impl Display for MysqlType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "mysql")
+        write!(f, "{}", MYSQL)
     }
 }
 
@@ -85,7 +87,7 @@ impl QueryExecutor for Pool<sqlx::MySql> {
         let stream: BoxStream<Result<sqlx::mysql::MySqlRow, sqlx::Error>> = query.fetch(self);
 
         let response: StreamDbResultSet<sqlx::mysql::MySql> =
-            StreamDbResultSet::create(stream, batch).await?;
+            StreamDbResultSet::create(MYSQL, stream, batch).await?;
         Ok(Arc::new(response))
     }
 }

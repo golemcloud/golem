@@ -66,10 +66,14 @@ impl DbInfo {
     }
 }
 
-pub trait RdbConnectionString {
+pub trait RdbConnection {
     fn connection_string(&self) -> String;
 
     fn host_connection_string(&self) -> String;
+}
+
+pub trait RdbsConnections {
+    fn host_connection_strings(&self) -> Vec<String>;
 }
 
 #[derive(Debug, Clone, Args)]
@@ -124,7 +128,7 @@ impl PostgresInfo {
     }
 }
 
-impl RdbConnectionString for PostgresInfo {
+impl RdbConnection for PostgresInfo {
     fn connection_string(&self) -> String {
         format!(
             "postgres://{}:{}@{}:{}/{}",
@@ -338,7 +342,7 @@ async fn mysql_wait_for_startup(info: &MysqlInfo, timeout: Duration) {
     }
 }
 
-impl RdbConnectionString for MysqlInfo {
+impl RdbConnection for MysqlInfo {
     fn connection_string(&self) -> String {
         format!(
             "mysql://{}:{}@{}:{}/{}",

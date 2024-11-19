@@ -592,7 +592,9 @@ impl Default for RdbmsQueryConfig {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct RdbmsPoolConfig {
     pub max_connections: u32,
+    #[serde(with = "humantime_serde")]
     pub eviction_ttl: Duration,
+    #[serde(with = "humantime_serde")]
     pub eviction_period: Duration,
 }
 
