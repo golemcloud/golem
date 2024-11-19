@@ -448,75 +448,95 @@ impl ResolvedWitApplication {
     }
 
     fn sort_components_by_input_deps(&mut self, validation: &mut ValidationBuilder) {
-        let mut component_order = Vec::with_capacity(self.components.len());
+        struct Visit<'a> {
+            resolved_app: &'a ResolvedWitApplication,
+            component_names_by_id: Vec<&'a ComponentName>,
+            component_names_to_id: HashMap<&'a ComponentName, usize>,
+            visited: HashSet<usize>,
+            visiting: HashSet<usize>,
+            path: Vec<usize>,
+            component_order: Vec<ComponentName>,
+        }
 
-        // TODO: use some id instead of Strings?
-        let mut visited = HashSet::<ComponentName>::new();
-        let mut visiting = HashSet::<ComponentName>::new();
+        impl<'a> Visit<'a> {
+            fn new(resolved_app: &'a ResolvedWitApplication) -> Self {
+                let component_names_by_id = resolved_app.components.keys().collect::<Vec<_>>();
+                let component_names_to_id = component_names_by_id
+                    .iter()
+                    .enumerate()
+                    .map(|(id, name)| (*name, id))
+                    .collect();
 
-        fn visit(
-            resolved_app: &ResolvedWitApplication,
-            visited: &mut HashSet<ComponentName>,
-            visiting: &mut HashSet<ComponentName>,
-            component_order: &mut Vec<ComponentName>,
-            component_name: &ComponentName,
-            input_deps: &BTreeSet<ComponentName>,
-        ) -> bool {
-            if visited.contains(component_name) {
-                true
-            } else if visiting.contains(component_name) {
-                false
-            } else {
-                visiting.insert(component_name.clone());
+                Self {
+                    resolved_app,
+                    component_names_by_id,
+                    component_names_to_id,
+                    visited: Default::default(),
+                    visiting: Default::default(),
+                    path: vec![],
+                    component_order: vec![],
+                }
+            }
 
-                for dep_component_name in input_deps {
-                    if !visit(
-                        resolved_app,
-                        visited,
-                        visiting,
-                        component_order,
-                        dep_component_name,
-                        &resolved_app
-                            .components
-                            .get(dep_component_name)
-                            .unwrap()
-                            .input_component_deps,
-                    ) {
-                        return false;
+            fn visit_all(mut self) -> Result<Vec<ComponentName>, Vec<&'a ComponentName>> {
+                for (component_id, &component_name) in
+                    self.component_names_by_id.clone().iter().enumerate()
+                {
+                    if !self.visited.contains(&component_id)
+                        && !self.visit(component_id, component_name)
+                    {
+                        return Err(self
+                            .path
+                            .into_iter()
+                            .map(|component_id| self.component_names_by_id[component_id])
+                            .collect::<Vec<_>>());
                     }
                 }
+                Ok(self.component_order)
+            }
 
-                visiting.remove(component_name);
-                visited.insert(component_name.clone());
+            fn visit(&mut self, component_id: usize, component_name: &ComponentName) -> bool {
+                if self.visited.contains(&component_id) {
+                    true
+                } else if self.visiting.contains(&component_id) {
+                    self.path.push(component_id);
+                    false
+                } else {
+                    let component = self.resolved_app.components.get(component_name).unwrap();
 
-                component_order.push(component_name.clone());
+                    self.path.push(component_id);
+                    self.visiting.insert(component_id);
 
-                true
+                    for dep_component_name in &component.input_component_deps {
+                        if !self.visit(
+                            self.component_names_to_id[dep_component_name],
+                            dep_component_name,
+                        ) {
+                            return false;
+                        }
+                    }
+
+                    self.visiting.remove(&component_id);
+                    self.visited.insert(component_id);
+                    self.component_order.push(component_name.clone());
+                    self.path.pop();
+
+                    true
+                }
             }
         }
 
-        for (component_name, component) in &self.components {
-            if !visited.contains(component_name)
-                && !visit(
-                    self,
-                    &mut visited,
-                    &mut visiting,
-                    &mut component_order,
-                    component_name,
-                    &component.input_component_deps,
-                )
-            {
-                // TODO: better error message, collect full path
-                component_order.push(component_name.clone());
+        match Visit::new(&self).visit_all() {
+            Ok(component_order) => {
+                self.component_order = component_order;
+            }
+            Err(recursive_path) => {
                 validation.add_error(format!(
-                    "Found component cycle: {}",
-                    component_order.iter().map(|s| s.as_str()).join(", ")
+                    "Found component interface package use cycle: {}",
+                    recursive_path.iter().map(|s| s.as_str()).join(", ")
                 ));
-                break;
             }
         }
-
-        self.component_order = component_order;
     }
 
     pub fn component_order(&self) -> &[ComponentName] {
