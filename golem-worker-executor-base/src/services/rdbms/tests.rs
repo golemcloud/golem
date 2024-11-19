@@ -72,13 +72,11 @@ fn rdbms_service() -> RdbmsServiceDefault {
 // }
 
 #[test]
-async fn postgres_execute_test_select1(
-    postgres: &DockerPostgresRdbs,
-    rdbms_service: &RdbmsServiceDefault,
-) {
-    rdbms_execute_test(
+async fn postgres_par_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
+    rdbms_par_test(
         rdbms_service.postgres(),
-        &postgres.rdbs[0].host_connection_string(),
+        postgres.host_connection_strings(),
+        3,
         "SELECT 1",
         vec![],
         Some(1),
@@ -87,11 +85,13 @@ async fn postgres_execute_test_select1(
 }
 
 #[test]
-async fn postgres_par_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
-    rdbms_par_test(
+async fn postgres_execute_test_select1(
+    postgres: &DockerPostgresRdbs,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    rdbms_execute_test(
         rdbms_service.postgres(),
-        postgres.host_connection_strings(),
-        3,
+        &postgres.rdbs[0].host_connection_string(),
         "SELECT 1",
         vec![],
         Some(1),
@@ -193,6 +193,50 @@ async fn postgres_execute_test_create_insert_select(
         None,
     )
     .await;
+}
+
+#[test]
+async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
+    let rdbms = rdbms_service.postgres();
+    let schema = "test1";
+    let db_address = postgres.rdbs[2].host_connection_string();
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        format!("CREATE SCHEMA IF NOT EXISTS {};", schema).as_str(),
+        vec![],
+        None,
+    )
+    .await;
+
+    let create_table_statement = format!(
+        r#"
+            CREATE TABLE IF NOT EXISTS {schema}.components
+            (
+                component_id        varchar(255)    NOT NULL,
+                namespace           varchar(255)    NOT NULL,
+                name                varchar(255)    NOT NULL,
+                PRIMARY KEY (component_id)
+            );
+        "#
+    );
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        create_table_statement.as_str(),
+        vec![],
+        None,
+    )
+    .await;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        format!("SELECT component_id, namespace, name from {schema}.components").as_str(),
+        vec![],
+        Some(0),
+    )
+    .await
 }
 
 #[test]
@@ -315,7 +359,7 @@ async fn rdbms_execute_test<T: RdbmsType>(
     let connection = rdbms.create(&worker_id, db_address).await;
     check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
-    // println!("pool_key: {}", pool_key);
+
     let result = rdbms.execute(&worker_id, &pool_key, query, params).await;
     check!(
         result.is_ok(),
@@ -458,47 +502,223 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
 }
 
 #[test]
-async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
-    let rdbms = rdbms_service.postgres();
-    let schema = "test1";
-    let db_address = postgres.rdbs[2].host_connection_string();
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        format!("CREATE SCHEMA IF NOT EXISTS {};", schema).as_str(),
-        vec![],
-        None,
-    )
-    .await;
-
-    let create_table_statement = format!(
-        r#"
-            CREATE TABLE IF NOT EXISTS {schema}.components
-            (
-                component_id        varchar(255)    NOT NULL,
-                namespace           varchar(255)    NOT NULL,
-                name                varchar(255)    NOT NULL,
-                PRIMARY KEY (component_id)
-            );
-        "#
-    );
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        create_table_statement.as_str(),
-        vec![],
-        None,
-    )
-    .await;
-
-    rdbms_execute_test(
-        rdbms.clone(),
-        &db_address,
-        format!("SELECT component_id, namespace, name from {schema}.components").as_str(),
-        vec![],
-        Some(0),
+async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
+    rdbms_connection_err_test(
+        rdbms_service.postgres(),
+        "pg://user:password@localhost:5999",
+        Error::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
     )
     .await
+}
+
+#[test]
+async fn postgres_query_err_test(
+    postgres: &DockerPostgresRdbs,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    let db_address = postgres.rdbs[1].host_connection_string();
+    let rdbms = rdbms_service.postgres();
+
+    rdbms_query_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT * FROM xxx",
+        vec![],
+        Error::QueryResponseFailure(
+            "error returned from database: relation \"xxx\" does not exist".to_string(),
+        ),
+    )
+    .await;
+    rdbms_query_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT '12.34'::float8::numeric::money;",
+        vec![],
+        Error::QueryResponseFailure("Unsupported type: MONEY".to_string()),
+    )
+    .await;
+}
+
+#[test]
+async fn postgres_execute_err_test(
+    postgres: &DockerPostgresRdbs,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    let db_address = postgres.rdbs[1].host_connection_string();
+    let rdbms = rdbms_service.postgres();
+
+    rdbms_execute_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT * FROM xxx",
+        vec![],
+        Error::QueryExecutionFailure(
+            "error returned from database: relation \"xxx\" does not exist".to_string(),
+        ),
+    )
+    .await;
+
+    rdbms_query_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT '12.34'::float8::numeric::money;",
+        vec![],
+        Error::QueryResponseFailure("Unsupported type: MONEY".to_string()),
+    )
+    .await;
+}
+
+#[test]
+async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
+    let db_address = mysql.rdbs[1].clone().host_connection_string();
+    let rdbms = rdbms_service.mysql();
+
+    rdbms_query_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT * FROM xxx",
+        vec![],
+        Error::QueryResponseFailure(
+            "error returned from database: 1146 (42S02): Table 'mysql.xxx' doesn't exist"
+                .to_string(),
+        ),
+    )
+    .await;
+
+    rdbms_query_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT 1",
+        vec![
+            DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
+            DbValue::Array(vec![DbValuePrimitive::Text("tag1".to_string())]),
+        ],
+        Error::QueryParameterFailure("Array param not supported".to_string()),
+    )
+    .await;
+}
+
+#[test]
+async fn mysql_execute_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServiceDefault) {
+    let db_address = mysql.rdbs[1].clone().host_connection_string();
+    let rdbms = rdbms_service.mysql();
+
+    rdbms_execute_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT * FROM xxx",
+        vec![],
+        Error::QueryExecutionFailure(
+            "error returned from database: 1146 (42S02): Table 'mysql.xxx' doesn't exist"
+                .to_string(),
+        ),
+    )
+    .await;
+
+    rdbms_execute_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT 1",
+        vec![DbValue::Array(vec![DbValuePrimitive::Text(
+            "tag1".to_string(),
+        )])],
+        Error::QueryParameterFailure("Array param not supported".to_string()),
+    )
+    .await;
+}
+
+#[test]
+async fn mysql_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
+    rdbms_connection_err_test(
+        rdbms_service.mysql(),
+        "msql://user:password@localhost:3506",
+        Error::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
+    )
+    .await
+}
+
+async fn rdbms_connection_err_test<T: RdbmsType>(
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    db_address: &str,
+    expected: Error,
+) {
+    let worker_id = new_worker_id();
+    let result = rdbms.create(&worker_id, db_address).await;
+
+    check!(result.is_err(), "connection to {db_address} is not error");
+
+    let error = result.err().unwrap();
+    println!("error: {}", error);
+    check!(
+        error == expected,
+        "connection error for {db_address} do not match"
+    );
+}
+
+async fn rdbms_query_err_test<T: RdbmsType>(
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    db_address: &str,
+    query: &str,
+    params: Vec<DbValue>,
+    expected: Error,
+) {
+    let worker_id = new_worker_id();
+    let connection = rdbms.create(&worker_id, db_address).await;
+    check!(connection.is_ok(), "connection to {} failed", db_address);
+    let pool_key = connection.unwrap();
+
+    let result = rdbms.query(&worker_id, &pool_key, query, params).await;
+
+    check!(
+        result.is_err(),
+        "query {} (executed on {}) - response is not error",
+        query,
+        pool_key
+    );
+
+    let error = result.err().unwrap();
+    println!("error: {}", error);
+    check!(
+        error == expected,
+        "query {} (executed on {}) - response error do not match",
+        query,
+        pool_key
+    );
+
+    let _ = rdbms.remove(&worker_id, &pool_key);
+}
+
+async fn rdbms_execute_err_test<T: RdbmsType>(
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    db_address: &str,
+    query: &str,
+    params: Vec<DbValue>,
+    expected: Error,
+) {
+    let worker_id = new_worker_id();
+    let connection = rdbms.create(&worker_id, db_address).await;
+    check!(connection.is_ok(), "connection to {} failed", db_address);
+    let pool_key = connection.unwrap();
+
+    let result = rdbms.execute(&worker_id, &pool_key, query, params).await;
+
+    check!(
+        result.is_err(),
+        "query {} (executed on {}) - response is not error",
+        query,
+        pool_key
+    );
+
+    let error = result.err().unwrap();
+    println!("error: {}", error);
+    check!(
+        error == expected,
+        "query {} (executed on {}) - response error do not match",
+        query,
+        pool_key
+    );
+
+    let _ = rdbms.remove(&worker_id, &pool_key);
 }
 
 #[test]

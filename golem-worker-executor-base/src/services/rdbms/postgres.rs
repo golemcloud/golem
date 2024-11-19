@@ -515,7 +515,7 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
         //     },
         //     _ => Err(format!("Unsupported type: {:?}", type_name))?,
         // },
-        _ => Err(format!("Unsupported type: {:?}", type_name))?,
+        _ => Err(format!("Unsupported type: {}", type_name))?,
     };
     Ok(value)
 }
@@ -589,7 +589,7 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
             pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Blob)),
             _ => match *type_kind {
                 PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
-                _ => Err(format!("Unsupported type: {:?}", value)),
+                _ => Err(format!("Unsupported type: {}", type_name)),
             },
         }
     }

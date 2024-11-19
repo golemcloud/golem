@@ -157,7 +157,7 @@ pub struct DbColumn {
 //     Indexed,
 // }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Error {
     ConnectionFailure(String),
     QueryParameterFailure(String),
