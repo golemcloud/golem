@@ -526,7 +526,7 @@ impl ResolvedWitApplication {
             }
         }
 
-        match Visit::new(&self).visit_all() {
+        match Visit::new(self).visit_all() {
             Ok(component_order) => {
                 self.component_order = component_order;
             }
