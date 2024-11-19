@@ -309,6 +309,8 @@ impl TryFrom<&sqlx::mysql::MySqlTypeInfo> for DbColumnType {
     }
 }
 
+/// sqlx_mysql::protocol::text::column::ColumnType is not publicly accessible.
+///
 #[allow(dead_code)]
 pub(crate) mod mysql_type_name {
     pub(crate) const BOOLEAN: &str = "BOOLEAN";

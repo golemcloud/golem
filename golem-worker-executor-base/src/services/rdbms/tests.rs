@@ -106,20 +106,22 @@ async fn postgres_execute_test_create_insert_select(
 ) {
     let db_address = postgres.rdbs[1].host_connection_string();
     let rdbms = rdbms_service.postgres();
+
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
             (
                 component_id        uuid    NOT NULL PRIMARY KEY,
                 namespace           text    NOT NULL,
-                name                text    NOT NULL
+                name                text    NOT NULL,
+                tags                text[]
             );
         "#;
 
     let insert_statement = r#"
             INSERT INTO components
-            (component_id, namespace, name)
+            (component_id, namespace, name, tags)
             VALUES
-            ($1, $2, $3)
+            ($1, $2, $3, $4)
         "#;
 
     rdbms_execute_test(
@@ -138,6 +140,11 @@ async fn postgres_execute_test_create_insert_select(
             DbValue::Primitive(DbValuePrimitive::Uuid(Uuid::new_v4())),
             DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
             DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
+            DbValue::Array(vec![
+                DbValuePrimitive::Text("tag1".to_string()),
+                DbValuePrimitive::Text("tag2".to_string()),
+                DbValuePrimitive::Text("tag3".to_string()),
+            ]),
         ];
 
         rdbms_execute_test(
@@ -169,12 +176,18 @@ async fn postgres_execute_test_create_insert_select(
             db_type: DbColumnType::Primitive(DbColumnTypePrimitive::Text),
             db_type_name: "TEXT".to_string(),
         },
+        DbColumn {
+            name: "tags".to_string(),
+            ordinal: 3,
+            db_type: DbColumnType::Array(DbColumnTypePrimitive::Text),
+            db_type_name: "TEXT[]".to_string(),
+        },
     ];
 
     rdbms_query_test(
         rdbms.clone(),
         &db_address,
-        "SELECT component_id, namespace, name from components",
+        "SELECT component_id, namespace, name, tags from components",
         vec![],
         Some(expected_columns),
         None,
@@ -300,13 +313,23 @@ async fn rdbms_execute_test<T: RdbmsType>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(&worker_id, db_address).await;
-    check!(connection.is_ok());
+    check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
     // println!("pool_key: {}", pool_key);
     let result = rdbms.execute(&worker_id, &pool_key, query, params).await;
-    check!(result.is_ok());
+    check!(
+        result.is_ok(),
+        "query {} (executed on {}) failed",
+        query,
+        pool_key
+    );
     if let Some(expected) = expected {
-        check!(result.unwrap() == expected);
+        check!(
+            result.unwrap() == expected,
+            "query {} (executed on {}) result do not match",
+            query,
+            pool_key
+        );
     }
     let _ = rdbms.remove(&worker_id, &pool_key);
     let exists = rdbms.exists(&worker_id, &pool_key);
@@ -323,17 +346,28 @@ async fn rdbms_query_test<T: RdbmsType>(
 ) {
     let worker_id = new_worker_id();
     let connection = rdbms.create(&worker_id, db_address).await;
-    check!(connection.is_ok());
+    check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
 
     let result = rdbms.query(&worker_id, &pool_key, query, params).await;
-    check!(result.is_ok());
+
+    check!(
+        result.is_ok(),
+        "query {} (executed on {}) failed",
+        query,
+        pool_key
+    );
 
     let result = result.unwrap();
     let columns = result.get_columns().await.unwrap();
 
     if let Some(expected) = expected_columns {
-        check!(columns == expected);
+        check!(
+            columns == expected,
+            "query {} (executed on {}) response columns do not match",
+            query,
+            pool_key
+        );
     }
 
     let mut rows: Vec<DbRow> = vec![];
@@ -343,7 +377,12 @@ async fn rdbms_query_test<T: RdbmsType>(
     }
 
     if let Some(expected) = expected_rows {
-        check!(rows == expected);
+        check!(
+            rows == expected,
+            "query {} (executed on {}) response rows do not match",
+            query,
+            pool_key
+        );
     }
 
     let _ = rdbms.remove(&worker_id, &pool_key);
@@ -410,7 +449,10 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         check!(result.is_ok(), "result for worker {worker_id} is error");
 
         if let Some(expected) = expected {
-            check!(result.unwrap() == expected, "result for worker {worker_id}");
+            check!(
+                result.unwrap() == expected,
+                "result for worker {worker_id} do not match"
+            );
         }
     }
 }

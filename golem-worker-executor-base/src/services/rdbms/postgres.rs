@@ -595,9 +595,8 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
     }
 }
 
-/**
- * https://www.postgresql.org/docs/current/catalog-pg-type.html
- */
+/// sqlx::postgres::type_info::PgType is not publicly accessible.
+///
 #[allow(dead_code)]
 pub(crate) mod pg_type_name {
     pub(crate) const BOOL: &str = "BOOL";
