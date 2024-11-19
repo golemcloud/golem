@@ -232,11 +232,6 @@ impl SecurityScheme {
         client_secret: &str,
         redirect_uri: &str,
     ) -> Result<SecurityScheme, String> {
-        let issuer_url =
-            IssuerUrl::new("https://accounts.google.com".to_string()).map_err(|err| {
-                format!("Invalid Issuer URL for Google, {}", err) // shouldn't happen
-            })?;
-
         Self::from(
             Provider::Google,
             scheme_id,

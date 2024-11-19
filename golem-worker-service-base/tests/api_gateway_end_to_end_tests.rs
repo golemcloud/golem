@@ -865,7 +865,6 @@ async fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
 
 mod internal {
     use async_trait::async_trait;
-    use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
     use golem_common::model::ComponentId;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
@@ -889,7 +888,6 @@ mod internal {
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
-    use golem_worker_service_base::gateway_security::GoogleIdentityProvider;
     use golem_worker_service_base::service::gateway::security_scheme::{
         DefaultSecuritySchemeService, SecuritySchemeService,
     };
@@ -905,15 +903,7 @@ mod internal {
 
     pub(crate) fn get_security_scheme_service(
     ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
-        Arc::new(DefaultSecuritySchemeService::new(
-            Arc::new(GoogleIdentityProvider::default()),
-            Cache::new(
-                Some(100),
-                FullCacheEvictionMode::None,
-                BackgroundEvictionMode::None,
-                "secuity_scheme",
-            ),
-        ))
+        Arc::new(DefaultSecuritySchemeService::default())
     }
 
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}

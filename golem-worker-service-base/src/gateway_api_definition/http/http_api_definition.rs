@@ -822,7 +822,7 @@ mod tests {
         async fn test_encode_decode(path_pattern: &str, worker_id: &str, response_mapping: &str) {
             let security_scheme_service: Arc<
                 dyn SecuritySchemeService<DefaultNamespace> + Send + Sync,
-            > = Arc::new(DefaultSecuritySchemeService::new());
+            > = Arc::new(DefaultSecuritySchemeService::default());
 
             let yaml = get_api_spec(path_pattern, worker_id, response_mapping);
             let api_http_definition_request: api::HttpApiDefinitionRequest =

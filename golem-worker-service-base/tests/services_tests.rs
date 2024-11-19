@@ -25,7 +25,6 @@ use golem_worker_service_base::service::gateway::api_deployment::{
 use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
 
 use chrono::Utc;
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_wasm_ast::analysis::analysed_type::str;
 use golem_worker_service_base::api;
@@ -216,17 +215,7 @@ async fn test_services(
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
     let security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> =
-        Arc::new(DefaultSecuritySchemeService::new(
-            Arc::new(
-                golem_worker_service_base::gateway_security::GoogleIdentityProvider::default(),
-            ),
-            Cache::new(
-                Some(100),
-                FullCacheEvictionMode::None,
-                BackgroundEvictionMode::None,
-                "security_scheme_cache",
-            ),
-        ));
+        Arc::new(DefaultSecuritySchemeService::default());
 
     let definition_service: Arc<
         dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,

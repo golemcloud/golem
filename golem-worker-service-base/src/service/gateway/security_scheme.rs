@@ -1,12 +1,11 @@
 use crate::gateway_security::{
-    IdentityProvider, IdentityProviderError, SecurityScheme, SecuritySchemeIdentifier,
+    IdentityProviderError, SecurityScheme, SecuritySchemeIdentifier,
     SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use std::fmt::Display;
 use std::hash::Hash;
-use std::sync::Arc;
 
 // The controller phase can decide whether the developer of API deployment
 // has create-security role in Namespace, before calling this service
@@ -53,8 +52,10 @@ pub struct DefaultSecuritySchemeService<Namespace> {
     cache: SecuritySchemeCache<Namespace>,
 }
 
-impl<Namespace: Send + Sync + Clone + Hash + Eq + 'static> DefaultSecuritySchemeService<Namespace> {
-    pub fn new() -> Self {
+impl<Namespace: Send + Sync + Clone + Hash + Eq + 'static> Default
+    for DefaultSecuritySchemeService<Namespace>
+{
+    fn default() -> Self {
         DefaultSecuritySchemeService {
             cache: Cache::new(
                 Some(1024),

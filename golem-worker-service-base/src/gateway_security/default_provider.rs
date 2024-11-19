@@ -5,7 +5,7 @@ use openidconnect::core::{
     CoreClient, CoreIdTokenClaims, CoreIdTokenVerifier, CoreProviderMetadata, CoreResponseType,
     CoreTokenResponse,
 };
-use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, IssuerUrl, Nonce, Scope};
+use openidconnect::{AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, Scope};
 
 // All providers can reuse DefaultIdentityProvider if provided internally
 pub struct DefaultIdentityProvider;
