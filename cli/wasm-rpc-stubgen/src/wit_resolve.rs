@@ -533,7 +533,10 @@ impl ResolvedWitApplication {
             Err(recursive_path) => {
                 validation.add_error(format!(
                     "Found component interface package use cycle: {}",
-                    recursive_path.iter().map(|s| s.as_str()).join(", ")
+                    recursive_path
+                        .iter()
+                        .map(|s| s.as_str().log_color_error_highlight())
+                        .join(", ")
                 ));
             }
         }
