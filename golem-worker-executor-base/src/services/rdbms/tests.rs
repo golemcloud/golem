@@ -21,8 +21,6 @@ use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdbs;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdbs;
 use golem_test_framework::components::rdb::RdbConnectionString;
-use std::ops::Deref;
-use std::str::FromStr;
 use std::sync::Arc;
 use test_r::{test, test_dep};
 use uuid::Uuid;
@@ -378,7 +376,8 @@ async fn postgres_schema_test(postgres: &DockerPostgresRdbs, rdbms_service: &Rdb
         format!("SELECT component_id, namespace, name from {schema}.components").as_str(),
         vec![],
         Some(0),
-    ).await
+    )
+    .await
 }
 
 #[test]

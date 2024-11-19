@@ -15,8 +15,9 @@
 use crate::services::rdbms::metrics::{record_rdbms_failure, record_rdbms_success};
 use crate::services::rdbms::types::{DbColumn, DbResultSet, DbRow, DbValue, Error};
 use crate::services::rdbms::{
-    Rdbms, RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey, RdbmsStatus, RdbmsType,
+    Rdbms, RdbmsPoolKey, RdbmsStatus, RdbmsType,
 };
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::stream::BoxStream;

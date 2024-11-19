@@ -19,7 +19,8 @@ use crate::services::rdbms::types::{
     DbColumn, DbColumnType, DbColumnTypePrimitive, DbResultSet, DbRow, DbValue, DbValuePrimitive,
     Error,
 };
-use crate::services::rdbms::{Rdbms, RdbmsConfig, RdbmsPoolConfig, RdbmsPoolKey, RdbmsType};
+use crate::services::rdbms::{Rdbms, RdbmsPoolKey, RdbmsType};
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use sqlx::{Column, Pool, Row, TypeInfo};

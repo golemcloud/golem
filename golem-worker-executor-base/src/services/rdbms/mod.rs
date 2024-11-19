@@ -21,6 +21,7 @@ pub mod types;
 #[cfg(test)]
 mod tests;
 
+use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use crate::services::rdbms::types::{DbResultSet, DbValue, Error};
@@ -94,21 +95,17 @@ pub struct RdbmsServiceDefault {
 }
 
 impl RdbmsServiceDefault {
-    pub fn new(
-        mysql: Arc<dyn Rdbms<MysqlType> + Send + Sync>,
-        postgres: Arc<dyn Rdbms<PostgresType> + Send + Sync>,
-    ) -> Self {
-        Self { mysql, postgres }
+    pub fn new(config: RdbmsConfig) -> Self {
+        Self {
+            mysql: MysqlType::new_rdbms(config),
+            postgres: PostgresType::new_rdbms(config),
+        }
     }
 }
 
 impl Default for RdbmsServiceDefault {
     fn default() -> Self {
-        let config = RdbmsConfig::default();
-        Self::new(
-            MysqlType::new_rdbms(config),
-            PostgresType::new_rdbms(config),
-        )
+        Self::new(RdbmsConfig::default())
     }
 }
 
@@ -119,40 +116,6 @@ impl RdbmsService for RdbmsServiceDefault {
 
     fn postgres(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
         self.postgres.clone()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct RdbmsConfig {
-    pub pool: RdbmsPoolConfig,
-    pub query: RdbmsQueryConfig,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct RdbmsQueryConfig {
-    pub query_batch: usize,
-}
-
-impl Default for RdbmsQueryConfig {
-    fn default() -> Self {
-        Self { query_batch: 50 }
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct RdbmsPoolConfig {
-    pub max_connections: u32,
-    pub eviction_ttl: std::time::Duration,
-    pub eviction_period: std::time::Duration,
-}
-
-impl Default for RdbmsPoolConfig {
-    fn default() -> Self {
-        Self {
-            max_connections: 20,
-            eviction_ttl: std::time::Duration::from_secs(10 * 60),
-            eviction_period: std::time::Duration::from_secs(2 * 60),
-        }
     }
 }
 
