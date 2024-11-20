@@ -10,7 +10,7 @@ use std::hash::Hash;
 // The controller phase can decide whether the developer of API deployment
 // has create-security role in Namespace, before calling this service
 #[async_trait]
-pub trait SecuritySchemeService<Namespace> {
+pub trait   SecuritySchemeService<Namespace> {
     async fn get(
         &self,
         security_scheme_name: &SecuritySchemeIdentifier,

@@ -7,9 +7,7 @@ use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
 };
 use crate::gateway_middleware::{Cors, CorsPreflightExpr, HttpMiddleware, Middleware, Middlewares};
-use crate::gateway_security::{
-    SecuritySchemeIdentifier, SecuritySchemeReference, SecuritySchemeWithProviderMetadata,
-};
+use crate::gateway_security::{Provider, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeReference, SecuritySchemeWithProviderMetadata};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_common::model::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
@@ -18,7 +16,9 @@ use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::result::Result;
+use std::str::FromStr;
 use std::time::SystemTime;
+use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -74,6 +74,66 @@ pub struct HttpApiDefinitionRequestData {
     pub draft: bool,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct SecuritySchemeData {
+    provider_type: String,
+    scheme_identifier: SecuritySchemeIdentifier,
+    client_id: String,
+    client_secret: String, // secret type macros and therefore already redacted
+    redirect_url: String,
+    scopes: Vec<String>,
+}
+
+impl TryFrom<SecuritySchemeData> for SecurityScheme {
+    type Error = String;
+
+    fn try_from(value: SecuritySchemeData) -> Result<Self, Self::Error> {
+        let provider_type = Provider::from_str(value.provider_type.as_str())?;
+        let scheme_identifier = value.scheme_identifier;
+        let client_id = ClientId::new(value.client_id);
+        let client_secret = ClientSecret::new(value.client_secret);
+        let redirect_url = RedirectUrl::new(value.redirect_url).map_err(|e| e.to_string())?;
+        let scopes = value
+            .scopes
+            .into_iter()
+            .map(|scope| Scope::new(scope))
+            .collect();
+
+        Ok(SecurityScheme::new(
+            provider_type,
+            scheme_identifier,
+            client_id,
+            client_secret,
+            redirect_url,
+            scopes,
+        ))
+    }
+}
+
+impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeData {
+    fn from(value: SecuritySchemeWithProviderMetadata) -> Self {
+        let provider_type = value.security_scheme.provider_type().to_string();
+        let scheme_identifier = value.security_scheme.scheme_identifier();
+        let client_id = value.security_scheme.client_id().to_string();
+        let client_secret = value.security_scheme.client_secret().secret().to_string();
+        let redirect_url = value.security_scheme.redirect_url().to_string();
+        let scopes = value.security_scheme.scopes().iter().map(|scope| scope.to_string()).collect();
+
+        Self {
+            provider_type,
+            scheme_identifier,
+            client_id,
+            client_secret,
+            redirect_url,
+            scopes,
+        }
+    }
+}
+
+
 
 // HttpApiDefinitionResponse is a trimmed down version of CompiledHttpApiDefinition
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]

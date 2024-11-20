@@ -393,7 +393,7 @@ mod test {
             ));
 
         let security_scheme_service =
-            Arc::new(DefaultSecuritySchemeService::new());
+            Arc::new(DefaultSecuritySchemeService::default());
 
         let component_service: ComponentService = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(

@@ -2,17 +2,38 @@ use crate::gateway_security::default_provider::DefaultIdentityProvider;
 use crate::gateway_security::IdentityProvider;
 use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 use std::sync::Arc;
 
 // SecurityScheme shouldn't have Serialize or Deserialize
 #[derive(Debug, Clone)]
-pub struct SecurityScheme {
+    pub struct SecurityScheme {
     provider_type: Provider,
     scheme_identifier: SecuritySchemeIdentifier,
     client_id: ClientId,
     client_secret: ClientSecret, // secret type macros and therefore already redacted
     redirect_url: RedirectUrl,
     scopes: Vec<Scope>,
+}
+
+impl SecurityScheme {
+    pub fn new(
+        provider_type: Provider,
+        scheme_identifier: SecuritySchemeIdentifier,
+        client_id: ClientId,
+        client_secret: ClientSecret,
+        redirect_url: RedirectUrl,
+        scopes: Vec<Scope>,
+    ) -> Self {
+        SecurityScheme {
+            provider_type,
+            scheme_identifier,
+            client_id,
+            client_secret,
+            redirect_url,
+            scopes,
+        }
+    }
 }
 
 // May be relaxed to just a string as we make it more configurable
@@ -22,6 +43,20 @@ pub enum Provider {
     Facebook,
     Microsoft,
     Gitlab,
+}
+
+impl FromStr for Provider {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "google" => Ok(Provider::Google),
+            "facebook" => Ok(Provider::Facebook),
+            "microsoft" => Ok(Provider::Microsoft),
+            "gitlab" => Ok(Provider::Gitlab),
+            _ => Err(format!("Invalid provider: {}", s)),
+        }
+    }
 }
 
 impl From<Provider> for golem_api_grpc::proto::golem::apidefinition::Provider {
