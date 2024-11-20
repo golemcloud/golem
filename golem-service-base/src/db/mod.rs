@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::error::Error;
-use std::path::Path;
-
+use anyhow::anyhow;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Sqlite, SqliteConnection};
+use std::path::Path;
 use tracing::info;
 
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
@@ -33,7 +32,7 @@ fn create_postgres_options(config: &DbPostgresConfig) -> PgConnectOptions {
 
 pub async fn create_postgres_pool(
     config: &DbPostgresConfig,
-) -> Result<Pool<Postgres>, Box<dyn Error>> {
+) -> Result<Pool<Postgres>, sqlx::Error> {
     let schema = config.schema.clone().unwrap_or("public".to_string());
     info!(
         "DB Pool: postgresql://{}:{}/{}?currentSchema={}",
@@ -55,7 +54,7 @@ pub async fn create_postgres_pool(
         .map_err(|e| e.into())
 }
 
-pub async fn postgres_migrate(config: &DbPostgresConfig, path: &Path) -> Result<(), Box<dyn Error>> {
+pub async fn postgres_migrate(config: &DbPostgresConfig, path: &Path) -> Result<(), anyhow::Error> {
     let schema = config.schema.clone().unwrap_or("public".to_string());
     info!(
         "DB migration: postgresql://{}:{}/{}?currentSchema={}, path: {:?}",
@@ -75,7 +74,7 @@ pub async fn postgres_migrate(config: &DbPostgresConfig, path: &Path) -> Result<
     let result = conn.execute(sqlx::query(&sql)).await?;
     if result.rows_affected() == 0 {
         let _ = conn.close().await;
-        return Err(format!("DB schema {} do not exists/was not created", schema).into());
+        return Err(anyhow!("DB schema {schema} do not exists/was not created"));
     }
 
     let migrator = sqlx::migrate::Migrator::new(path).await?;
@@ -91,7 +90,7 @@ fn create_sqlite_options(config: &DbSqliteConfig) -> SqliteConnectOptions {
         .create_if_missing(true)
 }
 
-pub async fn create_sqlite_pool(config: &DbSqliteConfig) -> Result<Pool<Sqlite>, Box<dyn Error>> {
+pub async fn create_sqlite_pool(config: &DbSqliteConfig) -> Result<Pool<Sqlite>, sqlx::Error> {
     info!("DB Pool: sqlite://{}", config.database);
 
     SqlitePoolOptions::new()
@@ -101,8 +100,11 @@ pub async fn create_sqlite_pool(config: &DbSqliteConfig) -> Result<Pool<Sqlite>,
         .map_err(|e| e.into())
 }
 
-pub async fn sqlite_migrate(config: &DbSqliteConfig, path: &Path) -> Result<(), Box<dyn Error>> {
-    info!("DB migration: sqlite://{}, path: {:?}", config.database, path);
+pub async fn sqlite_migrate(config: &DbSqliteConfig, path: &Path) -> Result<(), anyhow::Error> {
+    info!(
+        "DB migration: sqlite://{}, path: {:?}",
+        config.database, path
+    );
     let mut conn = SqliteConnection::connect_with(&create_sqlite_options(config)).await?;
     let migrator = sqlx::migrate::Migrator::new(path).await?;
     migrator.run_direct(&mut conn).await?;

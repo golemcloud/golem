@@ -12,20 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::api::{make_open_api_service, ApiServices};
 use crate::config::ComponentServiceConfig;
 use crate::service::Services;
+use anyhow::{anyhow, Context};
 use golem_common::config::DbConfig;
 use golem_common::golem_version;
 use golem_service_base::db;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
+use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
-use std::sync::Arc;
-use tokio::select;
-use tracing::{error, info};
+use tokio::task::JoinSet;
+use tracing::info;
 
 pub mod api;
 pub mod config;
@@ -38,71 +40,93 @@ const VERSION: &str = golem_version!();
 #[cfg(test)]
 test_r::enable!();
 
-pub async fn async_main(
-    config: &ComponentServiceConfig,
+#[derive(Clone)]
+pub struct ComponentService {
+    config: ComponentServiceConfig,
     prometheus_registry: Registry,
-    db_migration_path: &Path
-) -> Result<(), std::io::Error> {
-    let grpc_port = config.grpc_port;
-    let http_port = config.http_port;
+    services: Services,
+}
 
-    info!(
-        "Starting cloud server on ports: http: {}, grpc: {}",
-        http_port, grpc_port
-    );
+impl ComponentService {
+    pub async fn new(
+        config: ComponentServiceConfig,
+        prometheus_registry: Registry,
+        db_migration_path: &Path,
+    ) -> Result<Self, anyhow::Error> {
+        info!(
+            "Starting cloud server on ports: http: {}, grpc: {}",
+            config.http_port, config.grpc_port
+        );
 
-    match config.db.clone() {
-        DbConfig::Postgres(c) => {
-            db::postgres_migrate(&c, &db_migration_path.join("postgres"))
-                .await
-                .map_err(|e| {
-                    error!("DB - init error: {}", e);
-                    std::io::Error::new(std::io::ErrorKind::Other, "Init error (Postgres DB migration)")
-                })?;
-        }
-        DbConfig::Sqlite(c) => {
-            db::sqlite_migrate(&c, &db_migration_path.join("sqlite"))
-                .await
-                .map_err(|e| {
-                    error!("DB - init error: {}", e);
-                    std::io::Error::new(std::io::ErrorKind::Other, "Init error (Sqlite DB migration)")
-                })?;
-        }
-    };
+        match config.db.clone() {
+            DbConfig::Postgres(c) => {
+                db::postgres_migrate(&c, &db_migration_path.join("postgres"))
+                    .await
+                    .context("Postgres DB migration")?;
+            }
+            DbConfig::Sqlite(c) => {
+                db::sqlite_migrate(&c, &db_migration_path.join("sqlite"))
+                    .await
+                    .context("SQLite DB migration")?;
+            }
+        };
 
-    let services = Services::new(config).await.map_err(|e| {
-        error!("Services - init error: {}", e);
-        std::io::Error::new(std::io::ErrorKind::Other, e)
-    })?;
-
-    let http_services = services.clone();
-    let grpc_services = services.clone();
-
-    let http_server = tokio::spawn(async move {
-        let prometheus_registry = Arc::new(prometheus_registry);
-        let app = api::combined_routes(prometheus_registry, &http_services)
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
-
-        poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", http_port)))
-            .run(app)
+        let services = Services::new(&config)
             .await
-            .expect("HTTP server failed");
-    });
+            .map_err(|err| anyhow!(err).context("Service initialization"))?;
 
-    let grpc_server = tokio::spawn(async move {
+        Ok(Self {
+            config,
+            prometheus_registry,
+            services,
+        })
+    }
+
+    pub async fn run(&self) -> Result<(), anyhow::Error> {
+        let mut join_set = JoinSet::new();
+        let _grpc_server = join_set.spawn({
+            let self_ = self.clone();
+            async move { self_.start_grpc_server().await }
+        });
+        let _http_server = join_set.spawn({
+            let self_ = self.clone();
+            async move { self_.start_http_server().await }
+        });
+
+        while let Some(res) = join_set.join_next().await {
+            let result = res?;
+            result?;
+        }
+
+        Ok(())
+    }
+
+    pub fn http_service(&self) -> OpenApiService<ApiServices, ()> {
+        make_open_api_service(&self.services)
+    }
+
+    pub async fn start_grpc_server(&self) -> Result<(), anyhow::Error> {
+        let grpc_services = self.services.clone();
         grpcapi::start_grpc_server(
-            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), grpc_port).into(),
+            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), self.config.grpc_port).into(),
             &grpc_services,
         )
         .await
-        .expect("gRPC server failed");
-    });
-
-    select! {
-        _ = http_server => {},
-        _ = grpc_server => {},
+        .map_err(|err| anyhow!(err).context("gRPC server failed"))
     }
 
-    Ok(())
+    async fn start_http_server(&self) -> Result<(), anyhow::Error> {
+        let prometheus_registry = self.prometheus_registry.clone();
+        let app = api::combined_routes(prometheus_registry, &self.services)
+            .with(OpenTelemetryMetrics::new())
+            .with(Tracing);
+
+        poem::Server::new(TcpListener::bind(format!(
+            "0.0.0.0:{}",
+            self.config.http_port
+        )))
+        .run(app)
+        .await
+        .map_err(|err| anyhow!(err).context("HTTP server failed"))
+    }
 }

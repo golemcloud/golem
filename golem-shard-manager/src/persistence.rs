@@ -14,12 +14,12 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::error::ShardManagerError;
+use crate::model::{RoutingTable, ShardManagerState};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::redis::RedisPool;
 use golem_common::serialization::{deserialize, serialize};
-use crate::error::ShardManagerError;
-use crate::model::{RoutingTable, ShardManagerState};
 
 #[async_trait]
 pub trait RoutingTablePersistence {
@@ -99,7 +99,8 @@ impl RoutingTableFileSystemPersistence {
 impl RoutingTablePersistence for RoutingTableFileSystemPersistence {
     async fn write(&self, routing_table: &RoutingTable) -> Result<(), ShardManagerError> {
         let shard_manager_state = ShardManagerState::new(routing_table);
-        let encoded = serialize(&shard_manager_state).map_err(ShardManagerError::SerializationError)?;
+        let encoded =
+            serialize(&shard_manager_state).map_err(ShardManagerError::SerializationError)?;
         tokio::fs::write(&self.path, encoded).await?;
         Ok(())
     }

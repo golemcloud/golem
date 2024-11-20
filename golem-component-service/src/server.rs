@@ -12,25 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
-use golem_component_service::api::make_open_api_service;
 use golem_component_service::config::{make_config_loader, ComponentServiceConfig};
-use golem_component_service::service::Services;
-use golem_component_service::{api, async_main, grpcapi, metrics};
-use golem_service_base::db;
+use golem_component_service::{metrics, ComponentService};
 use opentelemetry::global;
-use poem::listener::TcpListener;
-use poem::middleware::{OpenTelemetryMetrics, Tracing};
-use poem::EndpointExt;
 use prometheus::Registry;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
-use std::sync::Arc;
-use tokio::select;
-use tracing::{error, info};
 
-fn main() -> Result<(), std::io::Error> {
+fn main() -> Result<(), anyhow::Error> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -43,8 +32,7 @@ fn main() -> Result<(), std::io::Error> {
 
         let exporter = opentelemetry_prometheus::exporter()
             .with_registry(prometheus.clone())
-            .build()
-            .unwrap();
+            .build()?;
 
         global::set_meter_provider(
             opentelemetry_sdk::metrics::MeterProviderBuilder::default()
@@ -52,22 +40,25 @@ fn main() -> Result<(), std::io::Error> {
                 .build(),
         );
 
-        tokio::runtime::Builder::new_multi_thread()
+        Ok(tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?
-            .block_on(async_main(&config, prometheus, Path::new("./db/migration")))
+            .block_on(run(config, prometheus))?)
     } else {
         Ok(())
     }
 }
 
-async fn dump_openapi_yaml() -> Result<(), std::io::Error> {
+async fn run(config: ComponentServiceConfig, prometheus: Registry) -> Result<(), anyhow::Error> {
+    let server = ComponentService::new(config, prometheus, Path::new("./db/migration")).await?;
+    server.run().await
+}
+
+async fn dump_openapi_yaml() -> Result<(), anyhow::Error> {
     let config = ComponentServiceConfig::default();
-    let services = Services::new(&config).await.map_err(|e| {
-        error!("Services - init error: {}", e);
-        std::io::Error::new(std::io::ErrorKind::Other, e)
-    })?;
-    let service = make_open_api_service(&services);
-    println!("{}", service.spec_yaml());
+    let service =
+        ComponentService::new(config, Registry::default(), Path::new("./db/migration")).await?;
+    let yaml = service.http_service().spec_yaml();
+    println!("{yaml}");
     Ok(())
 }

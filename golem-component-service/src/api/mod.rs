@@ -17,18 +17,16 @@ use poem::endpoint::PrometheusExporter;
 use poem::Route;
 use poem_openapi::OpenApiService;
 use prometheus::Registry;
-use std::ops::Deref;
-use std::sync::Arc;
 
 pub mod component;
 pub mod healthcheck;
 
-pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) -> Route {
+pub fn combined_routes(prometheus_registry: Registry, services: &Services) -> Route {
     let api_service = make_open_api_service(services);
 
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint_yaml();
-    let metrics = PrometheusExporter::new(prometheus_registry.deref().clone());
+    let metrics = PrometheusExporter::new(prometheus_registry.clone());
 
     Route::new()
         .nest("/", api_service)
@@ -37,7 +35,7 @@ pub fn combined_routes(prometheus_registry: Arc<Registry>, services: &Services) 
         .nest("/metrics", metrics)
 }
 
-type ApiServices = (component::ComponentApi, healthcheck::HealthcheckApi);
+pub type ApiServices = (component::ComponentApi, healthcheck::HealthcheckApi);
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices, ()> {
     OpenApiService::new(

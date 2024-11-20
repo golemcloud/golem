@@ -24,9 +24,17 @@ golem-worker-executor-base = { path = "../golem-worker-executor-base", version =
 golem-worker-service = { path = "../golem-worker-service", version = "0.0.0" }
 golem-worker-service-base = { path = "../golem-worker-service-base", version = "0.0.0" }
 
+anyhow = { workspace = true }
+bytes = { workspace = true }
+http-body-util = "0.1.2"
+hyper = { workspace = true }
+hyper-util = "0.1.10"
 opentelemetry = { workspace = true }
 opentelemetry-prometheus = { workspace = true }
 opentelemetry_sdk = { workspace = true }
+poem = { workspace = true }
+poem-openapi = { workspace = true }
 prometheus = { workspace = true }
+regex = { workspace = true }
 rustls = { workspace = true }
 tokio = { workspace = true }

@@ -1,22 +1,17 @@
-use crate::api::make_open_api_service;
-use crate::config::make_config_loader;
+use crate::api::{make_open_api_service, ApiServices};
 use crate::service::Services;
+use anyhow::{anyhow, Context};
 use golem_common::config::DbConfig;
-use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_service_base::db;
 use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
-use golem_worker_service_base::metrics;
-use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
+use poem_openapi::OpenApiService;
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
-use std::sync::Arc;
-use tokio::select;
-use tracing::error;
+use tokio::task::JoinSet;
 
 pub mod api;
 pub mod config;
@@ -26,116 +21,105 @@ pub mod service;
 #[cfg(test)]
 test_r::enable!();
 
-pub async fn async_main() -> std::io::Result<()> {
-    if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
-        let config = WorkerServiceBaseConfig::default();
-        let services = Services::new(&config)
-            .await
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        let api_service = make_open_api_service(&services);
-        println!("{}", api_service.spec_yaml());
-        Ok(())
-    } else if let Some(config) = make_config_loader().load_or_dump_config() {
-        let prometheus = metrics::register_all();
-        init_tracing(&config, prometheus.clone());
-        app(&config, prometheus, Path::new("./db/migration")).await
-    } else {
-        Ok(())
-    }
+#[derive(Clone)]
+pub struct WorkerService {
+    config: WorkerServiceBaseConfig,
+    prometheus_registry: Registry,
+    services: Services,
 }
 
-pub async fn app(
-    config: &WorkerServiceBaseConfig,
-    prometheus_registry: Registry,
-    db_migration_path: &Path,
-) -> std::io::Result<()> {
-    let config = config.clone();
+impl WorkerService {
+    pub async fn new(
+        config: WorkerServiceBaseConfig,
+        prometheus_registry: Registry,
+        db_migration_path: &Path,
+    ) -> Result<Self, anyhow::Error> {
+        match &config.db {
+            DbConfig::Postgres(c) => {
+                db::postgres_migrate(&c, &db_migration_path.join("postgres"))
+                    .await
+                    .context("Postgres DB migration")?;
+            }
+            DbConfig::Sqlite(c) => {
+                db::sqlite_migrate(&c, &db_migration_path.join("sqlite"))
+                    .await
+                    .context("Postgres DB migration")?;
+            }
+        };
 
-    match config.db.clone() {
-        DbConfig::Postgres(c) => {
-            db::postgres_migrate(&c, &db_migration_path.join("postgres"))
-                .await
-                .map_err(|e| {
-                    error!(error = e, "DB - postgres - init error");
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Init error (Postgres DB migration)",
-                    )
-                })?;
-        }
-        DbConfig::Sqlite(c) => {
-            db::sqlite_migrate(&c, &db_migration_path.join("sqlite"))
-                .await
-                .map_err(|e| {
-                    error!(error = e, "DB - sqlite - init error");
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "Init error (Sqlite DB migration)",
-                    )
-                })?;
-        }
-    };
-
-    let services: Services = Services::new(&config)
-        .await
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-
-    let http_service1 = services.clone();
-    let http_service2 = services.clone();
-    let grpc_services = services.clone();
-
-    let custom_request_server = tokio::spawn(async move {
-        let route = api::custom_request_route(http_service1)
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
-
-        poem::Server::new(TcpListener::bind(("0.0.0.0", config.custom_request_port)))
-            .name("gateway")
-            .run(route)
+        let services: Services = Services::new(&config)
             .await
-            .expect("Custom Request server failed")
-    });
+            .map_err(|err| anyhow!(err).context("Service initialization"))?;
 
-    let worker_server = tokio::spawn(async move {
-        let prometheus_registry = Arc::new(prometheus_registry);
-        let app = api::combined_routes(prometheus_registry, &http_service2)
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
+        Ok(Self {
+            config,
+            prometheus_registry,
+            services,
+        })
+    }
 
-        poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", config.port)))
-            .run(app)
-            .await
-            .expect("HTTP server failed");
-    });
+    pub async fn run(&self) -> Result<(), anyhow::Error> {
+        let mut join_set = JoinSet::new();
 
-    let grpc_server = tokio::spawn(async move {
+        let _grpc_server = join_set.spawn({
+            let self_ = self.clone();
+            async move { self_.start_grpc_server().await }
+        });
+        let _http_server = join_set.spawn({
+            let self_ = self.clone();
+            async move { self_.start_http_server().await }
+        });
+        let _api_gateway_server = join_set.spawn({
+            let self_ = self.clone();
+            async move { self_.start_api_gateway_server().await }
+        });
+
+        while let Some(res) = join_set.join_next().await {
+            let result = res?;
+            result?;
+        }
+
+        Ok(())
+    }
+
+    pub fn http_service(&self) -> OpenApiService<ApiServices, ()> {
+        make_open_api_service(&self.services)
+    }
+
+    pub async fn start_grpc_server(&self) -> Result<(), anyhow::Error> {
+        let grpc_services = self.services.clone();
         grpcapi::start_grpc_server(
-            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), config.worker_grpc_port).into(),
+            SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), self.config.worker_grpc_port).into(),
             &grpc_services,
         )
         .await
-        .expect("gRPC server failed");
-    });
-
-    select! {
-        _ = worker_server => {},
-        _ = custom_request_server => {},
-        _ = grpc_server => {},
+        .map_err(|err| anyhow!(err).context("gRPC server failed"))
     }
-    Ok(())
-}
 
-fn init_tracing(config: &WorkerServiceBaseConfig, prometheus_registry: Registry) {
-    init_tracing_with_default_env_filter(&config.tracing);
+    async fn start_http_server(&self) -> Result<(), anyhow::Error> {
+        let prometheus_registry = self.prometheus_registry.clone();
+        let app = api::combined_routes(prometheus_registry, &self.services)
+            .with(OpenTelemetryMetrics::new())
+            .with(Tracing);
 
-    let exporter = opentelemetry_prometheus::exporter()
-        .with_registry(prometheus_registry.clone())
-        .build()
-        .unwrap();
+        poem::Server::new(TcpListener::bind(format!("0.0.0.0:{}", self.config.port)))
+            .run(app)
+            .await
+            .map_err(|err| anyhow!(err).context("HTTP server failed"))
+    }
 
-    global::set_meter_provider(
-        MeterProviderBuilder::default()
-            .with_reader(exporter)
-            .build(),
-    );
+    pub async fn start_api_gateway_server(&self) -> Result<(), anyhow::Error> {
+        let route = api::custom_request_route(&self.services)
+            .with(OpenTelemetryMetrics::new())
+            .with(Tracing);
+
+        poem::Server::new(TcpListener::bind((
+            "0.0.0.0",
+            self.config.custom_request_port,
+        )))
+        .name("gateway")
+        .run(route)
+        .await
+        .map_err(|err| anyhow!(err).context("API Gateway server failed"))
+    }
 }

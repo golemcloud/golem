@@ -54,7 +54,7 @@ impl IsRetriableError for ShardManagerError {
             ShardManagerError::WorkerExecutionError(_) => true, // TODO: can we define which ones are retryable?
             ShardManagerError::SerializationError(_) => false,
             ShardManagerError::RedisError(_) => false,
-            ShardManagerError::IoError(_) => false
+            ShardManagerError::IoError(_) => false,
         }
     }
 
