@@ -126,7 +126,6 @@ impl Services {
         let worker_service: worker::WorkerService = Arc::new(WorkerServiceDefault::new(
             worker_executor_grpc_clients.clone(),
             config.worker_executor_retries.clone(),
-            component_service.clone(),
             routing_table_service.clone(),
         ));
 

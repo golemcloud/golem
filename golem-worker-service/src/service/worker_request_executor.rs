@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use golem_common::model::TargetWorkerId;
-use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
+use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::model::validate_worker_name;
 use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::gateway_execution::{
@@ -28,11 +28,11 @@ use tracing::{debug, info};
 
 // The open source deviates from the proprietary codebase here, only in terms of authorisation
 pub struct UnauthorisedWorkerRequestExecutor {
-    pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
+    pub worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
 impl UnauthorisedWorkerRequestExecutor {
-    pub fn new(worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>) -> Self {
+    pub fn new(worker_service: Arc<dyn WorkerService + Sync + Send>) -> Self {
         Self { worker_service }
     }
 }

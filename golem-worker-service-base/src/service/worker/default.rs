@@ -16,7 +16,6 @@ use super::{
     AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients, RandomExecutor,
     ResponseMapResult, RoutingLogic, WorkerServiceError, WorkerStream,
 };
-use crate::service::component::ComponentService;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
@@ -39,7 +38,7 @@ use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, TargetWorkerId, WorkerFilter,
     WorkerId, WorkerStatus,
 };
-use golem_service_base::model::{Component, GolemError};
+use golem_service_base::model::GolemError;
 use golem_service_base::model::{
     GetOplogResponse, GolemErrorUnknown, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
 };
@@ -56,7 +55,7 @@ use tracing::{error, info};
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
 #[async_trait]
-pub trait WorkerService<AuthCtx> {
+pub trait WorkerService {
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -210,13 +209,6 @@ pub trait WorkerService<AuthCtx> {
         metadata: WorkerRequestMetadata,
     ) -> WorkerResult<()>;
 
-    async fn get_component_for_worker(
-        &self,
-        worker_id: &WorkerId,
-        metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Component, WorkerServiceError>;
-
     async fn get_oplog(
         &self,
         worker_id: &WorkerId,
@@ -262,39 +254,36 @@ pub struct WorkerRequestMetadata {
 }
 
 #[derive(Clone)]
-pub struct WorkerServiceDefault<AuthCtx> {
+pub struct WorkerServiceDefault {
     worker_executor_clients: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
     // NOTE: unlike other retries, reaching max_attempts for the worker executor
     //       (with retryable errors) does not end the retry loop,
     //       rather it emits a warn log and resets the retry state.
     worker_executor_retries: RetryConfig,
-    component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
 }
 
-impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
+impl WorkerServiceDefault {
     pub fn new(
         worker_executor_clients: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
         worker_executor_retries: RetryConfig,
-        component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     ) -> Self {
         Self {
             worker_executor_clients,
             worker_executor_retries,
-            component_service,
             routing_table_service,
         }
     }
 }
 
-impl<AuthCtx> HasRoutingTableService for WorkerServiceDefault<AuthCtx> {
+impl HasRoutingTableService for WorkerServiceDefault {
     fn routing_table_service(&self) -> &Arc<dyn RoutingTableService + Send + Sync> {
         &self.routing_table_service
     }
 }
 
-impl<AuthCtx> HasWorkerExecutorClients for WorkerServiceDefault<AuthCtx> {
+impl HasWorkerExecutorClients for WorkerServiceDefault {
     fn worker_executor_clients(&self) -> &MultiTargetGrpcClient<WorkerExecutorClient<Channel>> {
         &self.worker_executor_clients
     }
@@ -305,10 +294,7 @@ impl<AuthCtx> HasWorkerExecutorClients for WorkerServiceDefault<AuthCtx> {
 }
 
 #[async_trait]
-impl<AuthCtx> WorkerService<AuthCtx> for WorkerServiceDefault<AuthCtx>
-where
-    AuthCtx: Send + Sync,
-{
+impl WorkerService for WorkerServiceDefault {
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -515,7 +501,7 @@ where
             move |worker_executor_client| {
                 info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
-                    workerexecutor::v1::InvokeAndAwaitWorkerRequest {
+                    InvokeAndAwaitWorkerRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
                         input: params.clone(),
@@ -830,16 +816,6 @@ where
         Ok(())
     }
 
-    async fn get_component_for_worker(
-        &self,
-        worker_id: &WorkerId,
-        metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Component, WorkerServiceError> {
-        self.try_get_component_for_worker(worker_id, metadata, auth_ctx)
-            .await
-    }
-
     async fn get_oplog(
         &self,
         worker_id: &WorkerId,
@@ -1123,38 +1099,7 @@ where
     }
 }
 
-impl<AuthCtx> WorkerServiceDefault<AuthCtx>
-where
-    AuthCtx: Send + Sync,
-{
-    async fn try_get_component_for_worker(
-        &self,
-        worker_id: &WorkerId,
-        request_metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Component, WorkerServiceError> {
-        match self.get_metadata(worker_id, request_metadata).await {
-            Ok(metadata) => {
-                let component_version = metadata.component_version;
-                let component_details = self
-                    .component_service
-                    .get_by_version(&worker_id.component_id, component_version, auth_ctx)
-                    .await?;
-
-                Ok(component_details)
-            }
-            Err(WorkerServiceError::WorkerNotFound(_)) => Ok(self
-                .component_service
-                .get_latest(&worker_id.component_id, auth_ctx)
-                .await?),
-            Err(WorkerServiceError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
-                .component_service
-                .get_latest(&worker_id.component_id, auth_ctx)
-                .await?),
-            Err(other) => Err(other),
-        }
-    }
-
+impl WorkerServiceDefault {
     async fn find_running_metadata_internal(
         &self,
         component_id: &ComponentId,

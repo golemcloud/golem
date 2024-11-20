@@ -69,14 +69,14 @@ pub struct FileServerBindingDetails {
 pub struct DefaultFileServerBindingHandler {
     component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
+    worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
 impl DefaultFileServerBindingHandler {
     pub fn new(
         component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
-        worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
+        worker_service: Arc<dyn WorkerService + Sync + Send>,
     ) -> Self {
         DefaultFileServerBindingHandler {
             component_service,
