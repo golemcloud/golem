@@ -208,7 +208,6 @@ mod tests {
             version: ApiVersion::new("v1"),
             draft: false,
             created_at: chrono::Utc::now(),
-            security: None,
         };
 
         let cors_transformer = CorsTransformer;
@@ -246,7 +245,6 @@ mod tests {
             version: ApiVersion::new("v1"),
             draft: false,
             created_at: chrono::Utc::now(),
-            security: None,
         };
 
         let transformer = CorsTransformer;
@@ -281,7 +279,6 @@ mod tests {
             version: ApiVersion::new("v1"),
             draft: false,
             created_at: chrono::Utc::now(),
-            security: None,
         };
 
         let cors_transformer = CorsTransformer;
