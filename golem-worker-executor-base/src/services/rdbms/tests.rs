@@ -505,7 +505,14 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
 async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.postgres(),
-        "pg://user:password@localhost:5999",
+        "pg://user:password@localhost:3506",
+        Error::ConnectionFailure("error with configuration: 'pg' scheme is invalid".to_string()),
+    )
+    .await;
+
+    rdbms_connection_err_test(
+        rdbms_service.postgres(),
+        "postgres://user:password@localhost:5999",
         Error::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
     )
     .await
@@ -524,7 +531,7 @@ async fn postgres_query_err_test(
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryResponseFailure(
+        Error::QueryExecutionFailure(
             "error returned from database: relation \"xxx\" does not exist".to_string(),
         ),
     )
@@ -534,7 +541,21 @@ async fn postgres_query_err_test(
         &db_address,
         "SELECT '12.34'::float8::numeric::money;",
         vec![],
-        Error::QueryResponseFailure("Unsupported type: MONEY".to_string()),
+        Error::QueryResponseFailure("Type 'MONEY' is not supported".to_string()),
+    )
+    .await;
+
+    rdbms_query_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT 1",
+        vec![DbValue::Array(vec![
+            DbValuePrimitive::Text("tag1".to_string()),
+            DbValuePrimitive::Int8(0),
+        ])],
+        Error::QueryParameterFailure(
+            "Array param element '0' with index 1 is not supported".to_string(),
+        ),
     )
     .await;
 }
@@ -558,12 +579,17 @@ async fn postgres_execute_err_test(
     )
     .await;
 
-    rdbms_query_err_test(
+    rdbms_execute_err_test(
         rdbms.clone(),
         &db_address,
-        "SELECT '12.34'::float8::numeric::money;",
-        vec![],
-        Error::QueryResponseFailure("Unsupported type: MONEY".to_string()),
+        "SELECT 1",
+        vec![DbValue::Array(vec![
+            DbValuePrimitive::Text("tag1".to_string()),
+            DbValuePrimitive::Int8(0),
+        ])],
+        Error::QueryParameterFailure(
+            "Array param element '0' with index 1 is not supported".to_string(),
+        ),
     )
     .await;
 }
@@ -578,7 +604,7 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServ
         &db_address,
         "SELECT * FROM xxx",
         vec![],
-        Error::QueryResponseFailure(
+        Error::QueryExecutionFailure(
             "error returned from database: 1146 (42S02): Table 'mysql.xxx' doesn't exist"
                 .to_string(),
         ),
@@ -593,7 +619,16 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServ
             DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
             DbValue::Array(vec![DbValuePrimitive::Text("tag1".to_string())]),
         ],
-        Error::QueryParameterFailure("Array param not supported".to_string()),
+        Error::QueryParameterFailure("Array param is not supported".to_string()),
+    )
+    .await;
+
+    rdbms_query_err_test(
+        rdbms.clone(),
+        &db_address,
+        "SELECT YEAR(\"2017-06-15\");",
+        vec![],
+        Error::QueryResponseFailure("Type 'YEAR' is not supported".to_string()),
     )
     .await;
 }
@@ -622,7 +657,7 @@ async fn mysql_execute_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsSe
         vec![DbValue::Array(vec![DbValuePrimitive::Text(
             "tag1".to_string(),
         )])],
-        Error::QueryParameterFailure("Array param not supported".to_string()),
+        Error::QueryParameterFailure("Array param is not supported".to_string()),
     )
     .await;
 }
@@ -632,9 +667,16 @@ async fn mysql_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.mysql(),
         "msql://user:password@localhost:3506",
+        Error::ConnectionFailure("error with configuration: 'msql' scheme is invalid".to_string()),
+    )
+    .await;
+
+    rdbms_connection_err_test(
+        rdbms_service.mysql(),
+        "mysql://user:password@localhost:3506",
         Error::ConnectionFailure("pool timed out while waiting for an open connection".to_string()),
     )
-    .await
+    .await;
 }
 
 async fn rdbms_connection_err_test<T: RdbmsType>(

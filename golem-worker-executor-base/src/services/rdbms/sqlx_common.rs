@@ -300,7 +300,7 @@ where
                 let rows: Vec<DB::Row> = rows
                     .into_iter()
                     .collect::<Result<Vec<_>, sqlx::Error>>()
-                    .map_err(|e| Error::QueryResponseFailure(e.to_string()))?;
+                    .map_err(|e| Error::QueryExecutionFailure(e.to_string()))?;
 
                 let columns = rows[0]
                     .columns()

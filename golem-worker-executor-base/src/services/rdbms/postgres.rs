@@ -25,10 +25,11 @@ use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use futures_util::stream::BoxStream;
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
-use sqlx::{Column, Pool, Row, TypeInfo};
+use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
+use url::Url;
 use uuid::Uuid;
 
 pub(crate) const POSTGRES: &str = "postgres";
@@ -57,7 +58,13 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
         &self,
         config: &RdbmsPoolConfig,
     ) -> Result<Pool<sqlx::Postgres>, sqlx::Error> {
-        let options = PgConnectOptions::from_str(&self.address)?;
+        let url: Url = self.address.parse().map_err(sqlx::Error::config)?;
+        if url.scheme() != "postgres" && url.scheme() != "postgresql" {
+            Err(sqlx::Error::Configuration(
+                format!("'{}' scheme is invalid", url.scheme()).into(),
+            ))?
+        }
+        let options = PgConnectOptions::from_url(&url)?;
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(config.max_connections)
             .connect_with(options)
@@ -103,8 +110,7 @@ impl<'q> QueryParamsBinder<'q, sqlx::Postgres>
         params: Vec<DbValue>,
     ) -> Result<sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>, Error> {
         for param in params {
-            self =
-                bind_value(self, param).map_err(|e| Error::QueryParameterFailure(e.to_string()))?;
+            self = bind_value(self, param).map_err(Error::QueryParameterFailure)?;
         }
         Ok(self)
     }
@@ -269,7 +275,10 @@ fn bind_value(
                     })?;
                     Ok(query.bind(values))
                 }
-                _ => Err(format!("Unsupported array value: {:?}", first)),
+                _ => Err(format!(
+                    "Array param element '{}' with index 0 is not supported",
+                    first
+                )),
             }
         }
         _ => Ok(query),
@@ -298,7 +307,7 @@ fn bind_value_primitive(
         }
         DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
         DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
-        _ => Err(format!("Unsupported value: {:?}", value)),
+        _ => Err(format!("Param '{}' is not supported", value)),
     }
 }
 
@@ -511,11 +520,11 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
         //                 None => DbValue::Array(vec![]),
         //             }
         //         }
-        //         _ => Err(format!("Unsupported type: {:?}", type_name))?,
+        //         _ => Err(format!("Type '{}' is not supported", type_name))?,
         //     },
-        //     _ => Err(format!("Unsupported type: {:?}", type_name))?,
+        //     _ => Err(format!("Type '{}' is not supported", type_name))?,
         // },
-        _ => Err(format!("Unsupported type: {}", type_name))?,
+        _ => Err(format!("Type '{}' is not supported", type_name))?,
     };
     Ok(value)
 }
@@ -589,7 +598,7 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
             pg_type_name::BYTEA_ARRAY => Ok(DbColumnType::Array(DbColumnTypePrimitive::Blob)),
             _ => match *type_kind {
                 PgTypeKind::Enum(_) => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
-                _ => Err(format!("Unsupported type: {}", type_name)),
+                _ => Err(format!("Type '{}' is not supported", type_name))?,
             },
         }
     }

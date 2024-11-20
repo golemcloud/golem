@@ -23,10 +23,11 @@ use crate::services::rdbms::types::{
 use crate::services::rdbms::{Rdbms, RdbmsPoolKey, RdbmsType};
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
-use sqlx::{Column, Pool, Row, TypeInfo};
+use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
 use std::str::FromStr;
 use std::sync::Arc;
+use url::Url;
 
 pub(crate) const MYSQL: &str = "mysql";
 
@@ -54,7 +55,13 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
         &self,
         config: &RdbmsPoolConfig,
     ) -> Result<Pool<sqlx::MySql>, sqlx::Error> {
-        let options = sqlx::mysql::MySqlConnectOptions::from_str(&self.address)?;
+        let url: Url = self.address.parse().map_err(sqlx::Error::config)?;
+        if url.scheme() != "mysql" {
+            Err(sqlx::Error::Configuration(
+                format!("'{}' scheme is invalid", url.scheme()).into(),
+            ))?
+        }
+        let options = sqlx::mysql::MySqlConnectOptions::from_url(&url)?;
         sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(config.max_connections)
             .connect_with(options)
@@ -100,8 +107,7 @@ impl<'q> QueryParamsBinder<'q, sqlx::MySql>
         params: Vec<DbValue>,
     ) -> Result<sqlx::query::Query<'q, sqlx::MySql, sqlx::mysql::MySqlArguments>, Error> {
         for param in params {
-            self =
-                bind_value(self, param).map_err(|e| Error::QueryParameterFailure(e.to_string()))?;
+            self = bind_value(self, param).map_err(Error::QueryParameterFailure)?;
         }
         Ok(self)
     }
@@ -113,7 +119,7 @@ fn bind_value(
 ) -> Result<sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments>, String> {
     match value {
         DbValue::Primitive(v) => bind_value_primitive(query, v),
-        DbValue::Array(_) => Err("Array param not supported".to_string()),
+        DbValue::Array(_) => Err("Array param is not supported".to_string()),
     }
 }
 
@@ -139,7 +145,7 @@ fn bind_value_primitive(
         }
         // DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
         DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
-        _ => Err(format!("Unsupported value: {:?}", value)),
+        _ => Err(format!("Param '{}' is not supported", value)),
     }
 }
 
@@ -252,7 +258,7 @@ fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::DbNull),
             }
         }
-        _ => Err(format!("Unsupported type: {:?}", type_name))?,
+        _ => Err(format!("Type '{}' is not supported", type_name))?,
     };
     Ok(value)
 }
@@ -304,7 +310,7 @@ impl TryFrom<&sqlx::mysql::MySqlTypeInfo> for DbColumnType {
                 Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Blob))
             }
             mysql_type_name::ENUM => Ok(DbColumnType::Primitive(DbColumnTypePrimitive::Text)),
-            _ => Err(format!("Unsupported type: {:?}", value)),
+            _ => Err(format!("Type '{}' is not supported", type_name))?,
         }
     }
 }

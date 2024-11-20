@@ -14,6 +14,7 @@
 
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
+use itertools::Itertools;
 use std::fmt::Display;
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
@@ -90,10 +91,43 @@ pub enum DbColumnTypePrimitive {
     Uuid,
 }
 
+impl Display for DbColumnTypePrimitive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DbColumnTypePrimitive::Int8 => write!(f, "int8"),
+            DbColumnTypePrimitive::Int16 => write!(f, "int16"),
+            DbColumnTypePrimitive::Int32 => write!(f, "int32"),
+            DbColumnTypePrimitive::Int64 => write!(f, "int64"),
+            DbColumnTypePrimitive::Float => write!(f, "float"),
+            DbColumnTypePrimitive::Double => write!(f, "double"),
+            DbColumnTypePrimitive::Decimal => write!(f, "decimal"),
+            DbColumnTypePrimitive::Boolean => write!(f, "boolean"),
+            DbColumnTypePrimitive::Timestamp => write!(f, "timestamp"),
+            DbColumnTypePrimitive::Date => write!(f, "date"),
+            DbColumnTypePrimitive::Time => write!(f, "time"),
+            DbColumnTypePrimitive::Interval => write!(f, "interval"),
+            DbColumnTypePrimitive::Text => write!(f, "text"),
+            DbColumnTypePrimitive::Blob => write!(f, "blob"),
+            DbColumnTypePrimitive::Json => write!(f, "json"),
+            DbColumnTypePrimitive::Xml => write!(f, "xml"),
+            DbColumnTypePrimitive::Uuid => write!(f, "uuid"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DbColumnType {
     Primitive(DbColumnTypePrimitive),
     Array(DbColumnTypePrimitive),
+}
+
+impl Display for DbColumnType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DbColumnType::Primitive(v) => write!(f, "{}", v),
+            DbColumnType::Array(v) => write!(f, "{}[]", v),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -118,10 +152,44 @@ pub enum DbValuePrimitive {
     DbNull,
 }
 
+impl Display for DbValuePrimitive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DbValuePrimitive::Int8(v) => write!(f, "{}", v),
+            DbValuePrimitive::Int16(v) => write!(f, "{}", v),
+            DbValuePrimitive::Int32(v) => write!(f, "{}", v),
+            DbValuePrimitive::Int64(v) => write!(f, "{}", v),
+            DbValuePrimitive::Float(v) => write!(f, "{}", v),
+            DbValuePrimitive::Double(v) => write!(f, "{}", v),
+            DbValuePrimitive::Decimal(v) => write!(f, "{}", v),
+            DbValuePrimitive::Boolean(v) => write!(f, "{}", v),
+            DbValuePrimitive::Timestamp(v) => write!(f, "{}", v),
+            DbValuePrimitive::Date(v) => write!(f, "{}", v),
+            DbValuePrimitive::Time(v) => write!(f, "{}", v),
+            DbValuePrimitive::Interval(v) => write!(f, "{}", v),
+            DbValuePrimitive::Text(v) => write!(f, "{}", v),
+            DbValuePrimitive::Blob(v) => write!(f, "{:?}", v),
+            DbValuePrimitive::Json(v) => write!(f, "{}", v),
+            DbValuePrimitive::Xml(v) => write!(f, "{}", v),
+            DbValuePrimitive::Uuid(v) => write!(f, "{}", v),
+            DbValuePrimitive::DbNull => write!(f, "NULL"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum DbValue {
     Primitive(DbValuePrimitive),
     Array(Vec<DbValuePrimitive>),
+}
+
+impl Display for DbValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DbValue::Primitive(v) => write!(f, "{}", v),
+            DbValue::Array(v) => write!(f, "[{}]", v.iter().format(", ")),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -183,11 +251,15 @@ pub(crate) fn get_plain_values<T>(
     f: impl Fn(DbValuePrimitive) -> Option<T>,
 ) -> Result<Vec<T>, String> {
     let mut result: Vec<T> = Vec::new();
-    for value in values {
+    for (index, value) in values.iter().enumerate() {
         if let Some(v) = f(value.clone()) {
             result.push(v);
         } else {
-            Err(format!("Unsupported array value: {:?}", value.clone()))?
+            Err(format!(
+                "Array param element '{}' with index {} is not supported",
+                value.clone(),
+                index
+            ))?
         }
     }
     Ok(result)
