@@ -255,25 +255,25 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 }
 
 #[async_trait]
-impl<N: Send + Sync + Clone, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
-    for DefaultGatewayBindingExecutor<N>
+impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync> GatewayBindingExecutor<Namespace, Response>
+    for DefaultGatewayBindingExecutor<Namespace>
 {
     async fn execute_binding(
         &self,
-        binding: &ResolvedGatewayBinding<N>,
+        binding: &ResolvedGatewayBinding<Namespace>,
         session: GatewaySessionStore,
-    ) -> R
+    ) -> Response
     where
-        RibResult: ToResponse<R>,
-        EvaluationError: ToResponseFromSafeDisplay<R>,
-        RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
-        MiddlewareInError: ToResponseFromSafeDisplay<R>,
-        MiddlewareOutError: ToResponseFromSafeDisplay<R>,
-        FileServerBindingResult: ToResponse<R>, // FileServerBindingResult can be a direct response in a file server endpoint
-        CorsPreflight: ToResponse<R>, // Cors can be a direct response in a cors preflight endpoint
-        AuthCallBackResult: ToResponse<R>, // AuthCallBackResult can be a direct response in auth callback endpoint
-        HttpRequestAuthentication: MiddlewareIn<R>, // HttpAuthorizer can authorise input
-        CorsPreflight: MiddlewareOut<R>,   // CorsPreflight can be a middleware in other endpoints
+        RibResult: ToResponse<Response>,
+        EvaluationError: ToResponseFromSafeDisplay<Response>,
+        RibInputTypeMismatch: ToResponseFromSafeDisplay<Response>,
+        MiddlewareInError: ToResponseFromSafeDisplay<Response>,
+        MiddlewareOutError: ToResponseFromSafeDisplay<Response>,
+        FileServerBindingResult: ToResponse<Response>, // FileServerBindingResult can be a direct response in a file server endpoint
+        CorsPreflight: ToResponse<Response>, // Cors can be a direct response in a cors preflight endpoint
+        AuthCallBackResult: ToResponse<Response>, // AuthCallBackResult can be a direct response in auth callback endpoint
+        HttpRequestAuthentication: MiddlewareIn<Response>, // HttpAuthorizer can authorise input
+        CorsPreflight: MiddlewareOut<Response>,   // CorsPreflight can be a middleware in other endpoints
     {
         match &binding.resolved_binding {
             ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
@@ -304,7 +304,7 @@ impl<N: Send + Sync + Clone, R: Debug + Send + Sync> GatewayBindingExecutor<N, R
                     Some(r) => r,
                     None => {
                         let mut response = self
-                            .handle_worker_binding::<R>(binding, resolved_worker_binding, &session)
+                            .handle_worker_binding::<Response>(binding, resolved_worker_binding, &session)
                             .await;
 
                         let middleware_out_result = resolved_worker_binding
@@ -333,7 +333,7 @@ impl<N: Send + Sync + Clone, R: Debug + Send + Sync> GatewayBindingExecutor<N, R
                 match result {
                     Some(r) => r,
                     None => {
-                        self.handle_file_server_binding::<R>(
+                        self.handle_file_server_binding::<Response>(
                             binding,
                             resolved_file_server_binding,
                             &session,
