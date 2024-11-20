@@ -102,7 +102,7 @@ impl TryFrom<SecuritySchemeData> for SecurityScheme {
         let scopes = value
             .scopes
             .into_iter()
-            .map(|scope| Scope::new(scope))
+            .map(Scope::new)
             .collect();
 
         Ok(SecurityScheme::new(
