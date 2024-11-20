@@ -770,3 +770,15 @@ impl PluginScopeArgs for OssPluginScopeArgs {
         }
     }
 }
+
+pub fn decode_api_definition<'de, T: Deserialize<'de>>(
+    input: &'de str,
+    format: &ApiDefinitionFileFormat,
+) -> Result<T, GolemError> {
+    match format {
+        ApiDefinitionFileFormat::Json => serde_json::from_str(input)
+            .map_err(|e| GolemError(format!("Failed to parse json api definition: {e:?}"))),
+        ApiDefinitionFileFormat::Yaml => serde_yaml::from_str(input)
+            .map_err(|e| GolemError(format!("Failed to parse yaml api definition: {e:?}"))),
+    }
+}
