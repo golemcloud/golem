@@ -159,7 +159,6 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
                     &worker_id,
                     binding_details.file_path.clone(),
                     empty_worker_metadata(),
-                    &EmptyAuthCtx(),
                 )
                 .await
                 .map_err(FileServerBindingError::WorkerServiceError)?;

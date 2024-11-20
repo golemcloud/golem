@@ -64,21 +64,18 @@ pub trait WorkerService<AuthCtx> {
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerId>;
 
     async fn connect(
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerStream<LogEvent>>;
 
     async fn delete(
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     fn validate_typed_parameters(
@@ -174,7 +171,6 @@ pub trait WorkerService<AuthCtx> {
         oplog_id: u64,
         data: Vec<u8>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<bool>;
 
     async fn interrupt(
@@ -182,14 +178,12 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         recover_immediately: bool,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata>;
 
     async fn find_metadata(
@@ -200,14 +194,12 @@ pub trait WorkerService<AuthCtx> {
         count: u64,
         precise: bool,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
 
     async fn resume(
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn update(
@@ -216,7 +208,6 @@ pub trait WorkerService<AuthCtx> {
         update_mode: UpdateMode,
         target_version: ComponentVersion,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn get_component_for_worker(
@@ -233,7 +224,6 @@ pub trait WorkerService<AuthCtx> {
         cursor: Option<OplogCursor>,
         count: u64,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn search_oplog(
@@ -243,7 +233,6 @@ pub trait WorkerService<AuthCtx> {
         count: u64,
         query: String,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn list_directory(
@@ -251,7 +240,6 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
 
     async fn get_file_contents(
@@ -259,7 +247,6 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
 }
 
@@ -329,7 +316,6 @@ where
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerId> {
         let worker_id_clone = worker_id.clone();
         self.call_worker_executor(
@@ -367,7 +353,6 @@ where
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerStream<LogEvent>> {
         let worker_id = worker_id.clone();
         let worker_id_err: WorkerId = worker_id.clone();
@@ -403,7 +388,6 @@ where
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -626,7 +610,6 @@ where
         oplog_id: u64,
         data: Vec<u8>,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<bool> {
         let promise_id = PromiseId {
             worker_id: worker_id.clone(),
@@ -680,7 +663,6 @@ where
         worker_id: &WorkerId,
         recover_immediately: bool,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -718,7 +700,6 @@ where
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata> {
         let worker_id = worker_id.clone();
         let metadata = self.call_worker_executor(
@@ -768,26 +749,17 @@ where
         count: u64,
         precise: bool,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         info!("Find metadata");
         if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
-                .find_running_metadata_internal(component_id, filter, auth_ctx)
+                .find_running_metadata_internal(component_id, filter)
                 .await?;
 
             Ok((None, result.into_iter().take(count as usize).collect()))
         } else {
-            self.find_metadata_internal(
-                component_id,
-                filter,
-                cursor,
-                count,
-                precise,
-                metadata,
-                auth_ctx,
-            )
-            .await
+            self.find_metadata_internal(component_id, filter, cursor, count, precise, metadata)
+                .await
         }
     }
 
@@ -795,7 +767,6 @@ where
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -829,7 +800,6 @@ where
         update_mode: UpdateMode,
         target_version: ComponentVersion,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -877,7 +847,6 @@ where
         cursor: Option<OplogCursor>,
         count: u64,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -950,7 +919,6 @@ where
         count: u64,
         query: String,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1013,7 +981,6 @@ where
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
@@ -1068,7 +1035,6 @@ where
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
@@ -1167,10 +1133,7 @@ where
         request_metadata: WorkerRequestMetadata,
         auth_ctx: &AuthCtx,
     ) -> Result<Component, WorkerServiceError> {
-        match self
-            .get_metadata(worker_id, request_metadata, auth_ctx)
-            .await
-        {
+        match self.get_metadata(worker_id, request_metadata).await {
             Ok(metadata) => {
                 let component_version = metadata.component_version;
                 let component_details = self
@@ -1196,7 +1159,6 @@ where
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<WorkerMetadata>> {
         let component_id = component_id.clone();
         let result = self.call_worker_executor(
@@ -1253,7 +1215,6 @@ where
         count: u64,
         precise: bool,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let component_id = component_id.clone();
         let result = self

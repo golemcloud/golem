@@ -629,7 +629,6 @@ impl WorkerGrpcApi {
                 request.args,
                 request.env,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -640,11 +639,7 @@ impl WorkerGrpcApi {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         self.worker_service
-            .delete(
-                &worker_id,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .delete(&worker_id, empty_worker_metadata())
             .await?;
 
         Ok(())
@@ -667,7 +662,6 @@ impl WorkerGrpcApi {
                 parameters.oplog_idx,
                 parameters.data,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -682,11 +676,7 @@ impl WorkerGrpcApi {
 
         let metadata = self
             .worker_service
-            .get_metadata(
-                &worker_id,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .get_metadata(&worker_id, empty_worker_metadata())
             .await?;
 
         Ok(metadata.into())
@@ -719,7 +709,6 @@ impl WorkerGrpcApi {
                 request.count,
                 request.precise,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -739,7 +728,6 @@ impl WorkerGrpcApi {
                 &worker_id,
                 request.recover_immediately,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -888,11 +876,7 @@ impl WorkerGrpcApi {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         self.worker_service
-            .resume(
-                &worker_id,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .resume(&worker_id, empty_worker_metadata())
             .await?;
 
         Ok(())
@@ -905,11 +889,7 @@ impl WorkerGrpcApi {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let stream = self
             .worker_service
-            .connect(
-                &worker_id,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .connect(&worker_id, empty_worker_metadata())
             .await?;
 
         Ok(stream)
@@ -924,7 +904,6 @@ impl WorkerGrpcApi {
                 request.mode(),
                 request.target_version,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -945,7 +924,6 @@ impl WorkerGrpcApi {
                 request.cursor.map(|cursor| cursor.into()),
                 request.count,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -988,7 +966,6 @@ impl WorkerGrpcApi {
                 request.count,
                 request.query,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?;
 
@@ -1028,12 +1005,7 @@ impl WorkerGrpcApi {
 
         let result = self
             .worker_service
-            .list_directory(
-                &worker_id,
-                file_path,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .list_directory(&worker_id, file_path, empty_worker_metadata())
             .await?;
 
         Ok(
@@ -1055,7 +1027,6 @@ impl WorkerGrpcApi {
                 &worker_id,
                 file_path,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .await?
             .map(|item|
