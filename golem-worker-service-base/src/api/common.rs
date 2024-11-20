@@ -155,10 +155,39 @@ mod conversion {
         apidefinition::v1::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
         common::ErrorBody,
     };
-    use golem_common::SafeDisplay;
+    use golem_common::{safe, SafeDisplay};
     use poem_openapi::payload::Json;
     use std::fmt::Display;
+    use crate::gateway_security::IdentityProviderError;
+    use crate::service::gateway::security_scheme::SecuritySchemeServiceError;
 
+    impl From<SecuritySchemeServiceError> for ApiEndpointError {
+        fn from(value: SecuritySchemeServiceError) -> Self {
+            match value {
+                SecuritySchemeServiceError::IdentityProviderError(identity_provider_error) => {
+                   match identity_provider_error {
+                       IdentityProviderError::ClientInitError(error) => {
+                            ApiEndpointError::internal(safe(error))
+                       }
+                       IdentityProviderError::InvalidIssuerUrl(error) => {
+                            ApiEndpointError::bad_request(safe(error))
+                       }
+                       IdentityProviderError::FailedToDiscoverProviderMetadata(error) => {
+                            ApiEndpointError::bad_request(safe(error))
+                       }
+                       IdentityProviderError::FailedToExchangeCodeForTokens(error) => {
+                           ApiEndpointError::unauthorized(safe(error))
+                       }
+                       IdentityProviderError::IdTokenVerificationError(error) => {
+                            ApiEndpointError::unauthorized(safe(error))
+                       }
+                   }
+                }
+                SecuritySchemeServiceError::InternalError(_) => ApiEndpointError::internal(value),
+                SecuritySchemeServiceError::NotFound(_) => ApiEndpointError::not_found(value),
+            }
+        }
+    }
     impl From<ApiDefinitionServiceError> for ApiEndpointError {
         fn from(error: ApiDefinitionServiceError) -> Self {
             match error {
@@ -184,8 +213,8 @@ mod conversion {
                 ApiDefinitionServiceError::InternalRepoError(_) => {
                     ApiEndpointError::internal(error)
                 }
-                ApiDefinitionServiceError::SecuritySchemeNotFound(_) => {
-                    ApiEndpointError::bad_request(error)
+                ApiDefinitionServiceError::SecuritySchemeError(error) => {
+                    ApiEndpointError::from(error)
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),
             }
@@ -240,7 +269,12 @@ mod conversion {
                         )),
                     }
                 }
-                ApiDefinitionServiceError::SecuritySchemeNotFound(_) => ApiDefinitionError {
+                ApiDefinitionServiceError::SecuritySchemeError(error) => ApiDefinitionError {
+                    error: Some(api_definition_error::Error::NotFound(ErrorBody {
+                        error: error.to_safe_string(),
+                    })),
+                },
+                ApiDefinitionServiceError::IdentityProviderError(error) => ApiDefinitionError {
                     error: Some(api_definition_error::Error::NotFound(ErrorBody {
                         error: error.to_safe_string(),
                     })),

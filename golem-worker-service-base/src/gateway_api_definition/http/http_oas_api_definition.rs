@@ -31,7 +31,7 @@ impl OpenApiHttpApiDefinitionRequest {
             version: api_definition_version,
             routes,
             draft: true,
-            security: global_security,
+            security_schemes: global_security,
         })
     }
 }
@@ -127,12 +127,13 @@ mod internal {
 
     pub(crate) fn get_global_security(open_api: &OpenAPI) -> Option<SecuritySchemeReference> {
         let global_security = match &open_api.security {
-            Some(requirements) => requirements.first().cloned(),
-            None => None,
+            Some(requirements) => requirements,
+            None => &vec![],
         };
 
+        // Fix this
         let global_security_name =
-            global_security.and_then(|x| x.clone().first().map(|x| x.0.to_string()));
+            global_security.into_iter().map(|x| x.keys());
 
         global_security_name.map(|x| SecuritySchemeReference {
             security_scheme_identifier: SecuritySchemeIdentifier::new(x),

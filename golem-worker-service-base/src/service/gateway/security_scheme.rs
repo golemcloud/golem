@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use std::fmt::Display;
 use std::hash::Hash;
+use golem_common::SafeDisplay;
 
 // The controller phase can decide whether the developer of API deployment
 // has create-security role in Namespace, before calling this service
@@ -15,7 +16,7 @@ pub trait   SecuritySchemeService<Namespace> {
         &self,
         security_scheme_name: &SecuritySchemeIdentifier,
         namespace: &Namespace,
-    ) -> Result<Option<SecuritySchemeWithProviderMetadata>, SecuritySchemeServiceError>;
+    ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
     async fn create(
         &self,
         namespace: &Namespace,
@@ -23,20 +24,24 @@ pub trait   SecuritySchemeService<Namespace> {
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum SecuritySchemeServiceError {
     IdentityProviderError(IdentityProviderError),
     InternalError(String),
+    NotFound(SecuritySchemeIdentifier)
 }
 
-impl Display for SecuritySchemeServiceError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl SafeDisplay for SecuritySchemeServiceError {
+    fn to_safe_string(&self) -> String {
         match self {
             SecuritySchemeServiceError::IdentityProviderError(err) => {
-                write!(f, "IdentityProviderError: {}", err)
+                format!("IdentityProviderError: {}", err.to_string())
             }
             SecuritySchemeServiceError::InternalError(err) => {
-                write!(f, "InternalError: {}", err)
+                format!("InternalError: {}", err)
+            }
+            SecuritySchemeServiceError::NotFound(identifier) => {
+                format!("SecurityScheme not found: {}", identifier.to_string())
             }
         }
     }
@@ -75,14 +80,18 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
         &self,
         security_scheme_identifier: &SecuritySchemeIdentifier,
         namespace: &Namespace,
-    ) -> Result<Option<SecuritySchemeWithProviderMetadata>, SecuritySchemeServiceError> {
+    ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
         // TODO; get_or_insert_simple with Repo
         let result = self
             .cache
             .get(&(namespace.clone(), security_scheme_identifier.clone()))
             .await;
 
-        Ok(result)
+
+        match result {
+            Some(result) => Ok(result),
+            None => Err(SecuritySchemeServiceError::NotFound(security_scheme_identifier.clone())),
+        }
     }
 
     async fn create(

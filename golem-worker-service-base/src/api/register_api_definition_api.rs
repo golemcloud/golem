@@ -54,7 +54,7 @@ pub struct ApiDefinitionInfo {
 pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub security: Option<SecuritySchemeReferenceData>,
+    pub security: Vec<SecuritySchemeReferenceData>,
     pub routes: Vec<RouteRequestData>,
     #[serde(default)]
     pub draft: bool,
@@ -79,12 +79,12 @@ pub struct HttpApiDefinitionRequestData {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct SecuritySchemeData {
-    provider_type: String,
-    scheme_identifier: SecuritySchemeIdentifier,
-    client_id: String,
-    client_secret: String, // secret type macros and therefore already redacted
-    redirect_url: String,
-    scopes: Vec<String>,
+    pub provider_type: String,
+    pub scheme_identifier: String,
+    pub client_id: String,
+    pub client_secret: String, // secret type macros and therefore already redacted
+    pub redirect_url: String,
+    pub scopes: Vec<String>,
 }
 
 impl TryFrom<SecuritySchemeData> for SecurityScheme {
@@ -104,7 +104,7 @@ impl TryFrom<SecuritySchemeData> for SecurityScheme {
 
         Ok(SecurityScheme::new(
             provider_type,
-            scheme_identifier,
+            SecuritySchemeIdentifier::new(scheme_identifier),
             client_id,
             client_secret,
             redirect_url,
@@ -116,7 +116,7 @@ impl TryFrom<SecuritySchemeData> for SecurityScheme {
 impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeData {
     fn from(value: SecuritySchemeWithProviderMetadata) -> Self {
         let provider_type = value.security_scheme.provider_type().to_string();
-        let scheme_identifier = value.security_scheme.scheme_identifier();
+        let scheme_identifier = value.security_scheme.scheme_identifier().to_string();
         let client_id = value.security_scheme.client_id().to_string();
         let client_secret = value.security_scheme.client_secret().secret().to_string();
         let redirect_url = value.security_scheme.redirect_url().to_string();
@@ -560,7 +560,7 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
             crate::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: self.id,
                 version: self.version,
-                security: self.security.map(SecuritySchemeReference::from),
+                security_schemes: self.security.into_iter().map(SecuritySchemeReference::from).collect(),
                 routes,
                 draft: self.draft,
             },
@@ -707,16 +707,8 @@ impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition>
 
         let id = value.id.0;
 
-        let security = value
-            .security
-            .map(|x| {
-                golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata::try_from(
-                    x,
-                )
-            })
-            .transpose()?;
 
-        let definition = grpc_apidefinition::HttpApiDefinition { security, routes };
+        let definition = grpc_apidefinition::HttpApiDefinition { routes };
 
         let created_at = prost_types::Timestamp::from(SystemTime::from(value.created_at));
 
@@ -756,7 +748,7 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
             version: ApiVersion(value.version),
             routes,
             draft: value.draft,
-            security: None, //
+            security_schemes: vec![]
         };
 
         Ok(result)

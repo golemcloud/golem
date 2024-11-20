@@ -8,7 +8,7 @@ use crate::gateway_middleware::Cors;
 use crate::gateway_security::{SecuritySchemeReference, SecuritySchemeWithProviderMetadata};
 use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
-use crate::service::gateway::security_scheme::SecuritySchemeService;
+use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySchemeServiceError};
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
@@ -18,24 +18,39 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use Iterator;
+use golem_common::SafeDisplay;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub security: Option<SecuritySchemeWithProviderMetadata>, // Allowing a global security scheme for the API
     pub routes: Vec<Route>,
     pub draft: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl HttpApiDefinition {
+    pub fn id(&self) -> ApiDefinitionId {
+        self.id.clone()
+    }
+
+    pub fn version(&self) -> ApiVersion {
+        self.version.clone()
+    }
+    pub fn security_schemes(&self) -> Vec<SecuritySchemeReference> {
+        self.routes
+            .iter()
+            .filter_map(|route| route.binding.get_authenticate_request_middleware())
+            .map(|x| SecuritySchemeReference::from(x.security_scheme))
+            .collect()
+    }
+
     pub async fn from_http_api_definition_request<Namespace>(
         namespace: &Namespace,
         request: HttpApiDefinitionRequest,
@@ -44,21 +59,16 @@ impl HttpApiDefinition {
     ) -> Result<Self, ApiDefinitionError> {
         let mut registry = HashMap::new();
 
-        if let Some(security) = request.security {
-            if let Some(security_scheme) = security_scheme_service
-                .get(&security.security_scheme_identifier, namespace)
+        for security_scheme_reference in  request.security_schemes {
+            let security_scheme = security_scheme_service
+                .get(&security_scheme_reference.security_scheme_identifier, namespace)
                 .await
-                .map_err(|e| ApiDefinitionError::Internal(e.to_string()))?
-            {
-                registry.insert(
-                    security.security_scheme_identifier.clone(),
-                    security_scheme.clone(),
-                );
-            } else {
-                return Err(ApiDefinitionError::SecuritySchemeNotFound(
-                    security.security_scheme_identifier.to_string(),
-                ));
-            }
+                .map_err(ApiDefinitionError::SecuritySchemeError)?;
+
+            registry.insert(
+                security_scheme_reference.security_scheme_identifier.clone(),
+                security_scheme.clone(),
+            );
         };
 
         let mut routes = vec![];
@@ -73,11 +83,13 @@ impl HttpApiDefinition {
                         binding,
                         path: route.path,
                     })
-                } else if let Some(security_scheme) = security_scheme_service
-                    .get(&security.security_scheme_identifier, namespace)
-                    .await
-                    .map_err(|e| ApiDefinitionError::Internal(e.to_string()))?
-                {
+                } else {
+
+                    let security_scheme = security_scheme_service
+                        .get(&security.security_scheme_identifier, namespace)
+                        .await
+                        .map_err(|e| ApiDefinitionError::SecuritySchemeError(e))?;
+
                     let mut binding = route.binding;
                     binding.add_authenticate_request_middleware(security_scheme.clone());
 
@@ -86,10 +98,6 @@ impl HttpApiDefinition {
                         binding,
                         path: route.path,
                     })
-                } else {
-                    return Err(ApiDefinitionError::SecuritySchemeNotFound(
-                        security.security_scheme_identifier.to_string(),
-                    ));
                 }
             } else {
                 routes.push(Route {
@@ -103,7 +111,6 @@ impl HttpApiDefinition {
         let mut http_api_definition = HttpApiDefinition {
             id: request.id,
             version: request.version,
-            security: registry.iter().next().map(|(_, v)| v.clone()),
             routes,
             draft: request.draft,
             created_at,
@@ -122,15 +129,15 @@ impl HttpApiDefinition {
 impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
     fn from(value: HttpApiDefinition) -> Self {
         Self {
-            id: value.id,
-            version: value.version,
-            security: value.security.map(SecuritySchemeReference::from),
+            id: value.id(),
+            version: value.version(),
+            security_schemes: value.security_schemes(),
             routes: value
                 .routes
-                .iter()
-                .map(|x| RouteRequest::from(x.clone()))
+                .into_iter()
+                .map(|route| RouteRequest::from(route))
                 .collect(),
-            draft: value.draft,
+            draft: value.draft
         }
     }
 }
@@ -156,7 +163,6 @@ impl<Namespace> From<CompiledHttpApiDefinition<Namespace>> for HttpApiDefinition
                 .collect(),
             draft: compiled_http_api_definition.draft,
             created_at: compiled_http_api_definition.created_at,
-            security: None,
         }
     }
 }
@@ -184,7 +190,6 @@ impl TryFrom<grpc_apidefinition::ApiDefinition>
             routes,
             draft: value.draft,
             created_at: created_at.into(),
-            security: None,
         };
         Ok(result)
     }
@@ -199,7 +204,6 @@ impl TryFrom<grpc_apidefinition::ApiDefinition>
 pub struct CompiledHttpApiDefinition<Namespace> {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub security: Option<SecuritySchemeWithProviderMetadata>,
     pub routes: Vec<CompiledRoute>,
     pub draft: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -222,7 +226,6 @@ impl<Namespace: Clone> CompiledHttpApiDefinition<Namespace> {
         Ok(CompiledHttpApiDefinition {
             id: http_api_definition.id.clone(),
             version: http_api_definition.version.clone(),
-            security: http_api_definition.security.clone(),
             routes: compiled_routes,
             draft: http_api_definition.draft,
             created_at: http_api_definition.created_at,

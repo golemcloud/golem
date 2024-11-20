@@ -7,6 +7,7 @@ use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
 use std::fmt::Display;
 use url::Url;
+use golem_common::SafeDisplay;
 
 // A high level abstraction of an identity-provider, that expose
 // necessary functionalities that gets called at various points in gateway security integration.
@@ -59,7 +60,7 @@ pub struct AuthorizationUrl {
     pub nonce: Nonce,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum IdentityProviderError {
     ClientInitError(String),
     InvalidIssuerUrl(String),
@@ -68,19 +69,19 @@ pub enum IdentityProviderError {
     IdTokenVerificationError(String),
 }
 
-impl Display for IdentityProviderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl SafeDisplay for IdentityProviderError {
+    fn to_safe_string(&self) -> String {
         match self {
-            IdentityProviderError::ClientInitError(err) => write!(f, "ClientInitError: {}", err),
-            IdentityProviderError::InvalidIssuerUrl(err) => write!(f, "InvalidIssuerUrl: {}", err),
+            IdentityProviderError::ClientInitError(err) => format!("ClientInitError: {}", err),
+            IdentityProviderError::InvalidIssuerUrl(err) => format!("InvalidIssuerUrl: {}", err),
             IdentityProviderError::FailedToDiscoverProviderMetadata(err) => {
-                write!(f, "FailedToDiscoverProviderMetadata: {}", err)
+                format!("FailedToDiscoverProviderMetadata: {}", err)
             }
             IdentityProviderError::FailedToExchangeCodeForTokens(err) => {
-                write!(f, "FailedToExchangeCodeForTokens: {}", err)
+                format!("FailedToExchangeCodeForTokens: {}", err)
             }
             IdentityProviderError::IdTokenVerificationError(err) => {
-                write!(f, "IdTokenVerificationError: {}", err)
+                format!("IdTokenVerificationError: {}", err)
             }
         }
     }

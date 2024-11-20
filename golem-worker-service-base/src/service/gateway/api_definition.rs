@@ -30,12 +30,12 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use tracing::{error, info};
-
+use crate::gateway_security::{IdentityProviderError, SecuritySchemeIdentifier, SecuritySchemeReference};
 use crate::service::component::ComponentService;
 use crate::service::gateway::api_definition_validator::{
     ApiDefinitionValidatorService, ValidationErrors,
 };
-use crate::service::gateway::security_scheme::SecuritySchemeService;
+use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySchemeServiceError};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
 
@@ -55,8 +55,10 @@ pub enum ApiDefinitionError {
     ComponentNotFoundError(Vec<VersionedComponentId>),
     #[error("Rib compilation error: {0}")]
     RibCompilationErrors(String),
-    #[error("Security Scheme not found: {0}")]
-    SecuritySchemeNotFound(String),
+    #[error("Security Scheme Error: {0}")]
+    SecuritySchemeError(SecuritySchemeServiceError),
+    #[error("Identity Provider Error: {0}")]
+    IdentityProviderError(IdentityProviderError),
     #[error("API definition not found: {0}")]
     ApiDefinitionNotFound(ApiDefinitionId),
     #[error("API definition is not draft: {0}")]
@@ -88,10 +90,11 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::ApiDefinitionNotFound(_) => self.to_string(),
             ApiDefinitionError::ApiDefinitionNotDraft(_) => self.to_string(),
             ApiDefinitionError::ApiDefinitionAlreadyExists(_) => self.to_string(),
+            ApiDefinitionError::IdentityProviderError(inner) => inner.to_safe_string(),
             ApiDefinitionError::ApiDefinitionDeployed(_) => self.to_string(),
             ApiDefinitionError::InternalRepoError(inner) => inner.to_safe_string(),
             ApiDefinitionError::Internal(_) => self.to_string(),
-            ApiDefinitionError::SecuritySchemeNotFound(inner) => inner.to_string(),
+            ApiDefinitionError::SecuritySchemeError(inner) => inner.to_string(),
         }
     }
 }

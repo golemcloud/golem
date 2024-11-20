@@ -29,7 +29,6 @@ message ApiDefinitionList {
 // Used in api definition repo and needs to be backward compatible
 message HttpApiDefinition {
   repeated HttpRoute routes = 1;
-  optional SecurityWithProviderMetadata security = 2;
 }
 
 // Used in api definition repo and needs to be backward compatible
@@ -107,6 +106,10 @@ message CompiledGatewayBinding {
     optional StaticBinding static_binding = 13;
     // middleware
     optional Middleware middleware = 14;
+}
+
+message SecuritySchemaReference {
+    string security_scheme_identifier = 1;
 }
 
 // Used in api definition repo and needs to be backward compatible

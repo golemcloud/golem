@@ -5,6 +5,7 @@ use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
 use openidconnect::{ClaimsVerificationError, Nonce, Scope};
 use std::str::FromStr;
+use golem_common::SafeDisplay;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpRequestAuthentication {
@@ -25,7 +26,7 @@ impl HttpRequestAuthentication {
 
         let open_id_client = identity_provider
             .get_client(&self.security_scheme)
-            .map_err(|err| MiddlewareInError::Unauthorized(err.to_string()))?;
+            .map_err(|err| MiddlewareInError::Unauthorized(err.to_safe_string()))?;
 
         let id_token = input.get_id_token_from_cookie();
 
