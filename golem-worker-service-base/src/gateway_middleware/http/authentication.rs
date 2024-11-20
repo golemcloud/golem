@@ -2,10 +2,10 @@ use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::{MiddlewareInError, MiddlewareSuccess};
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
+use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
 use openidconnect::{ClaimsVerificationError, Nonce, Scope};
 use std::str::FromStr;
-use golem_common::SafeDisplay;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpRequestAuthentication {

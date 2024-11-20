@@ -22,7 +22,7 @@ impl OpenApiHttpApiDefinitionRequest {
             GOLEM_API_DEFINITION_VERSION,
         )?);
 
-        let global_security = get_global_security(open_api);
+        let security = get_global_security(open_api);
 
         let routes = get_routes(&open_api.paths)?;
 
@@ -31,7 +31,7 @@ impl OpenApiHttpApiDefinitionRequest {
             version: api_definition_version,
             routes,
             draft: true,
-            security_schemes: global_security,
+            security,
         })
     }
 }
@@ -125,18 +125,22 @@ mod internal {
 
     pub(crate) const GOLEM_API_GATEWAY_BINDING: &str = "x-golem-api-gateway-binding";
 
-    pub(crate) fn get_global_security(open_api: &OpenAPI) -> Option<SecuritySchemeReference> {
-        let global_security = match &open_api.security {
-            Some(requirements) => requirements,
-            None => &vec![],
-        };
+    pub(crate) fn get_global_security(open_api: &OpenAPI) -> Option<Vec<SecuritySchemeReference>> {
+        open_api.security.as_ref().and_then(|requirements| {
+            let global_security: Vec<_> = requirements
+                .iter()
+                .flat_map(|x| {
+                    x.keys().map(|key| SecuritySchemeReference {
+                        security_scheme_identifier: SecuritySchemeIdentifier::new(key.clone()),
+                    })
+                })
+                .collect();
 
-        // Fix this
-        let global_security_name =
-            global_security.into_iter().map(|x| x.keys());
-
-        global_security_name.map(|x| SecuritySchemeReference {
-            security_scheme_identifier: SecuritySchemeIdentifier::new(x),
+            if global_security.is_empty() {
+                Some(global_security)
+            } else {
+                None
+            }
         })
     }
     pub(crate) fn get_root_extension_str(

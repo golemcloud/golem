@@ -150,6 +150,8 @@ mod conversion {
     use crate::service::gateway::api_definition_validator::ValidationErrors;
     use crate::service::gateway::api_deployment::ApiDeploymentError;
 
+    use crate::gateway_security::IdentityProviderError;
+    use crate::service::gateway::security_scheme::SecuritySchemeServiceError;
     use golem_api_grpc::proto::golem::common::ErrorsBody;
     use golem_api_grpc::proto::golem::{
         apidefinition::v1::{api_definition_error, ApiDefinitionError, RouteValidationErrorsBody},
@@ -158,36 +160,41 @@ mod conversion {
     use golem_common::{safe, SafeDisplay};
     use poem_openapi::payload::Json;
     use std::fmt::Display;
-    use crate::gateway_security::IdentityProviderError;
-    use crate::service::gateway::security_scheme::SecuritySchemeServiceError;
 
     impl From<SecuritySchemeServiceError> for ApiEndpointError {
         fn from(value: SecuritySchemeServiceError) -> Self {
             match value {
                 SecuritySchemeServiceError::IdentityProviderError(identity_provider_error) => {
-                   match identity_provider_error {
-                       IdentityProviderError::ClientInitError(error) => {
-                            ApiEndpointError::internal(safe(error))
-                       }
-                       IdentityProviderError::InvalidIssuerUrl(error) => {
-                            ApiEndpointError::bad_request(safe(error))
-                       }
-                       IdentityProviderError::FailedToDiscoverProviderMetadata(error) => {
-                            ApiEndpointError::bad_request(safe(error))
-                       }
-                       IdentityProviderError::FailedToExchangeCodeForTokens(error) => {
-                           ApiEndpointError::unauthorized(safe(error))
-                       }
-                       IdentityProviderError::IdTokenVerificationError(error) => {
-                            ApiEndpointError::unauthorized(safe(error))
-                       }
-                   }
+                    ApiEndpointError::from(identity_provider_error)
                 }
                 SecuritySchemeServiceError::InternalError(_) => ApiEndpointError::internal(value),
                 SecuritySchemeServiceError::NotFound(_) => ApiEndpointError::not_found(value),
             }
         }
     }
+
+    impl From<IdentityProviderError> for ApiEndpointError {
+        fn from(value: IdentityProviderError) -> Self {
+            match value {
+                IdentityProviderError::ClientInitError(error) => {
+                    ApiEndpointError::internal(safe(error))
+                }
+                IdentityProviderError::InvalidIssuerUrl(error) => {
+                    ApiEndpointError::bad_request(safe(error))
+                }
+                IdentityProviderError::FailedToDiscoverProviderMetadata(error) => {
+                    ApiEndpointError::bad_request(safe(error))
+                }
+                IdentityProviderError::FailedToExchangeCodeForTokens(error) => {
+                    ApiEndpointError::unauthorized(safe(error))
+                }
+                IdentityProviderError::IdTokenVerificationError(error) => {
+                    ApiEndpointError::unauthorized(safe(error))
+                }
+            }
+        }
+    }
+
     impl From<ApiDefinitionServiceError> for ApiEndpointError {
         fn from(error: ApiDefinitionServiceError) -> Self {
             match error {
@@ -214,6 +221,9 @@ mod conversion {
                     ApiEndpointError::internal(error)
                 }
                 ApiDefinitionServiceError::SecuritySchemeError(error) => {
+                    ApiEndpointError::from(error)
+                }
+                ApiDefinitionServiceError::IdentityProviderError(error) => {
                     ApiEndpointError::from(error)
                 }
                 ApiDefinitionServiceError::Internal(_) => ApiEndpointError::internal(error),

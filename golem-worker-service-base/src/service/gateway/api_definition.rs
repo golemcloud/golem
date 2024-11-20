@@ -21,21 +21,21 @@ use crate::gateway_api_definition::http::{
     HttpApiDefinitionRequest, RouteCompilationErrors,
 };
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion, HasGolemBindings};
+use crate::gateway_security::IdentityProviderError;
 use crate::repo::api_definition::ApiDefinitionRecord;
 use crate::repo::api_definition::ApiDefinitionRepo;
 use crate::repo::api_deployment::ApiDeploymentRepo;
+use crate::service::component::ComponentService;
+use crate::service::gateway::api_definition_validator::{
+    ApiDefinitionValidatorService, ValidationErrors,
+};
+use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySchemeServiceError};
 use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::SafeDisplay;
 use golem_service_base::model::{Component, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use tracing::{error, info};
-use crate::gateway_security::{IdentityProviderError, SecuritySchemeIdentifier, SecuritySchemeReference};
-use crate::service::component::ComponentService;
-use crate::service::gateway::api_definition_validator::{
-    ApiDefinitionValidatorService, ValidationErrors,
-};
-use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySchemeServiceError};
 
 pub type ApiResult<T> = Result<T, ApiDefinitionError>;
 
@@ -94,7 +94,7 @@ impl SafeDisplay for ApiDefinitionError {
             ApiDefinitionError::ApiDefinitionDeployed(_) => self.to_string(),
             ApiDefinitionError::InternalRepoError(inner) => inner.to_safe_string(),
             ApiDefinitionError::Internal(_) => self.to_string(),
-            ApiDefinitionError::SecuritySchemeError(inner) => inner.to_string(),
+            ApiDefinitionError::SecuritySchemeError(inner) => inner.to_safe_string(),
         }
     }
 }

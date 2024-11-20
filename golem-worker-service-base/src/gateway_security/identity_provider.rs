@@ -3,11 +3,11 @@ use crate::gateway_security::{
     GolemIdentityProviderMetadata, Provider, SecuritySchemeWithProviderMetadata,
 };
 use async_trait::async_trait;
+use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce, Scope};
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use url::Url;
-use golem_common::SafeDisplay;
 
 // A high level abstraction of an identity-provider, that expose
 // necessary functionalities that gets called at various points in gateway security integration.
@@ -67,6 +67,14 @@ pub enum IdentityProviderError {
     FailedToDiscoverProviderMetadata(String),
     FailedToExchangeCodeForTokens(String),
     IdTokenVerificationError(String),
+}
+
+// To satisfy thiserror
+// https://github.com/golemcloud/golem/issues/1071
+impl Display for IdentityProviderError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_safe_string())
+    }
 }
 
 impl SafeDisplay for IdentityProviderError {

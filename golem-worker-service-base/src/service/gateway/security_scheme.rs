@@ -4,14 +4,14 @@ use crate::gateway_security::{
 };
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::SafeDisplay;
 use std::fmt::Display;
 use std::hash::Hash;
-use golem_common::SafeDisplay;
 
 // The controller phase can decide whether the developer of API deployment
 // has create-security role in Namespace, before calling this service
 #[async_trait]
-pub trait   SecuritySchemeService<Namespace> {
+pub trait SecuritySchemeService<Namespace> {
     async fn get(
         &self,
         security_scheme_name: &SecuritySchemeIdentifier,
@@ -28,14 +28,22 @@ pub trait   SecuritySchemeService<Namespace> {
 pub enum SecuritySchemeServiceError {
     IdentityProviderError(IdentityProviderError),
     InternalError(String),
-    NotFound(SecuritySchemeIdentifier)
+    NotFound(SecuritySchemeIdentifier),
+}
+
+// For satisfying thiserror::Error
+// https://github.com/golemcloud/golem/issues/1071
+impl Display for SecuritySchemeServiceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_safe_string())
+    }
 }
 
 impl SafeDisplay for SecuritySchemeServiceError {
     fn to_safe_string(&self) -> String {
         match self {
             SecuritySchemeServiceError::IdentityProviderError(err) => {
-                format!("IdentityProviderError: {}", err.to_string())
+                format!("IdentityProviderError: {}", err.to_safe_string())
             }
             SecuritySchemeServiceError::InternalError(err) => {
                 format!("InternalError: {}", err)
@@ -87,10 +95,11 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
             .get(&(namespace.clone(), security_scheme_identifier.clone()))
             .await;
 
-
         match result {
             Some(result) => Ok(result),
-            None => Err(SecuritySchemeServiceError::NotFound(security_scheme_identifier.clone())),
+            None => Err(SecuritySchemeServiceError::NotFound(
+                security_scheme_identifier.clone(),
+            )),
         }
     }
 

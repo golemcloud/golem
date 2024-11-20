@@ -7,10 +7,14 @@ use crate::gateway_binding::{
     GatewayBinding, GatewayBindingCompiled, StaticBinding, WorkerBinding, WorkerBindingCompiled,
 };
 use crate::gateway_middleware::{Cors, CorsPreflightExpr, HttpMiddleware, Middleware, Middlewares};
-use crate::gateway_security::{Provider, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeReference, SecuritySchemeWithProviderMetadata};
+use crate::gateway_security::{
+    Provider, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeReference,
+    SecuritySchemeWithProviderMetadata,
+};
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
 use golem_common::model::GatewayBindingType;
 use golem_service_base::model::VersionedComponentId;
+use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem_openapi::*;
 use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
@@ -18,7 +22,6 @@ use std::ops::Deref;
 use std::result::Result;
 use std::str::FromStr;
 use std::time::SystemTime;
-use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -54,7 +57,7 @@ pub struct ApiDefinitionInfo {
 pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub security: Vec<SecuritySchemeReferenceData>,
+    pub security: Option<Vec<SecuritySchemeReferenceData>>,
     pub routes: Vec<RouteRequestData>,
     #[serde(default)]
     pub draft: bool,
@@ -120,7 +123,12 @@ impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeData {
         let client_id = value.security_scheme.client_id().to_string();
         let client_secret = value.security_scheme.client_secret().secret().to_string();
         let redirect_url = value.security_scheme.redirect_url().to_string();
-        let scopes = value.security_scheme.scopes().iter().map(|scope| scope.to_string()).collect();
+        let scopes = value
+            .security_scheme
+            .scopes()
+            .iter()
+            .map(|scope| scope.to_string())
+            .collect();
 
         Self {
             provider_type,
@@ -132,8 +140,6 @@ impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeData {
         }
     }
 }
-
-
 
 // HttpApiDefinitionResponse is a trimmed down version of CompiledHttpApiDefinition
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -560,7 +566,9 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
             crate::gateway_api_definition::http::HttpApiDefinitionRequest {
                 id: self.id,
                 version: self.version,
-                security_schemes: self.security.into_iter().map(SecuritySchemeReference::from).collect(),
+                security: self
+                    .security
+                    .map(|x| x.into_iter().map(SecuritySchemeReference::from).collect()),
                 routes,
                 draft: self.draft,
             },
@@ -707,7 +715,6 @@ impl TryFrom<crate::gateway_api_definition::http::HttpApiDefinition>
 
         let id = value.id.0;
 
-
         let definition = grpc_apidefinition::HttpApiDefinition { routes };
 
         let created_at = prost_types::Timestamp::from(SystemTime::from(value.created_at));
@@ -732,23 +739,37 @@ impl TryFrom<grpc_apidefinition::v1::ApiDefinitionRequest>
     type Error = String;
 
     fn try_from(value: grpc_apidefinition::v1::ApiDefinitionRequest) -> Result<Self, Self::Error> {
-        let routes: Vec<RouteRequest> = match value.definition.ok_or("definition is missing")? {
-            grpc_apidefinition::v1::api_definition_request::Definition::Http(http) => http
-                .routes
-                .into_iter()
-                .map(crate::gateway_api_definition::http::RouteRequest::try_from)
-                .collect::<Result<Vec<crate::gateway_api_definition::http::RouteRequest>, String>>(
-                )?,
+        let mut global_securities = vec![];
+        let mut route_requests = vec![];
+
+        match value.definition.ok_or("definition is missing")? {
+            grpc_apidefinition::v1::api_definition_request::Definition::Http(http) => {
+                for route in http.routes {
+                    let route_request =
+                        crate::gateway_api_definition::http::RouteRequest::try_from(route)?;
+                    if let Some(security) = &route_request.security {
+                        global_securities.push(security.clone());
+                    }
+
+                    route_requests.push(route_request);
+                }
+            }
         };
 
         let id = value.id.ok_or("Api Definition ID is missing")?;
 
+        let security = if global_securities.is_empty() {
+            None
+        } else {
+            Some(global_securities)
+        };
+
         let result = crate::gateway_api_definition::http::HttpApiDefinitionRequest {
             id: ApiDefinitionId(id.value),
             version: ApiVersion(value.version),
-            routes,
+            routes: route_requests,
             draft: value.draft,
-            security_schemes: vec![]
+            security,
         };
 
         Ok(result)

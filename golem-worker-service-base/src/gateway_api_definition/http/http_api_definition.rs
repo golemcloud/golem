@@ -5,10 +5,10 @@ use crate::gateway_api_definition_transformer::transform_http_api_definition;
 use crate::gateway_binding::WorkerBindingCompiled;
 use crate::gateway_binding::{GatewayBinding, GatewayBindingCompiled};
 use crate::gateway_middleware::Cors;
-use crate::gateway_security::{SecuritySchemeReference, SecuritySchemeWithProviderMetadata};
+use crate::gateway_security::SecuritySchemeReference;
 use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
-use crate::service::gateway::security_scheme::{SecuritySchemeService, SecuritySchemeServiceError};
+use crate::service::gateway::security_scheme::SecuritySchemeService;
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
@@ -18,13 +18,12 @@ use golem_wasm_ast::analysis::AnalysedExport;
 use poem_openapi::Enum;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use Iterator;
-use golem_common::SafeDisplay;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
@@ -59,17 +58,22 @@ impl HttpApiDefinition {
     ) -> Result<Self, ApiDefinitionError> {
         let mut registry = HashMap::new();
 
-        for security_scheme_reference in  request.security_schemes {
-            let security_scheme = security_scheme_service
-                .get(&security_scheme_reference.security_scheme_identifier, namespace)
-                .await
-                .map_err(ApiDefinitionError::SecuritySchemeError)?;
+        if let Some(security_schemes) = request.security {
+            for security_scheme_reference in security_schemes {
+                let security_scheme = security_scheme_service
+                    .get(
+                        &security_scheme_reference.security_scheme_identifier,
+                        namespace,
+                    )
+                    .await
+                    .map_err(ApiDefinitionError::SecuritySchemeError)?;
 
-            registry.insert(
-                security_scheme_reference.security_scheme_identifier.clone(),
-                security_scheme.clone(),
-            );
-        };
+                registry.insert(
+                    security_scheme_reference.security_scheme_identifier.clone(),
+                    security_scheme.clone(),
+                );
+            }
+        }
 
         let mut routes = vec![];
 
@@ -84,7 +88,6 @@ impl HttpApiDefinition {
                         path: route.path,
                     })
                 } else {
-
                     let security_scheme = security_scheme_service
                         .get(&security.security_scheme_identifier, namespace)
                         .await
@@ -128,16 +131,23 @@ impl HttpApiDefinition {
 
 impl From<HttpApiDefinition> for HttpApiDefinitionRequest {
     fn from(value: HttpApiDefinition) -> Self {
+        let global_security = value.security_schemes();
+        let security = if global_security.is_empty() {
+            None
+        } else {
+            Some(global_security)
+        };
+
         Self {
             id: value.id(),
             version: value.version(),
-            security_schemes: value.security_schemes(),
+            security,
             routes: value
                 .routes
                 .into_iter()
                 .map(|route| RouteRequest::from(route))
                 .collect(),
-            draft: value.draft
+            draft: value.draft,
         }
     }
 }

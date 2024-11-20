@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 // SecurityScheme shouldn't have Serialize or Deserialize
 #[derive(Debug, Clone)]
-    pub struct SecurityScheme {
+pub struct SecurityScheme {
     provider_type: Provider,
     scheme_identifier: SecuritySchemeIdentifier,
     client_id: ClientId,

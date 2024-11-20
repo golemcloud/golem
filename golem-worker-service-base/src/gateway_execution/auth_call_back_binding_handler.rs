@@ -57,10 +57,13 @@ impl SafeDisplay for AuthorisationError {
             AuthorisationError::InvalidSession => "The session is no longer valid.".to_string(),
             AuthorisationError::MissingParametersInSession => "Session failures".to_string(),
             AuthorisationError::ClaimFetchError(err) => {
-                format!("Failed to fetch claims. Error details: {}", err)
+                format!(
+                    "Failed to fetch claims. Error details: {}",
+                    err.to_safe_string()
+                )
             }
             AuthorisationError::IdentityProviderError(err) => {
-                format!("Identity provider error: {}", err)
+                format!("Identity provider error: {}", err.to_safe_string())
             }
             AuthorisationError::AccessTokenNotFound => {
                 "Unable to continue with authorisation".to_string()
@@ -70,7 +73,10 @@ impl SafeDisplay for AuthorisationError {
             }
             AuthorisationError::ConflictingState => "Suspicious login attempt".to_string(),
             AuthorisationError::FailedCodeExchange(err) => {
-                format!("Failed to exchange code for tokens. Error details: {}", err)
+                format!(
+                    "Failed to exchange code for tokens. Error details: {}",
+                    err.to_safe_string()
+                )
             }
             AuthorisationError::NonceNotFound => {
                 "Suspicious authorisation attempt. Failed checks.".to_string()
