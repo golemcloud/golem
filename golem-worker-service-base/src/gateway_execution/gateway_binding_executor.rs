@@ -39,14 +39,14 @@ pub trait GatewayBindingExecutor<Namespace, Response> {
 }
 
 pub struct DefaultGatewayBindingExecutor<Namespace> {
-    pub evaluator: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
+    pub evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
 }
 
-impl<N> DefaultGatewayBindingExecutor<N> {
+impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
     pub fn new(
-        evaluator: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
-        file_server_binding_handler: Arc<dyn FileServerBindingHandler<N> + Sync + Send>,
+        evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
+        file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     ) -> Self {
         Self {
             evaluator,
@@ -57,7 +57,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     async fn resolve_rib_inputs<R>(
         &self,
         request_details: &GatewayRequestDetails,
-        resolved_worker_binding: &ResolvedWorkerBinding<N>,
+        resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> Result<(RibInput, RibInput), R>
     where
         RibInputTypeMismatch: ToResponse<R>,
@@ -82,7 +82,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         &self,
         request_rib_input: RibInput,
         worker_rib_input: RibInput,
-        resolved_worker_binding: &ResolvedWorkerBinding<N>,
+        resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> Result<RibResult, EvaluationError> {
         let rib_input = request_rib_input.merge(worker_rib_input);
         self.evaluator
@@ -97,14 +97,15 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                     .compiled_response_mapping
                     .response_mapping_compiled,
                 &rib_input,
+                resolved_worker_binding.namespace.clone(),
             )
             .await
     }
 
     async fn handle_worker_binding<R>(
         &self,
-        binding: &ResolvedGatewayBinding<N>,
-        resolved_binding: &ResolvedWorkerBinding<N>,
+        binding: &ResolvedGatewayBinding<Namespace>,
+        resolved_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> R
     where
         RibResult: ToResponse<R>,
@@ -134,8 +135,8 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 
     async fn handle_file_server_binding<R>(
         &self,
-        binding: &ResolvedGatewayBinding<N>,
-        resolved_binding: &ResolvedWorkerBinding<N>,
+        binding: &ResolvedGatewayBinding<Namespace>,
+        resolved_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> R
     where
         FileServerBindingResult: ToResponse<R>,
@@ -172,24 +173,24 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 }
 
 #[async_trait]
-impl<N: Send + Sync, R: Debug + Send + Sync> GatewayBindingExecutor<N, R>
-    for DefaultGatewayBindingExecutor<N>
+impl<Namespace: Clone + Send + Sync, Request: Debug + Send + Sync>
+    GatewayBindingExecutor<Namespace, Request> for DefaultGatewayBindingExecutor<Namespace>
 {
-    async fn execute_binding(&self, binding: &ResolvedGatewayBinding<N>) -> R
+    async fn execute_binding(&self, binding: &ResolvedGatewayBinding<Namespace>) -> Request
     where
-        RibResult: ToResponse<R>,
-        EvaluationError: ToResponse<R>,
-        RibInputTypeMismatch: ToResponse<R>,
-        FileServerBindingResult: ToResponse<R>,
-        CorsPreflight: ToResponse<R>,
+        RibResult: ToResponse<Request>,
+        EvaluationError: ToResponse<Request>,
+        RibInputTypeMismatch: ToResponse<Request>,
+        FileServerBindingResult: ToResponse<Request>,
+        CorsPreflight: ToResponse<Request>,
     {
         match &binding.resolved_binding {
             ResolvedBinding::Worker(resolved_binding) => {
-                self.handle_worker_binding::<R>(binding, resolved_binding)
+                self.handle_worker_binding::<Request>(binding, resolved_binding)
                     .await
             }
             ResolvedBinding::FileServer(resolved_binding) => {
-                self.handle_file_server_binding::<R>(binding, resolved_binding)
+                self.handle_file_server_binding::<Request>(binding, resolved_binding)
                     .await
             }
             ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {

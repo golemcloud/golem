@@ -836,6 +836,7 @@ fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
 mod internal {
     use async_trait::async_trait;
     use golem_common::model::ComponentId;
+    use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
     use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
     use golem_wasm_ast::analysis::{
@@ -870,11 +871,11 @@ mod internal {
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}
 
     #[async_trait]
-    impl GatewayWorkerRequestExecutor for TestApiGatewayWorkerRequestExecutor {
+    impl GatewayWorkerRequestExecutor<DefaultNamespace> for TestApiGatewayWorkerRequestExecutor {
         // This test executor simply returns the worker request details itself as a type-annotated-value
         async fn execute(
             &self,
-            resolved_worker_request: GatewayResolvedWorkerRequest,
+            resolved_worker_request: GatewayResolvedWorkerRequest<DefaultNamespace>,
         ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
             let type_annotated_value = convert_to_worker_response(&resolved_worker_request);
             let worker_response = create_tuple(vec![type_annotated_value]);
@@ -1070,7 +1071,7 @@ mod internal {
     }
 
     pub(crate) fn convert_to_worker_response(
-        worker_request: &GatewayResolvedWorkerRequest,
+        worker_request: &GatewayResolvedWorkerRequest<DefaultNamespace>,
     ) -> TypeAnnotatedValue {
         let mut record_elems = vec![
             (
@@ -1147,7 +1148,8 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_test_rib_interpreter() -> Arc<dyn WorkerServiceRibInterpreter + Sync + Send> {
+    pub(crate) fn get_test_rib_interpreter(
+    ) -> Arc<dyn WorkerServiceRibInterpreter<DefaultNamespace> + Sync + Send> {
         Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             Arc::new(TestApiGatewayWorkerRequestExecutor {}),
         ))

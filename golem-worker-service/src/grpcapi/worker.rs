@@ -16,7 +16,7 @@ use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use futures::Stream;
 use futures::StreamExt;
-use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, delete_worker_response, get_oplog_response,
@@ -45,13 +45,9 @@ use golem_common::grpc::{
     proto_worker_id_string,
 };
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{
-    ComponentFilePath, ComponentVersion, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId,
-};
+use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::auth::EmptyAuthCtx;
-use golem_service_base::model::validate_worker_name;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
 use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::grpcapi::{

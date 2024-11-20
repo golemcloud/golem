@@ -77,7 +77,8 @@ pub struct Services {
             + Sync
             + Send,
     >,
-    pub worker_to_http_service: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
+    pub worker_to_http_service:
+        Arc<dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send>,
     pub api_definition_validator_service: Arc<
         dyn ApiDefinitionValidatorService<HttpApiDefinition, RouteValidationError> + Sync + Send,
     >,
@@ -129,9 +130,11 @@ impl Services {
             routing_table_service.clone(),
         ));
 
-        let worker_to_http_service: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send> = Arc::new(
-            UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
-        );
+        let worker_to_http_service: Arc<
+            dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send,
+        > = Arc::new(UnauthorisedWorkerRequestExecutor::new(
+            worker_service.clone(),
+        ));
 
         let (api_definition_repo, api_deployment_repo) = match config.db.clone() {
             DbConfig::Postgres(c) => {

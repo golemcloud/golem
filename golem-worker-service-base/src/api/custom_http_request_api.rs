@@ -48,7 +48,9 @@ pub struct CustomHttpRequestApi<Namespace> {
 
 impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
     pub fn new(
-        worker_request_executor_service: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
+        worker_request_executor_service: Arc<
+            dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send,
+        >,
         api_definition_lookup_service: Arc<
             dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<Namespace>>
                 + Sync

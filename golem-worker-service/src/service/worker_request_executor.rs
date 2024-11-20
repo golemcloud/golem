@@ -15,12 +15,16 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use golem_service_base::auth::EmptyAuthCtx;
+use golem_common::model::TargetWorkerId;
+use golem_service_base::auth::{DefaultNamespace, EmptyAuthCtx};
+use golem_service_base::model::validate_worker_name;
+use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::gateway_execution::{
     GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
     WorkerResponse,
 };
 use golem_worker_service_base::service::worker::WorkerService;
+use tracing::{debug, info};
 
 // The open source deviates from the proprietary codebase here, only in terms of authorisation
 pub struct UnauthorisedWorkerRequestExecutor {
@@ -34,29 +38,10 @@ impl UnauthorisedWorkerRequestExecutor {
 }
 
 #[async_trait]
-impl GatewayWorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
+impl GatewayWorkerRequestExecutor<DefaultNamespace> for UnauthorisedWorkerRequestExecutor {
     async fn execute(
         &self,
-        worker_request_params: GatewayResolvedWorkerRequest,
-    ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        internal::execute(self, worker_request_params.clone()).await
-    }
-}
-
-mod internal {
-    use super::UnauthorisedWorkerRequestExecutor;
-    use golem_worker_service_base::empty_worker_metadata;
-
-    use golem_common::model::TargetWorkerId;
-    use golem_service_base::model::validate_worker_name;
-    use golem_worker_service_base::gateway_execution::{
-        GatewayResolvedWorkerRequest, WorkerRequestExecutorError, WorkerResponse,
-    };
-    use tracing::{debug, info};
-
-    pub(crate) async fn execute(
-        default_executor: &UnauthorisedWorkerRequestExecutor,
-        worker_request_params: GatewayResolvedWorkerRequest,
+        worker_request_params: GatewayResolvedWorkerRequest<DefaultNamespace>,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name_opt_validated = worker_request_params
             .worker_name
@@ -106,7 +91,7 @@ mod internal {
             "Invocation parameters"
         );
 
-        let type_annotated_value = default_executor
+        let type_annotated_value = self
             .worker_service
             .validate_and_invoke_and_await_typed(
                 &worker_id,
