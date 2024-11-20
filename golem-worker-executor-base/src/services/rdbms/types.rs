@@ -256,7 +256,7 @@ pub(crate) fn get_plain_values<T>(
             result.push(v);
         } else {
             Err(format!(
-                "Array param element '{}' with index {} is not supported",
+                "Array element '{}' with index {} has different type than expected",
                 value.clone(),
                 index
             ))?

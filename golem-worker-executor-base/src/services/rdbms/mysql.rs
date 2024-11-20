@@ -25,7 +25,6 @@ use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
-use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
@@ -58,7 +57,7 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
         let url: Url = self.address.parse().map_err(sqlx::Error::config)?;
         if url.scheme() != "mysql" {
             Err(sqlx::Error::Configuration(
-                format!("'{}' scheme is invalid", url.scheme()).into(),
+                format!("scheme '{}' in url is invalid", url.scheme()).into(),
             ))?
         }
         let options = sqlx::mysql::MySqlConnectOptions::from_url(&url)?;
@@ -119,7 +118,7 @@ fn bind_value(
 ) -> Result<sqlx::query::Query<sqlx::MySql, sqlx::mysql::MySqlArguments>, String> {
     match value {
         DbValue::Primitive(v) => bind_value_primitive(query, v),
-        DbValue::Array(_) => Err("Array param is not supported".to_string()),
+        DbValue::Array(_) => Err("Array type is not supported".to_string()),
     }
 }
 
@@ -145,7 +144,7 @@ fn bind_value_primitive(
         }
         // DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
         DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
-        _ => Err(format!("Param '{}' is not supported", value)),
+        _ => Err(format!("Type '{}' is not supported", value)),
     }
 }
 

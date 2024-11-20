@@ -27,7 +27,6 @@ use futures_util::stream::BoxStream;
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
-use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
@@ -61,7 +60,7 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
         let url: Url = self.address.parse().map_err(sqlx::Error::config)?;
         if url.scheme() != "postgres" && url.scheme() != "postgresql" {
             Err(sqlx::Error::Configuration(
-                format!("'{}' scheme is invalid", url.scheme()).into(),
+                format!("scheme '{}' in url is invalid", url.scheme()).into(),
             ))?
         }
         let options = PgConnectOptions::from_url(&url)?;
@@ -307,7 +306,7 @@ fn bind_value_primitive(
         }
         DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
         DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
-        _ => Err(format!("Param '{}' is not supported", value)),
+        _ => Err(format!("Type '{}' is not supported", value)),
     }
 }
 

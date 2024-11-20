@@ -58,24 +58,24 @@ impl Display for RdbmsStatus {
 
 #[async_trait]
 pub trait Rdbms<T: RdbmsType> {
-    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error>;
+    async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error>;
 
-    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
+    fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
 
-    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool;
+    fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
 
     async fn execute(
         &self,
-        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<u64, Error>;
 
     async fn query(
         &self,
-        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error>;

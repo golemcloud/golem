@@ -144,52 +144,6 @@ impl RdbConnection for PostgresInfo {
     }
 }
 
-fn postgres_connection_string(host: &str, port: u16) -> String {
-    format!("postgres://postgres:postgres@{host}:{port}/postgres?connect_timeout=3")
-}
-
-async fn check_if_running(host: &str, port: u16) -> Result<(), ::tokio_postgres::Error> {
-    let (client, connection) = ::tokio_postgres::connect(
-        &postgres_connection_string(host, port),
-        ::tokio_postgres::NoTls,
-    )
-    .await?;
-
-    let connection_fiber = tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            eprintln!("connection error: {}", e);
-        }
-    });
-
-    let r = client.simple_query("SELECT version();").await?;
-
-    debug!("Test query returned with {r:?}");
-    connection_fiber.abort();
-    Ok(())
-}
-
-async fn wait_for_startup(host: &str, port: u16, timeout: Duration) {
-    info!(
-        "Waiting for Postgres start on host {host}:{port}, timeout: {}s",
-        timeout.as_secs()
-    );
-    let start = Instant::now();
-    loop {
-        let running = check_if_running(host, port).await;
-
-        match running {
-            Ok(_) => break,
-            Err(e) => {
-                if start.elapsed() > timeout {
-                    error!("Failed to verify that Postgres is running: {}", e);
-                    std::panic!("Failed to verify that Postgres is running");
-                }
-            }
-        }
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-}
-
 async fn postgres_check_if_running(info: &PostgresInfo) -> Result<(), sqlx::Error> {
     use sqlx::Executor;
     let connection_options = PgConnectOptions::new()

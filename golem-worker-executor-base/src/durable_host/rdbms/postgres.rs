@@ -54,7 +54,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .state
             .rdbms_service
             .postgres()
-            .create(&worker_id, &address)
+            .create(&address, &worker_id)
             .await;
 
         match result {
@@ -92,7 +92,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                     .state
                     .rdbms_service
                     .postgres()
-                    .query(&worker_id, &pool_key, &statement, params)
+                    .query(&pool_key, &worker_id, &statement, params)
                     .await;
 
                 match result {
@@ -134,7 +134,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
                     .state
                     .rdbms_service
                     .postgres()
-                    .execute(&worker_id, &pool_key, &statement, params)
+                    .execute(&pool_key, &worker_id, &statement, params)
                     .await
                     .map_err(|e| e.into());
 
@@ -159,7 +159,7 @@ impl<Ctx: WorkerCtx> HostDbConnection for DurableWorkerCtx<Ctx> {
             .state
             .rdbms_service
             .postgres()
-            .remove(&worker_id, &pool_key);
+            .remove(&pool_key, &worker_id);
 
         self.as_wasi_view()
             .table()

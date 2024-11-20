@@ -69,8 +69,8 @@ where
 
     async fn get_or_create(
         &self,
-        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
     ) -> Result<Arc<Pool<DB>>, Error> {
         let key_clone = key.clone();
         let pool_config = self.config.pool;
@@ -103,6 +103,7 @@ where
         Ok(pool)
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn remove_pool(&self, key: &RdbmsPoolKey) -> Result<bool, Error> {
         let _ = self.pool_workers_cache.remove(key);
         let pool = self.pool_cache.try_get(key);
@@ -143,23 +144,23 @@ where
     Pool<DB>: QueryExecutor,
     RdbmsPoolKey: PoolCreator<DB>,
 {
-    async fn create(&self, worker_id: &WorkerId, address: &str) -> Result<RdbmsPoolKey, Error> {
+    async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error> {
         let start = Instant::now();
         let key = RdbmsPoolKey::new(address.to_string());
         info!("{} create connection - pool: {}", self.rdbms_type, key);
-        let result = self.get_or_create(worker_id, &key).await;
+        let result = self.get_or_create(&key, worker_id).await;
         let _ = self.record_metrics("create", start, result)?;
         Ok(key)
     }
 
-    fn remove(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
+    fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
         match self.pool_workers_cache.get_mut(key) {
             Some(mut workers) => (*workers).remove(worker_id),
             None => false,
         }
     }
 
-    fn exists(&self, worker_id: &WorkerId, key: &RdbmsPoolKey) -> bool {
+    fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
         self.pool_workers_cache
             .get(key)
             .is_some_and(|workers| workers.contains(worker_id))
@@ -167,8 +168,8 @@ where
 
     async fn execute(
         &self,
-        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<u64, Error> {
@@ -182,7 +183,7 @@ where
         );
 
         let result = {
-            let pool = self.get_or_create(worker_id, key).await?;
+            let pool = self.get_or_create(key, worker_id).await?;
             pool.deref().execute(statement, params).await
         };
 
@@ -198,8 +199,8 @@ where
 
     async fn query(
         &self,
-        worker_id: &WorkerId,
         key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
         statement: &str,
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
@@ -213,7 +214,7 @@ where
         );
 
         let result = {
-            let pool = self.get_or_create(worker_id, key).await?;
+            let pool = self.get_or_create(key, worker_id).await?;
             pool.deref()
                 .query_stream(statement, params, self.config.query.query_batch)
                 .await

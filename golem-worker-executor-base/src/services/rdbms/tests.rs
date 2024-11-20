@@ -43,34 +43,6 @@ fn rdbms_service() -> RdbmsServiceDefault {
     RdbmsServiceDefault::default()
 }
 
-// #[test_gen]
-// async fn generated(r: &mut DynamicTestRegistration) {
-//     make(r, "_select1", "SELECT 1", 1).await;
-// }
-//
-// async fn make(r: &mut DynamicTestRegistration, suffix: &str, query: &str, expected: u64) {
-//     add_test!(
-//         r,
-//         format!("postgres_execute_test_{suffix}"),
-//         TestType::IntegrationTest,
-//         move |postgres: &mut DockerPostgresRdbs, rdbms_service: &mut RdbmsServiceDefault| async {
-//
-//             //     let address = postgres.rdbs[0].host_connection_string();
-//             // println!("address: {}", address);
-//             //
-//             // let worker_id = WorkerId {
-//             //     component_id: ComponentId::new_v4(),
-//             //     worker_name: "test".to_string(),
-//             // };
-//             //
-//             // let connection = rdbms_service.postgres().create(&worker_id, &address).await;
-//             // check!(connection.is_ok());
-//             // check!(1, expected);
-//             // postgres_execute_test((postgres, rdbms_service, query.to_string(), expected)).await.as_result()
-//         }
-//     );
-// }
-
 #[test]
 async fn postgres_par_test(postgres: &DockerPostgresRdbs, rdbms_service: &RdbmsServiceDefault) {
     rdbms_par_test(
@@ -113,6 +85,7 @@ async fn postgres_execute_test_create_insert_select(
                 component_id        uuid    NOT NULL PRIMARY KEY,
                 namespace           text    NOT NULL,
                 name                text    NOT NULL,
+                created_on          timestamp DEFAULT NOW(),
                 tags                text[]
             );
         "#;
@@ -135,6 +108,8 @@ async fn postgres_execute_test_create_insert_select(
 
     let count = 100;
 
+    let mut rows: Vec<DbRow> = Vec::with_capacity(count);
+
     for _ in 0..count {
         let params: Vec<DbValue> = vec![
             DbValue::Primitive(DbValuePrimitive::Uuid(Uuid::new_v4())),
@@ -151,10 +126,12 @@ async fn postgres_execute_test_create_insert_select(
             rdbms.clone(),
             &db_address,
             insert_statement,
-            params,
+            params.clone(),
             Some(1),
         )
         .await;
+
+        rows.push(DbRow { values: params });
     }
 
     let expected_columns = vec![
@@ -187,9 +164,18 @@ async fn postgres_execute_test_create_insert_select(
     rdbms_query_test(
         rdbms.clone(),
         &db_address,
-        "SELECT component_id, namespace, name, tags from components",
+        "SELECT component_id, namespace, name, tags FROM components ORDER BY created_on ASC",
         vec![],
         Some(expected_columns),
+        Some(rows),
+    )
+    .await;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        "DELETE FROM components;",
+        vec![],
         None,
     )
     .await;
@@ -274,9 +260,10 @@ async fn mysql_execute_test_create_insert_select(
     let create_table_statement = r#"
             CREATE TABLE IF NOT EXISTS components
             (
-                component_id        varchar(255)    NOT NULL,
+                component_id        varchar(25)    NOT NULL,
                 namespace           varchar(255)    NOT NULL,
                 name                varchar(255)    NOT NULL,
+                created_on          timestamp NOT NULL DEFAULT NOW(),
                 PRIMARY KEY (component_id)
             );
         "#;
@@ -299,9 +286,11 @@ async fn mysql_execute_test_create_insert_select(
 
     let count = 100;
 
-    for _ in 0..count {
+    let mut rows: Vec<DbRow> = Vec::with_capacity(count);
+
+    for i in 0..count {
         let params: Vec<DbValue> = vec![
-            DbValue::Primitive(DbValuePrimitive::Text(Uuid::new_v4().to_string())),
+            DbValue::Primitive(DbValuePrimitive::Text(format!("{:03}", i))),
             DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
             DbValue::Primitive(DbValuePrimitive::Text(format!("name-{}", Uuid::new_v4()))),
         ];
@@ -310,10 +299,12 @@ async fn mysql_execute_test_create_insert_select(
             rdbms.clone(),
             &db_address,
             insert_statement,
-            params,
+            params.clone(),
             Some(1),
         )
         .await;
+
+        rows.push(DbRow { values: params });
     }
 
     let expected_columns = vec![
@@ -340,9 +331,18 @@ async fn mysql_execute_test_create_insert_select(
     rdbms_query_test(
         rdbms.clone(),
         &db_address,
-        "SELECT component_id, namespace, name from components",
+        "SELECT component_id, namespace, name FROM components ORDER BY component_id ASC",
         vec![],
         Some(expected_columns),
+        Some(rows),
+    )
+    .await;
+
+    rdbms_execute_test(
+        rdbms.clone(),
+        &db_address,
+        "DELETE FROM components;",
+        vec![],
         None,
     )
     .await;
@@ -356,11 +356,11 @@ async fn rdbms_execute_test<T: RdbmsType>(
     expected: Option<u64>,
 ) {
     let worker_id = new_worker_id();
-    let connection = rdbms.create(&worker_id, db_address).await;
+    let connection = rdbms.create(db_address, &worker_id).await;
     check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
 
-    let result = rdbms.execute(&worker_id, &pool_key, query, params).await;
+    let result = rdbms.execute(&pool_key, &worker_id, query, params).await;
     check!(
         result.is_ok(),
         "query {} (executed on {}) failed",
@@ -370,13 +370,13 @@ async fn rdbms_execute_test<T: RdbmsType>(
     if let Some(expected) = expected {
         check!(
             result.unwrap() == expected,
-            "query {} (executed on {}) result do not match",
+            "query {} (executed on {}) - result do not match",
             query,
             pool_key
         );
     }
-    let _ = rdbms.remove(&worker_id, &pool_key);
-    let exists = rdbms.exists(&worker_id, &pool_key);
+    let _ = rdbms.remove(&pool_key, &worker_id);
+    let exists = rdbms.exists(&pool_key, &worker_id);
     check!(!exists);
 }
 
@@ -389,11 +389,11 @@ async fn rdbms_query_test<T: RdbmsType>(
     expected_rows: Option<Vec<DbRow>>,
 ) {
     let worker_id = new_worker_id();
-    let connection = rdbms.create(&worker_id, db_address).await;
+    let connection = rdbms.create(db_address, &worker_id).await;
     check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
 
-    let result = rdbms.query(&worker_id, &pool_key, query, params).await;
+    let result = rdbms.query(&pool_key, &worker_id, query, params).await;
 
     check!(
         result.is_ok(),
@@ -408,7 +408,7 @@ async fn rdbms_query_test<T: RdbmsType>(
     if let Some(expected) = expected_columns {
         check!(
             columns == expected,
-            "query {} (executed on {}) response columns do not match",
+            "query {} (executed on {}) - response columns do not match",
             query,
             pool_key
         );
@@ -423,15 +423,15 @@ async fn rdbms_query_test<T: RdbmsType>(
     if let Some(expected) = expected_rows {
         check!(
             rows == expected,
-            "query {} (executed on {}) response rows do not match",
+            "query {} (executed on {}) - response rows do not match",
             query,
             pool_key
         );
     }
 
-    let _ = rdbms.remove(&worker_id, &pool_key);
+    let _ = rdbms.remove(&pool_key, &worker_id);
 
-    let exists = rdbms.exists(&worker_id, &pool_key);
+    let exists = rdbms.exists(&pool_key, &worker_id);
     check!(!exists);
 }
 
@@ -452,12 +452,12 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
             let _ = fibers.spawn(async move {
                 let worker_id = new_worker_id();
 
-                let connection = rdbms_clone.create(&worker_id, &db_address_clone).await;
+                let connection = rdbms_clone.create(&db_address_clone, &worker_id).await;
 
                 let pool_key = connection.unwrap();
 
                 let result: Result<u64, Error> = rdbms_clone
-                    .execute(&worker_id, &pool_key, query, params_clone)
+                    .execute(&pool_key, &worker_id, query, params_clone)
                     .await;
 
                 (worker_id, pool_key, result)
@@ -477,7 +477,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
     let rdbms_status = rdbms.status();
 
     for (worker_id, pool_key) in workers_pools.clone() {
-        let _ = rdbms.remove(&worker_id, &pool_key);
+        let _ = rdbms.remove(&pool_key, &worker_id);
     }
 
     for (worker_id, pool_key) in workers_pools {
@@ -506,7 +506,9 @@ async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.postgres(),
         "pg://user:password@localhost:3506",
-        Error::ConnectionFailure("error with configuration: 'pg' scheme is invalid".to_string()),
+        Error::ConnectionFailure(
+            "error with configuration: scheme 'pg' in url is invalid".to_string(),
+        ),
     )
     .await;
 
@@ -554,7 +556,7 @@ async fn postgres_query_err_test(
             DbValuePrimitive::Int8(0),
         ])],
         Error::QueryParameterFailure(
-            "Array param element '0' with index 1 is not supported".to_string(),
+            "Array element '0' with index 1 has different type than expected".to_string(),
         ),
     )
     .await;
@@ -588,7 +590,7 @@ async fn postgres_execute_err_test(
             DbValuePrimitive::Int8(0),
         ])],
         Error::QueryParameterFailure(
-            "Array param element '0' with index 1 is not supported".to_string(),
+            "Array element '0' with index 1 has different type than expected".to_string(),
         ),
     )
     .await;
@@ -619,7 +621,7 @@ async fn mysql_query_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsServ
             DbValue::Primitive(DbValuePrimitive::Text("default".to_string())),
             DbValue::Array(vec![DbValuePrimitive::Text("tag1".to_string())]),
         ],
-        Error::QueryParameterFailure("Array param is not supported".to_string()),
+        Error::QueryParameterFailure("Array type is not supported".to_string()),
     )
     .await;
 
@@ -657,7 +659,7 @@ async fn mysql_execute_err_test(mysql: &DockerMysqlRdbs, rdbms_service: &RdbmsSe
         vec![DbValue::Array(vec![DbValuePrimitive::Text(
             "tag1".to_string(),
         )])],
-        Error::QueryParameterFailure("Array param is not supported".to_string()),
+        Error::QueryParameterFailure("Array type is not supported".to_string()),
     )
     .await;
 }
@@ -667,7 +669,9 @@ async fn mysql_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.mysql(),
         "msql://user:password@localhost:3506",
-        Error::ConnectionFailure("error with configuration: 'msql' scheme is invalid".to_string()),
+        Error::ConnectionFailure(
+            "error with configuration: scheme 'msql' in url is invalid".to_string(),
+        ),
     )
     .await;
 
@@ -685,12 +689,12 @@ async fn rdbms_connection_err_test<T: RdbmsType>(
     expected: Error,
 ) {
     let worker_id = new_worker_id();
-    let result = rdbms.create(&worker_id, db_address).await;
+    let result = rdbms.create(db_address, &worker_id).await;
 
     check!(result.is_err(), "connection to {db_address} is not error");
 
     let error = result.err().unwrap();
-    println!("error: {}", error);
+    // println!("error: {}", error);
     check!(
         error == expected,
         "connection error for {db_address} do not match"
@@ -705,11 +709,11 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     expected: Error,
 ) {
     let worker_id = new_worker_id();
-    let connection = rdbms.create(&worker_id, db_address).await;
+    let connection = rdbms.create(db_address, &worker_id).await;
     check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
 
-    let result = rdbms.query(&worker_id, &pool_key, query, params).await;
+    let result = rdbms.query(&pool_key, &worker_id, query, params).await;
 
     check!(
         result.is_err(),
@@ -719,7 +723,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
     );
 
     let error = result.err().unwrap();
-    println!("error: {}", error);
+    // println!("error: {}", error);
     check!(
         error == expected,
         "query {} (executed on {}) - response error do not match",
@@ -727,7 +731,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
         pool_key
     );
 
-    let _ = rdbms.remove(&worker_id, &pool_key);
+    let _ = rdbms.remove(&pool_key, &worker_id);
 }
 
 async fn rdbms_execute_err_test<T: RdbmsType>(
@@ -738,11 +742,11 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     expected: Error,
 ) {
     let worker_id = new_worker_id();
-    let connection = rdbms.create(&worker_id, db_address).await;
+    let connection = rdbms.create(db_address, &worker_id).await;
     check!(connection.is_ok(), "connection to {} failed", db_address);
     let pool_key = connection.unwrap();
 
-    let result = rdbms.execute(&worker_id, &pool_key, query, params).await;
+    let result = rdbms.execute(&pool_key, &worker_id, query, params).await;
 
     check!(
         result.is_err(),
@@ -752,7 +756,7 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
     );
 
     let error = result.err().unwrap();
-    println!("error: {}", error);
+    // println!("error: {}", error);
     check!(
         error == expected,
         "query {} (executed on {}) - response error do not match",
@@ -760,7 +764,7 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
         pool_key
     );
 
-    let _ = rdbms.remove(&worker_id, &pool_key);
+    let _ = rdbms.remove(&pool_key, &worker_id);
 }
 
 #[test]

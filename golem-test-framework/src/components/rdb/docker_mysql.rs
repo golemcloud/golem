@@ -23,7 +23,6 @@ use tokio::sync::Mutex;
 use tracing::info;
 
 use crate::components::docker::KillContainer;
-use crate::components::rdb::docker_postgres::DockerPostgresRdbs;
 use crate::components::rdb::{
     mysql_wait_for_startup, DbInfo, MysqlInfo, Rdb, RdbConnection, RdbsConnections,
 };
