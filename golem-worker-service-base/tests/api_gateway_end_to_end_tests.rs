@@ -161,8 +161,12 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
     "#;
 
     let api_specification: HttpApiDefinition =
-        get_api_spec_worker_binding_with_multiple_securities("foo/{user-id}", worker_name, response_mapping)
-            .await;
+        get_api_spec_worker_binding_with_multiple_securities(
+            "foo/{user-id}",
+            worker_name,
+            response_mapping,
+        )
+        .await;
 
     let test_response = execute(&api_request, &api_specification).await;
 
@@ -857,8 +861,8 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
         create_at,
         &internal::get_security_scheme_service(),
     )
-        .await
-        .unwrap()
+    .await
+    .unwrap()
 }
 
 async fn get_api_spec_cors_preflight_binding_default_response(
@@ -1083,6 +1087,7 @@ mod internal {
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
+    use golem_worker_service_base::gateway_security::GolemIdentityProviderMetadata;
     use golem_worker_service_base::repo::security_scheme::{
         SecuritySchemeRecord, SecuritySchemeRepo,
     };
@@ -1094,14 +1099,20 @@ mod internal {
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
         ACCESS_CONTROL_MAX_AGE,
     };
+    use openidconnect::core::{
+        CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType,
+        CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm,
+        CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType,
+    };
+    use openidconnect::{
+        AuthUrl, AuthenticationContextClass, IssuerUrl, JsonWebKeySetUrl, RegistrationUrl,
+        ResponseTypes, Scope, TokenUrl, UserInfoUrl,
+    };
     use rib::RibResult;
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
-    use openidconnect::core::{CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType};
-    use openidconnect::{AuthUrl, AuthenticationContextClass, IssuerUrl, JsonWebKeySetUrl, RegistrationUrl, ResponseTypes, Scope, TokenUrl, UserInfoUrl};
     use tokio::sync::Mutex;
-    use golem_worker_service_base::gateway_security::{GolemIdentityProviderMetadata};
 
     struct TestSecuritySchemeRepo {
         security_scheme: Arc<Mutex<HashMap<String, SecuritySchemeRecord>>>,
@@ -1434,7 +1445,6 @@ mod internal {
         Arc::new(TestFileServerBindingHandler {})
     }
 
-
     fn get_test_provider_metadata() -> GolemIdentityProviderMetadata {
         // Fetched from: https://rp.certification.openid.net:8080/openidconnect-rs/
         //     rp-response_type-code/.well-known/openid-configuration
@@ -1671,18 +1681,18 @@ mod internal {
                 "https://rp.certification.openid.net:8080/openidconnect-rs/rp-response_type-code"
                     .to_string(),
             )
-                .unwrap(),
+            .unwrap(),
             AuthUrl::new(
                 "https://rp.certification.openid.net:8080/openidconnect-rs/\
                  rp-response_type-code/authorization"
                     .to_string(),
             )
-                .unwrap(),
+            .unwrap(),
             JsonWebKeySetUrl::new(
                 "https://rp.certification.openid.net:8080/static/jwks_3INbZl52IrrPCp2j.json"
                     .to_string(),
             )
-                .unwrap(),
+            .unwrap(),
             vec![ResponseTypes::new(vec![CoreResponseType::Code])],
             vec![
                 CoreSubjectIdentifierType::Public,
@@ -1691,140 +1701,139 @@ mod internal {
             all_signing_algs.clone(),
             Default::default(),
         )
-            .set_request_object_signing_alg_values_supported(Some(all_signing_algs.clone()))
-            .set_token_endpoint_auth_signing_alg_values_supported(Some(vec![
-                CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
-                CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384,
-                CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512,
-                CoreJwsSigningAlgorithm::EcdsaP256Sha256,
-                CoreJwsSigningAlgorithm::EcdsaP384Sha384,
-                CoreJwsSigningAlgorithm::EcdsaP521Sha512,
-                CoreJwsSigningAlgorithm::HmacSha256,
-                CoreJwsSigningAlgorithm::HmacSha384,
-                CoreJwsSigningAlgorithm::HmacSha512,
-                CoreJwsSigningAlgorithm::RsaSsaPssSha256,
-                CoreJwsSigningAlgorithm::RsaSsaPssSha384,
-                CoreJwsSigningAlgorithm::RsaSsaPssSha512,
-            ]))
-            .set_scopes_supported(Some(vec![
-                Scope::new("email".to_string()),
-                Scope::new("phone".to_string()),
-                Scope::new("profile".to_string()),
-                Scope::new("openid".to_string()),
-                Scope::new("address".to_string()),
-                Scope::new("offline_access".to_string()),
-                Scope::new("openid".to_string()),
-            ]))
-            .set_userinfo_signing_alg_values_supported(Some(all_signing_algs))
-            .set_id_token_encryption_enc_values_supported(Some(vec![
-                CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
-                CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
-                CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
-                CoreJweContentEncryptionAlgorithm::Aes128Gcm,
-                CoreJweContentEncryptionAlgorithm::Aes192Gcm,
-                CoreJweContentEncryptionAlgorithm::Aes256Gcm,
-            ]))
-            .set_grant_types_supported(Some(vec![
-                CoreGrantType::AuthorizationCode,
-                CoreGrantType::Implicit,
-                CoreGrantType::JwtBearer,
-                CoreGrantType::RefreshToken,
-            ]))
-            .set_response_modes_supported(Some(vec![
-                CoreResponseMode::Query,
-                CoreResponseMode::Fragment,
-                CoreResponseMode::FormPost,
-            ]))
-            .set_require_request_uri_registration(Some(true))
-            .set_registration_endpoint(Some(
-                RegistrationUrl::new(
-                    "https://rp.certification.openid.net:8080/openidconnect-rs/\
+        .set_request_object_signing_alg_values_supported(Some(all_signing_algs.clone()))
+        .set_token_endpoint_auth_signing_alg_values_supported(Some(vec![
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384,
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha512,
+            CoreJwsSigningAlgorithm::EcdsaP256Sha256,
+            CoreJwsSigningAlgorithm::EcdsaP384Sha384,
+            CoreJwsSigningAlgorithm::EcdsaP521Sha512,
+            CoreJwsSigningAlgorithm::HmacSha256,
+            CoreJwsSigningAlgorithm::HmacSha384,
+            CoreJwsSigningAlgorithm::HmacSha512,
+            CoreJwsSigningAlgorithm::RsaSsaPssSha256,
+            CoreJwsSigningAlgorithm::RsaSsaPssSha384,
+            CoreJwsSigningAlgorithm::RsaSsaPssSha512,
+        ]))
+        .set_scopes_supported(Some(vec![
+            Scope::new("email".to_string()),
+            Scope::new("phone".to_string()),
+            Scope::new("profile".to_string()),
+            Scope::new("openid".to_string()),
+            Scope::new("address".to_string()),
+            Scope::new("offline_access".to_string()),
+            Scope::new("openid".to_string()),
+        ]))
+        .set_userinfo_signing_alg_values_supported(Some(all_signing_algs))
+        .set_id_token_encryption_enc_values_supported(Some(vec![
+            CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
+            CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
+            CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
+            CoreJweContentEncryptionAlgorithm::Aes128Gcm,
+            CoreJweContentEncryptionAlgorithm::Aes192Gcm,
+            CoreJweContentEncryptionAlgorithm::Aes256Gcm,
+        ]))
+        .set_grant_types_supported(Some(vec![
+            CoreGrantType::AuthorizationCode,
+            CoreGrantType::Implicit,
+            CoreGrantType::JwtBearer,
+            CoreGrantType::RefreshToken,
+        ]))
+        .set_response_modes_supported(Some(vec![
+            CoreResponseMode::Query,
+            CoreResponseMode::Fragment,
+            CoreResponseMode::FormPost,
+        ]))
+        .set_require_request_uri_registration(Some(true))
+        .set_registration_endpoint(Some(
+            RegistrationUrl::new(
+                "https://rp.certification.openid.net:8080/openidconnect-rs/\
                  rp-response_type-code/registration"
-                        .to_string(),
-                )
-                    .unwrap(),
-            ))
-            .set_claims_parameter_supported(Some(true))
-            .set_request_object_encryption_enc_values_supported(Some(vec![
-                CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
-                CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
-                CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
-                CoreJweContentEncryptionAlgorithm::Aes128Gcm,
-                CoreJweContentEncryptionAlgorithm::Aes192Gcm,
-                CoreJweContentEncryptionAlgorithm::Aes256Gcm,
-            ]))
-            .set_userinfo_endpoint(Some(
-                UserInfoUrl::new(
-                    "https://rp.certification.openid.net:8080/openidconnect-rs/\
+                    .to_string(),
+            )
+            .unwrap(),
+        ))
+        .set_claims_parameter_supported(Some(true))
+        .set_request_object_encryption_enc_values_supported(Some(vec![
+            CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
+            CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
+            CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
+            CoreJweContentEncryptionAlgorithm::Aes128Gcm,
+            CoreJweContentEncryptionAlgorithm::Aes192Gcm,
+            CoreJweContentEncryptionAlgorithm::Aes256Gcm,
+        ]))
+        .set_userinfo_endpoint(Some(
+            UserInfoUrl::new(
+                "https://rp.certification.openid.net:8080/openidconnect-rs/\
                  rp-response_type-code/userinfo"
-                        .to_string(),
-                )
-                    .unwrap(),
-            ))
-            .set_token_endpoint_auth_methods_supported(Some(vec![
-                CoreClientAuthMethod::ClientSecretPost,
-                CoreClientAuthMethod::ClientSecretBasic,
-                CoreClientAuthMethod::ClientSecretJwt,
-                CoreClientAuthMethod::PrivateKeyJwt,
-            ]))
-            .set_claims_supported(Some(
-                vec![
-                    "name",
-                    "given_name",
-                    "middle_name",
-                    "picture",
-                    "email_verified",
-                    "birthdate",
-                    "sub",
-                    "address",
-                    "zoneinfo",
-                    "email",
-                    "gender",
-                    "preferred_username",
-                    "family_name",
-                    "website",
-                    "profile",
-                    "phone_number_verified",
-                    "nickname",
-                    "updated_at",
-                    "phone_number",
-                    "locale",
-                ]
-                    .iter()
-                    .map(|claim| CoreClaimName::new((*claim).to_string()))
-                    .collect(),
-            ))
-            .set_request_object_encryption_alg_values_supported(Some(all_encryption_algs.clone()))
-            .set_claim_types_supported(Some(vec![
-                CoreClaimType::Normal,
-                CoreClaimType::Aggregated,
-                CoreClaimType::Distributed,
-            ]))
-            .set_request_uri_parameter_supported(Some(true))
-            .set_request_parameter_supported(Some(true))
-            .set_token_endpoint(Some(
-                TokenUrl::new(
-                    "https://rp.certification.openid.net:8080/openidconnect-rs/\
+                    .to_string(),
+            )
+            .unwrap(),
+        ))
+        .set_token_endpoint_auth_methods_supported(Some(vec![
+            CoreClientAuthMethod::ClientSecretPost,
+            CoreClientAuthMethod::ClientSecretBasic,
+            CoreClientAuthMethod::ClientSecretJwt,
+            CoreClientAuthMethod::PrivateKeyJwt,
+        ]))
+        .set_claims_supported(Some(
+            vec![
+                "name",
+                "given_name",
+                "middle_name",
+                "picture",
+                "email_verified",
+                "birthdate",
+                "sub",
+                "address",
+                "zoneinfo",
+                "email",
+                "gender",
+                "preferred_username",
+                "family_name",
+                "website",
+                "profile",
+                "phone_number_verified",
+                "nickname",
+                "updated_at",
+                "phone_number",
+                "locale",
+            ]
+            .iter()
+            .map(|claim| CoreClaimName::new((*claim).to_string()))
+            .collect(),
+        ))
+        .set_request_object_encryption_alg_values_supported(Some(all_encryption_algs.clone()))
+        .set_claim_types_supported(Some(vec![
+            CoreClaimType::Normal,
+            CoreClaimType::Aggregated,
+            CoreClaimType::Distributed,
+        ]))
+        .set_request_uri_parameter_supported(Some(true))
+        .set_request_parameter_supported(Some(true))
+        .set_token_endpoint(Some(
+            TokenUrl::new(
+                "https://rp.certification.openid.net:8080/openidconnect-rs/\
                  rp-response_type-code/token"
-                        .to_string(),
-                )
-                    .unwrap(),
-            ))
-            .set_id_token_encryption_alg_values_supported(Some(all_encryption_algs.clone()))
-            .set_userinfo_encryption_alg_values_supported(Some(all_encryption_algs))
-            .set_userinfo_encryption_enc_values_supported(Some(vec![
-                CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
-                CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
-                CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
-                CoreJweContentEncryptionAlgorithm::Aes128Gcm,
-                CoreJweContentEncryptionAlgorithm::Aes192Gcm,
-                CoreJweContentEncryptionAlgorithm::Aes256Gcm,
-            ]))
-            .set_acr_values_supported(Some(vec![AuthenticationContextClass::new(
-                "PASSWORD".to_string(),
-            )]));
+                    .to_string(),
+            )
+            .unwrap(),
+        ))
+        .set_id_token_encryption_alg_values_supported(Some(all_encryption_algs.clone()))
+        .set_userinfo_encryption_alg_values_supported(Some(all_encryption_algs))
+        .set_userinfo_encryption_enc_values_supported(Some(vec![
+            CoreJweContentEncryptionAlgorithm::Aes128CbcHmacSha256,
+            CoreJweContentEncryptionAlgorithm::Aes192CbcHmacSha384,
+            CoreJweContentEncryptionAlgorithm::Aes256CbcHmacSha512,
+            CoreJweContentEncryptionAlgorithm::Aes128Gcm,
+            CoreJweContentEncryptionAlgorithm::Aes192Gcm,
+            CoreJweContentEncryptionAlgorithm::Aes256Gcm,
+        ]))
+        .set_acr_values_supported(Some(vec![AuthenticationContextClass::new(
+            "PASSWORD".to_string(),
+        )]));
 
         serde_json::from_str(&json_response).unwrap()
     }
-
 }

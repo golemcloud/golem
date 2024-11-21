@@ -20,7 +20,9 @@ pub fn cors_transformer() -> Box<dyn ApiDefinitionTransformer> {
 // has to ensure all the routes under the same resource also has a cors::add_headers
 // middleware. This is handled using `CorsTransformer`.
 // Similarly, if a user has configured for as security scheme for a route (or routes),
-// as a middleware (HttpMiddleware::Auth), then
+// then AuthTransformer ensures that for all the security schemes
+// there exist a corresponding call back endpoint. We are not letting the users
+// define this to have a reasonable DX.
 pub fn transform_http_api_definition(
     input: &mut HttpApiDefinition,
 ) -> Result<(), ApiDefTransformationError> {

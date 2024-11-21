@@ -19,6 +19,9 @@ use crate::gateway_api_definition_transformer::{
 use std::collections::HashMap;
 
 // Auth transformer ensures that for all security schemes
+// configured in different parts of the ApiDefinition, there
+// exist a auth call back endpoint. We are not letting the users
+// define this to have a reasonable DX.
 pub struct AuthTransformer;
 
 impl ApiDefinitionTransformer for AuthTransformer {
