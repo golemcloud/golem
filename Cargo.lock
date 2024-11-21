@@ -2314,7 +2314,7 @@ checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.85",
+ "syn 2.0.87",
 ]
 
 [[package]]
@@ -2699,7 +2699,7 @@ checksum = "4a3daa8e81a3963a60642bcc1f90a670680bd4a77535faa384e9d1c79d620871"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
- "serde 1.0.213",
+ "serde 1.0.215",
  "sha2",
  "subtle",
  "zeroize",
@@ -3607,7 +3607,7 @@ dependencies = [
  "rand",
  "redis",
  "regex",
- "reqwest",
+ "reqwest 0.12.9",
  "serde 1.0.215",
  "serde_json",
  "serde_json_path",
@@ -3651,7 +3651,7 @@ dependencies = [
  "golem-wasm-rpc",
  "http 1.1.0",
  "relative-path",
- "reqwest",
+ "reqwest 0.12.9",
  "serde 1.0.215",
  "serde_json",
  "serde_yaml",
@@ -5190,7 +5190,7 @@ dependencies = [
  "plotters",
  "poem",
  "rand",
- "reqwest",
+ "reqwest 0.12.9",
  "serde 1.0.215",
  "serde_json",
  "test-r",
@@ -6207,7 +6207,7 @@ dependencies = [
  "http 0.2.12",
  "rand",
  "reqwest 0.11.27",
- "serde 1.0.213",
+ "serde 1.0.215",
  "serde_json",
  "serde_path_to_error",
  "sha2",
@@ -6284,7 +6284,7 @@ dependencies = [
  "p384",
  "rand",
  "rsa",
- "serde 1.0.213",
+ "serde 1.0.215",
  "serde-value",
  "serde_derive",
  "serde_json",
@@ -7699,7 +7699,7 @@ dependencies = [
  "pin-project-lite",
  "rustls 0.21.12",
  "rustls-pemfile 1.0.4",
- "serde 1.0.213",
+ "serde 1.0.215",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper 0.1.2",
@@ -8367,7 +8367,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "af99884400da37c88f5e9146b7f1fd0fbcae8f6eec4e9da38b67d05486f814a6"
 dependencies = [
  "itoa",
- "serde 1.0.213",
+ "serde 1.0.215",
 ]
 
 [[package]]
@@ -8376,7 +8376,7 @@ version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ce1fc6db65a611022b23a0dec6975d63fb80a302cb3388835ff02c097258d50"
 dependencies = [
- "serde 1.0.213",
+ "serde 1.0.215",
 ]
 
 [[package]]
@@ -10297,7 +10297,7 @@ dependencies = [
  "once_cell",
  "pathdiff",
  "ptree",
- "reqwest 0.12.8",
+ "reqwest 0.12.9",
  "secrecy",
  "semver",
  "serde 1.0.215",
