@@ -7,8 +7,8 @@ use crate::log::{
 };
 use crate::model::oam;
 use crate::model::wasm_rpc::{
-    include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName,
-    DEFAULT_CONFIG_FILE_NAME,
+    include_glob_patter_from_yaml_file, init_oam_app, Application, BuildStep,
+    BuildStepsLookupResult, ComponentName, WasmComponent, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::stub::{StubConfig, StubDefinition};
 use crate::validation::ValidatedResult;
@@ -33,6 +33,7 @@ use walkdir::WalkDir;
 pub struct Config {
     pub app_resolve_mode: ApplicationSourceMode,
     pub skip_up_to_date_checks: bool,
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +52,7 @@ struct ApplicationContext {
 
 impl ApplicationContext {
     fn new(config: Config) -> anyhow::Result<ApplicationContext> {
-        to_anyhow(
+        let ctx = to_anyhow(
             "Failed to create application context, see problems above",
             load_app_validated(&config).and_then(|application| {
                 ResolvedWitApplication::new(&application).map(|wit| ApplicationContext {
@@ -62,7 +63,23 @@ impl ApplicationContext {
                     component_base_output_wit_deps: HashMap::new(),
                 })
             }),
-        )
+        )?;
+
+        if let Some(profile) = &ctx.config.profile {
+            let all_profiles = ctx.application.all_profiles();
+            if !all_profiles.contains(profile) {
+                bail!(
+                    "Profile {} not found. Available profiles: {}",
+                    profile.log_color_error_highlight(),
+                    all_profiles
+                        .into_iter()
+                        .map(|s| s.log_color_highlight())
+                        .join(", ")
+                );
+            }
+        }
+
+        Ok(ctx)
     }
 
     fn update_wit_context(&mut self) -> anyhow::Result<()> {
@@ -143,7 +160,7 @@ async fn pre_component_build_ctx(ctx: &mut ApplicationContext) -> anyhow::Result
 
     {
         let mut any_changed = false;
-        for component_name in ctx.application.wasm_components_by_name.keys() {
+        for component_name in ctx.application.component_names() {
             let changed = create_output_wit(ctx, component_name)?;
             if changed {
                 update_cargo_toml(ctx, component_name)?;
@@ -167,36 +184,79 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
     log_action("Executing", "component-build steps");
     let _indent = LogIndent::new();
 
-    let components_with_build_steps = ctx
-        .application
-        .wasm_components_by_name
-        .values()
-        .filter(|component| !component.build_steps.is_empty())
-        .collect::<Vec<_>>();
-
-    if components_with_build_steps.is_empty() {
-        log_warn_action(
-            "Skipping",
-            "building components, no components with build steps found",
-        );
-        return Ok(());
-    }
-
     log_action("Building", "components");
     let _indent = LogIndent::new();
 
-    for component in components_with_build_steps {
-        log_action(
-            "Building",
-            format!(
-                "component {} in directory {}",
-                component.name.log_color_highlight(),
-                component.source_dir().log_color_highlight(),
-            ),
-        );
+    for (component_name, component) in ctx.application.components() {
+        let build_steps = match ctx
+            .application
+            .component_build_steps(component_name, ctx.config.profile.as_deref())
+        {
+            BuildStepsLookupResult::NoBuildSteps => {
+                log_warn_action(
+                    "Skipping",
+                    format!(
+                        "building {}, no build steps are defined",
+                        component_name.log_color_highlight()
+                    ),
+                );
+                None
+            }
+            BuildStepsLookupResult::NoBuildStepsForRequestedProfile => {
+                log_warn_action(
+                    "Skipping",
+                    format!(
+                        "building {}, no build steps for profile {}",
+                        component_name.log_color_highlight(),
+                        ctx.config.profile.as_ref().unwrap().log_color_highlight()
+                    ),
+                );
+                None
+            }
+            BuildStepsLookupResult::BuildSteps { build_steps } => {
+                log_action(
+                    "Building",
+                    format!("{}", component_name.log_color_highlight()),
+                );
+                Some(build_steps)
+            }
+            BuildStepsLookupResult::BuildStepsForDefaultProfile {
+                profile,
+                build_steps,
+            } => {
+                log_action(
+                    "Building",
+                    format!(
+                        "{} using requested profile {}",
+                        component_name.log_color_highlight(),
+                        profile.log_color_highlight()
+                    ),
+                );
+                Some(build_steps)
+            }
+            BuildStepsLookupResult::BuildStepsForRequestedProfile {
+                profile,
+                build_steps,
+            } => {
+                log_action(
+                    "Building",
+                    format!(
+                        "{} using default profile {}",
+                        component_name.log_color_highlight(),
+                        profile.log_color_highlight()
+                    ),
+                );
+                Some(build_steps)
+            }
+        };
+
+        let Some(build_steps) = build_steps else {
+            continue;
+        };
+
         let _indent = LogIndent::new();
 
-        for build_step in &component.build_steps {
+        for build_step in build_steps {
             let build_dir = build_step
                 .dir
                 .as_ref()
@@ -209,8 +269,9 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
 
                 if is_up_to_date(ctx.config.skip_up_to_date_checks, || inputs, || outputs) {
                     log_skipping_up_to_date(format!(
-                        "executing command: {}",
-                        build_step.command.log_color_highlight()
+                        "executing command: {} in directory {}",
+                        build_step.command.log_color_highlight(),
+                        build_dir.log_color_highlight()
                     ));
                     continue;
                 }
@@ -256,7 +317,7 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
     log_action("Executing", "post-component-build steps");
     let _indent = LogIndent::new();
 
-    for (component_name, component) in &ctx.application.wasm_components_by_name {
+    for (component_name, component) in ctx.application.components() {
         let input_wasm = ctx.application.component_input_wasm(component_name);
         let output_wasm = ctx.application.component_output_wasm(component_name);
 
@@ -346,18 +407,11 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
         log_action("Cleaning", "components");
         let _indent = LogIndent::new();
 
-        for (component_name, component) in &app.wasm_components_by_name {
-            log_action(
-                "Cleaning",
-                format!("component {}", component_name.log_color_highlight()),
-            );
-            let _indent = LogIndent::new();
-
-            delete_path("wit output dir", &app.component_output_wit(component_name))?;
-            delete_path("wasm input", &app.component_input_wasm(component_name))?;
-            delete_path("wasm output", &app.component_output_wasm(component_name))?;
-
-            for build_step in &component.build_steps {
+        fn clean_build_steps(
+            component: &WasmComponent,
+            build_steps: &[BuildStep],
+        ) -> anyhow::Result<()> {
+            for build_step in build_steps {
                 let build_dir = build_step
                     .dir
                     .as_ref()
@@ -368,6 +422,31 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
                 for output in outputs {
                     delete_path("build step output", &output)?;
                 }
+            }
+
+            Ok(())
+        }
+
+        for (component_name, component) in app.components() {
+            log_action(
+                "Cleaning",
+                format!("component {}", component_name.log_color_highlight()),
+            );
+            let _indent = LogIndent::new();
+
+            delete_path("wit output dir", &app.component_output_wit(component_name))?;
+            delete_path("wasm input", &app.component_input_wasm(component_name))?;
+            delete_path("wasm output", &app.component_output_wasm(component_name))?;
+
+            let component_build = app.component_properties(component_name);
+            clean_build_steps(component, &component_build.build)?;
+            for (profile, build_steps) in &component_build.build_profiles {
+                log_action(
+                    "Cleaning",
+                    format!("profile {}", profile.log_color_highlight()),
+                );
+                let _indent = LogIndent::new();
+                clean_build_steps(component, build_steps)?;
             }
         }
     }
@@ -436,13 +515,12 @@ fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
     let app = oam_apps.and_then(Application::from_oam_apps);
 
     log_validated_action_result("Found", &app, |app| {
-        if app.wasm_components_by_name.is_empty() {
+        if app.component_names().next().is_none() {
             "no components".to_string()
         } else {
             format!(
                 "components: {}",
-                app.wasm_components_by_name
-                    .keys()
+                app.component_names()
                     .map(|s| s.log_color_highlight())
                     .join(", ")
             )

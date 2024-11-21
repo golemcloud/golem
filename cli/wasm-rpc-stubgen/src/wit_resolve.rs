@@ -257,7 +257,7 @@ impl ResolvedWitApplication {
     }
 
     fn add_components_from_app(&mut self, validation: &mut ValidationBuilder, app: &Application) {
-        for (component_name, component) in &app.wasm_components_by_name {
+        for (component_name, component) in app.components() {
             validation.push_context("component name", component_name.to_string());
 
             let input_wit_dir = app.component_input_wit(component_name);
@@ -291,7 +291,7 @@ impl ResolvedWitApplication {
                     .collect();
 
                 let input_contained_package_deps = {
-                    let deps_path = component.input_wit.join("deps");
+                    let deps_path = app.component_properties(component_name).input_wit.join("deps");
                     if !deps_path.exists() {
                         HashSet::new()
                     } else {

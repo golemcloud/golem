@@ -220,6 +220,9 @@ pub struct DeclarativeBuildArgs {
     /// When set to true will skip modification time based up-to-date checks, defaults to false
     #[clap(long, short, default_value = "false")]
     pub force_build: bool,
+    /// Selects a build profile
+    #[clap(long, short)]
+    pub profile: Option<String>,
 }
 
 pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
@@ -312,5 +315,6 @@ fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative
             }
         },
         skip_up_to_date_checks: args.force_build,
+        profile: args.profile,
     }
 }
