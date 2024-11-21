@@ -55,6 +55,7 @@ pub struct FileServerBindingSuccess {
 
 pub enum FileServerBindingError {
     InternalError(String),
+    InvalidRibResult(String),
     WorkerServiceError(WorkerServiceError),
     ComponentServiceError(ComponentServiceError),
 }
@@ -97,7 +98,7 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
         original_result: RibResult,
     ) -> FileServerBindingResult {
         let binding_details = FileServerBindingDetails::from_rib_result(original_result)
-            .map_err(FileServerBindingError::InternalError)?;
+            .map_err(FileServerBindingError::InvalidRibResult)?;
 
         let component_metadata = self
             .component_service

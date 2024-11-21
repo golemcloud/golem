@@ -49,6 +49,11 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
             Err(FileServerBindingError::WorkerServiceError(inner)) => {
                 WorkerApiBaseError::from(inner).into_response()
             }
+            Err(FileServerBindingError::InvalidRibResult(e)) => poem::Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from_string(
+                    format!("Error while processing rib result: {}", e).to_string(),
+                )),
         };
 
         middlewares.transform_http_response(&mut response);
