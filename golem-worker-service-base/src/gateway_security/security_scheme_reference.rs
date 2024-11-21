@@ -19,6 +19,14 @@ pub struct SecuritySchemeReference {
     pub security_scheme_identifier: SecuritySchemeIdentifier,
 }
 
+impl SecuritySchemeReference {
+    pub fn new(security_scheme_identifier: String) -> Self {
+        SecuritySchemeReference {
+            security_scheme_identifier: SecuritySchemeIdentifier::new(security_scheme_identifier),
+        }
+    }
+}
+
 impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeReference {
     fn from(value: SecuritySchemeWithProviderMetadata) -> Self {
         SecuritySchemeReference {

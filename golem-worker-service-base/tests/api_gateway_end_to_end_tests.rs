@@ -109,6 +109,80 @@ async fn test_end_to_end_api_gateway_simple_worker() {
 }
 
 #[test]
+async fn test_end_to_end_api_gateway_with_security() {
+    let empty_headers = HeaderMap::new();
+    let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let worker_name = r#"
+      let id: u64 = request.path.user-id;
+      "shopping-cart-${id}"
+    "#;
+
+    let response_mapping = r#"
+      let response = golem:it/api.{get-cart-contents}("a", "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_spec_worker_binding_with_security("foo/{user-id}", worker_name, response_mapping)
+            .await;
+
+    let test_response = execute(&api_request, &api_specification).await;
+
+    let result = (
+        test_response.get_function_name().unwrap(),
+        test_response.get_function_params().unwrap(),
+    );
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
+async fn test_end_to_end_api_gateway_with_multiple_security() {
+    let empty_headers = HeaderMap::new();
+    let api_request = get_api_request("foo/1", None, &empty_headers, serde_json::Value::Null);
+
+    let worker_name = r#"
+      let id: u64 = request.path.user-id;
+      "shopping-cart-${id}"
+    "#;
+
+    let response_mapping = r#"
+      let response = golem:it/api.{get-cart-contents}("a", "b");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_spec_worker_binding_with_multiple_securities("foo/{user-id}", worker_name, response_mapping)
+            .await;
+
+    let test_response = execute(&api_request, &api_specification).await;
+
+    let result = (
+        test_response.get_function_name().unwrap(),
+        test_response.get_function_params().unwrap(),
+    );
+
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
+}
+
+#[test]
 async fn test_end_to_end_api_gateway_cors_preflight() {
     let empty_headers = HeaderMap::new();
     let api_request =
@@ -679,6 +753,112 @@ async fn get_api_spec_worker_binding(
     )
     .await
     .unwrap()
+}
+
+// https://swagger.io/docs/specification/v3_0/authentication/openid-connect-discovery/
+async fn get_api_spec_worker_binding_with_security(
+    path_pattern: &str,
+    worker_name: &str,
+    rib_expression: &str,
+) -> HttpApiDefinition {
+    let yaml_string = format!(
+        r#"
+          id: users-api
+          version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
+          security:
+          - openId1
+          routes:
+          - method: Get
+            path: {}
+            security: openId1
+            binding:
+              type: wit-worker
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              workerName: '{}'
+              response: '${{{}}}'
+
+        "#,
+        path_pattern, worker_name, rib_expression
+    );
+
+    // Serde is available only for user facing HttpApiDefinition
+    let http_api_definition_request: api::HttpApiDefinitionRequest =
+        serde_yaml::from_str(yaml_string.as_str()).unwrap();
+
+    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+        http_api_definition_request.try_into().unwrap();
+
+    let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+
+    HttpApiDefinition::from_http_api_definition_request(
+        &DefaultNamespace(),
+        core_request,
+        create_at,
+        &internal::get_security_scheme_service(),
+    )
+    .await
+    .unwrap()
+}
+
+// https://swagger.io/docs/specification/v3_0/authentication/openid-connect-discovery/
+async fn get_api_spec_worker_binding_with_multiple_securities(
+    path_pattern: &str,
+    worker_name: &str,
+    rib_expression: &str,
+) -> HttpApiDefinition {
+    let yaml_string = format!(
+        r#"
+          id: users-api
+          version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
+          security:
+          - openId1
+          - openId2
+          routes:
+          - method: Get
+            path: {}
+            binding:
+              type: wit-worker
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              workerName: '{}'
+              response: '${{{}}}'
+          - method: Post
+            path: {}
+            security: openId2
+            binding:
+              type: wit-worker
+              componentId:
+                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
+                version: 0
+              workerName: '{}'
+              response: '${{{}}}'
+
+        "#,
+        path_pattern, worker_name, rib_expression, path_pattern, worker_name, rib_expression
+    );
+
+    // Serde is available only for user facing HttpApiDefinition
+    let http_api_definition_request: api::HttpApiDefinitionRequest =
+        serde_yaml::from_str(yaml_string.as_str()).unwrap();
+
+    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+        http_api_definition_request.try_into().unwrap();
+
+    let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+
+    HttpApiDefinition::from_http_api_definition_request(
+        &DefaultNamespace(),
+        core_request,
+        create_at,
+        &internal::get_security_scheme_service(),
+    )
+        .await
+        .unwrap()
 }
 
 async fn get_api_spec_cors_preflight_binding_default_response(

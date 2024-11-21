@@ -70,7 +70,7 @@ pub struct ApiDefinitionInfo {
 pub struct HttpApiDefinitionRequest {
     pub id: ApiDefinitionId,
     pub version: ApiVersion,
-    pub security: Option<Vec<SecuritySchemeReferenceData>>,
+    pub security: Option<Vec<String>>,
     pub routes: Vec<RouteRequestData>,
     #[serde(default)]
     pub draft: bool,
@@ -182,6 +182,7 @@ pub struct RouteRequestData {
     pub method: MethodPattern,
     pub path: String,
     pub binding: GatewayBindingData,
+    pub security: Option<String>,
 }
 
 impl TryFrom<RouteRequestData> for RouteRequest {
@@ -213,13 +214,24 @@ impl TryFrom<RouteRequestData> for RouteRequest {
 impl TryFrom<Route> for RouteRequestData {
     type Error = String;
     fn try_from(value: Route) -> Result<Self, String> {
-        let method = value.method;
+        let method = value.method.clone();
         let path = value.path.to_string();
-        let binding = GatewayBindingData::try_from(value.binding)?;
+        let binding = GatewayBindingData::try_from(value.binding.clone())?;
+        let security = value
+            .binding
+            .get_authenticate_request_middleware()
+            .map(|x| {
+                x.security_scheme
+                    .security_scheme
+                    .scheme_identifier()
+                    .to_string()
+            });
+
         Ok(Self {
             method,
             path,
             binding,
+            security,
         })
     }
 }
@@ -230,10 +242,15 @@ impl TryFrom<RouteRequest> for RouteRequestData {
     fn try_from(value: RouteRequest) -> Result<Self, Self::Error> {
         let path = value.path.to_string();
         let binding = GatewayBindingData::try_from(value.binding)?;
+        let security = value
+            .security
+            .map(|s| s.security_scheme_identifier.to_string());
+
         Ok(Self {
             method: value.method,
             path,
             binding,
+            security,
         })
     }
 }
@@ -577,7 +594,7 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
                 version: self.version,
                 security: self
                     .security
-                    .map(|x| x.into_iter().map(SecuritySchemeReference::from).collect()),
+                    .map(|x| x.into_iter().map(SecuritySchemeReference::new).collect()),
                 routes,
                 draft: self.draft,
             },
