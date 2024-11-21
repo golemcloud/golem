@@ -17,6 +17,7 @@ use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::clients::component::ComponentClient;
 use crate::clients::file_download;
 use crate::clients::health_check::HealthCheckClient;
+use crate::clients::plugin::PluginClient;
 use crate::clients::worker::WorkerClient;
 use crate::config::{HttpClientConfig, OssProfile};
 use crate::factory::ServiceFactory;
@@ -25,10 +26,16 @@ use crate::oss::clients::api_definition::ApiDefinitionClientLive;
 use crate::oss::clients::api_deployment::ApiDeploymentClientLive;
 use crate::oss::clients::component::ComponentClientLive;
 use crate::oss::clients::health_check::HealthCheckClientLive;
+use crate::oss::clients::plugin::PluginClientLive;
 use crate::oss::clients::worker::WorkerClientLive;
 use crate::oss::model::OssContext;
 use crate::service::project::{ProjectResolver, ProjectResolverOss};
+use golem_client::model::{
+    PluginDefinitionDefaultPluginOwnerDefaultPluginScope,
+    PluginDefinitionWithoutOwnerDefaultPluginScope,
+};
 use golem_client::Context;
+use golem_common::model::plugin::DefaultPluginScope;
 use itertools::Itertools;
 use std::sync::Arc;
 use tracing::warn;
@@ -119,6 +126,9 @@ impl OssServiceFactory {
 impl ServiceFactory for OssServiceFactory {
     type ProjectRef = OssContext;
     type ProjectContext = OssContext;
+    type PluginDefinition = PluginDefinitionDefaultPluginOwnerDefaultPluginScope;
+    type PluginDefinitionWithoutOwner = PluginDefinitionWithoutOwnerDefaultPluginScope;
+    type PluginScope = DefaultPluginScope;
 
     fn project_resolver(
         &self,
@@ -201,6 +211,24 @@ impl ServiceFactory for OssServiceFactory {
                 })
             })
             .collect()
+    }
+
+    fn plugin_client(
+        &self,
+    ) -> Arc<
+        dyn PluginClient<
+                PluginDefinition = Self::PluginDefinition,
+                PluginDefinitionWithoutOwner = Self::PluginDefinitionWithoutOwner,
+                PluginScope = Self::PluginScope,
+                ProjectContext = Self::ProjectContext,
+            > + Send
+            + Sync,
+    > {
+        Arc::new(PluginClientLive {
+            client: golem_client::api::PluginClientLive {
+                context: self.worker_context(),
+            },
+        })
     }
 }
 

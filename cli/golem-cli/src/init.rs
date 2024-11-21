@@ -15,6 +15,7 @@
 use crate::command::api_definition::ApiDefinitionSubcommand;
 use crate::command::api_deployment::ApiDeploymentSubcommand;
 use crate::command::component::ComponentSubCommand;
+use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::{ProfileSubCommand, UniversalProfileAdd};
 use crate::command::worker::{OssWorkerUriArg, WorkerSubcommand};
 use crate::completion::PrintCompletion;
@@ -22,6 +23,7 @@ use crate::config::{CloudProfile, Config, OssProfile, Profile, ProfileConfig, Pr
 use crate::diagnose::diagnose;
 use crate::model::{
     ComponentUriArg, Format, GolemError, GolemResult, HasFormatConfig, HasVerbosity,
+    OssPluginScopeArgs,
 };
 use crate::oss::command::GolemOssCommand;
 use crate::oss::model::OssContext;
@@ -103,6 +105,13 @@ pub enum InitCommand<ProfileAdd: clap::Args> {
     ApiDeployment {
         #[command(subcommand)]
         subcommand: ApiDeploymentSubcommand<OssContext>,
+    },
+
+    /// Manage plugins
+    #[command()]
+    Plugin {
+        #[command(subcommand)]
+        subcommand: PluginSubcommand<OssPluginScopeArgs>,
     },
 
     /// Generate shell completions

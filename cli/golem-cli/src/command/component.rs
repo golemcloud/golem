@@ -14,15 +14,19 @@
 
 use crate::command::ComponentRefSplit;
 use crate::model::application_manifest::load_app;
+use crate::model::text::component::ComponentAddView;
 use crate::model::{
     ComponentName, Format, GolemError, GolemResult, PathBufOrStdin, WorkerUpdateMode,
 };
+use crate::parse_key_val;
 use crate::service::component::ComponentService;
 use crate::service::deploy::DeployService;
 use crate::service::project::ProjectResolver;
 use clap::Subcommand;
 use golem_client::model::ComponentType;
+use golem_common::model::PluginInstallationId;
 use golem_wasm_rpc_stubgen::commands::declarative::ApplicationResolveMode;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -160,6 +164,51 @@ pub enum ComponentSubCommand<ProjectRef: clap::Args, ComponentRef: clap::Args> {
         #[arg(short = 'y', long)]
         non_interactive: bool,
     },
+    /// Install a plugin for this component
+    #[command()]
+    InstallPlugin {
+        /// The component to install the plugin for
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// The plugin to install
+        #[arg(long)]
+        plugin_name: String,
+
+        /// The version of the plugin to install
+        #[arg(long)]
+        plugin_version: String,
+
+        /// Priority of the plugin - largest priority is applied first
+        #[arg(long)]
+        priority: i32,
+
+        /// List of parameters (key-value pairs) passed to the plugin
+        #[arg(short, long, value_parser = parse_key_val, value_name = "KEY=VAL")]
+        parameter: Vec<(String, String)>,
+    },
+    /// Get the installed plugins of the component
+    #[command()]
+    GetInstallations {
+        /// The component to list plugin installations for
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// The version of the component
+        #[arg(short = 't', long)]
+        version: Option<u64>,
+    },
+    /// Uninstall a plugin for this component
+    #[command()]
+    UninstallPlugin {
+        /// The component to install the plugin for
+        #[command(flatten)]
+        component_name_or_uri: ComponentRef,
+
+        /// The plugin to install
+        #[arg(long)]
+        installation_id: PluginInstallationId,
+    },
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -230,8 +279,7 @@ impl<
                 non_interactive,
             } => {
                 let project_id = projects.resolve_id_or_default(project_ref).await?;
-
-                service
+                let component = service
                     .add(
                         component_name,
                         component_file,
@@ -241,7 +289,10 @@ impl<
                         format,
                         vec![],
                     )
-                    .await
+                    .await?;
+                Ok(GolemResult::Ok(Box::new(ComponentAddView(
+                    component.into(),
+                ))))
             }
             ComponentSubCommand::Add {
                 project_ref,
@@ -274,7 +325,7 @@ impl<
                 let component_file =
                     PathBufOrStdin::Path(app.component_output_wasm(&component_name.0));
 
-                service
+                let component = service
                     .add(
                         component_name,
                         component_file,
@@ -284,7 +335,10 @@ impl<
                         format,
                         component.files.clone(),
                     )
-                    .await
+                    .await?;
+                Ok(GolemResult::Ok(Box::new(ComponentAddView(
+                    component.into(),
+                ))))
             }
             ComponentSubCommand::Update {
                 component_name_or_uri,
@@ -410,6 +464,46 @@ impl<
                 let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
                 deploy_service
                     .redeploy(component_name_or_uri, project_id, non_interactive, format)
+                    .await
+            }
+            ComponentSubCommand::InstallPlugin {
+                component_name_or_uri,
+                plugin_name,
+                plugin_version: version,
+                priority,
+                parameter,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .install_plugin(
+                        component_name_or_uri,
+                        project_id,
+                        &plugin_name,
+                        &version,
+                        priority,
+                        HashMap::from_iter(parameter),
+                    )
+                    .await
+            }
+            ComponentSubCommand::GetInstallations {
+                component_name_or_uri,
+                version,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .get_installations(component_name_or_uri, project_id, version)
+                    .await
+            }
+            ComponentSubCommand::UninstallPlugin {
+                component_name_or_uri,
+                installation_id,
+            } => {
+                let (component_name_or_uri, project_ref) = component_name_or_uri.split();
+                let project_id = projects.resolve_id_or_default_opt(project_ref).await?;
+                service
+                    .uninstall_plugin(component_name_or_uri, project_id, &installation_id)
                     .await
             }
         }
