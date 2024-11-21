@@ -82,7 +82,6 @@ impl WorkerApi {
                     args,
                     env,
                     empty_worker_metadata(),
-                    &EmptyAuthCtx::default(),
                 )
                 .instrument(record.span.clone())
                 .await?;
@@ -113,11 +112,7 @@ impl WorkerApi {
             recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
         let response = self
             .worker_service
-            .delete(
-                &worker_id,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .delete(&worker_id, empty_worker_metadata())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -322,13 +317,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .complete_promise(
-                &worker_id,
-                oplog_idx,
-                data,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .complete_promise(&worker_id, oplog_idx, data, empty_worker_metadata())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -365,7 +354,6 @@ impl WorkerApi {
                 &worker_id,
                 recover_immediately.0.unwrap_or(false),
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .instrument(record.span.clone())
             .await
@@ -409,11 +397,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .get_metadata(
-                &worker_id,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .get_metadata(&worker_id, empty_worker_metadata())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -485,7 +469,6 @@ impl WorkerApi {
                     count.0.unwrap_or(50),
                     precise.0.unwrap_or(false),
                     empty_worker_metadata(),
-                    &EmptyAuthCtx::default(),
                 )
                 .instrument(record.span.clone())
                 .await
@@ -541,7 +524,6 @@ impl WorkerApi {
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .instrument(record.span.clone())
             .await
@@ -567,11 +549,7 @@ impl WorkerApi {
         let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
         let response = self
             .worker_service
-            .resume(
-                &worker_id,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .resume(&worker_id, empty_worker_metadata())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -603,7 +581,6 @@ impl WorkerApi {
                 params.mode.clone().into(),
                 params.target_version,
                 empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
             )
             .instrument(record.span.clone())
             .await
@@ -646,7 +623,6 @@ impl WorkerApi {
                         cursor.0,
                         count.0,
                         empty_worker_metadata(),
-                        &EmptyAuthCtx::default(),
                     )
                     .instrument(record.span.clone())
                     .await
@@ -664,7 +640,6 @@ impl WorkerApi {
                         count.0,
                         query,
                         empty_worker_metadata(),
-                        &EmptyAuthCtx::default(),
                     )
                     .instrument(record.span.clone())
                     .await
@@ -682,7 +657,6 @@ impl WorkerApi {
                         cursor.0,
                         count.0,
                         empty_worker_metadata(),
-                        &EmptyAuthCtx::default(),
                     )
                     .instrument(record.span.clone())
                     .await
@@ -712,12 +686,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .list_directory(
-                &worker_id,
-                path,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .list_directory(&worker_id, path, empty_worker_metadata())
             .instrument(record.span.clone())
             .await
             .map(|s| {
@@ -748,12 +717,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .get_file_contents(
-                &worker_id,
-                path,
-                empty_worker_metadata(),
-                &EmptyAuthCtx::default(),
-            )
+            .get_file_contents(&worker_id, path, empty_worker_metadata())
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())

@@ -19,6 +19,7 @@ use golem_common::uri::oss::uri::ComponentUri;
 pub mod api_definition;
 pub mod api_deployment;
 pub mod component;
+pub mod plugin;
 pub mod profile;
 pub mod worker;
 

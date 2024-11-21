@@ -64,15 +64,15 @@ pub trait GatewayBindingExecutor<Namespace, Response> {
 }
 
 pub struct DefaultGatewayBindingExecutor<Namespace> {
-    pub evaluator: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
+    pub evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     pub auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
 }
 
-impl<N> DefaultGatewayBindingExecutor<N> {
+impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
     pub fn new(
-        evaluator: Arc<dyn WorkerServiceRibInterpreter + Sync + Send>,
-        file_server_binding_handler: Arc<dyn FileServerBindingHandler<N> + Sync + Send>,
+        evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
+        file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
         auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
     ) -> Self {
         Self {
@@ -85,7 +85,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
     async fn resolve_rib_inputs<R>(
         &self,
         request_details: &GatewayRequestDetails,
-        resolved_worker_binding: &ResolvedWorkerBinding<N>,
+        resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> Result<(RibInput, RibInput), R>
     where
         RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
@@ -106,7 +106,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
         &self,
         request_rib_input: RibInput,
         worker_rib_input: RibInput,
-        resolved_worker_binding: &ResolvedWorkerBinding<N>,
+        resolved_worker_binding: &ResolvedWorkerBinding<Namespace>,
     ) -> Result<RibResult, EvaluationError> {
         let rib_input = request_rib_input.merge(worker_rib_input);
         self.evaluator
@@ -121,14 +121,15 @@ impl<N> DefaultGatewayBindingExecutor<N> {
                     .compiled_response_mapping
                     .response_mapping_compiled,
                 &rib_input,
+                resolved_worker_binding.namespace.clone(),
             )
             .await
     }
 
     async fn handle_worker_binding<R>(
         &self,
-        binding: &ResolvedGatewayBinding<N>,
-        resolved_binding: &ResolvedWorkerBinding<N>,
+        binding: &ResolvedGatewayBinding<Namespace>,
+        resolved_binding: &ResolvedWorkerBinding<Namespace>,
         session_store: &GatewaySessionStore,
     ) -> R
     where
@@ -161,8 +162,8 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 
     async fn handle_file_server_binding<R>(
         &self,
-        binding: &ResolvedGatewayBinding<N>,
-        resolved_binding: &ResolvedWorkerBinding<N>,
+        binding: &ResolvedGatewayBinding<Namespace>,
+        resolved_binding: &ResolvedWorkerBinding<Namespace>,
         session_store: &GatewaySessionStore,
     ) -> R
     where
@@ -202,7 +203,7 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 
     async fn handle_http_auth_call_binding<R>(
         &self,
-        binding: &ResolvedGatewayBinding<N>,
+        binding: &ResolvedGatewayBinding<Namespace>,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         session_store: &GatewaySessionStore,
     ) -> R

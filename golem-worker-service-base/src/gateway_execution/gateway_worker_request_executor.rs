@@ -19,10 +19,10 @@ use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use std::fmt::Display;
 
 #[async_trait]
-pub trait GatewayWorkerRequestExecutor {
+pub trait GatewayWorkerRequestExecutor<Namespace> {
     async fn execute(
         &self,
-        resolved_worker_request: GatewayResolvedWorkerRequest,
+        resolved_worker_request: GatewayResolvedWorkerRequest<Namespace>,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError>;
 }
 

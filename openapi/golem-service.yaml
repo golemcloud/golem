@@ -2628,6 +2628,586 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/versions/{version}/plugins/installs:
+    get:
+      tags:
+      - Component
+      summary: Gets the list of plugins installed for the given component version
+      operationId: get_installed_plugins
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PluginInstallation'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/latest/plugins/installs:
+    post:
+      tags:
+      - Component
+      summary: Installs a new plugin for this component
+      operationId: install_plugin
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PluginInstallationCreation'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PluginInstallation'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/versions/latest/plugins/installs/{installation_id}:
+    put:
+      tags:
+      - Component
+      summary: Updates the priority or parameters of a plugin installation
+      operationId: update_installed_plugin
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: installation_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PluginInstallationUpdate'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/components/{component_id}/latest/plugins/installs/{installation_id}:
+    delete:
+      tags:
+      - Component
+      summary: Uninstalls a plugin from this component
+      operationId: uninstall_plugin
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: installation_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/plugins:
+    get:
+      tags:
+      - Plugin
+      summary: Lists all the registered plugins (including all versions of each).
+      operationId: list_plugins
+      parameters:
+      - in: query
+        name: scope
+        deprecated: false
+        schema:
+          $ref: '#/components/schemas/DefaultPluginScope'
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    post:
+      tags:
+      - Plugin
+      summary: Registers a new plugin
+      operationId: create_plugin
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/PluginDefinitionWithoutOwner<DefaultPluginScope>'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/plugins/{name}:
+    get:
+      tags:
+      - Plugin
+      summary: Lists all the registered versions of a specific plugin identified by its name
+      operationId: list_plugin_versions
+      parameters:
+      - in: path
+        name: name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/plugins/{name}/{version}:
+    get:
+      tags:
+      - Plugin
+      summary: Gets a registered plugin by its name and version
+      operationId: get_plugin
+      parameters:
+      - in: path
+        name: name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/PluginDefinition<DefaultPluginOwner, DefaultPluginScope>'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+    delete:
+      tags:
+      - Plugin
+      summary: Deletes a registered plugin by its name and version
+      operationId: delete_plugin
+      parameters:
+      - in: path
+        name: name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/Empty'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
 components:
   schemas:
     AnalysedResourceMode:
@@ -3023,8 +3603,8 @@ components:
     ComponentFilePermissions:
       type: string
       enum:
-      - ReadOnly
-      - ReadWrite
+      - read-only
+      - read-write
     Cors:
       type: object
       properties:
@@ -5480,11 +6060,69 @@ components:
       - exports
       - producers
       - memories
+    ComponentPluginScope:
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+      required:
+      - componentId
+    ComponentTransformerDefinition:
+      type: object
+      properties:
+        providedWitPackage:
+          type: string
+        jsonSchema:
+          type: string
+        validateUrl:
+          type: string
+        transformUrl:
+          type: string
+      required:
+      - validateUrl
+      - transformUrl
     ComponentType:
       type: string
       enum:
       - Durable
       - Ephemeral
+    DefaultPluginOwner:
+      type: object
+    DefaultPluginScope:
+      discriminator:
+        propertyName: type
+        mapping:
+          Global: '#/components/schemas/DefaultPluginScope_Empty'
+          Component: '#/components/schemas/DefaultPluginScope_ComponentPluginScope'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DefaultPluginScope_Empty'
+      - $ref: '#/components/schemas/DefaultPluginScope_ComponentPluginScope'
+    DefaultPluginScope_ComponentPluginScope:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Component
+            type: string
+            enum:
+            - Component
+        required:
+        - type
+      - $ref: '#/components/schemas/ComponentPluginScope'
+    DefaultPluginScope_Empty:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Global
+            type: string
+            enum:
+            - Global
+        required:
+        - type
+      - $ref: '#/components/schemas/Empty'
     InitialComponentFile:
       type: object
       properties:
@@ -5515,6 +6153,166 @@ components:
           format: uint64
       required:
       - initial
+    OplogProcessorDefinition:
+      type: object
+      properties:
+        componentId:
+          type: string
+          format: uuid
+        componentVersion:
+          type: integer
+          format: uint64
+      required:
+      - componentId
+      - componentVersion
+    PluginDefinition<DefaultPluginOwner, DefaultPluginScope>:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        homepage:
+          type: string
+        specs:
+          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
+        scope:
+          $ref: '#/components/schemas/DefaultPluginScope'
+        owner:
+          $ref: '#/components/schemas/DefaultPluginOwner'
+      required:
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
+      - owner
+    PluginDefinitionWithoutOwner<DefaultPluginScope>:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        icon:
+          type: array
+          items:
+            type: integer
+            format: uint8
+        homepage:
+          type: string
+        specs:
+          $ref: '#/components/schemas/PluginTypeSpecificDefinition'
+        scope:
+          $ref: '#/components/schemas/DefaultPluginScope'
+      required:
+      - name
+      - version
+      - description
+      - icon
+      - homepage
+      - specs
+      - scope
+    PluginInstallation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - id
+      - name
+      - version
+      - priority
+      - parameters
+    PluginInstallationCreation:
+      type: object
+      properties:
+        name:
+          type: string
+        version:
+          type: string
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - name
+      - version
+      - priority
+      - parameters
+    PluginInstallationUpdate:
+      type: object
+      properties:
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - priority
+      - parameters
+    PluginTypeSpecificDefinition:
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentTransformer: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
+          OplogProcessor: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_ComponentTransformerDefinition'
+      - $ref: '#/components/schemas/PluginTypeSpecificDefinition_OplogProcessorDefinition'
+    PluginTypeSpecificDefinition_ComponentTransformerDefinition:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentTransformer
+            type: string
+            enum:
+            - ComponentTransformer
+        required:
+        - type
+      - $ref: '#/components/schemas/ComponentTransformerDefinition'
+    PluginTypeSpecificDefinition_OplogProcessorDefinition:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: OplogProcessor
+            type: string
+            enum:
+            - OplogProcessor
+        required:
+        - type
+      - $ref: '#/components/schemas/OplogProcessorDefinition'
     ProducerField:
       type: object
       properties:
@@ -5551,4 +6349,5 @@ tags:
 - name: ApiDeployment
 - name: Component
 - name: HealthCheck
+- name: Plugin
 - name: Worker

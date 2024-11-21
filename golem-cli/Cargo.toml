@@ -93,7 +93,7 @@ postgres = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
-serde_json_path = "0.6.5"
+serde_json_path = "0.7.1"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }

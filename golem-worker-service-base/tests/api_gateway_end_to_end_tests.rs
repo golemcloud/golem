@@ -1,4 +1,17 @@
-use std::sync::Arc;
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use test_r::test;
 
 test_r::enable!();
@@ -948,11 +961,11 @@ mod internal {
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}
 
     #[async_trait]
-    impl GatewayWorkerRequestExecutor for TestApiGatewayWorkerRequestExecutor {
+    impl GatewayWorkerRequestExecutor<DefaultNamespace> for TestApiGatewayWorkerRequestExecutor {
         // This test executor simply returns the worker request details itself as a type-annotated-value
         async fn execute(
             &self,
-            resolved_worker_request: GatewayResolvedWorkerRequest,
+            resolved_worker_request: GatewayResolvedWorkerRequest<DefaultNamespace>,
         ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
             let type_annotated_value = convert_to_worker_response(&resolved_worker_request);
             let worker_response = create_tuple(vec![type_annotated_value]);
@@ -1148,7 +1161,7 @@ mod internal {
     }
 
     pub(crate) fn convert_to_worker_response(
-        worker_request: &GatewayResolvedWorkerRequest,
+        worker_request: &GatewayResolvedWorkerRequest<DefaultNamespace>,
     ) -> TypeAnnotatedValue {
         let mut record_elems = vec![
             (
@@ -1225,7 +1238,8 @@ mod internal {
         }
     }
 
-    pub(crate) fn get_test_rib_interpreter() -> Arc<dyn WorkerServiceRibInterpreter + Sync + Send> {
+    pub(crate) fn get_test_rib_interpreter(
+    ) -> Arc<dyn WorkerServiceRibInterpreter<DefaultNamespace> + Sync + Send> {
         Arc::new(DefaultRibInterpreter::from_worker_request_executor(
             Arc::new(TestApiGatewayWorkerRequestExecutor {}),
         ))

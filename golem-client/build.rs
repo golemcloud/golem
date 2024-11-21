@@ -55,9 +55,20 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::ComponentFilePathWithPermissionsList",
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
+            ("DefaultComponentOwner", "crate::DefaultComponentOwner"),
+            (
+                "DefaultPluginScope",
+                "golem_common::model::plugin::DefaultPluginScope",
+            ),
+            ("DefaultPluginOwner", "crate::DefaultPluginOwner"),
             (
                 "OplogCursor",
                 "golem_common::model::public_oplog::OplogCursor",
+            ),
+            ("Empty", "golem_common::model::Empty"),
+            (
+                "InitialComponentFile",
+                "golem_common::model::InitialComponentFile",
             ),
             ("PromiseId", "golem_common::model::PromiseId"),
             ("ShardId", "golem_common::model::ShardId"),

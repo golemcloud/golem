@@ -19,14 +19,14 @@ use std::io::Read;
 use async_trait::async_trait;
 use golem_client::model::HttpApiDefinitionRequest;
 use golem_client::model::HttpApiDefinitionWithTypeInfo;
-use serde::Deserialize;
 
 use crate::clients::api_definition::ApiDefinitionClient;
 use tokio::fs::read_to_string;
 use tracing::info;
 
 use crate::model::{
-    ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion, GolemError, PathBufOrStdin,
+    decode_api_definition, ApiDefinitionFileFormat, ApiDefinitionId, ApiDefinitionVersion,
+    GolemError, PathBufOrStdin,
 };
 use crate::oss::model::OssContext;
 
@@ -78,29 +78,19 @@ async fn create_or_update_api_definition<
         }
     };
 
-    fn get_definition<'de, T: Deserialize<'de>>(
-        input: &'de str,
-        format: &ApiDefinitionFileFormat,
-    ) -> Result<T, GolemError> {
-        match format {
-            ApiDefinitionFileFormat::Json => serde_json::from_str(input)
-                .map_err(|e| GolemError(format!("Failed to parse json api definition: {e:?}"))),
-            ApiDefinitionFileFormat::Yaml => serde_yaml::from_str(input)
-                .map_err(|e| GolemError(format!("Failed to parse yaml api definition: {e:?}"))),
-        }
-    }
-
     match action {
         Action::Import => {
-            let value = get_definition(definition_str.as_str(), format)?;
+            let value = decode_api_definition(definition_str.as_str(), format)?;
             Ok(client.import_open_api_json(&value).await?)
         }
         Action::Create => {
-            let value: HttpApiDefinitionRequest = get_definition(definition_str.as_str(), format)?;
+            let value: HttpApiDefinitionRequest =
+                decode_api_definition(definition_str.as_str(), format)?;
             Ok(client.create_definition_json(&value).await?)
         }
         Action::Update => {
-            let value: HttpApiDefinitionRequest = get_definition(definition_str.as_str(), format)?;
+            let value: HttpApiDefinitionRequest =
+                decode_api_definition(definition_str.as_str(), format)?;
             Ok(client
                 .update_definition_json(&value.id, &value.version, &value)
                 .await?)

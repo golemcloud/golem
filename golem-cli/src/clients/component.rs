@@ -15,9 +15,12 @@
 use crate::model::component::Component;
 use crate::model::{ComponentName, GolemError, PathBufOrStdin};
 use async_trait::async_trait;
-use golem_client::model::{ComponentFilePathWithPermissionsList, ComponentType};
+use golem_client::model::ComponentFilePathWithPermissionsList;
+use golem_client::model::{ComponentType, PluginInstallation};
 use golem_common::uri::oss::urn::ComponentUrn;
+use std::collections::HashMap;
 use std::path::Path;
+use uuid::Uuid;
 
 #[async_trait]
 pub trait ComponentClient {
@@ -28,15 +31,18 @@ pub trait ComponentClient {
         component_urn: &ComponentUrn,
         version: u64,
     ) -> Result<Component, GolemError>;
+
     async fn get_latest_metadata(
         &self,
         component_urn: &ComponentUrn,
     ) -> Result<Component, GolemError>;
+
     async fn find(
         &self,
         name: Option<ComponentName>,
         project: &Option<Self::ProjectContext>,
     ) -> Result<Vec<Component>, GolemError>;
+
     async fn add(
         &self,
         name: ComponentName,
@@ -46,6 +52,7 @@ pub trait ComponentClient {
         files_archive: Option<&Path>,
         files_permissions: Option<&ComponentFilePathWithPermissionsList>,
     ) -> Result<Component, GolemError>;
+
     async fn update(
         &self,
         urn: ComponentUrn,
@@ -54,4 +61,25 @@ pub trait ComponentClient {
         files_archive: Option<&Path>,
         files_permissions: Option<&ComponentFilePathWithPermissionsList>,
     ) -> Result<Component, GolemError>;
+
+    async fn install_plugin(
+        &self,
+        urn: &ComponentUrn,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i32,
+        parameters: HashMap<String, String>,
+    ) -> Result<PluginInstallation, GolemError>;
+
+    async fn get_installations(
+        &self,
+        urn: &ComponentUrn,
+        version: u64,
+    ) -> Result<Vec<PluginInstallation>, GolemError>;
+
+    async fn uninstall_plugin(
+        &self,
+        urn: &ComponentUrn,
+        installation_id: &Uuid,
+    ) -> Result<(), GolemError>;
 }

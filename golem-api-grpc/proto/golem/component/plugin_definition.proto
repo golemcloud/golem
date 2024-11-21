@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package golem.component;
+
+import public "golem/common/empty.proto";
+import public "golem/component/component_id.proto";
+
+message PluginDefinition {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  bytes icon = 4;
+  string homepage = 5;
+  PluginTypeSpecificDefinition specs = 6;
+  DefaultPluginScope scope = 7;
+}
+
+message DefaultPluginScope {
+  oneof scope {
+    golem.common.Empty global = 1;
+    ComponentPluginScope component = 2;
+  }
+}
+
+message ComponentPluginScope {
+  golem.component.ComponentId component_id = 1;
+}
+
+message PluginTypeSpecificDefinition {
+  oneof definition {
+    ComponentTransformerDefinition component_transformer = 1;
+    OplogProcessorDefinition oplog_processor = 2;
+  }
+}
+
+message ComponentTransformerDefinition {
+  optional string provided_wit_package = 1;
+  optional string json_schema = 2;
+  string validate_url = 3;
+  string transform_url = 4;
+}
+
+message OplogProcessorDefinition {
+  golem.component.ComponentId component_id = 1;
+  uint64 component_version = 2;
+}

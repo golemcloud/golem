@@ -15,6 +15,9 @@ spec:
         - sourcePath: ./files/foo.txt
           targetPath: /files/foo.txt
           permissions: read-only
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/dir/foo.txt
+          permissions: read-only
         - sourcePath: ./files/bar.txt
           targetPath: /files/bar.txt
           permissions: read-write
@@ -28,6 +31,9 @@ spec:
         files:
         - sourcePath: ./files/foo.txt
           targetPath: /files/foo.txt
+          permissions: read-only
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/dir/foo.txt
           permissions: read-only
         - sourcePath: ./files/bar.txt
           targetPath: /files/bar.txt
@@ -43,6 +49,9 @@ spec:
         - sourcePath: ./files/foo.txt
           targetPath: /files/foo.txt
           permissions: read-only
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/dir/foo.txt
+          permissions: read-only
         - sourcePath: ./files/bar.txt
           targetPath: /files/bar.txt
           permissions: read-write
@@ -56,6 +65,9 @@ spec:
         files:
         - sourcePath: ./files/foo.txt
           targetPath: /files/foo.txt
+          permissions: read-only
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/dir/foo.txt
           permissions: read-only
         - sourcePath: ./files/bar.txt
           targetPath: /files/bar.txt
@@ -71,6 +83,9 @@ spec:
         - sourcePath: ./files/foo.txt
           targetPath: /files/foo.txt
           permissions: read-only
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/dir/foo.txt
+          permissions: read-only
         - sourcePath: ./files/bar.txt
           targetPath: /files/bar.txt
           permissions: read-write
@@ -84,6 +99,9 @@ spec:
         files:
         - sourcePath: ./files/foo.txt
           targetPath: /files/foo.txt
+          permissions: read-only
+        - sourcePath: ./files/foo.txt
+          targetPath: /files/dir/foo.txt
           permissions: read-only
         - sourcePath: ./files/bar.txt
           targetPath: /files/bar.txt

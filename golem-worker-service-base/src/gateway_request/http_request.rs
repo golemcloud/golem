@@ -1,3 +1,4 @@
+
 // Copyright 2024 Golem Cloud
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,10 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use crate::gateway_api_deployment::ApiSiteString;
 use hyper::http::{HeaderMap, Method};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fmt::Display;
 
 #[derive(Clone)]

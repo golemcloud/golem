@@ -16,6 +16,7 @@ use crate::clients::api_definition::ApiDefinitionClient;
 use crate::clients::api_deployment::ApiDeploymentClient;
 use crate::clients::component::ComponentClient;
 use crate::clients::health_check::HealthCheckClient;
+use crate::clients::plugin::PluginClient;
 use crate::clients::worker::WorkerClient;
 use crate::service::api_definition::{ApiDefinitionService, ApiDefinitionServiceLive};
 use crate::service::api_deployment::{ApiDeploymentService, ApiDeploymentServiceLive};
@@ -30,6 +31,9 @@ use std::sync::Arc;
 pub trait ServiceFactory {
     type ProjectRef: Send + Sync + 'static;
     type ProjectContext: Display + Send + Sync + 'static;
+    type PluginDefinition: Send + Sync + 'static;
+    type PluginDefinitionWithoutOwner: Send + Sync + 'static;
+    type PluginScope: Send + Sync + 'static;
 
     fn project_resolver(
         &self,
@@ -109,4 +113,16 @@ pub trait ServiceFactory {
             worker_service: self.worker_service(),
         })
     }
+
+    fn plugin_client(
+        &self,
+    ) -> Arc<
+        dyn PluginClient<
+                PluginDefinition = Self::PluginDefinition,
+                PluginDefinitionWithoutOwner = Self::PluginDefinitionWithoutOwner,
+                PluginScope = Self::PluginScope,
+                ProjectContext = Self::ProjectContext,
+            > + Send
+            + Sync,
+    >;
 }

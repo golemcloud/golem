@@ -12,56 +12,75 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::ComponentServiceConfig;
 use golem_common::config::DbConfig;
+use golem_common::model::component::DefaultComponentOwner;
+use golem_common::model::plugin::{DefaultPluginOwner, DefaultPluginScope};
 use golem_component_service_base::config::ComponentCompilationConfig;
+use golem_component_service_base::config::ComponentStoreConfig;
+use golem_component_service_base::repo::component::{
+    ComponentRepo, DbComponentRepo, LoggedComponentRepo,
+};
+use golem_component_service_base::repo::plugin::{DbPluginRepo, LoggedPluginRepo, PluginRepo};
+use golem_component_service_base::service::component::{ComponentService, ComponentServiceDefault};
 use golem_component_service_base::service::component_compilation::{
     ComponentCompilationService, ComponentCompilationServiceDefault,
     ComponentCompilationServiceDisabled,
 };
+use golem_component_service_base::service::component_object_store;
+use golem_component_service_base::service::component_object_store::{
+    ComponentObjectStore, LoggedComponentObjectStore,
+};
+use golem_component_service_base::service::plugin::{PluginService, PluginServiceDefault};
 use golem_service_base::config::BlobStorageConfig;
-use golem_service_base::config::ComponentStoreConfig;
 use golem_service_base::db;
-use golem_service_base::service::component_object_store;
-use golem_service_base::service::initial_component_files::{self, InitialComponentFilesService};
+use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::sqlite::SqlitePool;
 use std::sync::Arc;
 
-use crate::config::ComponentServiceConfig;
-use golem_component_service_base::repo::component::{
-    ComponentRepo, DbComponentRepo, LoggedComponentRepo,
-};
-use golem_component_service_base::service::component::{ComponentService, ComponentServiceDefault};
-use golem_service_base::auth::DefaultNamespace;
-use golem_service_base::service::component_object_store::{
-    ComponentObjectStore, LoggedComponentObjectStore,
-};
-
 #[derive(Clone)]
 pub struct Services {
-    pub component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
     pub compilation_service: Arc<dyn ComponentCompilationService + Sync + Send>,
+    pub plugin_service:
+        Arc<dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Send + Sync>,
 }
 
 impl Services {
     pub async fn new(config: &ComponentServiceConfig) -> Result<Services, String> {
-        let component_repo: Arc<dyn ComponentRepo + Sync + Send> = match config.db.clone() {
-            DbConfig::Postgres(c) => {
-                let db_pool = db::create_postgres_pool(&c)
+        let (component_repo, plugin_repo) = match &config.db {
+            DbConfig::Postgres(db_config) => {
+                let db_pool = db::create_postgres_pool(db_config)
                     .await
                     .map_err(|e| e.to_string())?;
-                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
+
+                let component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send> =
+                    Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
+                        db_pool.clone().into(),
+                    )));
+                let plugin_repo: Arc<
+                    dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
                     db_pool.clone().into(),
-                )))
+                )));
+                (component_repo, plugin_repo)
             }
-            DbConfig::Sqlite(c) => {
-                let db_pool = db::create_sqlite_pool(&c)
+            DbConfig::Sqlite(db_config) => {
+                let db_pool = db::create_sqlite_pool(db_config)
                     .await
                     .map_err(|e| e.to_string())?;
-                Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
+                let component_repo: Arc<dyn ComponentRepo<DefaultComponentOwner> + Sync + Send> =
+                    Arc::new(LoggedComponentRepo::new(DbComponentRepo::new(
+                        db_pool.clone().into(),
+                    )));
+                let plugin_repo: Arc<
+                    dyn PluginRepo<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+                > = Arc::new(LoggedPluginRepo::new(DbPluginRepo::new(
                     db_pool.clone().into(),
-                )))
+                )));
+                (component_repo, plugin_repo)
             }
         };
 
@@ -87,9 +106,8 @@ impl Services {
             }
         };
 
-        let initial_component_files_service: Arc<InitialComponentFilesService> = Arc::new(
-            initial_component_files::InitialComponentFilesService::new(blob_storage.clone()),
-        );
+        let initial_component_files_service: Arc<InitialComponentFilesService> =
+            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         let object_store: Arc<dyn ComponentObjectStore + Sync + Send> =
             match &config.component_store {
@@ -119,7 +137,7 @@ impl Services {
                 }
             };
 
-        let component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send> =
+        let component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send> =
             Arc::new(ComponentServiceDefault::new(
                 component_repo.clone(),
                 object_store.clone(),
@@ -127,9 +145,14 @@ impl Services {
                 initial_component_files_service.clone(),
             ));
 
+        let plugin_service: Arc<
+            dyn PluginService<DefaultPluginOwner, DefaultPluginScope> + Sync + Send,
+        > = Arc::new(PluginServiceDefault::new(plugin_repo));
+
         Ok(Services {
             component_service,
             compilation_service,
+            plugin_service,
         })
     }
 }

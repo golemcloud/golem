@@ -108,9 +108,6 @@ impl std::fmt::Display for VersionedComponentId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-pub struct Empty {}
-
 pub fn validate_worker_name(name: &str) -> Result<(), &'static str> {
     let length = name.len();
     if !(1..=100).contains(&length) {
@@ -1847,19 +1844,6 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 c.into()
             }),
             files: value.files.into_iter().map(|f| f.into()).collect(),
-        }
-    }
-}
-
-impl Component {
-    pub fn next_version(self) -> Self {
-        let new_version = VersionedComponentId {
-            component_id: self.versioned_component_id.component_id,
-            version: self.versioned_component_id.version + 1,
-        };
-        Self {
-            versioned_component_id: new_version.clone(),
-            ..self
         }
     }
 }

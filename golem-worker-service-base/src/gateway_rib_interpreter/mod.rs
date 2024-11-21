@@ -28,7 +28,7 @@ use crate::gateway_execution::{GatewayResolvedWorkerRequest, GatewayWorkerReques
 // A wrapper service over original RibInterpreter concerning
 // the details of the worker service.
 #[async_trait]
-pub trait WorkerServiceRibInterpreter {
+pub trait WorkerServiceRibInterpreter<Namespace> {
     // Evaluate a Rib byte against a specific worker.
     // RibByteCode may have actual function calls.
     async fn evaluate(
@@ -38,6 +38,7 @@ pub trait WorkerServiceRibInterpreter {
         idempotency_key: &Option<IdempotencyKey>,
         rib_byte_code: &RibByteCode,
         rib_input: &RibInput,
+        namespace: Namespace,
     ) -> Result<RibResult, EvaluationError>;
 }
 
@@ -62,13 +63,13 @@ impl From<String> for EvaluationError {
     }
 }
 
-pub struct DefaultRibInterpreter {
-    worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
+pub struct DefaultRibInterpreter<Namespace> {
+    worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send>,
 }
 
-impl DefaultRibInterpreter {
+impl<Namespace> DefaultRibInterpreter<Namespace> {
     pub fn from_worker_request_executor(
-        worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor + Sync + Send>,
+        worker_request_executor: Arc<dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send>,
     ) -> Self {
         DefaultRibInterpreter {
             worker_request_executor,
@@ -77,7 +78,9 @@ impl DefaultRibInterpreter {
 }
 
 #[async_trait]
-impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
+impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Namespace>
+    for DefaultRibInterpreter<Namespace>
+{
     async fn evaluate(
         &self,
         worker_name: Option<&str>,
@@ -85,6 +88,7 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
         idempotency_key: &Option<IdempotencyKey>,
         expr: &RibByteCode,
         rib_input: &RibInput,
+        namespace: Namespace,
     ) -> Result<RibResult, EvaluationError> {
         let executor = self.worker_request_executor.clone();
 
@@ -98,6 +102,7 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
                 let worker_name = worker_name.clone();
                 let idempotency_key = idempotency_key.clone();
                 let executor = executor.clone();
+                let namespace = namespace.clone();
 
                 async move {
                     let worker_request = GatewayResolvedWorkerRequest {
@@ -106,6 +111,7 @@ impl WorkerServiceRibInterpreter for DefaultRibInterpreter {
                         function_name,
                         function_params: parameters,
                         idempotency_key,
+                        namespace,
                     };
 
                     executor

@@ -16,7 +16,6 @@ use super::{
     AllExecutors, CallWorkerExecutorError, HasWorkerExecutorClients, RandomExecutor,
     ResponseMapResult, RoutingLogic, WorkerServiceError, WorkerStream,
 };
-use crate::service::component::ComponentService;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
@@ -39,7 +38,7 @@ use golem_common::model::{
     FilterComparator, IdempotencyKey, PromiseId, ScanCursor, TargetWorkerId, WorkerFilter,
     WorkerId, WorkerStatus,
 };
-use golem_service_base::model::{Component, GolemError};
+use golem_service_base::model::GolemError;
 use golem_service_base::model::{
     GetOplogResponse, GolemErrorUnknown, PublicOplogEntryWithIndex, ResourceLimits, WorkerMetadata,
 };
@@ -56,7 +55,7 @@ use tracing::{error, info};
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
 #[async_trait]
-pub trait WorkerService<AuthCtx> {
+pub trait WorkerService {
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -64,21 +63,18 @@ pub trait WorkerService<AuthCtx> {
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerId>;
 
     async fn connect(
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerStream<LogEvent>>;
 
     async fn delete(
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     fn validate_typed_parameters(
@@ -174,7 +170,6 @@ pub trait WorkerService<AuthCtx> {
         oplog_id: u64,
         data: Vec<u8>,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<bool>;
 
     async fn interrupt(
@@ -182,14 +177,12 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &WorkerId,
         recover_immediately: bool,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata>;
 
     async fn find_metadata(
@@ -200,14 +193,12 @@ pub trait WorkerService<AuthCtx> {
         count: u64,
         precise: bool,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
 
     async fn resume(
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn update(
@@ -216,15 +207,7 @@ pub trait WorkerService<AuthCtx> {
         update_mode: UpdateMode,
         target_version: ComponentVersion,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<()>;
-
-    async fn get_component_for_worker(
-        &self,
-        worker_id: &WorkerId,
-        metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Component, WorkerServiceError>;
 
     async fn get_oplog(
         &self,
@@ -233,7 +216,6 @@ pub trait WorkerService<AuthCtx> {
         cursor: Option<OplogCursor>,
         count: u64,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn search_oplog(
@@ -243,7 +225,6 @@ pub trait WorkerService<AuthCtx> {
         count: u64,
         query: String,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn list_directory(
@@ -251,7 +232,6 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
 
     async fn get_file_contents(
@@ -259,7 +239,6 @@ pub trait WorkerService<AuthCtx> {
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
 }
 
@@ -275,39 +254,36 @@ pub struct WorkerRequestMetadata {
 }
 
 #[derive(Clone)]
-pub struct WorkerServiceDefault<AuthCtx> {
+pub struct WorkerServiceDefault {
     worker_executor_clients: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
     // NOTE: unlike other retries, reaching max_attempts for the worker executor
     //       (with retryable errors) does not end the retry loop,
     //       rather it emits a warn log and resets the retry state.
     worker_executor_retries: RetryConfig,
-    component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
 }
 
-impl<AuthCtx> WorkerServiceDefault<AuthCtx> {
+impl WorkerServiceDefault {
     pub fn new(
         worker_executor_clients: MultiTargetGrpcClient<WorkerExecutorClient<Channel>>,
         worker_executor_retries: RetryConfig,
-        component_service: Arc<dyn ComponentService<AuthCtx> + Send + Sync>,
         routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     ) -> Self {
         Self {
             worker_executor_clients,
             worker_executor_retries,
-            component_service,
             routing_table_service,
         }
     }
 }
 
-impl<AuthCtx> HasRoutingTableService for WorkerServiceDefault<AuthCtx> {
+impl HasRoutingTableService for WorkerServiceDefault {
     fn routing_table_service(&self) -> &Arc<dyn RoutingTableService + Send + Sync> {
         &self.routing_table_service
     }
 }
 
-impl<AuthCtx> HasWorkerExecutorClients for WorkerServiceDefault<AuthCtx> {
+impl HasWorkerExecutorClients for WorkerServiceDefault {
     fn worker_executor_clients(&self) -> &MultiTargetGrpcClient<WorkerExecutorClient<Channel>> {
         &self.worker_executor_clients
     }
@@ -318,10 +294,7 @@ impl<AuthCtx> HasWorkerExecutorClients for WorkerServiceDefault<AuthCtx> {
 }
 
 #[async_trait]
-impl<AuthCtx> WorkerService<AuthCtx> for WorkerServiceDefault<AuthCtx>
-where
-    AuthCtx: Send + Sync,
-{
+impl WorkerService for WorkerServiceDefault {
     async fn create(
         &self,
         worker_id: &WorkerId,
@@ -329,7 +302,6 @@ where
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerId> {
         let worker_id_clone = worker_id.clone();
         self.call_worker_executor(
@@ -367,7 +339,6 @@ where
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerStream<LogEvent>> {
         let worker_id = worker_id.clone();
         let worker_id_err: WorkerId = worker_id.clone();
@@ -403,7 +374,6 @@ where
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -531,7 +501,7 @@ where
             move |worker_executor_client| {
                 info!("Invoke and await function");
                 Box::pin(worker_executor_client.invoke_and_await_worker(
-                    workerexecutor::v1::InvokeAndAwaitWorkerRequest {
+                    InvokeAndAwaitWorkerRequest {
                         worker_id: Some(worker_id_clone.clone().into()),
                         name: function_name.clone(),
                         input: params.clone(),
@@ -626,7 +596,6 @@ where
         oplog_id: u64,
         data: Vec<u8>,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<bool> {
         let promise_id = PromiseId {
             worker_id: worker_id.clone(),
@@ -680,7 +649,6 @@ where
         worker_id: &WorkerId,
         recover_immediately: bool,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -718,7 +686,6 @@ where
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<WorkerMetadata> {
         let worker_id = worker_id.clone();
         let metadata = self.call_worker_executor(
@@ -768,26 +735,17 @@ where
         count: u64,
         precise: bool,
         metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         info!("Find metadata");
         if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
-                .find_running_metadata_internal(component_id, filter, auth_ctx)
+                .find_running_metadata_internal(component_id, filter)
                 .await?;
 
             Ok((None, result.into_iter().take(count as usize).collect()))
         } else {
-            self.find_metadata_internal(
-                component_id,
-                filter,
-                cursor,
-                count,
-                precise,
-                metadata,
-                auth_ctx,
-            )
-            .await
+            self.find_metadata_internal(component_id, filter, cursor, count, precise, metadata)
+                .await
         }
     }
 
@@ -795,7 +753,6 @@ where
         &self,
         worker_id: &WorkerId,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -829,7 +786,6 @@ where
         update_mode: UpdateMode,
         target_version: ComponentVersion,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -860,16 +816,6 @@ where
         Ok(())
     }
 
-    async fn get_component_for_worker(
-        &self,
-        worker_id: &WorkerId,
-        metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Component, WorkerServiceError> {
-        self.try_get_component_for_worker(worker_id, metadata, auth_ctx)
-            .await
-    }
-
     async fn get_oplog(
         &self,
         worker_id: &WorkerId,
@@ -877,7 +823,6 @@ where
         cursor: Option<OplogCursor>,
         count: u64,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -950,7 +895,6 @@ where
         count: u64,
         query: String,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1013,7 +957,6 @@ where
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
@@ -1068,7 +1011,6 @@ where
         worker_id: &TargetWorkerId,
         path: ComponentFilePath,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
@@ -1157,46 +1099,11 @@ where
     }
 }
 
-impl<AuthCtx> WorkerServiceDefault<AuthCtx>
-where
-    AuthCtx: Send + Sync,
-{
-    async fn try_get_component_for_worker(
-        &self,
-        worker_id: &WorkerId,
-        request_metadata: WorkerRequestMetadata,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Component, WorkerServiceError> {
-        match self
-            .get_metadata(worker_id, request_metadata, auth_ctx)
-            .await
-        {
-            Ok(metadata) => {
-                let component_version = metadata.component_version;
-                let component_details = self
-                    .component_service
-                    .get_by_version(&worker_id.component_id, component_version, auth_ctx)
-                    .await?;
-
-                Ok(component_details)
-            }
-            Err(WorkerServiceError::WorkerNotFound(_)) => Ok(self
-                .component_service
-                .get_latest(&worker_id.component_id, auth_ctx)
-                .await?),
-            Err(WorkerServiceError::Golem(GolemError::WorkerNotFound(_))) => Ok(self
-                .component_service
-                .get_latest(&worker_id.component_id, auth_ctx)
-                .await?),
-            Err(other) => Err(other),
-        }
-    }
-
+impl WorkerServiceDefault {
     async fn find_running_metadata_internal(
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<Vec<WorkerMetadata>> {
         let component_id = component_id.clone();
         let result = self.call_worker_executor(
@@ -1253,7 +1160,6 @@ where
         count: u64,
         precise: bool,
         metadata: WorkerRequestMetadata,
-        _auth_ctx: &AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let component_id = component_id.clone();
         let result = self

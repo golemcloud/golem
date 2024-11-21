@@ -14,7 +14,8 @@
 
 use crate::model::ResponseContentErrorMapper;
 use golem_client::api::{
-    ApiDefinitionError, ApiDeploymentError, ComponentError, HealthCheckError, WorkerError,
+    ApiDefinitionError, ApiDeploymentError, ComponentError, HealthCheckError, PluginError,
+    WorkerError,
 };
 use golem_client::model::{
     GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
@@ -37,6 +38,19 @@ impl ResponseContentErrorMapper for ComponentError {
             ComponentError::Error404(error) => error.error,
             ComponentError::Error409(error) => error.error,
             ComponentError::Error500(error) => error.error,
+        }
+    }
+}
+
+impl ResponseContentErrorMapper for PluginError {
+    fn map(self) -> String {
+        match self {
+            PluginError::Error400(errors) => errors.errors.iter().join(", "),
+            PluginError::Error401(error) => error.error,
+            PluginError::Error403(error) => error.error,
+            PluginError::Error404(error) => error.error,
+            PluginError::Error409(error) => error.error,
+            PluginError::Error500(error) => error.error,
         }
     }
 }
@@ -86,7 +100,7 @@ impl ResponseContentErrorMapper for ApiDeploymentError {
     }
 }
 
-fn display_golem_error(error: GolemError) -> String {
+pub fn display_golem_error(error: GolemError) -> String {
     match error {
         GolemError::InvalidRequest(GolemErrorInvalidRequest { details }) => {
             format!("Invalid request: {details}")
@@ -205,11 +219,11 @@ fn display_golem_error(error: GolemError) -> String {
     }
 }
 
-fn display_worker_id(worker_id: WorkerId) -> String {
+pub fn display_worker_id(worker_id: WorkerId) -> String {
     format!("{}/{}", worker_id.component_id, worker_id.worker_name)
 }
 
-fn display_promise_id(promise_id: PromiseId) -> String {
+pub fn display_promise_id(promise_id: PromiseId) -> String {
     format!(
         "{}/{}",
         display_worker_id(promise_id.worker_id),
@@ -217,7 +231,7 @@ fn display_promise_id(promise_id: PromiseId) -> String {
     )
 }
 
-fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String {
+pub fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String {
     match error {
         WorkerServiceErrorsBody::Messages(messages) => messages.errors.iter().join(", "),
         WorkerServiceErrorsBody::Validation(validation) => validation

@@ -1,38 +1,51 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use chrono::Utc;
+use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::{FunctionConstraint, FunctionConstraintCollection};
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
 use golem_common::model::InitialComponentFile;
 use golem_common::model::{ComponentFilePathWithPermissions, ComponentId, ComponentType};
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use rib::WorkerFunctionsInRib;
-use serde::{Deserialize, Serialize};
+use std::fmt::Debug;
 use std::time::SystemTime;
 use tokio::fs::File;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Component<Namespace> {
-    pub namespace: Namespace,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Component<Owner: ComponentOwner> {
+    pub owner: Owner,
     pub versioned_component_id: VersionedComponentId,
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<Utc>,
     pub component_type: ComponentType,
+    pub object_store_key: Option<String>,
     pub files: Vec<InitialComponentFile>,
 }
 
-impl<Namespace> Component<Namespace> {
+impl<Owner: ComponentOwner> Component<Owner> {
     pub fn new(
-        component_id: &ComponentId,
-        component_name: &ComponentName,
+        component_id: ComponentId,
+        component_name: ComponentName,
         component_type: ComponentType,
         data: &[u8],
-        namespace: &Namespace,
         files: Vec<InitialComponentFile>,
-    ) -> Result<Component<Namespace>, ComponentProcessingError>
-    where
-        Namespace: Eq + Clone + Send + Sync,
-    {
+        owner: Owner,
+    ) -> Result<Component<Owner>, ComponentProcessingError> {
         let metadata = ComponentMetadata::analyse_component(data)?;
 
         let versioned_component_id = VersionedComponentId {
@@ -41,31 +54,43 @@ impl<Namespace> Component<Namespace> {
         };
 
         Ok(Component {
-            namespace: namespace.clone(),
-            component_name: component_name.clone(),
+            owner,
+            component_name,
             component_size: data.len() as u64,
             metadata,
             created_at: Utc::now(),
+            object_store_key: Some(versioned_component_id.to_string()),
             versioned_component_id,
             component_type,
             files,
         })
     }
 
-    pub fn next_version(self) -> Self {
-        let new_version = VersionedComponentId {
-            component_id: self.versioned_component_id.component_id,
-            version: self.versioned_component_id.version + 1,
-        };
-        Self {
-            versioned_component_id: new_version.clone(),
-            ..self
-        }
+    pub fn user_object_store_key(&self) -> String {
+        format!(
+            "{}:user",
+            self.object_store_key
+                .as_ref()
+                .unwrap_or(&self.versioned_component_id.to_string())
+        )
+    }
+
+    pub fn protected_object_store_key(&self) -> String {
+        format!(
+            "{}:protected",
+            self.object_store_key
+                .as_ref()
+                .unwrap_or(&self.versioned_component_id.to_string())
+        )
+    }
+
+    pub fn owns_stored_object(&self) -> bool {
+        self.object_store_key == Some(self.versioned_component_id.to_string())
     }
 }
 
-impl<Namespace> From<Component<Namespace>> for golem_service_base::model::Component {
-    fn from(value: Component<Namespace>) -> Self {
+impl<Owner: ComponentOwner> From<Component<Owner>> for golem_service_base::model::Component {
+    fn from(value: Component<Owner>) -> Self {
         Self {
             versioned_component_id: value.versioned_component_id,
             component_name: value.component_name,
@@ -78,8 +103,10 @@ impl<Namespace> From<Component<Namespace>> for golem_service_base::model::Compon
     }
 }
 
-impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::component::Component {
-    fn from(value: Component<Namespace>) -> Self {
+impl<Owner: ComponentOwner> From<Component<Owner>>
+    for golem_api_grpc::proto::golem::component::Component
+{
+    fn from(value: Component<Owner>) -> Self {
         let component_type: golem_api_grpc::proto::golem::component::ComponentType =
             value.component_type.into();
         Self {
@@ -98,20 +125,20 @@ impl<Namespace> From<Component<Namespace>> for golem_api_grpc::proto::golem::com
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ComponentConstraints<Namespace> {
-    pub namespace: Namespace,
+pub struct ComponentConstraints<Owner: ComponentOwner> {
+    pub owner: Owner,
     pub component_id: ComponentId,
     pub constraints: FunctionConstraintCollection,
 }
 
-impl<Namespace: Clone> ComponentConstraints<Namespace> {
+impl<Owner: ComponentOwner> ComponentConstraints<Owner> {
     pub fn init(
-        namespace: &Namespace,
+        owner: &Owner,
         component_id: &ComponentId,
         worker_functions_in_rib: WorkerFunctionsInRib,
-    ) -> ComponentConstraints<Namespace> {
+    ) -> ComponentConstraints<Owner> {
         ComponentConstraints {
-            namespace: namespace.clone(),
+            owner: owner.clone(),
             component_id: component_id.clone(),
             constraints: FunctionConstraintCollection {
                 function_constraints: worker_functions_in_rib
@@ -126,13 +153,13 @@ impl<Namespace: Clone> ComponentConstraints<Namespace> {
     pub fn update_with(
         &self,
         function_constraints: &FunctionConstraintCollection,
-    ) -> Result<ComponentConstraints<Namespace>, String> {
+    ) -> Result<ComponentConstraints<Owner>, String> {
         let constraints = FunctionConstraintCollection::try_merge(vec![
             self.constraints.clone(),
             function_constraints.clone(),
         ])?;
         let component_constraints = ComponentConstraints {
-            namespace: self.namespace.clone(),
+            owner: self.owner.clone(),
             component_id: self.component_id.clone(),
             constraints,
         };
