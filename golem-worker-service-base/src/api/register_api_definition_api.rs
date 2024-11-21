@@ -99,11 +99,7 @@ impl TryFrom<SecuritySchemeData> for SecurityScheme {
         let client_id = ClientId::new(value.client_id);
         let client_secret = ClientSecret::new(value.client_secret);
         let redirect_url = RedirectUrl::new(value.redirect_url).map_err(|e| e.to_string())?;
-        let scopes = value
-            .scopes
-            .into_iter()
-            .map(Scope::new)
-            .collect();
+        let scopes = value.scopes.into_iter().map(Scope::new).collect();
 
         Ok(SecurityScheme::new(
             provider_type,

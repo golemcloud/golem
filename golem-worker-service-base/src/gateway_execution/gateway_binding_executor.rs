@@ -255,8 +255,8 @@ impl<N> DefaultGatewayBindingExecutor<N> {
 }
 
 #[async_trait]
-impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync> GatewayBindingExecutor<Namespace, Response>
-    for DefaultGatewayBindingExecutor<Namespace>
+impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync>
+    GatewayBindingExecutor<Namespace, Response> for DefaultGatewayBindingExecutor<Namespace>
 {
     async fn execute_binding(
         &self,
@@ -273,7 +273,7 @@ impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync> GatewayBindi
         CorsPreflight: ToResponse<Response>, // Cors can be a direct response in a cors preflight endpoint
         AuthCallBackResult: ToResponse<Response>, // AuthCallBackResult can be a direct response in auth callback endpoint
         HttpRequestAuthentication: MiddlewareIn<Response>, // HttpAuthorizer can authorise input
-        CorsPreflight: MiddlewareOut<Response>,   // CorsPreflight can be a middleware in other endpoints
+        CorsPreflight: MiddlewareOut<Response>, // CorsPreflight can be a middleware in other endpoints
     {
         match &binding.resolved_binding {
             ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
@@ -304,7 +304,11 @@ impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync> GatewayBindi
                     Some(r) => r,
                     None => {
                         let mut response = self
-                            .handle_worker_binding::<Response>(binding, resolved_worker_binding, &session)
+                            .handle_worker_binding::<Response>(
+                                binding,
+                                resolved_worker_binding,
+                                &session,
+                            )
                             .await;
 
                         let middleware_out_result = resolved_worker_binding

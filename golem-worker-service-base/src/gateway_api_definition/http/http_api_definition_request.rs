@@ -29,7 +29,6 @@ pub struct HttpApiDefinitionRequest {
     pub draft: bool,
 }
 
-
 // In a RouteRequest, security is defined at the outer level
 // to keep it consistent with the openAPI style of defining security at the root level.
 // Also this security has minimal information (and avoid details such as client-id, secret etc).

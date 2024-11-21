@@ -16,11 +16,13 @@ use crate::gateway_security::{
     IdentityProviderError, SecurityScheme, SecuritySchemeIdentifier,
     SecuritySchemeWithProviderMetadata,
 };
+use crate::repo::security_scheme::{SecuritySchemeRecord, SecuritySchemeRepo};
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::SafeDisplay;
 use std::fmt::Display;
 use std::hash::Hash;
+use std::sync::Arc;
 
 // The controller phase can decide whether the developer of API deployment
 // has create-security role in Namespace, before calling this service
@@ -36,24 +38,6 @@ pub trait SecuritySchemeService<Namespace> {
         &self,
         namespace: &Namespace,
         security_scheme: &SecurityScheme,
-    ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
-
-    async fn create_constraints(
-        &self,
-        namespace: &Namespace,
-        security_scheme: &SecuritySchemeIdentifier,
-    ) -> Result<(), SecuritySchemeServiceError>;
-
-    async fn update(
-      &self,
-      namespace: &Namespace,
-      security_scheme: &SecurityScheme
-    ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
-
-    async fn delete(
-        &self,
-        namespace: &Namespace,
-        security_scheme: &SecurityScheme
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
 }
 
@@ -96,25 +80,25 @@ pub type SecuritySchemeCache<N> = Cache<
 >;
 pub struct DefaultSecuritySchemeService<Namespace> {
     cache: SecuritySchemeCache<Namespace>,
+    repo: Arc<dyn SecuritySchemeRepo + Sync + Send>,
 }
 
-impl<Namespace: Send + Sync + Clone + Hash + Eq + 'static> Default
-    for DefaultSecuritySchemeService<Namespace>
-{
-    fn default() -> Self {
+impl<Namespace: Send + Sync + Clone + Hash + Eq + 'static> DefaultSecuritySchemeService<Namespace> {
+    pub fn new(repo: Arc<dyn SecuritySchemeRepo + Sync + Send>) -> Self {
         DefaultSecuritySchemeService {
             cache: Cache::new(
                 Some(1024),
                 FullCacheEvictionMode::None,
                 BackgroundEvictionMode::None,
-                "security_Scheme",
+                "security_scheme",
             ),
+            repo,
         }
     }
 }
 
 #[async_trait]
-impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
+impl<Namespace: Display + Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
     SecuritySchemeService<Namespace> for DefaultSecuritySchemeService<Namespace>
 {
     async fn get(
@@ -122,18 +106,31 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
         security_scheme_identifier: &SecuritySchemeIdentifier,
         namespace: &Namespace,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
-        // TODO; get_or_insert_simple with Repo
-        let result = self
-            .cache
-            .get(&(namespace.clone(), security_scheme_identifier.clone()))
-            .await;
+        self.cache
+            .get_or_insert_simple(
+                &(namespace.clone(), security_scheme_identifier.clone()),
+                || {
+                    let security_scheme_identifier = security_scheme_identifier.clone();
+                    let repo = self.repo.clone();
+                    Box::pin(async move {
+                        let result = repo
+                            .get(&security_scheme_identifier.to_string())
+                            .await
+                            .map_err(|err| {
+                                SecuritySchemeServiceError::InternalError(err.to_safe_string())
+                            })?;
 
-        match result {
-            Some(result) => Ok(result),
-            None => Err(SecuritySchemeServiceError::NotFound(
-                security_scheme_identifier.clone(),
-            )),
-        }
+                        match result {
+                            Some(v) => SecuritySchemeWithProviderMetadata::try_from(v)
+                                .map_err(|err| SecuritySchemeServiceError::InternalError(err)),
+                            None => Err(SecuritySchemeServiceError::NotFound(
+                                security_scheme_identifier.clone(),
+                            )),
+                        }
+                    })
+                },
+            )
+            .await
     }
 
     async fn create(
@@ -153,30 +150,20 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
                     security_scheme: security_scheme.clone(),
                     provider_metadata,
                 };
-                // TODO: get_or_insert_simple with Repo
-                let result = self
-                    .cache
-                    .get_or_insert_simple(
-                        &(namespace.clone(), security_scheme.scheme_identifier()),
-                        || Box::pin(async move { Ok(security_scheme_with_provider_metadata) }),
-                    )
-                    .await?;
 
-                Ok(result)
+                let record = SecuritySchemeRecord::from_security_scheme_metadata(
+                    namespace,
+                    &security_scheme_with_provider_metadata,
+                )
+                .map_err(|err| SecuritySchemeServiceError::InternalError(err))?;
+
+                self.repo.create(&record).await.map_err(|err| {
+                    SecuritySchemeServiceError::InternalError(err.to_safe_string())
+                })?;
+
+                Ok(security_scheme_with_provider_metadata)
             }
             Err(err) => Err(SecuritySchemeServiceError::IdentityProviderError(err)),
         }
-    }
-
-    async fn create_constraints(&self, namespace: &Namespace, security_scheme: &SecuritySchemeIdentifier) -> Result<(), SecuritySchemeServiceError> {
-
-    }
-
-    async fn update(&self, namespace: &Namespace, security_scheme: &SecurityScheme) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
-        todo!()
-    }
-
-    async fn delete(&self, namespace: &Namespace, security_scheme: &SecurityScheme) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
-        todo!()
     }
 }

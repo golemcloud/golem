@@ -12,28 +12,30 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::gateway_security::{
+    GolemIdentityProviderMetadata, Provider, SecurityScheme, SecuritySchemeIdentifier,
+    SecuritySchemeWithProviderMetadata,
+};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use futures::future::try_join_all;
-use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
     InitialComponentFileKey,
 };
+use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
+use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use sqlx::{Database, Pool, Row};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::result::Result;
 use std::str::FromStr;
 use std::sync::Arc;
-use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use tracing::{debug, error};
 use uuid::Uuid;
-use golem_service_base::auth::DefaultNamespace;
-use crate::gateway_security::{GolemIdentityProviderMetadata, Provider, SecurityScheme, SecuritySchemeIdentifier, SecuritySchemeWithProviderMetadata};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct SecuritySchemeRecord {
@@ -43,69 +45,28 @@ pub struct SecuritySchemeRecord {
     pub client_id: String,
     pub client_secret: String,
     pub redirect_uri: String,
-    pub scopes: Vec<String>,
-    pub security_scheme_metadata: Vec<u8>
+    pub scopes: String,
+    pub security_scheme_metadata: Vec<u8>,
 }
 
-impl<Namespace> TryFrom<SecuritySchemeRecord> for SecuritySchemeWithProviderMetadata
-where
-    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
-    <Namespace as TryFrom<String>>::Error: Display + Send + Sync + 'static,
-{
-    type Error = String;
-    fn try_from(value: SecuritySchemeRecord) -> Result<Self, Self::Error> {
-        let provider_metadata: GolemIdentityProviderMetadata =
-            identity_provider_metadata_serde::deserialize(&value.security_scheme_metadata)?;
-
-        let redirect_url =
-            RedirectUrl::new(value.redirect_uri).map_err(|e| e.to_string())?;
-
-        let provider_type =
-            Provider::from_str(&value.provider_type).map_err(|e| e.to_string())?;
-
-        let scheme_identifier =
-            SecuritySchemeIdentifier::new(value.security_scheme_id);
-
-        let client_id =
-            ClientId::new(value.client_id);
-
-        let client_secret =
-            ClientSecret::new(value.client_secret);
-
-        let scopes =
-           value.scopes.iter().map(|scope| Scope::new(scope.to_string())).collect();
-
-        let security_scheme = SecurityScheme::new(
-            provider_type,
-            scheme_identifier,
-            client_id,
-            client_secret,
-            redirect_url,
-            scopes
-        );
-
-        Ok(SecuritySchemeWithProviderMetadata {
-            security_scheme,
-            provider_metadata
-        })
-    }
-}
-
-impl<Namespace> TryFrom<SecuritySchemeWithProviderMetadata> for SecuritySchemeRecord
-where
-    Namespace: Display,
-{
-    type Error = String;
-
-    fn try_from(value: SecuritySchemeWithProviderMetadata) -> Result<Self, Self::Error> {
+impl SecuritySchemeRecord {
+    pub fn from_security_scheme_metadata<Namespace: Display>(
+        namespace: &Namespace,
+        value: &SecuritySchemeWithProviderMetadata,
+    ) -> Result<SecuritySchemeRecord, String> {
         let metadata = identity_provider_metadata_serde::serialize(&value.provider_metadata)?;
-        let scopes = value.security_scheme.scopes().iter().map(|scope| scope.to_string()).collect();
-        Ok(Self {
-            namespace: "default".to_string(), //TODO; Fixme
+        let scopes = value
+            .security_scheme
+            .scopes()
+            .iter()
+            .map(|scope| scope.to_string())
+            .collect();
+        Ok(SecuritySchemeRecord {
+            namespace: namespace.to_string(),
             provider_type: value.security_scheme.provider_type().to_string(),
             security_scheme_id: value.security_scheme.scheme_identifier().to_string(),
             client_id: value.security_scheme.client_id().to_string(),
-            client_secret: value.security_scheme.client_secret().to_string(),
+            client_secret: value.security_scheme.client_secret().secret().to_string(),
             redirect_uri: value.security_scheme.redirect_uri().to_string(),
             scopes,
             security_scheme_metadata: metadata.into(),
@@ -113,23 +74,63 @@ where
     }
 }
 
-#[async_trait]
-pub trait SecuritySchemeRepo {
-    async fn create(&self, component: &SecuritySchemeRecord) -> Result<(), RepoError>;
+impl TryFrom<SecuritySchemeRecord> for SecuritySchemeWithProviderMetadata {
+    type Error = String;
+    fn try_from(value: SecuritySchemeRecord) -> Result<Self, Self::Error> {
+        let provider_metadata: GolemIdentityProviderMetadata =
+            identity_provider_metadata_serde::deserialize(&value.security_scheme_metadata)?;
 
-    async fn get(&self, security_scheme_id: &String) -> Result<Option<SecuritySchemeRecord>, RepoError>;
+        let redirect_url = RedirectUrl::new(value.redirect_uri).map_err(|e| e.to_string())?;
+
+        let provider_type = Provider::from_str(&value.provider_type).map_err(|e| e.to_string())?;
+
+        let scheme_identifier = SecuritySchemeIdentifier::new(value.security_scheme_id);
+
+        let client_id = ClientId::new(value.client_id);
+
+        let client_secret = ClientSecret::new(value.client_secret);
+
+        let scopes = value
+            .scopes
+            .split(",")
+            .map(|x| Scope::new(x.trim().to_string()))
+            .collect();
+
+        let security_scheme = SecurityScheme::new(
+            provider_type,
+            scheme_identifier,
+            client_id,
+            client_secret,
+            redirect_url,
+            scopes,
+        );
+
+        Ok(SecuritySchemeWithProviderMetadata {
+            security_scheme,
+            provider_metadata,
+        })
+    }
 }
 
-pub struct DbSecurityRepo<DB: Database> {
+#[async_trait]
+pub trait SecuritySchemeRepo {
+    async fn create(&self, security_scheme_record: &SecuritySchemeRecord) -> Result<(), RepoError>;
+
+    async fn get(
+        &self,
+        security_scheme_id: &String,
+    ) -> Result<Option<SecuritySchemeRecord>, RepoError>;
+}
+
+pub struct DbSecuritySchemeRepo<DB: Database> {
     db_pool: Arc<Pool<DB>>,
 }
 
-impl<DB: Database> DbSecurityRepo<DB> {
+impl<DB: Database> DbSecuritySchemeRepo<DB> {
     pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
         Self { db_pool }
     }
 }
-
 
 pub struct LoggedComponentRepo<Repo: SecuritySchemeRepo> {
     repo: Repo,
@@ -154,7 +155,10 @@ impl<Repo: SecuritySchemeRepo> LoggedComponentRepo<Repo> {
         result: Result<R, RepoError>,
     ) -> Result<R, RepoError> {
         match &result {
-            Ok(_) => debug!(security_scheme_id = security_scheme_id.to_string(), "{}", message),
+            Ok(_) => debug!(
+                security_scheme_id = security_scheme_id.to_string(),
+                "{}", message
+            ),
             Err(error) => error!(
                 security_scheme_id = security_scheme_id.to_string(),
                 error = error.to_string(),
@@ -172,7 +176,10 @@ impl<Repo: SecuritySchemeRepo + Send + Sync> SecuritySchemeRepo for LoggedCompon
         Self::logged_with_id("create", &security_scheme_record.security_scheme_id, result)
     }
 
-    async fn get(&self, security_scheme_id: &String) -> Result<Option<SecuritySchemeRecord>, RepoError> {
+    async fn get(
+        &self,
+        security_scheme_id: &String,
+    ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
         let result = self.repo.get(security_scheme_id).await;
         Self::logged_with_id("get", security_scheme_id, result)
     }
@@ -180,7 +187,7 @@ impl<Repo: SecuritySchemeRepo + Send + Sync> SecuritySchemeRepo for LoggedCompon
 
 #[trait_gen(sqlx::Postgres -> sqlx::Postgres, sqlx::Sqlite)]
 #[async_trait]
-impl SecuritySchemeRepo for DbSecurityRepo<sqlx::Postgres> {
+impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
     async fn create(&self, security: &SecuritySchemeRecord) -> Result<(), RepoError> {
         let mut transaction = self.db_pool.begin().await?;
 
@@ -208,7 +215,10 @@ impl SecuritySchemeRepo for DbSecurityRepo<sqlx::Postgres> {
     }
 
     #[when(sqlx::Postgres -> get)]
-    async fn get_postgres(&self, security_scheme_id: &String) -> Result<Option<SecuritySchemeRecord>, RepoError> {
+    async fn get_postgres(
+        &self,
+        security_scheme_id: &String,
+    ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
         let security_scheme_record = sqlx::query_as::<_, SecuritySchemeRecord>(
             r#"
                 SELECT
@@ -218,21 +228,25 @@ impl SecuritySchemeRepo for DbSecurityRepo<sqlx::Postgres> {
                     c.client_id AS client_id,
                     c.client_secret AS client_secret,
                     c.redirect_uri AS redirect_uri,
+                    c.scopes AS scopes,
                     c.security_scheme_metadata AS security_scheme_metadata
                 FROM security_schemes
                 WHERE c.security_scheme_metadata = $1
                 "#,
         )
-            .bind(security_scheme_id)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(security_scheme_id)
+        .fetch_optional(self.db_pool.deref())
+        .await
+        .map_err::<RepoError, _>(|e| e.into())?;
 
         Ok(security_scheme_record)
     }
 
     #[when(sqlx::Sqlite -> get)]
-    async fn get(&self, security_scheme_id: &String) -> Result<Option<SecuritySchemeRecord>, RepoError> {
+    async fn get(
+        &self,
+        security_scheme_id: &String,
+    ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
         let security_scheme_record = sqlx::query_as::<_, SecuritySchemeRecord>(
             r#"
                 SELECT
@@ -247,27 +261,30 @@ impl SecuritySchemeRepo for DbSecurityRepo<sqlx::Postgres> {
                 WHERE c.security_scheme_metadata = $1
                "#,
         )
-            .bind(security_scheme_id)
-            .fetch_optional(self.db_pool.deref())
-            .await
-            .map_err::<RepoError, _>(|e| e.into())?;
+        .bind(security_scheme_id)
+        .fetch_optional(self.db_pool.deref())
+        .await
+        .map_err::<RepoError, _>(|e| e.into())?;
 
         Ok(security_scheme_record)
-
     }
 }
 
 pub mod identity_provider_metadata_serde {
     use bytes::{BufMut, Bytes, BytesMut};
-    use golem_api_grpc::proto::golem::apidefinition::{IdentityProviderMetadata as IdentityProviderMetadataProto};
+    use golem_api_grpc::proto::golem::apidefinition::IdentityProviderMetadata as IdentityProviderMetadataProto;
 
+    use crate::gateway_security::{
+        from_identity_provider_metadata_proto, to_identity_provider_metadata_proto,
+        GolemIdentityProviderMetadata,
+    };
     use prost::Message;
-    use crate::gateway_security::{from_identity_provider_metadata_proto, to_identity_provider_metadata_proto, GolemIdentityProviderMetadata};
 
     pub const SERIALIZATION_VERSION_V1: u8 = 1u8;
 
     pub fn serialize(value: &GolemIdentityProviderMetadata) -> Result<Bytes, String> {
-        let proto_value: IdentityProviderMetadataProto = to_identity_provider_metadata_proto(value.clone());
+        let proto_value: IdentityProviderMetadataProto =
+            to_identity_provider_metadata_proto(value.clone());
         let mut bytes = BytesMut::new();
         bytes.put_u8(SERIALIZATION_VERSION_V1);
         bytes.extend_from_slice(&proto_value.encode_to_vec());

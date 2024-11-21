@@ -31,6 +31,7 @@ use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
+use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::security_scheme::{
     DefaultSecuritySchemeService, SecuritySchemeService,
 };
@@ -100,7 +101,15 @@ pub async fn test_with_postgres_db() {
         api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
     );
 
-    test_services(api_definition_repo, api_deployment_repo).await;
+    let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+
+    test_services(
+        api_definition_repo,
+        api_deployment_repo,
+        security_scheme_repo,
+    )
+    .await;
 }
 
 #[test]
@@ -124,7 +133,15 @@ pub async fn test_with_sqlite_db() {
         api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
     );
 
-    test_services(api_definition_repo, api_deployment_repo).await;
+    let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+        Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+
+    test_services(
+        api_definition_repo,
+        api_deployment_repo,
+        security_scheme_repo,
+    )
+    .await;
 }
 
 struct TestComponentService;
@@ -208,6 +225,7 @@ impl<AuthCtx> ComponentService<AuthCtx> for TestComponentService {
 async fn test_services(
     api_definition_repo: Arc<dyn api_definition::ApiDefinitionRepo + Sync + Send>,
     api_deployment_repo: Arc<dyn api_deployment::ApiDeploymentRepo + Sync + Send>,
+    security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send>,
 ) {
     let component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send> =
         Arc::new(TestComponentService {});
@@ -215,7 +233,7 @@ async fn test_services(
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
     let security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> =
-        Arc::new(DefaultSecuritySchemeService::default());
+        Arc::new(DefaultSecuritySchemeService::new(security_scheme_repo));
 
     let definition_service: Arc<
         dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
