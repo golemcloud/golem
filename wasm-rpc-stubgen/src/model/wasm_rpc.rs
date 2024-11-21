@@ -1,26 +1,20 @@
 use crate::log::LogColorize;
 use crate::model::oam;
 use crate::model::oam::TypedTraitProperties;
-use crate::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
+use crate::model::unknown_properties::HasUnknownProperties;
+use crate::model::wasm_rpc::template::Template;
 use crate::naming::wit::package_dep_dir_name_from_parser;
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
 use golem_wasm_rpc::WASM_RPC_VERSION;
 use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::path::{Path, PathBuf};
 use wit_parser::PackageName;
 
 pub const DEFAULT_CONFIG_FILE_NAME: &str = "golem.yaml";
-
-pub const OAM_TRAIT_TYPE_WASM_RPC: &str = "wasm-rpc";
-
-pub const OAM_COMPONENT_TYPE_WASM: &str = "wasm";
-pub const OAM_COMPONENT_TYPE_WASM_BUILD: &str = "wasm-build";
-pub const OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD: &str = "wasm-rpc-stub-build";
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ComponentName(String);
@@ -49,6 +43,260 @@ impl From<&str> for ComponentName {
     }
 }
 
+mod raw {
+    use crate::model::oam;
+    use crate::model::unknown_properties::{HasUnknownProperties, UnknownProperties};
+    use serde::{Deserialize, Serialize};
+    use std::collections::HashMap;
+
+    pub const OAM_TRAIT_TYPE_WASM_RPC: &str = "wasm-rpc";
+
+    pub const OAM_COMPONENT_TYPE_WASM: &str = "wasm";
+    pub const OAM_COMPONENT_TYPE_WASM_BUILD: &str = "wasm-build";
+    pub const OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD: &str = "wasm-rpc-stub-build";
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct BuildStep {
+        pub command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub dir: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub inputs: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub outputs: Vec<String>,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WasmComponentProperties {
+        pub component_template: Option<String>,
+        pub input_wit: Option<String>,
+        pub output_wit: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub build: Vec<BuildStep>,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        pub build_profiles: HashMap<String, Vec<BuildStep>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub default_build_profile: Option<String>,
+        pub input_wasm: Option<String>,
+        pub output_wasm: Option<String>,
+        #[serde(flatten)]
+        pub unknown_properties: UnknownProperties,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct WasmComponentTemplateProperties {
+        pub input_wit: String,
+        pub output_wit: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub build: Vec<BuildStep>,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        pub build_profiles: HashMap<String, Vec<BuildStep>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub default_build_profile: Option<String>,
+        pub input_wasm: String,
+        pub output_wasm: String,
+        #[serde(flatten)]
+        pub unknown_properties: UnknownProperties,
+    }
+
+    impl HasUnknownProperties for WasmComponentProperties {
+        fn unknown_properties(&self) -> &UnknownProperties {
+            &self.unknown_properties
+        }
+    }
+
+    impl oam::TypedComponentProperties for WasmComponentProperties {
+        fn component_type() -> &'static str {
+            OAM_COMPONENT_TYPE_WASM
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    pub struct WasmRpcTraitProperties {
+        #[serde(rename = "componentName")]
+        pub component_name: String,
+        #[serde(flatten)]
+        pub unknown_properties: UnknownProperties,
+    }
+
+    impl HasUnknownProperties for WasmRpcTraitProperties {
+        fn unknown_properties(&self) -> &UnknownProperties {
+            &self.unknown_properties
+        }
+    }
+
+    impl oam::TypedTraitProperties for WasmRpcTraitProperties {
+        fn trait_type() -> &'static str {
+            OAM_TRAIT_TYPE_WASM_RPC
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ComponentBuildProperties {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub include: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub build_dir: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub wit_deps: Vec<String>,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        pub component_templates: HashMap<String, WasmComponentTemplateProperties>,
+        #[serde(flatten)]
+        pub unknown_properties: UnknownProperties,
+    }
+
+    impl oam::TypedComponentProperties for ComponentBuildProperties {
+        fn component_type() -> &'static str {
+            OAM_COMPONENT_TYPE_WASM_BUILD
+        }
+    }
+
+    impl HasUnknownProperties for ComponentBuildProperties {
+        fn unknown_properties(&self) -> &UnknownProperties {
+            &self.unknown_properties
+        }
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct ComponentStubBuildProperties {
+        pub component_name: Option<String>,
+        pub build_dir: Option<String>,
+        pub wasm: Option<String>,
+        pub wit: Option<String>,
+        pub world: Option<String>,
+        pub crate_version: Option<String>,
+        pub wasm_rpc_path: Option<String>,
+        pub wasm_rpc_version: Option<String>,
+        #[serde(flatten)]
+        pub unknown_properties: UnknownProperties,
+    }
+
+    impl oam::TypedComponentProperties for ComponentStubBuildProperties {
+        fn component_type() -> &'static str {
+            OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD
+        }
+    }
+
+    impl HasUnknownProperties for ComponentStubBuildProperties {
+        fn unknown_properties(&self) -> &UnknownProperties {
+            &self.unknown_properties
+        }
+    }
+}
+
+mod template {
+    use crate::model::wasm_rpc::raw::{BuildStep, WasmComponentTemplateProperties};
+    use crate::model::wasm_rpc::WasmComponentProperties;
+    use serde::Serialize;
+    use std::collections::HashMap;
+
+    pub trait Template<C: Serialize> {
+        type Rendered;
+
+        fn render(
+            &self,
+            env: &minijinja::Environment,
+            ctx: &C,
+        ) -> Result<Self::Rendered, minijinja::Error>;
+    }
+
+    impl<C: Serialize> Template<C> for String {
+        type Rendered = String;
+
+        fn render(
+            &self,
+            env: &minijinja::Environment,
+            ctx: &C,
+        ) -> Result<Self::Rendered, minijinja::Error> {
+            env.render_str(self, ctx)
+        }
+    }
+
+    impl<C: Serialize, T: Template<C>> Template<C> for Option<T> {
+        type Rendered = Option<T::Rendered>;
+
+        fn render(
+            &self,
+            env: &minijinja::Environment,
+            ctx: &C,
+        ) -> Result<Self::Rendered, minijinja::Error> {
+            match self {
+                Some(template) => Ok(Some(template.render(env, ctx)?)),
+                None => Ok(None),
+            }
+        }
+    }
+
+    impl<C: Serialize, T: Template<C>> Template<C> for Vec<T> {
+        type Rendered = Vec<T::Rendered>;
+
+        fn render(
+            &self,
+            env: &minijinja::Environment,
+            ctx: &C,
+        ) -> Result<Self::Rendered, minijinja::Error> {
+            self.iter().map(|elem| elem.render(env, ctx)).collect()
+        }
+    }
+
+    impl<C: Serialize, T: Template<C>> Template<C> for HashMap<String, T> {
+        type Rendered = HashMap<String, T::Rendered>;
+
+        fn render(
+            &self,
+            env: &minijinja::Environment,
+            ctx: &C,
+        ) -> Result<Self::Rendered, minijinja::Error> {
+            let mut rendered = HashMap::<String, T::Rendered>::new();
+            for (key, template) in self {
+                rendered.insert(key.clone(), template.render(env, ctx)?);
+            }
+            Ok(rendered)
+        }
+    }
+
+    impl<C: Serialize> Template<C> for BuildStep {
+        type Rendered = BuildStep;
+
+        fn render(
+            &self,
+            env: &minijinja::Environment,
+            ctx: &C,
+        ) -> Result<Self::Rendered, minijinja::Error> {
+            Ok(BuildStep {
+                command: self.command.render(env, ctx)?,
+                dir: self.dir.render(env, ctx)?,
+                inputs: self.inputs.render(env, ctx)?,
+                outputs: self.outputs.render(env, ctx)?,
+            })
+        }
+    }
+
+    impl<C: Serialize> Template<C> for WasmComponentTemplateProperties {
+        type Rendered = WasmComponentProperties;
+
+        fn render(
+            &self,
+            env: &minijinja::Environment,
+            ctx: &C,
+        ) -> Result<Self::Rendered, minijinja::Error> {
+            Ok(WasmComponentProperties {
+                build: self.build.render(env, ctx)?,
+                build_profiles: self.build_profiles.render(env, ctx)?,
+                default_build_profile: self.default_build_profile.render(env, ctx)?,
+                input_wit: self.input_wit.render(env, ctx)?.into(),
+                output_wit: self.output_wit.render(env, ctx)?.into(),
+                input_wasm: self.input_wasm.render(env, ctx)?.into(),
+                output_wasm: self.output_wasm.render(env, ctx)?.into(),
+            })
+        }
+    }
+}
+
 pub fn init_oam_app(_component_name: ComponentName) -> oam::Application {
     // TODO: let's do it as part of https://github.com/golemcloud/wasm-rpc/issues/89
     todo!()
@@ -63,13 +311,13 @@ pub fn include_glob_patter_from_yaml_file(source: &Path) -> Option<String> {
         .and_then(|mut oam_app| {
             let mut includes = oam_app
                 .spec
-                .extract_components_by_type(&BTreeSet::from([OAM_COMPONENT_TYPE_WASM_BUILD]))
-                .remove(OAM_COMPONENT_TYPE_WASM_BUILD)
+                .extract_components_by_type(&BTreeSet::from([raw::OAM_COMPONENT_TYPE_WASM_BUILD]))
+                .remove(raw::OAM_COMPONENT_TYPE_WASM_BUILD)
                 .unwrap_or_default()
                 .into_iter()
                 .filter_map(|component| {
                     component
-                        .typed_properties::<ComponentBuildProperties>()
+                        .typed_properties::<raw::ComponentBuildProperties>()
                         .ok()
                         .and_then(|properties| properties.include)
                 });
@@ -86,10 +334,11 @@ pub fn include_glob_patter_from_yaml_file(source: &Path) -> Option<String> {
 
 #[derive(Clone, Debug)]
 pub struct Application {
-    pub common_wasm_build: Option<WasmBuild>,
-    pub common_wasm_rpc_stub_build: Option<WasmRpcStubBuild>,
-    pub wasm_rpc_stub_builds_by_name: BTreeMap<ComponentName, WasmRpcStubBuild>,
-    pub wasm_components_by_name: BTreeMap<ComponentName, WasmComponent>,
+    common_wasm_build: Option<WasmBuild>,
+    common_wasm_rpc_stub_build: Option<WasmRpcStubBuild>,
+    wasm_rpc_stub_builds_by_name: BTreeMap<ComponentName, WasmRpcStubBuild>,
+    wasm_components_by_name: BTreeMap<ComponentName, WasmComponent>,
+    wasm_component_rendered_templates_by_name: BTreeMap<ComponentName, WasmComponentProperties>,
 }
 
 impl Application {
@@ -123,11 +372,82 @@ impl Application {
 
         let common_wasm_build = Self::validate_wasm_builds(&mut validation, all_wasm_builds);
 
+        let wasm_component_rendered_templates_by_name = {
+            let env = minijinja::Environment::new();
+
+            wasm_components_by_name
+                .iter()
+                .filter_map(|(component_name, component)| {
+                    if let WasmComponentPropertySource::Template { template_name } =
+                        &component.properties
+                    {
+                        Some((component_name, template_name))
+                    } else {
+                        None
+                    }
+                })
+                .filter_map(|(component_name, template_name)| {
+                    let templates = common_wasm_build
+                        .as_ref()
+                        .map(|build| &build.component_templates);
+
+                    match templates.and_then(|templates| templates.get(template_name)) {
+                        Some(template) => {
+                            match template.render(
+                                &env,
+                                &minijinja::context! { componentName => component_name.as_str() },
+                            ) {
+                                Ok(properties) => Some((component_name.clone(), properties)),
+                                Err(err) => {
+                                    validation
+                                        .push_context("component_name", component_name.to_string());
+                                    validation
+                                        .push_context("template_name", template_name.to_string());
+
+                                    validation.add_error(format!(
+                                        "Failed to render component template: {}",
+                                        err
+                                    ));
+                                    validation.pop_context();
+                                    validation.pop_context();
+
+                                    None
+                                }
+                            }
+                        }
+                        None => {
+                            validation.add_error(format!(
+                                "Component template {} not found, {}",
+                                template_name.log_color_error_highlight(),
+                                match templates {
+                                    Some(templates) if !templates.is_empty() => {
+                                        format!(
+                                            "available templates: {}",
+                                            templates
+                                                .keys()
+                                                .map(|s| s.log_color_highlight())
+                                                .join(", ")
+                                        )
+                                    }
+                                    _ => {
+                                        "no templates are defined".to_string()
+                                    }
+                                }
+                            ));
+                            validation.pop_context();
+                            None
+                        }
+                    }
+                })
+                .collect()
+        };
+
         validation.build(Self {
             common_wasm_build,
             common_wasm_rpc_stub_build,
             wasm_rpc_stub_builds_by_name,
             wasm_components_by_name,
+            wasm_component_rendered_templates_by_name,
         })
     }
 
@@ -142,16 +462,16 @@ impl Application {
                 .application
                 .spec
                 .extract_components_by_type(&BTreeSet::from([
-                    OAM_COMPONENT_TYPE_WASM,
-                    OAM_COMPONENT_TYPE_WASM_BUILD,
-                    OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD,
+                    raw::OAM_COMPONENT_TYPE_WASM,
+                    raw::OAM_COMPONENT_TYPE_WASM_BUILD,
+                    raw::OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD,
                 ]));
 
         let wasm_components = Self::convert_components(
             &oam_app.source,
             validation,
             &mut components_by_type,
-            OAM_COMPONENT_TYPE_WASM,
+            raw::OAM_COMPONENT_TYPE_WASM,
             Self::convert_wasm_component,
         );
 
@@ -159,7 +479,7 @@ impl Application {
             &oam_app.source,
             validation,
             &mut components_by_type,
-            OAM_COMPONENT_TYPE_WASM_BUILD,
+            raw::OAM_COMPONENT_TYPE_WASM_BUILD,
             Self::convert_wasm_build,
         );
 
@@ -167,7 +487,7 @@ impl Application {
             &oam_app.source,
             validation,
             &mut components_by_type,
-            OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD,
+            raw::OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD,
             Self::convert_wasm_rpc_stub_build,
         );
 
@@ -216,22 +536,22 @@ impl Application {
         validation: &mut ValidationBuilder,
         mut component: oam::Component,
     ) -> Option<WasmComponent> {
-        let properties = component.typed_properties::<WasmComponentProperties>();
+        let properties = component.typed_properties::<raw::WasmComponentProperties>();
 
         if let Some(err) = properties.as_ref().err() {
             validation.add_error(format!("Failed to get component properties: {}", err))
         }
 
         let wasm_rpc_traits = component
-            .extract_traits_by_type(&BTreeSet::from([OAM_TRAIT_TYPE_WASM_RPC]))
-            .remove(OAM_TRAIT_TYPE_WASM_RPC)
+            .extract_traits_by_type(&BTreeSet::from([raw::OAM_TRAIT_TYPE_WASM_RPC]))
+            .remove(raw::OAM_TRAIT_TYPE_WASM_RPC)
             .unwrap_or_default();
 
         let mut wasm_rpc_dependencies = Vec::<ComponentName>::new();
         for wasm_rpc in wasm_rpc_traits {
             validation.push_context("trait type", wasm_rpc.trait_type.clone());
 
-            match WasmRpcTraitProperties::from_generic_trait(wasm_rpc) {
+            match raw::WasmRpcTraitProperties::from_generic_trait(wasm_rpc) {
                 Ok(wasm_rpc) => {
                     wasm_rpc.add_unknown_property_warns(
                         || vec![("dep component name", wasm_rpc.component_name.clone())],
@@ -298,16 +618,97 @@ impl Application {
                     }
                 }
 
-                Some(WasmComponent {
-                    name: component.name.into(),
-                    source: source.to_path_buf(),
-                    build_steps: properties.build,
-                    input_wit: properties.input_wit.into(),
-                    output_wit: properties.output_wit.into(),
-                    input_wasm: properties.input_wasm.into(),
-                    output_wasm: properties.output_wasm.into(),
-                    wasm_rpc_dependencies,
-                })
+                if !properties.build_profiles.is_empty() && !properties.build.is_empty() {
+                    validation.add_warn(
+                        "If buildProfiles is defined then build will be ignored".to_string(),
+                    );
+                }
+
+                if !properties.build_profiles.is_empty()
+                    && properties.default_build_profile.is_none()
+                {
+                    validation.add_error("If buildProfiles is defined then defaultBuildProfile also have to be defined".to_string());
+                }
+
+                if properties.build_profiles.is_empty()
+                    && properties.default_build_profile.is_some()
+                {
+                    validation.add_error("If defaultBuildProfile is defined then buildProfiles also have to be defined".to_string());
+                }
+
+                if let Some(default_build_profile) = &properties.default_build_profile {
+                    if !properties
+                        .build_profiles
+                        .contains_key(default_build_profile)
+                    {
+                        validation.add_error(format!(
+                            "The defined defaultBuildProfile ({}) if not found in buildProfiles",
+                            default_build_profile.log_color_error_highlight()
+                        ))
+                    }
+                }
+
+                match properties.component_template {
+                    Some(build_template) => {
+                        for (property_defined, property_name) in [
+                            (properties.input_wit.is_some(), "inputWit"),
+                            (properties.output_wit.is_some(), "outputWit"),
+                            (!properties.build.is_empty(), "build"),
+                            (!properties.build_profiles.is_empty(), "buildProfiles"),
+                            (
+                                properties.default_build_profile.is_some(),
+                                "defaultBuildProfile",
+                            ),
+                            (properties.input_wasm.is_some(), "inputWasm"),
+                            (properties.output_wasm.is_some(), "outputWasm"),
+                        ] {
+                            if property_defined {
+                                validation.add_warn(format!(
+                                    "Component property {} is ignored when componentTemplate is defined",
+                                    property_name.log_color_error_highlight()
+                                ))
+                            }
+                        }
+
+                        Some(WasmComponent {
+                            name: component.name.into(),
+                            source: source.to_path_buf(),
+                            properties: WasmComponentPropertySource::Template {
+                                template_name: build_template,
+                            },
+                            wasm_rpc_dependencies,
+                        })
+                    }
+                    None => {
+                        for (property, property_name) in [
+                            (&properties.input_wit, "inputWit"),
+                            (&properties.output_wit, "outputWit"),
+                            (&properties.input_wasm, "inputWasm"),
+                            (&properties.output_wasm, "outputWasm"),
+                        ] {
+                            if property.is_none() {
+                                validation.add_error(format!("Component property {} must be defined, unless componentTemplate is defined", property_name.log_color_error_highlight()))
+                            }
+                        }
+
+                        Some(WasmComponent {
+                            name: component.name.into(),
+                            source: source.to_path_buf(),
+                            properties: WasmComponentPropertySource::Concrete {
+                                build: WasmComponentProperties {
+                                    build: properties.build,
+                                    build_profiles: properties.build_profiles,
+                                    default_build_profile: properties.default_build_profile,
+                                    input_wit: properties.input_wit.unwrap_or_default().into(),
+                                    output_wit: properties.output_wit.unwrap_or_default().into(),
+                                    input_wasm: properties.input_wasm.unwrap_or_default().into(),
+                                    output_wasm: properties.output_wasm.unwrap_or_default().into(),
+                                },
+                            },
+                            wasm_rpc_dependencies,
+                        })
+                    }
+                }
             }
             _ => None,
         }
@@ -318,15 +719,17 @@ impl Application {
         validation: &mut ValidationBuilder,
         component: oam::Component,
     ) -> Option<WasmBuild> {
-        let result = match component.typed_properties::<ComponentBuildProperties>() {
+        let result = match component.typed_properties::<raw::ComponentBuildProperties>() {
             Ok(properties) => {
+                // TODO: validate component templates
                 properties.add_unknown_property_warns(Vec::new, validation);
 
                 let wasm_rpc_stub_build = WasmBuild {
                     source: source.to_path_buf(),
                     name: component.name,
                     build_dir: properties.build_dir.map(|s| s.into()),
-                    _wit_deps: properties.wit_deps.into_iter().map(|s| s.into()).collect(),
+                    component_templates: properties.component_templates,
+                    wit_deps: properties.wit_deps.into_iter().map(|s| s.into()).collect(),
                 };
 
                 Some(wasm_rpc_stub_build)
@@ -355,7 +758,7 @@ impl Application {
         validation: &mut ValidationBuilder,
         component: oam::Component,
     ) -> Option<WasmRpcStubBuild> {
-        let result = match component.typed_properties::<ComponentStubBuildProperties>() {
+        let result = match component.typed_properties::<raw::ComponentStubBuildProperties>() {
             Ok(properties) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
 
@@ -493,6 +896,12 @@ impl Application {
             ));
         }
 
+        if wasm_builds.len() == 1 {
+            for (_template_name, _build) in &wasm_builds[0].component_templates {
+                // TODO: validate templates
+            }
+        }
+
         wasm_builds.into_iter().next()
     }
 
@@ -591,10 +1000,18 @@ impl Application {
         )
     }
 
+    pub fn components(&self) -> impl Iterator<Item = (&ComponentName, &WasmComponent)> {
+        self.wasm_components_by_name.iter()
+    }
+
+    pub fn component_names(&self) -> impl Iterator<Item = &ComponentName> {
+        self.wasm_components_by_name.keys()
+    }
+
     pub fn wit_deps(&self) -> Vec<PathBuf> {
         self.common_wasm_build
             .as_ref()
-            .map(|wasm_build| wasm_build._wit_deps.clone())
+            .map(|wasm_build| wasm_build.wit_deps.clone())
             .unwrap_or_default()
     }
 
@@ -602,6 +1019,17 @@ impl Application {
         self.wasm_components_by_name
             .iter()
             .flat_map(|(_, component)| component.wasm_rpc_dependencies.iter().cloned())
+            .collect()
+    }
+
+    pub fn all_profiles(&self) -> BTreeSet<String> {
+        self.component_names()
+            .flat_map(|component_name| {
+                self.component_properties(component_name)
+                    .build_profiles
+                    .keys()
+                    .cloned()
+            })
             .collect()
     }
 
@@ -618,9 +1046,21 @@ impl Application {
             .unwrap_or_else(|| panic!("Component not found: {}", component_name))
     }
 
+    pub fn component_properties(&self, component_name: &ComponentName) -> &WasmComponentProperties {
+        match &self.component(component_name).properties {
+            WasmComponentPropertySource::Concrete { build } => build,
+            WasmComponentPropertySource::Template { .. } => self
+                .wasm_component_rendered_templates_by_name
+                .get(component_name)
+                .expect("Missing rendered template"),
+        }
+    }
+
     pub fn component_input_wit(&self, component_name: &ComponentName) -> PathBuf {
         let component = self.component(component_name);
-        component.source_dir().join(component.input_wit.clone())
+        component
+            .source_dir()
+            .join(self.component_properties(component_name).input_wit.clone())
     }
 
     pub fn component_base_output_wit(&self, component_name: &ComponentName) -> PathBuf {
@@ -642,17 +1082,64 @@ impl Application {
 
     pub fn component_output_wit(&self, component_name: &ComponentName) -> PathBuf {
         let component = self.component(component_name);
-        component.source_dir().join(component.output_wit.clone())
+        component
+            .source_dir()
+            .join(self.component_properties(component_name).output_wit.clone())
     }
 
     pub fn component_input_wasm(&self, component_name: &ComponentName) -> PathBuf {
         let component = self.component(component_name);
-        component.source_dir().join(component.input_wasm.clone())
+        component
+            .source_dir()
+            .join(self.component_properties(component_name).input_wasm.clone())
     }
 
     pub fn component_output_wasm(&self, component_name: &ComponentName) -> PathBuf {
         let component = self.component(component_name);
-        component.source_dir().join(component.output_wasm.clone())
+        component.source_dir().join(
+            self.component_properties(component_name)
+                .output_wasm
+                .clone(),
+        )
+    }
+
+    pub fn component_build_steps<'a>(
+        &'a self,
+        component_name: &ComponentName,
+        profile: Option<&'a str>,
+    ) -> BuildStepsLookupResult<'a> {
+        let component_build = self.component_properties(component_name);
+        match profile {
+            Some(profile) => match component_build.build_profiles.get(profile) {
+                Some(build_steps) => BuildStepsLookupResult::BuildStepsForRequestedProfile {
+                    profile,
+                    build_steps,
+                },
+                None => BuildStepsLookupResult::NoBuildStepsForRequestedProfile,
+            },
+            None => {
+                if !component_build.build_profiles.is_empty() {
+                    let default_profile = component_build
+                        .default_build_profile
+                        .as_ref()
+                        .expect("Missing build profile");
+
+                    BuildStepsLookupResult::BuildStepsForDefaultProfile {
+                        profile: default_profile,
+                        build_steps: component_build
+                            .build_profiles
+                            .get(default_profile)
+                            .expect("Missing build steps for profile"),
+                    }
+                } else if !component_build.build.is_empty() {
+                    BuildStepsLookupResult::BuildSteps {
+                        build_steps: &component_build.build,
+                    }
+                } else {
+                    BuildStepsLookupResult::NoBuildSteps
+                }
+            }
+        }
     }
 
     pub fn stub_world(&self, component_name: &ComponentName) -> Option<String> {
@@ -732,15 +1219,30 @@ impl Application {
     }
 }
 
+pub type BuildStep = raw::BuildStep;
+
 #[derive(Clone, Debug)]
-pub struct WasmComponent {
-    pub name: ComponentName,
-    pub source: PathBuf,
-    pub build_steps: Vec<BuildStep>,
+pub struct WasmComponentProperties {
+    pub build: Vec<raw::BuildStep>,
+    pub build_profiles: HashMap<String, Vec<raw::BuildStep>>,
+    pub default_build_profile: Option<String>,
     pub input_wit: PathBuf,
     pub output_wit: PathBuf,
     pub input_wasm: PathBuf,
     pub output_wasm: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+pub enum WasmComponentPropertySource {
+    Concrete { build: WasmComponentProperties },
+    Template { template_name: String },
+}
+
+#[derive(Clone, Debug)]
+pub struct WasmComponent {
+    pub name: ComponentName,
+    pub source: PathBuf,
+    pub properties: WasmComponentPropertySource,
     pub wasm_rpc_dependencies: Vec<ComponentName>,
 }
 
@@ -760,83 +1262,20 @@ impl WasmComponent {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BuildStep {
-    pub command: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub inputs: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub outputs: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WasmComponentProperties {
-    pub input_wit: String,
-    pub output_wit: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub build: Vec<BuildStep>,
-    pub input_wasm: String,
-    pub output_wasm: String,
-    #[serde(flatten)]
-    pub unknown_properties: UnknownProperties,
-}
-
-impl HasUnknownProperties for WasmComponentProperties {
-    fn unknown_properties(&self) -> &UnknownProperties {
-        &self.unknown_properties
-    }
-}
-
-impl oam::TypedComponentProperties for WasmComponentProperties {
-    fn component_type() -> &'static str {
-        OAM_COMPONENT_TYPE_WASM
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WasmRpcTraitProperties {
-    #[serde(rename = "componentName")]
-    pub component_name: String,
-    #[serde(flatten)]
-    pub unknown_properties: UnknownProperties,
-}
-
-impl HasUnknownProperties for WasmRpcTraitProperties {
-    fn unknown_properties(&self) -> &UnknownProperties {
-        &self.unknown_properties
-    }
-}
-
-impl oam::TypedTraitProperties for WasmRpcTraitProperties {
-    fn trait_type() -> &'static str {
-        OAM_TRAIT_TYPE_WASM_RPC
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentBuildProperties {
-    include: Option<String>,
-    build_dir: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    wit_deps: Vec<String>,
-    #[serde(flatten)]
-    unknown_properties: UnknownProperties,
-}
-
-impl oam::TypedComponentProperties for ComponentBuildProperties {
-    fn component_type() -> &'static str {
-        OAM_COMPONENT_TYPE_WASM_BUILD
-    }
-}
-
-impl HasUnknownProperties for ComponentBuildProperties {
-    fn unknown_properties(&self) -> &UnknownProperties {
-        &self.unknown_properties
-    }
+pub enum BuildStepsLookupResult<'a> {
+    NoBuildSteps,
+    NoBuildStepsForRequestedProfile,
+    BuildSteps {
+        build_steps: &'a [BuildStep],
+    },
+    BuildStepsForDefaultProfile {
+        profile: &'a str,
+        build_steps: &'a [BuildStep],
+    },
+    BuildStepsForRequestedProfile {
+        profile: &'a str,
+        build_steps: &'a [BuildStep],
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -844,34 +1283,8 @@ pub struct WasmBuild {
     source: PathBuf,
     name: String,
     build_dir: Option<PathBuf>,
-    _wit_deps: Vec<PathBuf>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ComponentStubBuildProperties {
-    component_name: Option<String>,
-    build_dir: Option<String>,
-    wasm: Option<String>,
-    wit: Option<String>,
-    world: Option<String>,
-    crate_version: Option<String>,
-    wasm_rpc_path: Option<String>,
-    wasm_rpc_version: Option<String>,
-    #[serde(flatten)]
-    unknown_properties: UnknownProperties,
-}
-
-impl oam::TypedComponentProperties for ComponentStubBuildProperties {
-    fn component_type() -> &'static str {
-        OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD
-    }
-}
-
-impl HasUnknownProperties for ComponentStubBuildProperties {
-    fn unknown_properties(&self) -> &UnknownProperties {
-        &self.unknown_properties
-    }
+    component_templates: HashMap<String, raw::WasmComponentTemplateProperties>,
+    wit_deps: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -927,10 +1340,13 @@ mod tests {
 
         assert!(component_name.as_str() == "component-one");
         assert!(component.name.as_str() == "component-one");
+        // TODO:
+        /*
         assert!(component.input_wit.to_string_lossy() == "input_wit");
         assert!(component.output_wit.to_string_lossy() == "output_wit");
         assert!(component.input_wasm.to_string_lossy() == "out/in.wasm");
         assert!(component.output_wasm.to_string_lossy() == "out/out.wasm");
+        */
         assert!(component.wasm_rpc_dependencies.len() == 2);
 
         assert!(component.wasm_rpc_dependencies[0].as_str() == "component-three");

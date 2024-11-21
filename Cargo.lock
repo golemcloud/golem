@@ -1923,6 +1923,7 @@ dependencies = [
  "indexmap 2.6.0",
  "indoc",
  "itertools 0.12.1",
+ "minijinja",
  "pretty_env_logger",
  "prettyplease",
  "proc-macro2",
@@ -2679,6 +2680,15 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "minijinja"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c37e1b517d1dcd0e51dc36c4567b9d5a29262b3ec8da6cb5d35e27a8fb529b5"
+dependencies = [
+ "serde 1.0.210",
+]
 
 [[package]]
 name = "miniz_oxide"
