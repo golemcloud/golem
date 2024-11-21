@@ -100,7 +100,7 @@ impl ResponseContentErrorMapper for ApiDeploymentError {
     }
 }
 
-fn display_golem_error(error: GolemError) -> String {
+pub fn display_golem_error(error: GolemError) -> String {
     match error {
         GolemError::InvalidRequest(GolemErrorInvalidRequest { details }) => {
             format!("Invalid request: {details}")
@@ -219,11 +219,11 @@ fn display_golem_error(error: GolemError) -> String {
     }
 }
 
-fn display_worker_id(worker_id: WorkerId) -> String {
+pub fn display_worker_id(worker_id: WorkerId) -> String {
     format!("{}/{}", worker_id.component_id, worker_id.worker_name)
 }
 
-fn display_promise_id(promise_id: PromiseId) -> String {
+pub fn display_promise_id(promise_id: PromiseId) -> String {
     format!(
         "{}/{}",
         display_worker_id(promise_id.worker_id),
@@ -231,7 +231,7 @@ fn display_promise_id(promise_id: PromiseId) -> String {
     )
 }
 
-fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String {
+pub fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String {
     match error {
         WorkerServiceErrorsBody::Messages(messages) => messages.errors.iter().join(", "),
         WorkerServiceErrorsBody::Validation(validation) => validation
