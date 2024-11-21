@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
 use test_r::test;
 
 test_r::enable!();

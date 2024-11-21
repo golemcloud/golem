@@ -257,7 +257,7 @@ pub mod fmt {
 pub mod api_definition {
     use crate::model::text::fmt::*;
     use cli_table::{format::Justify, Table};
-    use golem_client::model::{HttpApiDefinitionWithTypeInfo, RouteWithTypeInfo};
+    use golem_client::model::{HttpApiDefinitionResponseData, RouteWithTypeInfo};
     use golem_common::model::ComponentId;
     use golem_common::uri::oss::urn::ComponentUrn;
     use serde::{Deserialize, Serialize};
@@ -301,7 +301,7 @@ pub mod api_definition {
         }
     }
 
-    fn api_definition_fields(def: &HttpApiDefinitionWithTypeInfo) -> Vec<(String, String)> {
+    fn api_definition_fields(def: &HttpApiDefinitionResponseData) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
 
         fields
@@ -320,7 +320,7 @@ pub mod api_definition {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ApiDefinitionGetView(pub HttpApiDefinitionWithTypeInfo);
+    pub struct ApiDefinitionGetView(pub HttpApiDefinitionResponseData);
 
     impl MessageWithFields for ApiDefinitionGetView {
         fn message(&self) -> String {
@@ -337,7 +337,7 @@ pub mod api_definition {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ApiDefinitionAddView(pub HttpApiDefinitionWithTypeInfo);
+    pub struct ApiDefinitionAddView(pub HttpApiDefinitionResponseData);
 
     impl MessageWithFields for ApiDefinitionAddView {
         fn message(&self) -> String {
@@ -354,7 +354,7 @@ pub mod api_definition {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ApiDefinitionUpdateView(pub HttpApiDefinitionWithTypeInfo);
+    pub struct ApiDefinitionUpdateView(pub HttpApiDefinitionResponseData);
 
     impl MessageWithFields for ApiDefinitionUpdateView {
         fn message(&self) -> String {
@@ -371,7 +371,7 @@ pub mod api_definition {
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct ApiDefinitionImportView(pub HttpApiDefinitionWithTypeInfo);
+    pub struct ApiDefinitionImportView(pub HttpApiDefinitionResponseData);
 
     impl MessageWithFields for ApiDefinitionImportView {
         fn message(&self) -> String {
@@ -397,8 +397,8 @@ pub mod api_definition {
         pub route_count: usize,
     }
 
-    impl From<&HttpApiDefinitionWithTypeInfo> for HttpApiDefinitionTableView {
-        fn from(value: &HttpApiDefinitionWithTypeInfo) -> Self {
+    impl From<&HttpApiDefinitionResponseData> for HttpApiDefinitionTableView {
+        fn from(value: &HttpApiDefinitionResponseData) -> Self {
             Self {
                 id: value.id.to_string(),
                 version: value.version.to_string(),
@@ -407,7 +407,7 @@ pub mod api_definition {
         }
     }
 
-    impl TextFormat for Vec<HttpApiDefinitionWithTypeInfo> {
+    impl TextFormat for Vec<HttpApiDefinitionResponseData> {
         fn print(&self) {
             print_table::<_, HttpApiDefinitionTableView>(self);
         }
