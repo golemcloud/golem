@@ -59,10 +59,9 @@ impl SecuritySchemeApi {
             "create",
             security_scheme_identifier = payload.0.scheme_identifier
         );
-        let security_scheme =
-            SecurityScheme::try_from(payload.0).map_err(|err| ApiEndpointError::bad_request(
-               safe(format!("Invalid security scheme {}", err))
-            ))?;
+        let security_scheme = SecurityScheme::try_from(payload.0).map_err(|err| {
+            ApiEndpointError::bad_request(safe(format!("Invalid security scheme {}", err)))
+        })?;
 
         let security_scheme_with_metadata = self
             .security_scheme_service
@@ -70,7 +69,8 @@ impl SecuritySchemeApi {
             .instrument(record.span.clone())
             .await?;
 
-        Ok(Json(SecuritySchemeData::from(security_scheme_with_metadata)))
-
+        Ok(Json(SecuritySchemeData::from(
+            security_scheme_with_metadata,
+        )))
     }
 }

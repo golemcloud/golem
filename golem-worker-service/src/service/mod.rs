@@ -38,10 +38,13 @@ use golem_common::config::RetryConfig;
 use golem_common::config::DbConfig;
 use golem_service_base::db;
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
+use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
 };
-use golem_worker_service_base::service::gateway::security_scheme::DefaultSecuritySchemeService;
+use golem_worker_service_base::service::gateway::security_scheme::{
+    DefaultSecuritySchemeService, SecuritySchemeService,
+};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -50,6 +53,7 @@ use tonic::codec::CompressionEncoding;
 pub struct Services {
     pub worker_service: worker::WorkerService,
     pub component_service: component::ComponentService,
+    pub security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Sync + Send>,
     pub definition_service:
         Arc<dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send>,
     pub deployment_service:
@@ -114,7 +118,10 @@ impl Services {
             UnauthorisedWorkerRequestExecutor::new(worker_service.clone()),
         );
 
-        let (api_definition_repo, api_deployment_repo) = match config.db.clone() {
+        let (api_definition_repo, api_deployment_repo, security_scheme_repo) = match config
+            .db
+            .clone()
+        {
             DbConfig::Postgres(c) => {
                 let db_pool = db::create_postgres_pool(&c)
                     .await
@@ -127,7 +134,15 @@ impl Services {
                     Arc::new(api_deployment::LoggedDeploymentRepo::new(
                         api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
                     ));
-                (api_definition_repo, api_deployment_repo)
+
+                let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+
+                (
+                    api_definition_repo,
+                    api_deployment_repo,
+                    security_scheme_repo,
+                )
             }
             DbConfig::Sqlite(c) => {
                 let db_pool = db::create_sqlite_pool(&c)
@@ -141,7 +156,15 @@ impl Services {
                     Arc::new(api_deployment::LoggedDeploymentRepo::new(
                         api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
                     ));
-                (api_definition_repo, api_deployment_repo)
+
+                let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> =
+                    Arc::new(DbSecuritySchemeRepo::new(db_pool.clone().into()));
+
+                (
+                    api_definition_repo,
+                    api_deployment_repo,
+                    security_scheme_repo,
+                )
             }
         };
 
@@ -183,7 +206,8 @@ impl Services {
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
-        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::default());
+        let security_scheme_service =
+            Arc::new(DefaultSecuritySchemeService::new(security_scheme_repo));
 
         let definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
@@ -191,7 +215,7 @@ impl Services {
             component_service.clone(),
             api_definition_repo.clone(),
             api_deployment_repo.clone(),
-            security_scheme_service,
+            security_scheme_service.clone(),
             api_definition_validator_service.clone(),
         ));
 
@@ -209,6 +233,7 @@ impl Services {
         Ok(Services {
             worker_service,
             definition_service,
+            security_scheme_service,
             deployment_service,
             http_definition_lookup_service,
             worker_to_http_service,

@@ -123,11 +123,11 @@ impl<DB: Database> DbSecuritySchemeRepo<DB> {
     }
 }
 
-pub struct LoggedComponentRepo<Repo: SecuritySchemeRepo> {
+pub struct LoggedSecuritySchemeRepo<Repo: SecuritySchemeRepo> {
     repo: Repo,
 }
 
-impl<Repo: SecuritySchemeRepo> LoggedComponentRepo<Repo> {
+impl<Repo: SecuritySchemeRepo> LoggedSecuritySchemeRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
         Self { repo }
     }
@@ -153,7 +153,7 @@ impl<Repo: SecuritySchemeRepo> LoggedComponentRepo<Repo> {
 }
 
 #[async_trait]
-impl<Repo: SecuritySchemeRepo + Send + Sync> SecuritySchemeRepo for LoggedComponentRepo<Repo> {
+impl<Repo: SecuritySchemeRepo + Send + Sync> SecuritySchemeRepo for LoggedSecuritySchemeRepo<Repo> {
     async fn create(&self, security_scheme_record: &SecuritySchemeRecord) -> Result<(), RepoError> {
         let result = self.repo.create(security_scheme_record).await;
         Self::logged_with_id("create", &security_scheme_record.security_scheme_id, result)

@@ -299,17 +299,18 @@ mod test {
     use super::*;
     use crate::service::component::ComponentService;
     use async_trait::async_trait;
-    use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
     use golem_common::config::DbSqliteConfig;
     use golem_common::model::component_constraint::FunctionConstraintCollection;
     use golem_common::model::ComponentId;
     use golem_service_base::db;
     use golem_service_base::model::Component;
-    use golem_worker_service_base::gateway_security::GoogleIdentityProvider;
     use golem_worker_service_base::repo::api_definition::{
         ApiDefinitionRepo, DbApiDefinitionRepo, LoggedApiDefinitionRepo,
     };
     use golem_worker_service_base::repo::api_deployment;
+    use golem_worker_service_base::repo::security_scheme::{
+        DbSecuritySchemeRepo, LoggedSecuritySchemeRepo, SecuritySchemeRepo,
+    };
     use golem_worker_service_base::service::component::ComponentResult;
     use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionServiceDefault;
     use golem_worker_service_base::service::gateway::http_api_definition_validator::HttpApiDefinitionValidator;
@@ -392,8 +393,12 @@ mod test {
                 api_deployment::DbApiDeploymentRepo::new(db_pool.clone().into()),
             ));
 
+        let security_scheme_repo: Arc<dyn SecuritySchemeRepo + Sync + Send> = Arc::new(
+            LoggedSecuritySchemeRepo::new(DbSecuritySchemeRepo::new(db_pool.clone().into())),
+        );
+
         let security_scheme_service =
-            Arc::new(DefaultSecuritySchemeService::default());
+            Arc::new(DefaultSecuritySchemeService::new(security_scheme_repo));
 
         let component_service: ComponentService = Arc::new(TestComponentService);
         let definition_service = ApiDefinitionServiceDefault::new(

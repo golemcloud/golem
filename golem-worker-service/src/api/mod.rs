@@ -1,8 +1,8 @@
 pub mod api_definition;
 pub mod api_deployment;
+mod security_scheme;
 pub mod worker;
 pub mod worker_connect;
-mod security_scheme;
 
 use crate::api::worker::WorkerApi;
 use crate::service::Services;
@@ -19,6 +19,7 @@ type ApiServices = (
     WorkerApi,
     api_definition::RegisterApiDefinitionApi,
     api_deployment::ApiDeploymentApi,
+    security_scheme::SecuritySchemeApi,
     HealthcheckApi,
 );
 
@@ -61,6 +62,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<ApiServices,
             },
             api_definition::RegisterApiDefinitionApi::new(services.definition_service.clone()),
             api_deployment::ApiDeploymentApi::new(services.deployment_service.clone()),
+            security_scheme::SecuritySchemeApi::new(services.security_scheme_service.clone()),
             HealthcheckApi,
         ),
         "Golem API",
