@@ -57,7 +57,7 @@ impl ToResponse<poem::Response> for FileServerBindingResult {
                 WorkerApiBaseError::from(inner).into_response()
             }
             Err(FileServerBindingError::WorkerServiceError(inner)) => {
-                WorkerApiBaseError::from(inner).into_response(),
+                WorkerApiBaseError::from(inner).into_response()
             }
             Err(FileServerBindingError::InvalidRibResult(e)) => poem::Response::builder()
                 .status(StatusCode::BAD_REQUEST)

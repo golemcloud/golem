@@ -77,10 +77,10 @@ pub struct Services {
             + Sync
             + Send,
     >,
-    pub worker_to_http_service: Arc<dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send>,
-    pub api_definition_validator_service: Arc<
-        dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send,
-    >,
+    pub worker_to_http_service:
+        Arc<dyn GatewayWorkerRequestExecutor<DefaultNamespace> + Sync + Send>,
+    pub api_definition_validator_service:
+        Arc<dyn ApiDefinitionValidatorService<HttpApiDefinition> + Sync + Send>,
     pub fileserver_binding_handler:
         Arc<dyn FileServerBindingHandler<DefaultNamespace> + Sync + Send>,
 }
