@@ -20,7 +20,6 @@ async-trait = { workspace = true }
 clap = { workspace = true }
 console-subscriber = { workspace = true }
 golem-wasm-rpc = { workspace = true }
-plotters = "0.3.6"
 poem = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }

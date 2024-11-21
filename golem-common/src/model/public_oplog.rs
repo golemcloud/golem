@@ -17,7 +17,6 @@ use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
 use crate::model::regions::OplogRegion;
 use crate::model::{AccountId, ComponentVersion, Empty, IdempotencyKey, Timestamp, WorkerId};
-use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{Value, ValueAndType};
 use poem_openapi::types::{ParseFromParameter, ParseResult};
@@ -717,6 +716,7 @@ impl PublicOplogEntry {
     }
 }
 
+#[cfg(feature = "grpc")]
 impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEntry {
     type Error = String;
 
@@ -971,6 +971,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
     }
 }
 
+#[cfg(feature = "grpc")]
 impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEntry {
     type Error = String;
 
@@ -1266,6 +1267,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
     }
 }
 
+#[cfg(feature = "grpc")]
 impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
     for PublicWrappedFunctionType
 {
@@ -1296,6 +1298,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<PublicWrappedFunctionType> for golem_api_grpc::proto::golem::worker::WrappedFunctionType {
     fn from(value: PublicWrappedFunctionType) -> Self {
         match value {
@@ -1333,6 +1336,7 @@ impl From<PublicWrappedFunctionType> for golem_api_grpc::proto::golem::worker::W
     }
 }
 
+#[cfg(feature = "grpc")]
 impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicy> for PublicRetryConfig {
     type Error = String;
 
@@ -1349,6 +1353,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RetryPolicy> for PublicRetryC
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<PublicRetryConfig> for golem_api_grpc::proto::golem::worker::RetryPolicy {
     fn from(value: PublicRetryConfig) -> Self {
         golem_api_grpc::proto::golem::worker::RetryPolicy {
@@ -1361,6 +1366,7 @@ impl From<PublicRetryConfig> for golem_api_grpc::proto::golem::worker::RetryPoli
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<golem_api_grpc::proto::golem::worker::OplogLogLevel> for LogLevel {
     fn from(value: golem_api_grpc::proto::golem::worker::OplogLogLevel) -> Self {
         match value {
@@ -1378,6 +1384,7 @@ impl From<golem_api_grpc::proto::golem::worker::OplogLogLevel> for LogLevel {
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<LogLevel> for golem_api_grpc::proto::golem::worker::OplogLogLevel {
     fn from(value: LogLevel) -> Self {
         match value {
@@ -1395,6 +1402,7 @@ impl From<LogLevel> for golem_api_grpc::proto::golem::worker::OplogLogLevel {
     }
 }
 
+#[cfg(feature = "grpc")]
 impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicWorkerInvocation {
     type Error = String;
 
@@ -1431,6 +1439,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerInvocation> for PublicW
     }
 }
 
+#[cfg(feature = "grpc")]
 impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::WorkerInvocation {
     type Error = String;
 
@@ -1467,6 +1476,7 @@ impl TryFrom<PublicWorkerInvocation> for golem_api_grpc::proto::golem::worker::W
     }
 }
 
+#[cfg(feature = "grpc")]
 impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for PublicUpdateDescription {
     type Error = String;
 
@@ -1486,6 +1496,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for Public
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<PublicUpdateDescription> for golem_api_grpc::proto::golem::worker::UpdateDescription {
     fn from(value: PublicUpdateDescription) -> Self {
         match value {
@@ -1546,6 +1557,7 @@ impl Display for OplogCursor {
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<golem_api_grpc::proto::golem::worker::OplogCursor> for OplogCursor {
     fn from(value: golem_api_grpc::proto::golem::worker::OplogCursor) -> Self {
         Self {
@@ -1555,6 +1567,7 @@ impl From<golem_api_grpc::proto::golem::worker::OplogCursor> for OplogCursor {
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
     fn from(value: OplogCursor) -> Self {
         Self {

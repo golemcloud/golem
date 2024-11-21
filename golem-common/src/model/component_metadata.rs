@@ -79,6 +79,7 @@ pub struct VersionedName {
     pub version: String,
 }
 
+#[cfg(feature = "grpc")]
 impl From<golem_api_grpc::proto::golem::component::VersionedName> for VersionedName {
     fn from(value: golem_api_grpc::proto::golem::component::VersionedName) -> Self {
         Self {
@@ -88,6 +89,7 @@ impl From<golem_api_grpc::proto::golem::component::VersionedName> for VersionedN
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<VersionedName> for golem_api_grpc::proto::golem::component::VersionedName {
     fn from(value: VersionedName) -> Self {
         Self {
@@ -97,6 +99,7 @@ impl From<VersionedName> for golem_api_grpc::proto::golem::component::VersionedN
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<golem_api_grpc::proto::golem::component::ProducerField> for ProducerField {
     fn from(value: golem_api_grpc::proto::golem::component::ProducerField) -> Self {
         Self {
@@ -106,6 +109,7 @@ impl From<golem_api_grpc::proto::golem::component::ProducerField> for ProducerFi
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<ProducerField> for golem_api_grpc::proto::golem::component::ProducerField {
     fn from(value: ProducerField) -> Self {
         Self {
@@ -133,6 +137,7 @@ pub struct Producers {
     pub fields: Vec<ProducerField>,
 }
 
+#[cfg(feature = "grpc")]
 impl From<golem_api_grpc::proto::golem::component::Producers> for Producers {
     fn from(value: golem_api_grpc::proto::golem::component::Producers) -> Self {
         Self {
@@ -141,6 +146,7 @@ impl From<golem_api_grpc::proto::golem::component::Producers> for Producers {
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<Producers> for golem_api_grpc::proto::golem::component::Producers {
     fn from(value: Producers) -> Self {
         Self {
@@ -229,6 +235,7 @@ impl From<golem_wasm_ast::core::Mem> for LinearMemory {
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<golem_api_grpc::proto::golem::component::LinearMemory> for LinearMemory {
     fn from(value: golem_api_grpc::proto::golem::component::LinearMemory) -> Self {
         Self {
@@ -238,6 +245,7 @@ impl From<golem_api_grpc::proto::golem::component::LinearMemory> for LinearMemor
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<LinearMemory> for golem_api_grpc::proto::golem::component::LinearMemory {
     fn from(value: LinearMemory) -> Self {
         Self {
@@ -267,6 +275,7 @@ impl From<RawComponentMetadata> for ComponentMetadata {
     }
 }
 
+#[cfg(feature = "grpc")]
 impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata> for ComponentMetadata {
     type Error = String;
 
@@ -293,6 +302,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata> for Com
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<ComponentMetadata> for golem_api_grpc::proto::golem::component::ComponentMetadata {
     fn from(value: ComponentMetadata) -> Self {
         Self {

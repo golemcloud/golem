@@ -67,6 +67,7 @@ impl ParseFromParameter for DefaultPluginScope {
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<DefaultPluginScope> for golem_api_grpc::proto::golem::component::DefaultPluginScope {
     fn from(scope: DefaultPluginScope) -> Self {
         match scope {
@@ -86,6 +87,7 @@ impl From<DefaultPluginScope> for golem_api_grpc::proto::golem::component::Defau
     }
 }
 
+#[cfg(feature = "grpc")]
 impl TryFrom<golem_api_grpc::proto::golem::component::DefaultPluginScope> for DefaultPluginScope {
     type Error = String;
 
@@ -122,6 +124,7 @@ pub struct PluginInstallation {
     pub parameters: HashMap<String, String>,
 }
 
+#[cfg(feature = "grpc")]
 impl From<PluginInstallation> for golem_api_grpc::proto::golem::component::PluginInstallation {
     fn from(plugin_installation: PluginInstallation) -> Self {
         golem_api_grpc::proto::golem::component::PluginInstallation {

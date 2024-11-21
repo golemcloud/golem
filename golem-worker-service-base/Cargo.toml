@@ -45,8 +45,6 @@ mime_guess = "2.0.5"
 nom = { workspace = true }
 openapiv3 = { workspace = true }
 opentelemetry = { workspace = true }
-opentelemetry-prometheus = { workspace = true }
-opentelemetry_sdk = { workspace = true }
 poem = { workspace = true }
 poem-openapi = { workspace = true }
 prometheus = { workspace = true }
@@ -57,8 +55,6 @@ rustc-hash = "1.1.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
-strum = { workspace = true }
-strum_macros = { workspace = true }
 sqlx = { workspace = true, features = [
     "runtime-tokio",
     "sqlite",
@@ -67,14 +63,11 @@ sqlx = { workspace = true, features = [
     "migrate",
     "chrono",
 ] }
-tap = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tonic = { workspace = true }
-tonic-health = { workspace = true }
-tonic-reflection = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }

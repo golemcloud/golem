@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::config::RetryConfig;
+use crate::retriable_error::IsRetriableError;
 use crate::retries::RetryState;
 use dashmap::DashMap;
 use std::future::Future;
@@ -222,4 +223,32 @@ impl Default for GrpcClientConfig {
 
 fn requires_reconnect(e: &Status) -> bool {
     e.code() == Code::Unavailable
+}
+
+impl IsRetriableError for Status {
+    fn is_retriable(&self) -> bool {
+        match self.code() {
+            Code::Ok
+            | Code::Cancelled
+            | Code::InvalidArgument
+            | Code::NotFound
+            | Code::AlreadyExists
+            | Code::PermissionDenied
+            | Code::FailedPrecondition
+            | Code::OutOfRange
+            | Code::Unimplemented
+            | Code::DataLoss
+            | Code::Unauthenticated => false,
+            Code::Unknown
+            | Code::DeadlineExceeded
+            | Code::ResourceExhausted
+            | Code::Aborted
+            | Code::Internal
+            | Code::Unavailable => true,
+        }
+    }
+
+    fn as_loggable(&self) -> Option<String> {
+        Some(self.to_string())
+    }
 }

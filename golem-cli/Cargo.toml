@@ -24,10 +24,10 @@ harness = false
 
 [dependencies]
 golem-client = { path = "../golem-client", version = "0.0.0" }
-golem-common = { path = "../golem-common", version = "0.0.0" }
+golem-common = { path = "../golem-common", version = "0.0.0", default-features = false }
 golem-rib = { path = "../golem-rib", version = "0.0.0" }
 
-anyhow.workspace = true
+anyhow { }workspace = true }
 assert2 = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
@@ -57,7 +57,6 @@ itertools = { workspace = true }
 lenient_bool = "0.1.1"
 log = { version = "0.4.22" }
 native-tls = "0.2.11"
-openapiv3 = { workspace = true }
 phf = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
@@ -87,7 +86,6 @@ wasm-wave = { workspace = true }
 golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
 
 async-recursion = "1.0.5"
-env_logger = "0.11.1"
 log = "0.4.20"
 postgres = { workspace = true }
 rand = { workspace = true }
@@ -99,7 +97,6 @@ testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
 tokio-postgres = { workspace = true }
 tonic = { workspace = true }
-tonic-health = { workspace = true }
 strip-ansi-escapes = "0.2.0"
 
 [features]

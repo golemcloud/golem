@@ -59,6 +59,7 @@ macro_rules! newtype_uuid {
             }
         }
 
+        #[cfg(feature = "grpc")]
         impl TryFrom<$proto_type> for $name {
             type Error = String;
 
@@ -72,6 +73,7 @@ macro_rules! newtype_uuid {
             }
         }
 
+        #[cfg(feature = "grpc")]
         impl From<$name> for $proto_type {
             fn from(value: $name) -> Self {
                 $proto_type {

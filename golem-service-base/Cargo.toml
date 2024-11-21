@@ -61,10 +61,7 @@ url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-golem-test-framework = { path = "../golem-test-framework", version = "0.0.0" }
-
 assert2 = { workspace = true }
-proptest = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
 testcontainers = { workspace = true }

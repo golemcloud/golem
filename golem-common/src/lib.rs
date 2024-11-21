@@ -16,11 +16,16 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 
 pub mod cache;
+
+#[cfg(feature = "grpc")]
 pub mod client;
 pub mod config;
 
 pub mod golem_version;
+
+#[cfg(feature = "grpc")]
 pub mod grpc;
+
 pub mod json_yaml;
 pub mod metrics;
 pub mod model;

@@ -235,6 +235,7 @@ pub struct IndexedResourceKey {
     pub resource_params: Vec<String>,
 }
 
+#[cfg(feature = "grpc")]
 impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
     fn from(value: IndexedResourceKey) -> Self {
         golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
@@ -244,6 +245,7 @@ impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedR
     }
 }
 
+#[cfg(feature = "grpc")]
 impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
     fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
         IndexedResourceKey {
