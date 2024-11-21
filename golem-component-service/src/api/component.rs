@@ -12,159 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::api::{ComponentError, Result};
 use futures_util::TryStreamExt;
-use golem_common::model::{ComponentFilePathWithPermissionsList, ComponentId, ComponentType};
-use golem_component_service_base::model::InitialComponentFilesArchiveAndPermissions;
-use golem_component_service_base::service::component::{
-    ComponentError as ComponentServiceError, ComponentService,
+use golem_common::model::component::DefaultComponentOwner;
+use golem_common::model::plugin::{
+    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
 };
+use golem_common::model::ComponentFilePathWithPermissionsList;
+use golem_common::model::{ComponentId, ComponentType, Empty, PluginInstallationId};
+use golem_common::recorded_http_api_request;
+use golem_component_service_base::model::{
+    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+};
+use golem_component_service_base::service::component::ComponentService;
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::auth::DefaultNamespace;
 use golem_service_base::model::*;
-use poem::error::ReadBodyError;
 use poem::Body;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
 use poem_openapi::types::multipart::Upload;
 use poem_openapi::*;
-use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::Instrument;
 
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::{recorded_http_api_request, SafeDisplay};
-
-#[derive(ApiResponse, Debug, Clone)]
-pub enum ComponentError {
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    #[oai(status = 403)]
-    LimitExceeded(Json<ErrorBody>),
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    #[oai(status = 409)]
-    AlreadyExists(Json<ErrorBody>),
-    #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
-}
-
-impl TraceErrorKind for ComponentError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            ComponentError::BadRequest(_) => "BadRequest",
-            ComponentError::NotFound(_) => "NotFound",
-            ComponentError::AlreadyExists(_) => "AlreadyExists",
-            ComponentError::LimitExceeded(_) => "LimitExceeded",
-            ComponentError::Unauthorized(_) => "Unauthorized",
-            ComponentError::InternalError(_) => "InternalError",
-        }
-    }
-}
-
-#[derive(Multipart)]
-#[oai(rename_all = "camelCase")]
-pub struct UploadPayload {
-    name: ComponentName,
-    component_type: Option<ComponentType>,
-    component: Upload,
-    files_permissions: Option<ComponentFilePathWithPermissionsList>,
-    files: Option<Upload>,
-}
-
-#[derive(Multipart)]
-#[oai(rename_all = "camelCase")]
-pub struct UpdatePayload {
-    component_type: Option<ComponentType>,
-    component: Upload,
-    files_permissions: Option<ComponentFilePathWithPermissionsList>,
-    files: Option<Upload>,
-}
-
-type Result<T> = std::result::Result<T, ComponentError>;
-
-impl From<ComponentServiceError> for ComponentError {
-    fn from(error: ComponentServiceError) -> Self {
-        match error {
-            ComponentServiceError::UnknownComponentId(_)
-            | ComponentServiceError::UnknownVersionedComponentId(_) => {
-                ComponentError::NotFound(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::AlreadyExists(_) => {
-                ComponentError::AlreadyExists(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::ComponentProcessingError(error) => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                }))
-            }
-            ComponentServiceError::InternalRepoError(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::InternalConversionError { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::ComponentStoreError { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::ComponentConstraintConflictError(_) => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                }))
-            }
-            ComponentServiceError::ComponentConstraintCreateError(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::MalformedComponentArchiveError { .. } => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![error.to_safe_string()],
-                }))
-            }
-            ComponentServiceError::InitialComponentFileUploadError { .. } => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::InitialComponentFileNotFound { .. } => {
-                ComponentError::NotFound(Json(ErrorBody {
-                    error: error.to_safe_string(),
-                }))
-            }
-        }
-    }
-}
-
-impl From<ReadBodyError> for ComponentError {
-    fn from(value: ReadBodyError) -> Self {
-        ComponentError::InternalError(Json(ErrorBody {
-            error: value.to_string(),
-        }))
-    }
-}
-
-impl From<std::io::Error> for ComponentError {
-    fn from(value: std::io::Error) -> Self {
-        ComponentError::InternalError(Json(ErrorBody {
-            error: value.to_string(),
-        }))
-    }
-}
-
 pub struct ComponentApi {
-    pub component_service: Arc<dyn ComponentService<DefaultNamespace> + Sync + Send>,
+    pub component_service: Arc<dyn ComponentService<DefaultComponentOwner> + Sync + Send>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
@@ -202,7 +74,7 @@ impl ComponentApi {
                     payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
                     files,
-                    &DefaultNamespace::default(),
+                    &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
                 .await
@@ -222,7 +94,6 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         wasm: Binary<Body>,
-
         /// Type of the new version of the component - if not specified, the type of the previous version
         /// is used.
         component_type: Query<Option<ComponentType>>,
@@ -240,7 +111,7 @@ impl ComponentApi {
                     data,
                     component_type.0,
                     None,
-                    &DefaultNamespace::default(),
+                    &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
                 .await
@@ -284,7 +155,7 @@ impl ComponentApi {
                     data,
                     payload.component_type,
                     files,
-                    &DefaultNamespace::default(),
+                    &DefaultComponentOwner,
                 )
                 .instrument(record.span.clone())
                 .await
@@ -314,7 +185,7 @@ impl ComponentApi {
         );
         let response = self
             .component_service
-            .download_stream(&component_id.0, version.0, &DefaultNamespace::default())
+            .download_stream(&component_id.0, version.0, &DefaultComponentOwner)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -353,7 +224,7 @@ impl ComponentApi {
 
         let response = self
             .component_service
-            .get(&component_id.0, &DefaultNamespace::default())
+            .get(&component_id.0, &DefaultComponentOwner)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -372,8 +243,8 @@ impl ComponentApi {
     )]
     async fn get_component_metadata(
         &self,
-        #[oai(name = "component_id")] component_id: Path<ComponentId>,
-        #[oai(name = "version")] version: Path<String>,
+        component_id: Path<ComponentId>,
+        version: Path<String>,
     ) -> Result<Json<Component>> {
         let record = recorded_http_api_request!(
             "get_component_metadata",
@@ -382,11 +253,7 @@ impl ComponentApi {
         );
 
         let response = {
-            let version_int = version.0.parse::<u64>().map_err(|_| {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec!["Invalid version".to_string()],
-                }))
-            })?;
+            let version_int = Self::parse_version_path_segment(&version.0)?;
 
             let versioned_component_id = VersionedComponentId {
                 component_id: component_id.0,
@@ -394,7 +261,7 @@ impl ComponentApi {
             };
 
             self.component_service
-                .get_by_version(&versioned_component_id, &DefaultNamespace::default())
+                .get_by_version(&versioned_component_id, &DefaultComponentOwner)
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
@@ -428,7 +295,7 @@ impl ComponentApi {
 
         let response = self
             .component_service
-            .get_latest_version(&component_id.0, &DefaultNamespace::default())
+            .get_latest_version(&component_id.0, &DefaultComponentOwner)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -457,7 +324,7 @@ impl ComponentApi {
 
         let response = self
             .component_service
-            .find_by_name(component_name.0, &DefaultNamespace::default())
+            .find_by_name(component_name.0, &DefaultComponentOwner)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -465,4 +332,151 @@ impl ComponentApi {
 
         record.result(response)
     }
+
+    /// Gets the list of plugins installed for the given component version
+    #[oai(
+        path = "/:component_id/versions/:version/plugins/installs",
+        method = "get",
+        operation_id = "get_installed_plugins"
+    )]
+    async fn get_installed_plugins(
+        &self,
+        component_id: Path<ComponentId>,
+        version: Path<String>,
+    ) -> Result<Json<Vec<PluginInstallation>>> {
+        let record = recorded_http_api_request!(
+            "get_installed_plugins",
+            component_id = component_id.0.to_string(),
+            version = version.0,
+        );
+
+        let version_int = Self::parse_version_path_segment(&version.0)?;
+
+        let response = self
+            .component_service
+            .get_plugin_installations_for_component(
+                &DefaultComponentOwner,
+                &component_id.0,
+                version_int,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
+    }
+
+    /// Installs a new plugin for this component
+    #[oai(
+        path = "/:component_id/latest/plugins/installs",
+        method = "post",
+        operation_id = "install_plugin"
+    )]
+    async fn install_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        plugin: Json<PluginInstallationCreation>,
+    ) -> Result<Json<PluginInstallation>> {
+        let record = recorded_http_api_request!(
+            "install_plugin",
+            component_id = component_id.0.to_string(),
+            plugin_name = plugin.name.clone(),
+            plugin_version = plugin.version.clone()
+        );
+
+        let response = self
+            .component_service
+            .create_plugin_installation_for_component(
+                &DefaultComponentOwner,
+                &component_id.0,
+                plugin.0,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
+    }
+
+    /// Updates the priority or parameters of a plugin installation
+    #[oai(
+        path = "/:component_id/versions/latest/plugins/installs/:installation_id",
+        method = "put",
+        operation_id = "update_installed_plugin"
+    )]
+    async fn update_installed_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        installation_id: Path<PluginInstallationId>,
+        update: Json<PluginInstallationUpdate>,
+    ) -> Result<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "update_installed_plugin",
+            component_id = component_id.0.to_string(),
+            installation_id = installation_id.0.to_string()
+        );
+
+        let response = self
+            .component_service
+            .update_plugin_installation_for_component(
+                &DefaultComponentOwner,
+                &installation_id.0,
+                &component_id.0,
+                update.0,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
+
+        record.result(response)
+    }
+
+    /// Uninstalls a plugin from this component
+    #[oai(
+        path = "/:component_id/latest/plugins/installs/:installation_id",
+        method = "delete",
+        operation_id = "uninstall_plugin"
+    )]
+    async fn uninstall_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        installation_id: Path<PluginInstallationId>,
+    ) -> Result<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "uninstall_plugin",
+            component_id = component_id.0.to_string(),
+            installation_id = installation_id.0.to_string()
+        );
+
+        let response = self
+            .component_service
+            .delete_plugin_installation_for_component(
+                &DefaultComponentOwner,
+                &installation_id.0,
+                &component_id.0,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
+
+        record.result(response)
+    }
+
+    fn parse_version_path_segment(version: &str) -> Result<u64> {
+        version.parse::<u64>().map_err(|_| {
+            ComponentError::BadRequest(Json(ErrorsBody {
+                errors: vec!["Invalid version".to_string()],
+            }))
+        })
+    }
+}
+
+#[derive(Multipart)]
+#[oai(rename_all = "camelCase")]
+pub struct UploadPayload {
+    name: ComponentName,
+    component_type: Option<ComponentType>,
+    component: Upload,
+    files_permissions: Option<ComponentFilePathWithPermissionsList>,
+    files: Option<Upload>,
 }

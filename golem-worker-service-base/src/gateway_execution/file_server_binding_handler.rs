@@ -1,3 +1,17 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use crate::empty_worker_metadata;
 use crate::gateway_binding::WorkerDetail;
 use crate::getter::{get_response_headers_or_default, get_status_code, GetterExt};
@@ -55,14 +69,14 @@ pub struct FileServerBindingDetails {
 pub struct DefaultFileServerBindingHandler {
     component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
-    worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
+    worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
 impl DefaultFileServerBindingHandler {
     pub fn new(
         component_service: Arc<dyn ComponentService<EmptyAuthCtx> + Sync + Send>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
-        worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
+        worker_service: Arc<dyn WorkerService + Sync + Send>,
     ) -> Self {
         DefaultFileServerBindingHandler {
             component_service,
@@ -145,7 +159,6 @@ impl<Namespace: HasAccountId + Send + Sync + 'static> FileServerBindingHandler<N
                     &worker_id,
                     binding_details.file_path.clone(),
                     empty_worker_metadata(),
-                    &EmptyAuthCtx(),
                 )
                 .await
                 .map_err(FileServerBindingError::WorkerServiceError)?;

@@ -1,48 +1,47 @@
+// Copyright 2024 Golem Cloud
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use golem_service_base::auth::EmptyAuthCtx;
+use golem_common::model::TargetWorkerId;
+use golem_service_base::auth::DefaultNamespace;
+use golem_service_base::model::validate_worker_name;
+use golem_worker_service_base::empty_worker_metadata;
 use golem_worker_service_base::gateway_execution::{
     GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
     WorkerResponse,
 };
 use golem_worker_service_base::service::worker::WorkerService;
+use tracing::{debug, info};
 
 // The open source deviates from the proprietary codebase here, only in terms of authorisation
 pub struct UnauthorisedWorkerRequestExecutor {
-    pub worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>,
+    pub worker_service: Arc<dyn WorkerService + Sync + Send>,
 }
 
 impl UnauthorisedWorkerRequestExecutor {
-    pub fn new(worker_service: Arc<dyn WorkerService<EmptyAuthCtx> + Sync + Send>) -> Self {
+    pub fn new(worker_service: Arc<dyn WorkerService + Sync + Send>) -> Self {
         Self { worker_service }
     }
 }
 
 #[async_trait]
-impl GatewayWorkerRequestExecutor for UnauthorisedWorkerRequestExecutor {
+impl GatewayWorkerRequestExecutor<DefaultNamespace> for UnauthorisedWorkerRequestExecutor {
     async fn execute(
         &self,
-        worker_request_params: GatewayResolvedWorkerRequest,
-    ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        internal::execute(self, worker_request_params.clone()).await
-    }
-}
-
-mod internal {
-    use super::UnauthorisedWorkerRequestExecutor;
-    use golem_worker_service_base::empty_worker_metadata;
-
-    use golem_common::model::TargetWorkerId;
-    use golem_service_base::model::validate_worker_name;
-    use golem_worker_service_base::gateway_execution::{
-        GatewayResolvedWorkerRequest, WorkerRequestExecutorError, WorkerResponse,
-    };
-    use tracing::{debug, info};
-
-    pub(crate) async fn execute(
-        default_executor: &UnauthorisedWorkerRequestExecutor,
-        worker_request_params: GatewayResolvedWorkerRequest,
+        worker_request_params: GatewayResolvedWorkerRequest<DefaultNamespace>,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
         let worker_name_opt_validated = worker_request_params
             .worker_name
@@ -92,7 +91,7 @@ mod internal {
             "Invocation parameters"
         );
 
-        let type_annotated_value = default_executor
+        let type_annotated_value = self
             .worker_service
             .validate_and_invoke_and_await_typed(
                 &worker_id,

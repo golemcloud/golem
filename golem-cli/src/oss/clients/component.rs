@@ -12,20 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::HashMap;
 use std::io::Read;
 
 use async_trait::async_trait;
 use golem_client::model::ComponentFilePathWithPermissionsList;
 
 use crate::clients::component::ComponentClient;
-use golem_common::uri::oss::urn::ComponentUrn;
-use tokio::fs::File;
-use tracing::info;
-
 use crate::model::component::Component;
 use crate::model::{ComponentName, GolemError, PathBufOrStdin};
 use crate::oss::model::OssContext;
+use golem_client::model::{PluginInstallation, PluginInstallationCreation};
+use golem_common::uri::oss::urn::ComponentUrn;
 use std::path::Path;
+use tokio::fs::File;
+use tracing::info;
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct ComponentClientLive<C: golem_client::api::ComponentClient + Sync + Send> {
@@ -193,5 +195,56 @@ impl<C: golem_client::api::ComponentClient + Sync + Send> ComponentClient
         };
 
         Ok(component.into())
+    }
+
+    async fn install_plugin(
+        &self,
+        urn: &ComponentUrn,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i32,
+        parameters: HashMap<String, String>,
+    ) -> Result<PluginInstallation, GolemError> {
+        info!("Installing plugin {plugin_name} version {plugin_version} to {urn}");
+
+        Ok(self
+            .client
+            .install_plugin(
+                &urn.id.0,
+                &PluginInstallationCreation {
+                    name: plugin_name.to_string(),
+                    version: plugin_version.to_string(),
+                    priority,
+                    parameters,
+                },
+            )
+            .await?)
+    }
+
+    async fn get_installations(
+        &self,
+        urn: &ComponentUrn,
+        version: u64,
+    ) -> Result<Vec<PluginInstallation>, GolemError> {
+        info!("Getting plugin installations for {urn} version {version}");
+
+        Ok(self
+            .client
+            .get_installed_plugins(&urn.id.0, &version.to_string())
+            .await?)
+    }
+
+    async fn uninstall_plugin(
+        &self,
+        urn: &ComponentUrn,
+        installation_id: &Uuid,
+    ) -> Result<(), GolemError> {
+        info!("Uninstalling plugin {installation_id} from {urn}");
+
+        self.client
+            .uninstall_plugin(&urn.id.0, installation_id)
+            .await?;
+
+        Ok(())
     }
 }

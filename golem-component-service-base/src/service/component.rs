@@ -16,37 +16,45 @@ use async_zip::ZipEntry;
 use bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
-use std::num::TryFromIntError;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::vec;
 
-use crate::model::{Component, ComponentConstraints, InitialComponentFilesArchiveAndPermissions};
+use crate::model::ComponentPluginInstallationTarget;
+use crate::model::InitialComponentFilesArchiveAndPermissions;
+use crate::model::{Component, ComponentConstraints};
+use crate::repo::component::{record_metadata_serde, ComponentRecord, FileRecord};
 use crate::repo::component::{ComponentConstraintsRecord, ComponentRepo};
 use crate::service::component_compilation::ComponentCompilationService;
+use crate::service::component_object_store::ComponentObjectStore;
+use crate::service::plugin::PluginError;
 use async_trait::async_trait;
 use async_zip::tokio::read::seek::ZipFileReader;
-use chrono::Utc;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::component::v1::component_error;
+use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_constraint::FunctionConstraintCollection;
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
-use golem_common::model::AccountId;
+use golem_common::model::plugin::{
+    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+};
+use golem_common::model::ComponentVersion;
+use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, HasAccountId,
-    InitialComponentFile, InitialComponentFileKey,
+    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
+    InitialComponentFileKey,
 };
 use golem_common::SafeDisplay;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
+use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
-use golem_service_base::service::component_object_store::ComponentObjectStore;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm_ast::analysis::AnalysedType;
 use rib::{FunctionTypeRegistry, RegistryKey, RegistryValue};
 use tap::TapFallible;
 use tokio::io::BufReader;
 use tokio_stream::Stream;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {
@@ -64,7 +72,8 @@ pub enum ComponentError {
     InternalConversionError { what: String, error: String },
     #[error("Internal component store error: {message}: {error}")]
     ComponentStoreError { message: String, error: String },
-    #[error("Component Constraint Error. Make sure the component is backward compatible as the functions are already in use:\n{0}")]
+    #[error("Component Constraint Error. Make sure the component is backward compatible as the functions are already in use:\n{0}"
+    )]
     ComponentConstraintConflictError(ConflictReport),
     #[error("Component Constraint Create Error: {0}")]
     ComponentConstraintCreateError(String),
@@ -227,7 +236,7 @@ pub fn create_new_versioned_component_id(component_id: &ComponentId) -> Versione
 }
 
 #[async_trait]
-pub trait ComponentService<Namespace> {
+pub trait ComponentService<Owner: ComponentOwner>: Debug {
     async fn create(
         &self,
         component_id: &ComponentId,
@@ -235,8 +244,8 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError>;
 
     // Files must have been uploaded to the blob store before calling this method
     async fn create_internal(
@@ -246,8 +255,8 @@ pub trait ComponentService<Namespace> {
         component_type: ComponentType,
         data: Vec<u8>,
         files: Vec<InitialComponentFile>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError>;
 
     async fn update(
         &self,
@@ -255,8 +264,8 @@ pub trait ComponentService<Namespace> {
         data: Vec<u8>,
         component_type: Option<ComponentType>,
         files: Option<InitialComponentFilesArchiveAndPermissions>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError>;
 
     // Files must have been uploaded to the blob store before calling this method
     async fn update_internal(
@@ -266,95 +275,119 @@ pub trait ComponentService<Namespace> {
         component_type: Option<ComponentType>,
         // None signals that files should be reused from the previous version
         files: Option<Vec<InitialComponentFile>>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError>;
 
     async fn download(
         &self,
         component_id: &ComponentId,
-        version: Option<u64>,
-        namespace: &Namespace,
+        version: Option<ComponentVersion>,
+        owner: &Owner,
     ) -> Result<Vec<u8>, ComponentError>;
 
     async fn download_stream(
         &self,
         component_id: &ComponentId,
-        version: Option<u64>,
-        namespace: &Namespace,
+        version: Option<ComponentVersion>,
+        owner: &Owner,
     ) -> Result<
         Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
         ComponentError,
     >;
 
-    async fn get_protected_data(
-        &self,
-        component_id: &ComponentId,
-        version: Option<u64>,
-        namespace: &Namespace,
-    ) -> Result<Option<Vec<u8>>, ComponentError>;
-
     async fn find_by_name(
         &self,
         component_name: Option<ComponentName>,
-        namespace: &Namespace,
-    ) -> Result<Vec<Component<Namespace>>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError>;
 
     async fn find_id_by_name(
         &self,
         component_name: &ComponentName,
-        namespace: &Namespace,
+        owner: &Owner,
     ) -> Result<Option<ComponentId>, ComponentError>;
 
     async fn get_by_version(
         &self,
         component_id: &VersionedComponentId,
-        namespace: &Namespace,
-    ) -> Result<Option<Component<Namespace>>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError>;
 
     async fn get_latest_version(
         &self,
         component_id: &ComponentId,
-        namespace: &Namespace,
-    ) -> Result<Option<Component<Namespace>>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError>;
 
     async fn get(
         &self,
         component_id: &ComponentId,
-        namespace: &Namespace,
-    ) -> Result<Vec<Component<Namespace>>, ComponentError>;
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError>;
 
-    async fn get_namespace(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<Option<Namespace>, ComponentError>;
+    async fn get_owner(&self, component_id: &ComponentId) -> Result<Option<Owner>, ComponentError>;
 
-    async fn delete(
-        &self,
-        component_id: &ComponentId,
-        namespace: &Namespace,
-    ) -> Result<(), ComponentError>;
+    async fn delete(&self, component_id: &ComponentId, owner: &Owner)
+        -> Result<(), ComponentError>;
 
     async fn create_or_update_constraint(
         &self,
-        component_constraint: &ComponentConstraints<Namespace>,
-    ) -> Result<ComponentConstraints<Namespace>, ComponentError>;
+        component_constraint: &ComponentConstraints<Owner>,
+    ) -> Result<ComponentConstraints<Owner>, ComponentError>;
 
     async fn get_component_constraint(
         &self,
         component_id: &ComponentId,
+        owner: &Owner,
     ) -> Result<Option<FunctionConstraintCollection>, ComponentError>;
+
+    /// Gets the list of installed plugins for a given component version belonging to `owner`
+    async fn get_plugin_installations_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Vec<PluginInstallation>, PluginError>;
+
+    async fn create_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        installation: PluginInstallationCreation,
+    ) -> Result<PluginInstallation, PluginError>;
+
+    async fn update_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+        update: PluginInstallationUpdate,
+    ) -> Result<(), PluginError>;
+
+    async fn delete_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+    ) -> Result<(), PluginError>;
 }
 
-pub struct ComponentServiceDefault {
-    component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+pub struct ComponentServiceDefault<Owner: ComponentOwner> {
+    component_repo: Arc<dyn ComponentRepo<Owner> + Sync + Send>,
     object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
     component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
 }
 
-impl ComponentServiceDefault {
+impl<Owner: ComponentOwner> Debug for ComponentServiceDefault<Owner> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ComponentServiceDefault").finish()
+    }
+}
+
+impl<Owner: ComponentOwner> ComponentServiceDefault<Owner> {
     pub fn new(
-        component_repo: Arc<dyn ComponentRepo + Sync + Send>,
+        component_repo: Arc<dyn ComponentRepo<Owner> + Sync + Send>,
         object_store: Arc<dyn ComponentObjectStore + Sync + Send>,
         component_compilation: Arc<dyn ComponentCompilationService + Sync + Send>,
         initial_component_files_service: Arc<InitialComponentFilesService>,
@@ -412,682 +445,6 @@ impl ComponentServiceDefault {
             missing_functions,
             conflicting_functions,
         }
-    }
-
-    // All files must be confirmed to be in the blob store before calling this method
-    async fn create_unchecked<Namespace>(
-        &self,
-        component_id: &ComponentId,
-        component_name: &ComponentName,
-        component_type: ComponentType,
-        data: Vec<u8>,
-        uploaded_files: Vec<InitialComponentFile>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError>
-    where
-        Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
-        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
-    {
-        let versioned_component_id = create_new_versioned_component_id(component_id);
-
-        // analyze component before uploading anything so we fail early
-        let component_metadata = ComponentMetadata::analyse_component(&data)
-            .map_err(ComponentError::ComponentProcessingError)?;
-
-        let component_size = data.len() as u64;
-
-        info!(namespace = %namespace,"Uploaded component - exports {:?}", component_metadata.exports);
-
-        let (_, _) = tokio::try_join!(
-            self.upload_user_component(&versioned_component_id, data.clone()),
-            self.upload_protected_component(&versioned_component_id, data)
-        )?;
-
-        let component = Component {
-            component_size,
-            metadata: component_metadata,
-            created_at: Utc::now(),
-            component_type,
-            component_name: component_name.clone(),
-            versioned_component_id: versioned_component_id.clone(),
-            namespace: namespace.clone(),
-            files: uploaded_files.clone(),
-        };
-
-        let record = component
-            .clone()
-            .try_into()
-            .map_err(|e| ComponentError::conversion_error("record", e))?;
-
-        let result = self.component_repo.create(&record).await;
-
-        if let Err(RepoError::UniqueViolation(_)) = result {
-            Err(ComponentError::AlreadyExists(component_id.clone()))?;
-        }
-
-        self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version)
-            .await;
-
-        Ok(component)
-    }
-
-    async fn update_unchecked<Namespace>(
-        &self,
-        component_id: &ComponentId,
-        data: Vec<u8>,
-        component_type: Option<ComponentType>,
-        files: Option<Vec<InitialComponentFile>>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError>
-    where
-        Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync,
-        <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
-    {
-        let created_at = Utc::now();
-
-        let metadata = ComponentMetadata::analyse_component(&data)
-            .map_err(ComponentError::ComponentProcessingError)?;
-
-        info!(namespace = %namespace, "Uploaded component - exports {:?}", metadata.exports);
-
-        let constraints = self.component_repo.get_constraint(component_id).await?;
-
-        let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
-
-        if let Some(constraints) = constraints {
-            let conflicts =
-                Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
-            if !conflicts.is_empty() {
-                return Err(ComponentError::ComponentConstraintConflictError(conflicts));
-            }
-        }
-
-        let next_component = self
-            .component_repo
-            .get_latest_version(&component_id.0)
-            .await?
-            .filter(|c| c.namespace == namespace.to_string())
-            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))
-            .and_then(|c| {
-                c.try_into()
-                    .map_err(|e| ComponentError::conversion_error("record", e))
-            })
-            .map(Component::next_version)?;
-
-        // Fallback to the files from the previous version if no files are provided.
-        let files_to_use = files.unwrap_or_else(|| next_component.files.clone());
-
-        let component_size: u64 = data.len().try_into().map_err(|e: TryFromIntError| {
-            ComponentError::conversion_error("data length", e.to_string())
-        })?;
-
-        let (_, _) = tokio::try_join!(
-            self.upload_user_component(&next_component.versioned_component_id, data.clone()),
-            self.upload_protected_component(&next_component.versioned_component_id, data),
-        )?;
-
-        let component = Component {
-            component_size,
-            metadata,
-            created_at,
-            component_type: component_type.unwrap_or(next_component.component_type),
-            files: files_to_use,
-            ..next_component
-        };
-
-        let record = component
-            .clone()
-            .try_into()
-            .map_err(|e| ComponentError::conversion_error("record", e))?;
-
-        self.component_repo.create(&record).await?;
-
-        self.component_compilation
-            .enqueue_compilation(component_id, component.versioned_component_id.version)
-            .await;
-
-        Ok(component)
-    }
-}
-
-#[derive(Debug)]
-pub struct ConflictingFunction {
-    pub function: RegistryKey,
-    pub existing_parameter_types: Vec<AnalysedType>,
-    pub new_parameter_types: Vec<AnalysedType>,
-    pub existing_result_types: Vec<AnalysedType>,
-    pub new_result_types: Vec<AnalysedType>,
-}
-
-impl Display for ConflictingFunction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Function: {}", self.function)?;
-        writeln!(f, "  Parameter Type Conflict:")?;
-        writeln!(
-            f,
-            "    Existing: {}",
-            internal::convert_to_pretty_types(&self.existing_parameter_types)
-        )?;
-        writeln!(
-            f,
-            "    New:      {}",
-            internal::convert_to_pretty_types(&self.new_parameter_types)
-        )?;
-
-        writeln!(f, "  Result Type Conflict:")?;
-        writeln!(
-            f,
-            "    Existing: {}",
-            internal::convert_to_pretty_types(&self.existing_result_types)
-        )?;
-        writeln!(
-            f,
-            "    New:      {}",
-            internal::convert_to_pretty_types(&self.new_result_types)
-        )?;
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct ConflictReport {
-    pub missing_functions: Vec<RegistryKey>,
-    pub conflicting_functions: Vec<ConflictingFunction>,
-}
-
-impl Display for ConflictReport {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // Handling missing functions
-        writeln!(f, "Missing Functions:")?;
-        if self.missing_functions.is_empty() {
-            writeln!(f, "  None")?;
-        } else {
-            for missing_function in &self.missing_functions {
-                writeln!(f, "  - {}", missing_function)?;
-            }
-        }
-
-        // Handling conflicting functions
-        writeln!(f, "\nFunctions with conflicting types:")?;
-        if self.conflicting_functions.is_empty() {
-            writeln!(f, "  None")?;
-        } else {
-            for conflict in &self.conflicting_functions {
-                writeln!(f, "{}", conflict)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl ConflictReport {
-    pub fn is_empty(&self) -> bool {
-        self.missing_functions.is_empty() && self.conflicting_functions.is_empty()
-    }
-}
-
-#[async_trait]
-impl<Namespace> ComponentService<Namespace> for ComponentServiceDefault
-where
-    Namespace: Display + TryFrom<String> + Eq + Clone + Send + Sync + HasAccountId,
-    <Namespace as TryFrom<String>>::Error: Display + Debug + Send + Sync + 'static,
-{
-    async fn create(
-        &self,
-        component_id: &ComponentId,
-        component_name: &ComponentName,
-        component_type: ComponentType,
-        data: Vec<u8>,
-        files: Option<InitialComponentFilesArchiveAndPermissions>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError> {
-        info!(namespace = %namespace, "Create component");
-
-        self.find_id_by_name(component_name, namespace)
-            .await?
-            .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
-
-        let uploaded_files = match files {
-            Some(files) => {
-                self.upload_component_files(&namespace.account_id(), files)
-                    .await?
-            }
-            None => vec![],
-        };
-
-        self.create_unchecked(
-            component_id,
-            component_name,
-            component_type,
-            data,
-            uploaded_files,
-            namespace,
-        )
-        .await
-    }
-
-    async fn create_internal(
-        &self,
-        component_id: &ComponentId,
-        component_name: &ComponentName,
-        component_type: ComponentType,
-        data: Vec<u8>,
-        files: Vec<InitialComponentFile>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError> {
-        info!(namespace = %namespace, "Create component");
-
-        self.find_id_by_name(component_name, namespace)
-            .await?
-            .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
-
-        for file in &files {
-            let exists = self
-                .initial_component_files_service
-                .exists(&namespace.account_id(), &file.key)
-                .await
-                .map_err(|e| {
-                    ComponentError::initial_component_file_upload_error(
-                        "Error checking if file exists",
-                        e,
-                    )
-                })?;
-
-            if !exists {
-                return Err(ComponentError::initial_component_file_not_found(
-                    &file.path, &file.key,
-                ));
-            }
-        }
-
-        self.create_unchecked(
-            component_id,
-            component_name,
-            component_type,
-            data,
-            files,
-            namespace,
-        )
-        .await
-    }
-
-    async fn update(
-        &self,
-        component_id: &ComponentId,
-        data: Vec<u8>,
-        component_type: Option<ComponentType>,
-        files: Option<InitialComponentFilesArchiveAndPermissions>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError> {
-        info!(namespace = %namespace, "Update component");
-
-        let uploaded_files = match files {
-            Some(files) => Some(
-                self.upload_component_files(&namespace.account_id(), files)
-                    .await?,
-            ),
-            None => None,
-        };
-
-        self.update_unchecked(
-            component_id,
-            data,
-            component_type,
-            uploaded_files,
-            namespace,
-        )
-        .await
-    }
-
-    async fn update_internal(
-        &self,
-        component_id: &ComponentId,
-        data: Vec<u8>,
-        component_type: Option<ComponentType>,
-        files: Option<Vec<InitialComponentFile>>,
-        namespace: &Namespace,
-    ) -> Result<Component<Namespace>, ComponentError> {
-        info!(namespace = %namespace, "Update component");
-
-        for file in files.iter().flatten() {
-            let exists = self
-                .initial_component_files_service
-                .exists(&namespace.account_id(), &file.key)
-                .await
-                .map_err(|e| {
-                    ComponentError::initial_component_file_upload_error(
-                        "Error checking if file exists",
-                        e,
-                    )
-                })?;
-
-            if !exists {
-                return Err(ComponentError::initial_component_file_not_found(
-                    &file.path, &file.key,
-                ));
-            }
-        }
-
-        self.update_unchecked(component_id, data, component_type, files, namespace)
-            .await
-    }
-
-    async fn download(
-        &self,
-        component_id: &ComponentId,
-        version: Option<u64>,
-        namespace: &Namespace,
-    ) -> Result<Vec<u8>, ComponentError> {
-        let versioned_component_id = self
-            .get_versioned_component_id(component_id, version, namespace)
-            .await?
-            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
-
-        info!(namespace = %namespace, "Download component");
-
-        self.object_store
-            .get(&self.get_protected_object_store_key(&versioned_component_id))
-            .await
-            .tap_err(
-                |e| error!(namespace = %namespace, "Error downloading component - error: {}", e),
-            )
-            .map_err(|e| ComponentError::component_store_error("Error downloading component", e))
-    }
-
-    async fn download_stream(
-        &self,
-        component_id: &ComponentId,
-        version: Option<u64>,
-        namespace: &Namespace,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
-        ComponentError,
-    > {
-        let versioned_component_id = self
-            .get_versioned_component_id(component_id, version, namespace)
-            .await?
-            .ok_or(ComponentError::UnknownComponentId(component_id.clone()))?;
-
-        info!(namespace = %namespace, "Download component as stream");
-
-        let stream = self
-            .object_store
-            .get_stream(&self.get_protected_object_store_key(&versioned_component_id))
-            .await;
-
-        Ok(stream)
-    }
-
-    async fn get_protected_data(
-        &self,
-        component_id: &ComponentId,
-        version: Option<u64>,
-        namespace: &Namespace,
-    ) -> Result<Option<Vec<u8>>, ComponentError> {
-        info!(namespace = %namespace, "Get component protected data");
-
-        let versioned_component_id = self
-            .get_versioned_component_id(component_id, version, namespace)
-            .await?;
-
-        match versioned_component_id {
-            Some(versioned_component_id) => {
-                let data = self
-                    .object_store
-                    .get(&self.get_protected_object_store_key(&versioned_component_id))
-                    .await
-                    .tap_err(|e| error!(namespace = %namespace, "Error getting component data - error: {}", e))
-                    .map_err(|e| {
-                        ComponentError::component_store_error( "Error retrieving component", e)
-                    })?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn find_by_name(
-        &self,
-        component_name: Option<ComponentName>,
-        namespace: &Namespace,
-    ) -> Result<Vec<Component<Namespace>>, ComponentError> {
-        info!(namespace = %namespace, "Find component by name");
-
-        let records = match component_name {
-            Some(name) => {
-                self.component_repo
-                    .get_by_name(namespace.to_string().as_str(), &name.0)
-                    .await?
-            }
-            None => {
-                self.component_repo
-                    .get_all(namespace.to_string().as_str())
-                    .await?
-            }
-        };
-
-        let values: Vec<Component<Namespace>> = records
-            .iter()
-            .map(|c| c.clone().try_into())
-            .collect::<Result<Vec<Component<Namespace>>, _>>()
-            .map_err(|e| ComponentError::conversion_error("record", e))?;
-
-        Ok(values)
-    }
-
-    async fn find_id_by_name(
-        &self,
-        component_name: &ComponentName,
-        namespace: &Namespace,
-    ) -> Result<Option<ComponentId>, ComponentError> {
-        info!(namespace = %namespace, "Find component id by name");
-        let records = self
-            .component_repo
-            .get_id_by_name(namespace.to_string().as_str(), &component_name.0)
-            .await?;
-        Ok(records.map(ComponentId))
-    }
-
-    async fn get_by_version(
-        &self,
-        component_id: &VersionedComponentId,
-        namespace: &Namespace,
-    ) -> Result<Option<Component<Namespace>>, ComponentError> {
-        info!(namespace = %namespace, "Get component by version");
-
-        let result = self
-            .component_repo
-            .get_by_version(&component_id.component_id.0, component_id.version)
-            .await?;
-
-        match result {
-            Some(c) if c.namespace == namespace.to_string() => {
-                let value = c
-                    .try_into()
-                    .map_err(|e| ComponentError::conversion_error("record", e))?;
-                Ok(Some(value))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    async fn get_latest_version(
-        &self,
-        component_id: &ComponentId,
-        namespace: &Namespace,
-    ) -> Result<Option<Component<Namespace>>, ComponentError> {
-        info!(namespace = %namespace, "Get latest component");
-        let result = self
-            .component_repo
-            .get_latest_version(&component_id.0)
-            .await?;
-
-        match result {
-            Some(c) if c.namespace == namespace.to_string() => {
-                let value = c
-                    .try_into()
-                    .map_err(|e| ComponentError::conversion_error("record", e))?;
-                Ok(Some(value))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    async fn get(
-        &self,
-        component_id: &ComponentId,
-        namespace: &Namespace,
-    ) -> Result<Vec<Component<Namespace>>, ComponentError> {
-        info!(namespace = %namespace, "Get component");
-        let records = self.component_repo.get(&component_id.0).await?;
-
-        let values: Vec<Component<Namespace>> = records
-            .iter()
-            .filter(|d| d.namespace == namespace.to_string())
-            .map(|c| c.clone().try_into())
-            .collect::<Result<Vec<Component<Namespace>>, _>>()
-            .map_err(|e| ComponentError::conversion_error("record", e))?;
-
-        Ok(values)
-    }
-
-    async fn get_namespace(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<Option<Namespace>, ComponentError> {
-        info!("Get component namespace");
-        let result = self.component_repo.get_namespace(&component_id.0).await?;
-        if let Some(result) = result {
-            let value =
-                result
-                    .clone()
-                    .try_into()
-                    .map_err(|e: <Namespace as TryFrom<String>>::Error| {
-                        ComponentError::conversion_error("namespace", e.to_string())
-                    })?;
-            Ok(Some(value))
-        } else {
-            Ok(None)
-        }
-    }
-
-    async fn delete(
-        &self,
-        component_id: &ComponentId,
-        namespace: &Namespace,
-    ) -> Result<(), ComponentError> {
-        info!(namespace = %namespace, "Delete component");
-
-        let records = self.component_repo.get(&component_id.0).await?;
-
-        let versioned_component_ids: Vec<VersionedComponentId> = records
-            .into_iter()
-            .filter(|d| d.namespace == namespace.to_string())
-            .map(|c| c.into())
-            .collect();
-
-        if !versioned_component_ids.is_empty() {
-            for versioned_component_id in versioned_component_ids {
-                self.object_store
-                    .delete(&self.get_protected_object_store_key(&versioned_component_id))
-                    .await
-                    .map_err(|e| {
-                        ComponentError::component_store_error("Failed to delete component", e)
-                    })?;
-                self.object_store
-                    .delete(&self.get_user_object_store_key(&versioned_component_id))
-                    .await
-                    .map_err(|e| {
-                        ComponentError::component_store_error("Failed to delete component", e)
-                    })?;
-            }
-            self.component_repo
-                .delete(namespace.to_string().as_str(), &component_id.0)
-                .await?;
-            Ok(())
-        } else {
-            Err(ComponentError::UnknownComponentId(component_id.clone()))
-        }
-    }
-
-    async fn create_or_update_constraint(
-        &self,
-        component_constraint: &ComponentConstraints<Namespace>,
-    ) -> Result<ComponentConstraints<Namespace>, ComponentError> {
-        info!(namespace = %component_constraint.namespace, "Create Component Constraint");
-        let component_id = &component_constraint.component_id;
-        let record = ComponentConstraintsRecord::try_from(component_constraint.clone())
-            .map_err(|e| ComponentError::conversion_error("record", e))?;
-
-        self.component_repo
-            .create_or_update_constraint(&record)
-            .await?;
-        let result = self
-            .component_repo
-            .get_constraint(&component_constraint.component_id)
-            .await?
-            .ok_or(ComponentError::ComponentConstraintCreateError(format!(
-                "Failed to create constraints for {}",
-                component_id
-            )))?;
-
-        let component_constraints = ComponentConstraints {
-            namespace: component_constraint.namespace.clone(),
-            component_id: component_id.clone(),
-            constraints: result,
-        };
-
-        Ok(component_constraints)
-    }
-
-    async fn get_component_constraint(
-        &self,
-        component_id: &ComponentId,
-    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
-        let result = self.component_repo.get_constraint(component_id).await?;
-        Ok(result)
-    }
-}
-
-impl ComponentServiceDefault {
-    fn get_user_object_store_key(&self, id: &VersionedComponentId) -> String {
-        format!("{id}:user")
-    }
-
-    fn get_protected_object_store_key(&self, id: &VersionedComponentId) -> String {
-        format!("{id}:protected")
-    }
-
-    async fn upload_user_component(
-        &self,
-        user_component_id: &VersionedComponentId,
-        data: Vec<u8>,
-    ) -> Result<(), ComponentError> {
-        self.object_store
-            .put(&self.get_user_object_store_key(user_component_id), data)
-            .await
-            .map_err(|e| {
-                ComponentError::component_store_error("Failed to upload user component", e)
-            })
-    }
-
-    async fn upload_protected_component(
-        &self,
-        protected_component_id: &VersionedComponentId,
-        data: Vec<u8>,
-    ) -> Result<(), ComponentError> {
-        self.object_store
-            .put(
-                &self.get_protected_object_store_key(protected_component_id),
-                data,
-            )
-            .await
-            .map_err(|e| {
-                ComponentError::component_store_error("Failed to upload protected component", e)
-            })
     }
 
     async fn upload_component_files(
@@ -1196,33 +553,776 @@ impl ComponentServiceDefault {
         Ok(uploaded)
     }
 
-    async fn get_versioned_component_id<Namespace: Display + Clone>(
+    // All files must be confirmed to be in the blob store before calling this method
+    async fn create_unchecked(
         &self,
         component_id: &ComponentId,
-        version: Option<u64>,
-        namespace: &Namespace,
-    ) -> Result<Option<VersionedComponentId>, ComponentError> {
-        let stored = self
+        component_name: &ComponentName,
+        component_type: ComponentType,
+        data: Vec<u8>,
+        uploaded_files: Vec<InitialComponentFile>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        let component = Component::new(
+            component_id.clone(),
+            component_name.clone(),
+            component_type,
+            &data,
+            uploaded_files,
+            owner.clone(),
+        )?;
+
+        info!(owner = %owner,"Uploaded component - exports {:?}",component.metadata.exports
+        );
+        tokio::try_join!(
+            self.upload_user_component(&component, data.clone()),
+            self.upload_protected_component(&component, data)
+        )?;
+
+        let record = ComponentRecord::try_from_model(component.clone(), true)
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        let result = self.component_repo.create(&record).await;
+        if let Err(RepoError::UniqueViolation(_)) = result {
+            Err(ComponentError::AlreadyExists(component_id.clone()))?;
+        }
+
+        self.component_compilation
+            .enqueue_compilation(component_id, component.versioned_component_id.version)
+            .await;
+
+        Ok(component)
+    }
+
+    async fn update_unchecked(
+        &self,
+        component_id: &ComponentId,
+        data: Vec<u8>,
+        component_type: Option<ComponentType>,
+        files: Option<Vec<InitialComponentFile>>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        let metadata = ComponentMetadata::analyse_component(&data)
+            .map_err(ComponentError::ComponentProcessingError)?;
+
+        let constraints = self
             .component_repo
-            .get_latest_version(&component_id.0)
+            .get_constraint(&owner.to_string(), &component_id.0)
             .await?;
 
-        match stored {
-            Some(stored) if stored.namespace == namespace.to_string() => {
-                let stored_version = stored.version as u64;
-                let requested_version = version.unwrap_or(stored_version);
+        let new_type_registry = FunctionTypeRegistry::from_export_metadata(&metadata.exports);
 
-                if requested_version <= stored_version {
-                    Ok(Some(VersionedComponentId {
-                        component_id: component_id.clone(),
-                        version: requested_version,
-                    }))
-                } else {
-                    Ok(None)
-                }
+        if let Some(constraints) = constraints {
+            let conflicts =
+                Self::find_component_metadata_conflicts(&constraints, &new_type_registry);
+            if !conflicts.is_empty() {
+                return Err(ComponentError::ComponentConstraintConflictError(conflicts));
             }
-            _ => Ok(None),
         }
+
+        info!(owner = %owner, "Uploaded component - exports {:?}", metadata.exports);
+
+        let files = files.map(|files| {
+            files
+                .into_iter()
+                .map(|file| {
+                    FileRecord::from_component_id_and_version_and_file(component_id.0, 0, &file)
+                })
+                .collect()
+        });
+
+        let owner_record: Owner::Row = owner.clone().into();
+        let component_record = self
+            .component_repo
+            .update(
+                &owner_record,
+                &owner.to_string(),
+                &component_id.0,
+                data.clone(),
+                record_metadata_serde::serialize(&metadata)
+                    .map_err(|err| ComponentError::conversion_error("metadata", err))?
+                    .to_vec(),
+                component_type.map(|ct| ct as i32),
+                files,
+            )
+            .await?;
+        let mut component: Component<Owner> = component_record
+            .clone()
+            .try_into()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+        let object_store_key = component.versioned_component_id.to_string();
+        component.object_store_key = Some(object_store_key.clone());
+
+        debug!("Result component: {component:?}");
+
+        tokio::try_join!(
+            self.upload_user_component(&component, data.clone()),
+            self.upload_protected_component(&component, data)
+        )?;
+
+        self.component_compilation
+            .enqueue_compilation(component_id, component.versioned_component_id.version)
+            .await;
+
+        self.component_repo
+            .activate(
+                &owner.to_string(),
+                &component_id.0,
+                component.versioned_component_id.version as i64,
+                &object_store_key,
+            )
+            .await?;
+
+        Ok(component)
+    }
+
+    async fn upload_user_component(
+        &self,
+        component: &Component<Owner>,
+        data: Vec<u8>,
+    ) -> Result<(), ComponentError> {
+        self.object_store
+            .put(&component.user_object_store_key(), data)
+            .await
+            .map_err(|e| {
+                ComponentError::component_store_error("Failed to upload user component", e)
+            })
+    }
+
+    async fn upload_protected_component(
+        &self,
+        component: &Component<Owner>,
+        data: Vec<u8>,
+    ) -> Result<(), ComponentError> {
+        self.object_store
+            .put(&component.protected_object_store_key(), data)
+            .await
+            .map_err(|e| {
+                ComponentError::component_store_error("Failed to upload protected component", e)
+            })
+    }
+}
+
+#[async_trait]
+impl<Owner: ComponentOwner> ComponentService<Owner> for ComponentServiceDefault<Owner> {
+    async fn create(
+        &self,
+        component_id: &ComponentId,
+        component_name: &ComponentName,
+        component_type: ComponentType,
+        data: Vec<u8>,
+        files: Option<InitialComponentFilesArchiveAndPermissions>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        info!(owner = %owner, "Create component");
+
+        self.find_id_by_name(component_name, owner)
+            .await?
+            .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
+
+        let uploaded_files = match files {
+            Some(files) => {
+                self.upload_component_files(&owner.account_id(), files)
+                    .await?
+            }
+            None => vec![],
+        };
+
+        self.create_unchecked(
+            component_id,
+            component_name,
+            component_type,
+            data,
+            uploaded_files,
+            owner,
+        )
+        .await
+    }
+
+    async fn create_internal(
+        &self,
+        component_id: &ComponentId,
+        component_name: &ComponentName,
+        component_type: ComponentType,
+        data: Vec<u8>,
+        files: Vec<InitialComponentFile>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        info!(owner = %owner, "Create component");
+
+        self.find_id_by_name(component_name, owner)
+            .await?
+            .map_or(Ok(()), |id| Err(ComponentError::AlreadyExists(id)))?;
+
+        for file in &files {
+            let exists = self
+                .initial_component_files_service
+                .exists(&owner.account_id(), &file.key)
+                .await
+                .map_err(|e| {
+                    ComponentError::initial_component_file_upload_error(
+                        "Error checking if file exists",
+                        e,
+                    )
+                })?;
+
+            if !exists {
+                return Err(ComponentError::initial_component_file_not_found(
+                    &file.path, &file.key,
+                ));
+            }
+        }
+
+        self.create_unchecked(
+            component_id,
+            component_name,
+            component_type,
+            data,
+            files,
+            owner,
+        )
+        .await
+    }
+
+    async fn update(
+        &self,
+        component_id: &ComponentId,
+        data: Vec<u8>,
+        component_type: Option<ComponentType>,
+        files: Option<InitialComponentFilesArchiveAndPermissions>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        info!(owner = %owner, "Update component");
+
+        let uploaded_files = match files {
+            Some(files) => Some(
+                self.upload_component_files(&owner.account_id(), files)
+                    .await?,
+            ),
+            None => None,
+        };
+
+        self.update_unchecked(component_id, data, component_type, uploaded_files, owner)
+            .await
+    }
+
+    async fn update_internal(
+        &self,
+        component_id: &ComponentId,
+        data: Vec<u8>,
+        component_type: Option<ComponentType>,
+        files: Option<Vec<InitialComponentFile>>,
+        owner: &Owner,
+    ) -> Result<Component<Owner>, ComponentError> {
+        info!(owner = %owner, "Update component");
+
+        for file in files.iter().flatten() {
+            let exists = self
+                .initial_component_files_service
+                .exists(&owner.account_id(), &file.key)
+                .await
+                .map_err(|e| {
+                    ComponentError::initial_component_file_upload_error(
+                        "Error checking if file exists",
+                        e,
+                    )
+                })?;
+
+            if !exists {
+                return Err(ComponentError::initial_component_file_not_found(
+                    &file.path, &file.key,
+                ));
+            }
+        }
+
+        self.update_unchecked(component_id, data, component_type, files, owner)
+            .await
+    }
+
+    async fn download(
+        &self,
+        component_id: &ComponentId,
+        version: Option<ComponentVersion>,
+        owner: &Owner,
+    ) -> Result<Vec<u8>, ComponentError> {
+        let component = match version {
+            None => self.get_latest_version(component_id, owner).await?,
+            Some(version) => {
+                self.get_by_version(
+                    &VersionedComponentId {
+                        component_id: component_id.clone(),
+                        version,
+                    },
+                    owner,
+                )
+                .await?
+            }
+        };
+
+        if let Some(component) = component {
+            info!(owner = %owner, component_id = %component.versioned_component_id, "Download component");
+
+            self.object_store
+                .get(&component.protected_object_store_key())
+                .await
+                .tap_err(|e| error!(owner = %owner, "Error downloading component - error: {}", e))
+                .map_err(|e| {
+                    ComponentError::component_store_error("Error downloading component", e)
+                })
+        } else {
+            Err(ComponentError::UnknownComponentId(component_id.clone()))
+        }
+    }
+
+    async fn download_stream(
+        &self,
+        component_id: &ComponentId,
+        version: Option<ComponentVersion>,
+        owner: &Owner,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<Vec<u8>, anyhow::Error>> + Send + Sync>>,
+        ComponentError,
+    > {
+        let component = match version {
+            None => self.get_latest_version(component_id, owner).await?,
+            Some(version) => {
+                self.get_by_version(
+                    &VersionedComponentId {
+                        component_id: component_id.clone(),
+                        version,
+                    },
+                    owner,
+                )
+                .await?
+            }
+        };
+
+        if let Some(component) = component {
+            info!(owner = %owner, component_id = %component.versioned_component_id, "Download component as stream");
+
+            let stream = self
+                .object_store
+                .get_stream(&component.protected_object_store_key())
+                .await;
+
+            Ok(stream)
+        } else {
+            Err(ComponentError::UnknownComponentId(component_id.clone()))
+        }
+    }
+
+    async fn find_by_name(
+        &self,
+        component_name: Option<ComponentName>,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        info!(owner = %owner, "Find component by name");
+
+        let records = match component_name {
+            Some(name) => {
+                self.component_repo
+                    .get_by_name(&owner.to_string(), &name.0)
+                    .await?
+            }
+            None => self.component_repo.get_all(&owner.to_string()).await?,
+        };
+
+        let values: Vec<Component<Owner>> = records
+            .iter()
+            .map(|c| c.clone().try_into())
+            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        Ok(values)
+    }
+
+    async fn find_id_by_name(
+        &self,
+        component_name: &ComponentName,
+        owner: &Owner,
+    ) -> Result<Option<ComponentId>, ComponentError> {
+        info!(owner = %owner, "Find component id by name");
+        let records = self
+            .component_repo
+            .get_id_by_name(&owner.to_string(), &component_name.0)
+            .await?;
+        Ok(records.map(ComponentId))
+    }
+
+    async fn get_by_version(
+        &self,
+        component_id: &VersionedComponentId,
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        info!(owner = %owner, "Get component by version");
+
+        let result = self
+            .component_repo
+            .get_by_version(
+                &owner.to_string(),
+                &component_id.component_id.0,
+                component_id.version,
+            )
+            .await?;
+
+        match result {
+            Some(c) => {
+                let value = c
+                    .try_into()
+                    .map_err(|e| ComponentError::conversion_error("record", e))?;
+                Ok(Some(value))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn get_latest_version(
+        &self,
+        component_id: &ComponentId,
+        owner: &Owner,
+    ) -> Result<Option<Component<Owner>>, ComponentError> {
+        info!(owner = %owner, "Get latest component");
+        let result = self
+            .component_repo
+            .get_latest_version(&owner.to_string(), &component_id.0)
+            .await?;
+
+        match result {
+            Some(c) => {
+                let value = c
+                    .try_into()
+                    .map_err(|e| ComponentError::conversion_error("record", e))?;
+                Ok(Some(value))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn get(
+        &self,
+        component_id: &ComponentId,
+        owner: &Owner,
+    ) -> Result<Vec<Component<Owner>>, ComponentError> {
+        info!(owner = %owner, component_id = %component_id ,"Get component");
+        let records = self
+            .component_repo
+            .get(&owner.to_string(), &component_id.0)
+            .await?;
+
+        let values: Vec<Component<Owner>> = records
+            .iter()
+            .map(|c| c.clone().try_into())
+            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        Ok(values)
+    }
+
+    async fn get_owner(&self, component_id: &ComponentId) -> Result<Option<Owner>, ComponentError> {
+        info!(component_id = %component_id, "Get component owner");
+        let result = self.component_repo.get_namespace(&component_id.0).await?;
+        if let Some(result) = result {
+            let value = result
+                .parse()
+                .map_err(|e| ComponentError::conversion_error("namespace", e))?;
+            Ok(Some(value))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn delete(
+        &self,
+        component_id: &ComponentId,
+        owner: &Owner,
+    ) -> Result<(), ComponentError> {
+        info!(owner = %owner, component_id = %component_id, "Delete component");
+
+        let records = self
+            .component_repo
+            .get(&owner.to_string(), &component_id.0)
+            .await?;
+        let components = records
+            .iter()
+            .map(|c| c.clone().try_into())
+            .collect::<Result<Vec<Component<Owner>>, _>>()
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        let mut object_store_keys = Vec::new();
+
+        for component in components {
+            if component.owns_stored_object() {
+                object_store_keys.push(component.protected_object_store_key());
+                object_store_keys.push(component.user_object_store_key());
+            }
+        }
+
+        if !object_store_keys.is_empty() {
+            for key in object_store_keys {
+                self.object_store.delete(&key).await.map_err(|e| {
+                    ComponentError::component_store_error("Failed to delete component data", e)
+                })?;
+            }
+            self.component_repo
+                .delete(&owner.to_string(), &component_id.0)
+                .await?;
+            Ok(())
+        } else {
+            Err(ComponentError::UnknownComponentId(component_id.clone()))
+        }
+    }
+
+    async fn create_or_update_constraint(
+        &self,
+        component_constraint: &ComponentConstraints<Owner>,
+    ) -> Result<ComponentConstraints<Owner>, ComponentError> {
+        info!(owner = %component_constraint.owner, component_id = %component_constraint.component_id, "Create or update component constraint");
+        let component_id = &component_constraint.component_id;
+        let record = ComponentConstraintsRecord::try_from(component_constraint.clone())
+            .map_err(|e| ComponentError::conversion_error("record", e))?;
+
+        self.component_repo
+            .create_or_update_constraint(&record)
+            .await?;
+        let result = self
+            .component_repo
+            .get_constraint(
+                &component_constraint.owner.to_string(),
+                &component_constraint.component_id.0,
+            )
+            .await?
+            .ok_or(ComponentError::ComponentConstraintCreateError(format!(
+                "Failed to create constraints for {}",
+                component_id
+            )))?;
+
+        let component_constraints = ComponentConstraints {
+            owner: component_constraint.owner.clone(),
+            component_id: component_id.clone(),
+            constraints: result,
+        };
+
+        Ok(component_constraints)
+    }
+
+    async fn get_component_constraint(
+        &self,
+        component_id: &ComponentId,
+        owner: &Owner,
+    ) -> Result<Option<FunctionConstraintCollection>, ComponentError> {
+        info!(component_id = %component_id, "Get component constraint");
+
+        let result = self
+            .component_repo
+            .get_constraint(&owner.to_string(), &component_id.0)
+            .await?;
+        Ok(result)
+    }
+
+    async fn get_plugin_installations_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        component_version: ComponentVersion,
+    ) -> Result<Vec<PluginInstallation>, PluginError> {
+        let owner_record: Owner::Row = owner.clone().into();
+        let plugin_owner_record = owner_record.into();
+        let records = self
+            .component_repo
+            .get_installed_plugins(&plugin_owner_record, &component_id.0, component_version)
+            .await?;
+
+        records
+            .into_iter()
+            .map(PluginInstallation::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| PluginError::conversion_error("plugin installation", e))
+    }
+
+    async fn create_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        component_id: &ComponentId,
+        installation: PluginInstallationCreation,
+    ) -> Result<PluginInstallation, PluginError> {
+        let owner: Owner::Row = owner.clone().into();
+        let plugin_owner = owner.into();
+
+        let latest = self
+            .component_repo
+            .get_latest_version(&plugin_owner.to_string(), &component_id.0)
+            .await?;
+
+        if let Some(latest) = latest {
+            let installation = installation.with_generated_id();
+            let record = PluginInstallationRecord {
+                installation_id: installation.id.0,
+                plugin_name: installation.name.clone(),
+                plugin_version: installation.version.clone(),
+                priority: installation.priority,
+                parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
+                    PluginError::conversion_error("plugin installation parameters", e.to_string())
+                })?,
+                target: ComponentPluginInstallationTarget {
+                    component_id: component_id.clone(),
+                    component_version: latest.version as u64,
+                }
+                .into(),
+                owner: plugin_owner,
+            };
+
+            self.component_repo.install_plugin(&record).await?;
+
+            Ok(installation)
+        } else {
+            Err(PluginError::ComponentNotFound {
+                component_id: component_id.clone(),
+            })
+        }
+    }
+
+    async fn update_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+        update: PluginInstallationUpdate,
+    ) -> Result<(), PluginError> {
+        let owner_record: Owner::Row = owner.clone().into();
+        let plugin_owner_record = owner_record.into();
+
+        let latest = self
+            .component_repo
+            .get_latest_version(&owner.to_string(), &component_id.0)
+            .await?;
+
+        if latest.is_some() {
+            self.component_repo
+                .update_plugin_installation(
+                    &plugin_owner_record,
+                    &component_id.0,
+                    &installation_id.0,
+                    update.priority,
+                    serde_json::to_vec(&update.parameters).map_err(|e| {
+                        PluginError::conversion_error(
+                            "plugin installation parameters",
+                            e.to_string(),
+                        )
+                    })?,
+                )
+                .await?;
+
+            Ok(())
+        } else {
+            Err(PluginError::ComponentNotFound {
+                component_id: component_id.clone(),
+            })
+        }
+    }
+
+    async fn delete_plugin_installation_for_component(
+        &self,
+        owner: &Owner,
+        installation_id: &PluginInstallationId,
+        component_id: &ComponentId,
+    ) -> Result<(), PluginError> {
+        let owner_record: Owner::Row = owner.clone().into();
+        let plugin_owner_record = owner_record.into();
+
+        let latest = self
+            .component_repo
+            .get_latest_version(&owner.to_string(), &component_id.0)
+            .await?;
+
+        if latest.is_some() {
+            self.component_repo
+                .uninstall_plugin(&plugin_owner_record, &component_id.0, &installation_id.0)
+                .await?;
+
+            Ok(())
+        } else {
+            Err(PluginError::ComponentNotFound {
+                component_id: component_id.clone(),
+            })
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConflictingFunction {
+    pub function: RegistryKey,
+    pub existing_parameter_types: Vec<AnalysedType>,
+    pub new_parameter_types: Vec<AnalysedType>,
+    pub existing_result_types: Vec<AnalysedType>,
+    pub new_result_types: Vec<AnalysedType>,
+}
+
+impl Display for ConflictingFunction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Function: {}", self.function)?;
+        writeln!(f, "  Parameter Type Conflict:")?;
+        writeln!(
+            f,
+            "    Existing: {}",
+            internal::convert_to_pretty_types(&self.existing_parameter_types)
+        )?;
+        writeln!(
+            f,
+            "    New:      {}",
+            internal::convert_to_pretty_types(&self.new_parameter_types)
+        )?;
+
+        writeln!(f, "  Result Type Conflict:")?;
+        writeln!(
+            f,
+            "    Existing: {}",
+            internal::convert_to_pretty_types(&self.existing_result_types)
+        )?;
+        writeln!(
+            f,
+            "    New:      {}",
+            internal::convert_to_pretty_types(&self.new_result_types)
+        )?;
+
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct ConflictReport {
+    pub missing_functions: Vec<RegistryKey>,
+    pub conflicting_functions: Vec<ConflictingFunction>,
+}
+
+impl Display for ConflictReport {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Handling missing functions
+        writeln!(f, "Missing Functions:")?;
+        if self.missing_functions.is_empty() {
+            writeln!(f, "  None")?;
+        } else {
+            for missing_function in &self.missing_functions {
+                writeln!(f, "  - {}", missing_function)?;
+            }
+        }
+
+        // Handling conflicting functions
+        writeln!(f, "\nFunctions with conflicting types:")?;
+        if self.conflicting_functions.is_empty() {
+            writeln!(f, "  None")?;
+        } else {
+            for conflict in &self.conflicting_functions {
+                writeln!(f, "{}", conflict)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl ConflictReport {
+    pub fn is_empty(&self) -> bool {
+        self.missing_functions.is_empty() && self.conflicting_functions.is_empty()
     }
 }
 

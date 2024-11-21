@@ -12,12 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_worker_service::api::make_open_api_service;
-use golem_worker_service::service::Services;
+pub mod component;
+pub mod plugin;
 
-#[tokio::main]
-async fn main() {
-    let services = Services::noop();
-    let api_service = make_open_api_service(&services);
-    println!("{}", api_service.spec_yaml())
+use sqlx::query_builder::Separated;
+use sqlx::{Database, QueryBuilder};
+use std::fmt::Display;
+
+pub trait RowMeta<DB: Database> {
+    fn add_column_list<Sep: Display>(builder: &mut Separated<DB, Sep>);
+    fn add_where_clause<'a>(&'a self, builder: &mut QueryBuilder<'a, DB>);
+    fn push_bind<'a, Sep: Display>(&'a self, builder: &mut Separated<'_, 'a, DB, Sep>);
 }

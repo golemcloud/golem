@@ -13,3 +13,5 @@
 // limitations under the License.
 
 pub mod component;
+pub mod plugin;
+pub mod plugin_installation;

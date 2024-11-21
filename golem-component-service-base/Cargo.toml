@@ -7,7 +7,7 @@ edition = "2021"
 harness = false
 
 [[test]]
-name = "services_tests"
+name = "tests"
 harness = false
 
 [dependencies]
@@ -20,25 +20,23 @@ golem-wasm-ast = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
+aws-config = { workspace = true }
+aws-sdk-s3 = { workspace = true }
 bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 futures = { workspace = true }
+http = { workspace = true }
 http_02 = { workspace = true }
+poem = { workspace = true }
+poem-openapi = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 sanitize-filename = "0.5.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
-sqlx = { workspace = true, features = [
-    "runtime-tokio",
-    "sqlite",
-    "postgres",
-    "uuid",
-    "migrate",
-    "chrono",
-] }
+sqlx = { workspace = true }
 tap = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
@@ -46,6 +44,7 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
+tracing-futures = { version = "0.2.5", features = ["futures-03"] }
 uuid = { workspace = true }
 
 [dev-dependencies]

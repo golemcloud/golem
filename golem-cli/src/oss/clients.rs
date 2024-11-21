@@ -17,4 +17,5 @@ pub mod api_deployment;
 pub mod component;
 pub mod errors;
 pub mod health_check;
+pub mod plugin;
 pub mod worker;

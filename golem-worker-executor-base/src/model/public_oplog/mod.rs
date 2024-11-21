@@ -39,17 +39,17 @@ use golem_common::model::exports::{find_resource_site, function_by_name};
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::public_oplog::{
-    ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, Empty,
-    EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
-    ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
-    GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters,
-    ManualUpdateParameters, PendingUpdateParameters, PendingWorkerInvocationParameters,
-    PublicOplogEntry, PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters,
+    ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, EndRegionParameters,
+    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PublicOplogEntry,
+    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters,
     SnapshotBasedUpdateParameters, SuccessfulUpdateParameters, TimestampParameter,
 };
 use golem_common::model::{
-    ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, ShardId, WorkerId,
-    WorkerInvocation,
+    ComponentId, ComponentVersion, Empty, IdempotencyKey, OwnedWorkerId, PromiseId, ShardId,
+    WorkerId, WorkerInvocation,
 };
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_wasm_ast::analysis::analysed_type::{
@@ -489,7 +489,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let target_version = *description.target_version();
                 let public_description = match description {
                     UpdateDescription::Automatic { .. } => {
-                        PublicUpdateDescription::Automatic(Empty)
+                        PublicUpdateDescription::Automatic(Empty {})
                     }
                     UpdateDescription::SnapshotBased { payload, .. } => {
                         let bytes = oplog_service

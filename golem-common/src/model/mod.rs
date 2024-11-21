@@ -53,11 +53,13 @@ use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
+pub mod component;
 pub mod component_constraint;
 pub mod component_metadata;
 pub mod exports;
 pub mod lucene;
 pub mod oplog;
+pub mod plugin;
 pub mod public_oplog;
 pub mod regions;
 pub mod trim_date;
@@ -68,6 +70,11 @@ newtype_uuid!(
 );
 
 newtype_uuid!(ProjectId, golem_api_grpc::proto::golem::common::ProjectId);
+
+newtype_uuid!(
+    PluginInstallationId,
+    golem_api_grpc::proto::golem::common::PluginInstallationId
+);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -2493,6 +2500,9 @@ impl FromStr for ComponentType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct Empty {}
+
 /// Key that can be used to identify a component file.
 /// All files with the same content will have the same key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, NewType)]
@@ -2624,6 +2634,7 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Enum)]
 #[serde(rename_all = "kebab-case")]
+#[oai(rename_all = "kebab-case")]
 pub enum ComponentFilePermissions {
     ReadOnly,
     ReadWrite,
@@ -2676,6 +2687,8 @@ impl From<ComponentFilePermissions>
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct InitialComponentFile {
     pub key: InitialComponentFileKey,
     pub path: ComponentFilePath,
@@ -2948,12 +2961,15 @@ mod tests {
     use std::vec;
 
     use crate::model::oplog::OplogIndex;
+
     use crate::model::{
-        AccountId, ComponentFilePath, ComponentId, FilterComparator, IdempotencyKey, ShardId,
+        AccountId, ComponentFilePath, ComponentFilePermissions, ComponentId, Empty,
+        FilterComparator, IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ShardId,
         StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
         WorkerStatus, WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
+
     use poem_openapi::types::ToJSON;
     use rand::{thread_rng, Rng};
     use serde::{Deserialize, Serialize};
@@ -3300,5 +3316,24 @@ mod tests {
     fn initial_component_file_path_from_relative() {
         let path = ComponentFilePath::from_abs_str("a/b/c");
         assert!(path.is_err());
+    }
+
+    #[test]
+    fn empty_poem_serde_equivalence() {
+        let serialized = Empty {}.to_json_string();
+        let deserialized: Empty = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(Empty {}, deserialized);
+    }
+
+    #[test]
+    fn initial_component_file_serde_equivalence() {
+        let file = InitialComponentFile {
+            key: InitialComponentFileKey("key".to_string()),
+            path: ComponentFilePath::from_rel_str("hello").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
+        };
+        let serialized = file.to_json_string();
+        let deserialized: InitialComponentFile = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(file, deserialized);
     }
 }

@@ -16,7 +16,7 @@ use crate::config::RetryConfig;
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId, WrappedFunctionType};
 use crate::model::regions::OplogRegion;
-use crate::model::{AccountId, ComponentVersion, IdempotencyKey, Timestamp, WorkerId};
+use crate::model::{AccountId, ComponentVersion, Empty, IdempotencyKey, Timestamp, WorkerId};
 use golem_api_grpc::proto::golem::worker::{oplog_entry, worker_invocation, wrapped_function_type};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{Value, ValueAndType};
@@ -27,9 +27,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::time::Duration;
-
-#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
-pub struct Empty;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, Object)]
 pub struct SnapshotBasedUpdateParameters {
@@ -75,10 +72,10 @@ pub enum PublicWrappedFunctionType {
 impl From<WrappedFunctionType> for PublicWrappedFunctionType {
     fn from(wrapped_function_type: WrappedFunctionType) -> Self {
         match wrapped_function_type {
-            WrappedFunctionType::ReadLocal => PublicWrappedFunctionType::ReadLocal(Empty),
-            WrappedFunctionType::WriteLocal => PublicWrappedFunctionType::WriteLocal(Empty),
-            WrappedFunctionType::ReadRemote => PublicWrappedFunctionType::ReadRemote(Empty),
-            WrappedFunctionType::WriteRemote => PublicWrappedFunctionType::WriteRemote(Empty),
+            WrappedFunctionType::ReadLocal => PublicWrappedFunctionType::ReadLocal(Empty {}),
+            WrappedFunctionType::WriteLocal => PublicWrappedFunctionType::WriteLocal(Empty {}),
+            WrappedFunctionType::ReadRemote => PublicWrappedFunctionType::ReadRemote(Empty {}),
+            WrappedFunctionType::WriteRemote => PublicWrappedFunctionType::WriteRemote(Empty {}),
             WrappedFunctionType::WriteRemoteBatched(index) => {
                 PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                     index,
@@ -1279,16 +1276,16 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WrappedFunctionType>
     ) -> Result<Self, Self::Error> {
         match value.r#type() {
             wrapped_function_type::Type::ReadLocal => {
-                Ok(PublicWrappedFunctionType::ReadLocal(Empty))
+                Ok(PublicWrappedFunctionType::ReadLocal(Empty {}))
             }
             wrapped_function_type::Type::WriteLocal => {
-                Ok(PublicWrappedFunctionType::WriteLocal(Empty))
+                Ok(PublicWrappedFunctionType::WriteLocal(Empty {}))
             }
             wrapped_function_type::Type::ReadRemote => {
-                Ok(PublicWrappedFunctionType::ReadRemote(Empty))
+                Ok(PublicWrappedFunctionType::ReadRemote(Empty {}))
             }
             wrapped_function_type::Type::WriteRemote => {
-                Ok(PublicWrappedFunctionType::WriteRemote(Empty))
+                Ok(PublicWrappedFunctionType::WriteRemote(Empty {}))
             }
             wrapped_function_type::Type::WriteRemoteBatched => Ok(
                 PublicWrappedFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
@@ -1478,7 +1475,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::UpdateDescription> for Public
     ) -> Result<Self, Self::Error> {
         match value.description.ok_or("Missing description field")? {
             golem_api_grpc::proto::golem::worker::update_description::Description::AutoUpdate(_) => {
-                Ok(PublicUpdateDescription::Automatic(Empty))
+                Ok(PublicUpdateDescription::Automatic(Empty {}))
             }
             golem_api_grpc::proto::golem::worker::update_description::Description::SnapshotBased(
                 snapshot_based,
@@ -1571,7 +1568,7 @@ impl From<OplogCursor> for golem_api_grpc::proto::golem::worker::OplogCursor {
 mod tests {
 
     use super::{
-        ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, Empty,
+        ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters,
         EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
         ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
         GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters, LogParameters,
@@ -1582,7 +1579,7 @@ mod tests {
     };
     use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
     use crate::model::regions::OplogRegion;
-    use crate::model::{AccountId, ComponentId, IdempotencyKey, Timestamp, WorkerId};
+    use crate::model::{AccountId, ComponentId, Empty, IdempotencyKey, Timestamp, WorkerId};
     use golem_wasm_ast::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
     use golem_wasm_rpc::{Value, ValueAndType};
     use poem_openapi::types::ToJSON;
@@ -1638,7 +1635,7 @@ mod tests {
                 value: Value::List(vec![Value::U64(1)]),
                 typ: list(u64()),
             },
-            wrapped_function_type: PublicWrappedFunctionType::ReadRemote(Empty),
+            wrapped_function_type: PublicWrappedFunctionType::ReadRemote(Empty {}),
         });
         let serialized = entry.to_json_string();
         let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -1850,7 +1847,7 @@ mod tests {
         let entry = PublicOplogEntry::PendingUpdate(PendingUpdateParameters {
             timestamp: rounded_ts(Timestamp::now_utc()),
             target_version: 1,
-            description: PublicUpdateDescription::Automatic(Empty),
+            description: PublicUpdateDescription::Automatic(Empty {}),
         });
         let serialized = entry.to_json_string();
         let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();

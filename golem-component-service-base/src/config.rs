@@ -12,8 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::model::Empty;
+use golem_common::model::Empty;
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum ComponentStoreConfig {
+    S3(ComponentStoreS3Config),
+    Local(ComponentStoreLocalConfig),
+}
+
+impl Default for ComponentStoreConfig {
+    fn default() -> Self {
+        ComponentStoreConfig::Local(ComponentStoreLocalConfig {
+            root_path: "/tmp".to_string(),
+            object_prefix: "".to_string(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComponentStoreS3Config {
+    pub bucket_name: String,
+    pub object_prefix: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ComponentStoreLocalConfig {
+    pub root_path: String,
+    pub object_prefix: String,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]

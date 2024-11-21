@@ -19,7 +19,6 @@ use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::{ComponentId, WorkerId};
 use golem_common::recorded_http_api_request;
-use golem_service_base::auth::EmptyAuthCtx;
 use golem_service_base::model::{validate_worker_name, ErrorsBody};
 use golem_worker_service_base::api::WorkerApiBaseError;
 use golem_worker_service_base::empty_worker_metadata;
@@ -93,11 +92,7 @@ async fn connect_to_worker(
 
     let result = service
         .worker_service
-        .connect(
-            &worker_id,
-            empty_worker_metadata(),
-            &EmptyAuthCtx::default(),
-        )
+        .connect(&worker_id, empty_worker_metadata())
         .instrument(record.span.clone())
         .await;
 
