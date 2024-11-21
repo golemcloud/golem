@@ -20,7 +20,7 @@ use sqlx::ConnectOptions;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info};
+use tracing::{error, info};
 
 pub mod docker_mysql;
 pub mod docker_postgres;

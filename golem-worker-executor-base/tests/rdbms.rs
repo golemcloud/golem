@@ -45,6 +45,167 @@ async fn mysql() -> DockerMysqlRdbs {
     DockerMysqlRdbs::new(3, 3317, true, false).await
 }
 
+#[derive(Debug, Clone)]
+struct RdbmsTest {
+    pub fn_name: &'static str,
+    pub statement: &'static str,
+    pub params: Vec<String>,
+    pub expected: Option<serde_json::Value>,
+}
+
+impl RdbmsTest {
+    fn query_test(
+        statement: &'static str,
+        params: Vec<String>,
+        expected: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            fn_name: "query",
+            statement,
+            params,
+            expected,
+        }
+    }
+
+    fn execute_test(statement: &'static str, params: Vec<String>, expected: Option<u64>) -> Self {
+        Self {
+            fn_name: "execute",
+            statement,
+            params,
+            expected: expected.map(execute_ok_response),
+        }
+    }
+}
+
+#[test]
+#[tracing::instrument]
+async fn rdbms_postgres_create_insert_select(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    postgres: &DockerPostgresRdbs,
+    _tracing: &Tracing,
+) {
+    let db_addresses: Vec<String> = postgres.host_connection_strings();
+
+    let create_table_statement = r#"
+            CREATE TABLE IF NOT EXISTS test_users
+            (
+                user_id             uuid    NOT NULL PRIMARY KEY,
+                name                text    NOT NULL,
+                created_on          timestamp DEFAULT NOW()
+            );
+        "#;
+
+    let insert_statement = r#"
+            INSERT INTO test_users
+            (user_id, name)
+            VALUES
+            ($1::uuid, $2)
+        "#;
+
+    let count = 60;
+
+    let mut insert_tests: Vec<RdbmsTest> = Vec::with_capacity(count + 1);
+
+    insert_tests.push(RdbmsTest::execute_test(
+        create_table_statement,
+        vec![],
+        None,
+    ));
+
+    let mut expected_rows: Vec<serde_json::Value> = Vec::with_capacity(count);
+
+    for _ in 0..count {
+        let user_id = Uuid::new_v4();
+        let name = format!("name-{}", Uuid::new_v4());
+
+        let params: Vec<String> = vec![user_id.clone().to_string(), name.clone()];
+
+        insert_tests.push(RdbmsTest::execute_test(
+            insert_statement,
+            params.clone(),
+            Some(1),
+        ));
+
+        let user_id = user_id.as_u64_pair();
+
+        let row = json!(
+                    {
+                       "values":[
+                          {
+                             "primitive":{
+                                "uuid": vec![user_id.0, user_id.1]
+                             }
+                          },
+                          {
+                             "primitive":{
+                                "text": name
+                             }
+                          }
+                       ]
+                    }
+        );
+
+        expected_rows.push(row);
+    }
+
+    rdbms_component_test(
+        last_unique_id,
+        deps,
+        db_addresses.clone(),
+        "postgres",
+        insert_tests,
+        1,
+    )
+    .await;
+
+    let expected = json!(
+            [
+               {
+                  "ok":{
+                     "columns":[
+                        {
+                           "db-type":{
+                              "primitive":{
+                                 "uuid":null
+                              }
+                           },
+                           "db-type-name":"UUID",
+                           "name":"user_id",
+                           "ordinal":0
+                        },
+                        {
+                           "db-type":{
+                              "primitive":{
+                                 "text":null
+                              }
+                           },
+                           "db-type-name":"TEXT",
+                           "name":"name",
+                           "ordinal":1
+                        }
+                     ],
+                     "rows": expected_rows
+                  }
+               }
+            ]
+    );
+    let select_test = RdbmsTest::query_test(
+        "SELECT user_id, name FROM test_users ORDER BY created_on ASC",
+        vec![],
+        Some(expected),
+    );
+    rdbms_component_test(
+        last_unique_id,
+        deps,
+        db_addresses.clone(),
+        "postgres",
+        vec![select_test],
+        3,
+    )
+    .await;
+}
+
 #[test]
 #[tracing::instrument]
 async fn rdbms_postgres_select1(
@@ -53,16 +214,8 @@ async fn rdbms_postgres_select1(
     postgres: &DockerPostgresRdbs,
     _tracing: &Tracing,
 ) {
-    rdbms_execute_test(
-        last_unique_id,
-        deps,
-        postgres.host_connection_strings(),
-        "postgres",
-        "SELECT 1",
-        vec![],
-        Some(1),
-    )
-    .await;
+    let test1 = RdbmsTest::execute_test("SELECT 1", vec![], Some(1));
+
     let expected = json!(
             [
                {
@@ -94,14 +247,144 @@ async fn rdbms_postgres_select1(
                }
             ]
     );
-    rdbms_query_test(
+
+    let test2 = RdbmsTest::query_test("SELECT 1", vec![], Some(expected));
+
+    rdbms_component_test(
         last_unique_id,
         deps,
         postgres.host_connection_strings(),
         "postgres",
-        "SELECT 1",
+        vec![test1, test2],
+        3,
+    )
+    .await;
+}
+
+#[test]
+#[tracing::instrument]
+async fn rdbms_mysql_create_insert_select(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    mysql: &DockerMysqlRdbs,
+    _tracing: &Tracing,
+) {
+    let db_addresses: Vec<String> = mysql.host_connection_strings();
+
+    let create_table_statement = r#"
+            CREATE TABLE IF NOT EXISTS test_users
+            (
+                user_id             varchar(25)    NOT NULL,
+                name                varchar(255)    NOT NULL,
+                created_on          timestamp NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (user_id)
+            );
+        "#;
+
+    let insert_statement = r#"
+            INSERT INTO test_users
+            (user_id, name)
+            VALUES
+            (?, ?)
+        "#;
+
+    let count = 60;
+
+    let mut insert_tests: Vec<RdbmsTest> = Vec::with_capacity(count + 1);
+
+    insert_tests.push(RdbmsTest::execute_test(
+        create_table_statement,
+        vec![],
+        None,
+    ));
+
+    let mut expected_rows: Vec<serde_json::Value> = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let user_id = format!("{:03}", i);
+        let name = format!("name-{}", Uuid::new_v4());
+
+        let params: Vec<String> = vec![user_id.clone(), name.clone()];
+
+        insert_tests.push(RdbmsTest::execute_test(
+            insert_statement,
+            params.clone(),
+            Some(1),
+        ));
+
+        let row = json!(
+                    {
+                       "values":[
+                          {
+                             "primitive":{
+                                "text": user_id
+                             }
+                          },
+                          {
+                             "primitive":{
+                                "text": name
+                             }
+                          }
+                       ]
+                    }
+        );
+
+        expected_rows.push(row);
+    }
+
+    rdbms_component_test(
+        last_unique_id,
+        deps,
+        db_addresses.clone(),
+        "mysql",
+        insert_tests,
+        1,
+    )
+    .await;
+
+    let expected = json!(
+            [
+               {
+                  "ok":{
+                     "columns":[
+                        {
+                           "db-type":{
+                              "primitive":{
+                                 "text":null
+                              }
+                           },
+                           "db-type-name":"VARCHAR",
+                           "name":"user_id",
+                           "ordinal":0
+                        },
+                        {
+                           "db-type":{
+                              "primitive":{
+                                 "text":null
+                              }
+                           },
+                           "db-type-name":"VARCHAR",
+                           "name":"name",
+                           "ordinal":1
+                        }
+                     ],
+                     "rows": expected_rows
+                  }
+               }
+            ]
+    );
+    let select_test = RdbmsTest::query_test(
+        "SELECT user_id, name FROM test_users ORDER BY user_id ASC",
         vec![],
         Some(expected),
+    );
+    rdbms_component_test(
+        last_unique_id,
+        deps,
+        db_addresses.clone(),
+        "mysql",
+        vec![select_test],
+        1,
     )
     .await;
 }
@@ -114,16 +397,7 @@ async fn rdbms_mysql_select1(
     mysql: &DockerMysqlRdbs,
     _tracing: &Tracing,
 ) {
-    rdbms_execute_test(
-        last_unique_id,
-        deps,
-        mysql.host_connection_strings(),
-        "mysql",
-        "SELECT 1",
-        vec![],
-        Some(0),
-    )
-    .await;
+    let test1 = RdbmsTest::execute_test("SELECT 1", vec![], Some(0));
     let expected = json!(
             [
                {
@@ -155,60 +429,16 @@ async fn rdbms_mysql_select1(
                }
             ]
     );
-    rdbms_query_test(
+
+    let test2 = RdbmsTest::query_test("SELECT 1", vec![], Some(expected));
+
+    rdbms_component_test(
         last_unique_id,
         deps,
         mysql.host_connection_strings(),
         "mysql",
-        "SELECT 1",
-        vec![],
-        Some(expected),
-    )
-    .await;
-}
-
-async fn rdbms_execute_test(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    db_addresses: Vec<String>,
-    db_type: &'static str,
-    query: &'static str,
-    params: Vec<String>,
-    expected: Option<u64>,
-) {
-    let expected = expected.map(execute_ok_response);
-
-    rdbms_component_test(
-        last_unique_id,
-        deps,
-        db_addresses,
-        db_type,
-        "execute",
-        query,
-        params,
-        expected,
-    )
-    .await;
-}
-
-async fn rdbms_query_test(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    db_addresses: Vec<String>,
-    db_type: &'static str,
-    query: &'static str,
-    params: Vec<String>,
-    expected: Option<serde_json::Value>,
-) {
-    rdbms_component_test(
-        last_unique_id,
-        deps,
-        db_addresses,
-        db_type,
-        "query",
-        query,
-        params,
-        expected,
+        vec![test1, test2],
+        3,
     )
     .await;
 }
@@ -218,20 +448,22 @@ async fn rdbms_component_test(
     deps: &WorkerExecutorTestDependencies,
     db_addresses: Vec<String>,
     db_type: &'static str,
-    fn_name: &'static str,
-    query: &'static str,
-    params: Vec<String>,
-    expected: Option<serde_json::Value>,
+    tests: Vec<RdbmsTest>,
+    workers_per_db: u8,
 ) {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await.unwrap();
     let component_id = executor.store_component("rdbms-service").await;
-    let worker_ids = start_workers(&executor, &component_id, db_addresses, db_type, 3).await;
-
-    rdbms_workers_test(
-        &executor, worker_ids, db_type, fn_name, query, params, expected,
+    let worker_ids = start_workers(
+        &executor,
+        &component_id,
+        db_addresses,
+        db_type,
+        workers_per_db,
     )
     .await;
+
+    rdbms_workers_test(&executor, worker_ids, db_type, tests).await;
 
     drop(executor);
 }
@@ -240,34 +472,36 @@ async fn rdbms_workers_test(
     executor: &TestWorkerExecutor,
     worker_ids: Vec<WorkerId>,
     db_type: &'static str,
-    fn_name: &'static str,
-    query: &'static str,
-    params: Vec<String>,
-    expected: Option<serde_json::Value>,
+    tests: Vec<RdbmsTest>,
 ) {
-    let component_fn_name = format!("golem:it/api.{{{db_type}-{fn_name}}}");
-
-    let params = Value::List(params.into_iter().map(Value::String).collect());
-
-    let mut workers_results: HashMap<WorkerId, Result<TypeAnnotatedValue, Error>> = HashMap::new(); // <worker_id, result>
+    let mut workers_results: HashMap<WorkerId, HashMap<usize, Result<TypeAnnotatedValue, Error>>> =
+        HashMap::new(); // <worker_id, results>
 
     let mut fibers = JoinSet::new();
 
     for worker_id in worker_ids {
         let worker_id_clone = worker_id.clone();
-        let params_clone = params.clone();
         let executor_clone = executor.clone();
-        let component_fn_name_clone = component_fn_name.clone();
+        let tests_clone = tests.clone();
         let _ = fibers.spawn(async move {
-            let result = executor_clone
-                .invoke_and_await_typed(
-                    &worker_id_clone,
-                    component_fn_name_clone.as_str(),
-                    vec![Value::String(query.to_string()), params_clone],
-                )
-                .await;
+            let mut query_results: HashMap<usize, Result<TypeAnnotatedValue, Error>> =
+                HashMap::new();
+            for (index, query_test) in tests_clone.into_iter().enumerate() {
+                let fn_name = query_test.fn_name;
+                let component_fn_name = format!("golem:it/api.{{{db_type}-{fn_name}}}");
+                let params =
+                    Value::List(query_test.params.into_iter().map(Value::String).collect());
+                let result = executor_clone
+                    .invoke_and_await_typed(
+                        &worker_id_clone,
+                        component_fn_name.as_str(),
+                        vec![Value::String(query_test.statement.to_string()), params],
+                    )
+                    .await;
 
-            (worker_id_clone, result)
+                query_results.insert(index, result);
+            }
+            (worker_id_clone, query_results)
         });
     }
 
@@ -277,16 +511,29 @@ async fn rdbms_workers_test(
     }
 
     for (worker_id, result) in workers_results {
-        check!(
-            result.is_ok(),
-            "result {fn_name} for worker {worker_id} is error"
-        );
+        for (index, query_test) in tests.clone().into_iter().enumerate() {
+            let fn_name = query_test.fn_name;
 
-        if let Some(expected) = expected.clone() {
-            check!(
-                result.unwrap().to_json_value() == expected,
-                "result {fn_name} for worker {worker_id}"
-            );
+            match result.get(&index) {
+                Some(result) => {
+                    check!(
+                        result.is_ok(),
+                        "result {fn_name} with index {index} for worker {worker_id} is error"
+                    );
+                    if let Some(expected) = query_test.expected {
+                        check!(
+                            result.clone().unwrap().to_json_value() == expected,
+                            "result {fn_name} with index {index} for worker {worker_id}"
+                        );
+                    };
+                }
+                _ => {
+                    check!(
+                        false,
+                        "result {fn_name} with index {index} for worker {worker_id} is not found"
+                    );
+                }
+            }
         }
     }
 }
@@ -296,7 +543,7 @@ async fn start_workers(
     component_id: &ComponentId,
     db_addresses: Vec<String>,
     db_type: &'static str,
-    count: u8,
+    workers_per_db: u8,
 ) -> Vec<WorkerId> {
     let mut worker_ids: Vec<WorkerId> = Vec::new();
     let db_env_var = format!("DB_{}_URL", db_type.to_uppercase());
@@ -304,7 +551,7 @@ async fn start_workers(
     for db_address in db_addresses.into_iter() {
         let mut env = HashMap::new();
         env.insert(db_env_var.clone(), db_address);
-        for _ in 0..count {
+        for _ in 0..workers_per_db {
             let worker_name = format!("rdbms-service-{}-{}", db_type, Uuid::new_v4());
             let worker_id = executor
                 .start_worker_with(component_id, &worker_name, vec![], env.clone())
