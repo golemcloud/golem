@@ -20,7 +20,6 @@ use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use std::result::Result;
-use std::str::FromStr;
 use std::time::SystemTime;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
@@ -82,7 +81,7 @@ pub struct HttpApiDefinitionRequestData {
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct SecuritySchemeData {
-    pub provider_type: String,
+    pub provider_type: Provider,
     pub scheme_identifier: String,
     pub client_id: String,
     pub client_secret: String, // secret type macros and therefore already redacted
@@ -94,7 +93,7 @@ impl TryFrom<SecuritySchemeData> for SecurityScheme {
     type Error = String;
 
     fn try_from(value: SecuritySchemeData) -> Result<Self, Self::Error> {
-        let provider_type = Provider::from_str(value.provider_type.as_str())?;
+        let provider_type = value.provider_type;
         let scheme_identifier = value.scheme_identifier;
         let client_id = ClientId::new(value.client_id);
         let client_secret = ClientSecret::new(value.client_secret);
@@ -114,7 +113,7 @@ impl TryFrom<SecuritySchemeData> for SecurityScheme {
 
 impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeData {
     fn from(value: SecuritySchemeWithProviderMetadata) -> Self {
-        let provider_type = value.security_scheme.provider_type().to_string();
+        let provider_type = value.security_scheme.provider_type();
         let scheme_identifier = value.security_scheme.scheme_identifier().to_string();
         let client_id = value.security_scheme.client_id().to_string();
         let client_secret = value.security_scheme.client_secret().secret().to_string();

@@ -15,6 +15,8 @@
 use crate::gateway_security::default_provider::DefaultIdentityProvider;
 use crate::gateway_security::IdentityProvider;
 use openidconnect::{ClientId, ClientSecret, IssuerUrl, RedirectUrl, Scope};
+use poem_openapi::Enum;
+use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -51,7 +53,7 @@ impl SecurityScheme {
 }
 
 // May be relaxed to just a string as we make it more configurable
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
 pub enum Provider {
     Google,
     Facebook,

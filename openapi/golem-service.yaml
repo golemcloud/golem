@@ -1336,7 +1336,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -1398,7 +1398,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                  $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -1458,7 +1458,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -1525,7 +1525,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -1600,7 +1600,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/HttpApiDefinitionWithTypeInfo'
+                $ref: '#/components/schemas/HttpApiDefinitionResponseData'
         '400':
           description: ''
           content:
@@ -1903,6 +1903,116 @@ paths:
             application/json; charset=utf-8:
               schema:
                 type: string
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/security/schemes/{security_scheme_name}:
+    get:
+      summary: Get a security scheme
+      description: Get a security scheme by name
+      operationId: get
+      parameters:
+      - in: path
+        name: security_scheme_identifier
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/SecuritySchemeData'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/WorkerServiceErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: string
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+  /v1/security/schemes:
+    post:
+      summary: Create a security scheme
+      operationId: create
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/SecuritySchemeData'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/SecuritySchemeData'
         '400':
           description: ''
           content:
@@ -3200,6 +3310,8 @@ components:
           $ref: '#/components/schemas/RibInputTypeInfo'
         corsPreflight:
           $ref: '#/components/schemas/Cors'
+        middleware:
+          $ref: '#/components/schemas/MiddlewareData'
     GetFilesResponse:
       type: object
       properties:
@@ -3797,10 +3909,14 @@ components:
           type: string
         version:
           type: string
+        security:
+          type: array
+          items:
+            $ref: '#/components/schemas/SecuritySchemeReferenceData'
         routes:
           type: array
           items:
-            $ref: '#/components/schemas/RouteData'
+            $ref: '#/components/schemas/RouteRequestData'
         draft:
           type: boolean
       required:
@@ -3808,7 +3924,7 @@ components:
       - version
       - routes
       - draft
-    HttpApiDefinitionWithTypeInfo:
+    HttpApiDefinitionResponseData:
       type: object
       properties:
         id:
@@ -3955,6 +4071,8 @@ components:
       properties:
         cors:
           $ref: '#/components/schemas/Cors'
+        auth:
+          $ref: '#/components/schemas/SecuritySchemeReferenceData'
     NameOptionTypePair:
       type: object
       properties:
@@ -4047,6 +4165,13 @@ components:
       required:
       - workerId
       - oplogIdx
+    Provider:
+      type: string
+      enum:
+      - Google
+      - Facebook
+      - Microsoft
+      - Gitlab
     PublicOplogEntry:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -4491,7 +4616,7 @@ components:
             $ref: '#/components/schemas/AnalysedType'
       required:
       - types
-    RouteData:
+    RouteRequestData:
       type: object
       properties:
         method:
@@ -4504,21 +4629,6 @@ components:
       - method
       - path
       - binding
-    RouteValidationError:
-      type: object
-      properties:
-        method:
-          $ref: '#/components/schemas/MethodPattern'
-        path:
-          type: string
-        component:
-          $ref: '#/components/schemas/VersionedComponentId'
-        detail:
-          type: string
-      required:
-      - method
-      - path
-      - detail
     RouteWithTypeInfo:
       type: object
       properties:
@@ -4544,6 +4654,37 @@ components:
       required:
       - cursor
       - layer
+    SecuritySchemeData:
+      type: object
+      properties:
+        providerType:
+          $ref: '#/components/schemas/Provider'
+        schemeIdentifier:
+          type: string
+        clientId:
+          type: string
+        clientSecret:
+          type: string
+        redirectUrl:
+          type: string
+        scopes:
+          type: array
+          items:
+            type: string
+      required:
+      - providerType
+      - schemeIdentifier
+      - clientId
+      - clientSecret
+      - redirectUrl
+      - scopes
+    SecuritySchemeReferenceData:
+      type: object
+      properties:
+        securityScheme:
+          type: string
+      required:
+      - securityScheme
     ShardId:
       type: object
       properties:
@@ -4784,7 +4925,7 @@ components:
         errors:
           type: array
           items:
-            $ref: '#/components/schemas/RouteValidationError'
+            type: string
       required:
       - errors
     ValueAndType:
