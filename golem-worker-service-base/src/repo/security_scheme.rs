@@ -18,24 +18,15 @@ use crate::gateway_security::{
 };
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
-use futures::future::try_join_all;
-use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
-    InitialComponentFileKey,
-};
-use golem_service_base::auth::DefaultNamespace;
-use golem_service_base::model::{ComponentName, VersionedComponentId};
 use golem_service_base::repo::RepoError;
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
-use sqlx::{Database, Pool, Row};
+use sqlx::{Database, Pool};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::result::Result;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, error};
-use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct SecuritySchemeRecord {
@@ -139,14 +130,6 @@ pub struct LoggedComponentRepo<Repo: SecuritySchemeRepo> {
 impl<Repo: SecuritySchemeRepo> LoggedComponentRepo<Repo> {
     pub fn new(repo: Repo) -> Self {
         Self { repo }
-    }
-
-    fn logged<R>(message: &'static str, result: Result<R, RepoError>) -> Result<R, RepoError> {
-        match &result {
-            Ok(_) => debug!("{}", message),
-            Err(error) => error!(error = error.to_string(), "{message}"),
-        }
-        result
     }
 
     fn logged_with_id<R>(
