@@ -2634,6 +2634,7 @@ impl<'de> Deserialize<'de> for ComponentFilePath {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, Enum)]
 #[serde(rename_all = "kebab-case")]
+#[oai(rename_all = "kebab-case")]
 pub enum ComponentFilePermissions {
     ReadOnly,
     ReadWrite,
@@ -2686,6 +2687,8 @@ impl From<ComponentFilePermissions>
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
 pub struct InitialComponentFile {
     pub key: InitialComponentFileKey,
     pub path: ComponentFilePath,
@@ -2960,9 +2963,10 @@ mod tests {
     use crate::model::oplog::OplogIndex;
 
     use crate::model::{
-        AccountId, ComponentFilePath, ComponentId, Empty, FilterComparator, IdempotencyKey,
-        ShardId, StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId,
-        WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+        AccountId, ComponentFilePath, ComponentFilePermissions, ComponentId, Empty,
+        FilterComparator, IdempotencyKey, InitialComponentFile, InitialComponentFileKey, ShardId,
+        StringFilterComparator, TargetWorkerId, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+        WorkerStatus, WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
 
@@ -3319,5 +3323,17 @@ mod tests {
         let serialized = Empty {}.to_json_string();
         let deserialized: Empty = serde_json::from_str(&serialized).unwrap();
         assert_eq!(Empty {}, deserialized);
+    }
+
+    #[test]
+    fn initial_component_file_serde_equivalence() {
+        let file = InitialComponentFile {
+            key: InitialComponentFileKey("key".to_string()),
+            path: ComponentFilePath::from_rel_str("hello").unwrap(),
+            permissions: ComponentFilePermissions::ReadWrite,
+        };
+        let serialized = file.to_json_string();
+        let deserialized: InitialComponentFile = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(file, deserialized);
     }
 }
