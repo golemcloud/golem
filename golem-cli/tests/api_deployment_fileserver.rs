@@ -116,15 +116,31 @@ fn api_deployment_file_server_simple(
         &host,
     ])?;
 
+    // read a read-only file
     let res1 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/foo.txt"))?;
     assert_eq!(res1.status().as_u16(), 200);
     assert_eq!(res1.headers().get("content-type").unwrap(), "text/plain");
     assert_eq!(res1.text()?, "foo\n");
 
+    // read a read-write file
     let res2 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/bar.txt"))?;
     assert_eq!(res2.status().as_u16(), 200);
     assert_eq!(res2.headers().get("content-type").unwrap(), "text/plain");
     assert_eq!(res2.text()?, "bar\n");
+
+    // read a non-existing file
+    let res3 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/notfound.txt"))?;
+    assert_eq!(res3.status().as_u16(), 404);
+
+    // try to read a directory. This will fail with a 400 as the mime type of 'dir' cannot be inferred.
+    let res4 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/dir"))?;
+    assert_eq!(res4.status().as_u16(), 400);
+
+    // TODO: read a file from a nested path
+    // let res5 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/dir/foo.txt"))?;
+    // assert_eq!(res5.status().as_u16(), 200);
+    // assert_eq!(res5.headers().get("content-type").unwrap(), "text/plain");
+    // assert_eq!(res5.text()?, "foo\n");
 
     Ok(())
 }
@@ -178,13 +194,21 @@ fn api_deployment_fileserver_complex(
         &host,
     ])?;
 
-    let res = reqwest::blocking::get(format!("http://{host}/files/{component_id}/file"))?;
-    assert_eq!(res.status().as_u16(), 201);
+    let res1 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/foo.txt"))?;
+    assert_eq!(res1.status().as_u16(), 201);
     assert_eq!(
-        res.headers().get("content-type").unwrap(),
+        res1.headers().get("content-type").unwrap(),
         "application/json"
     );
-    assert_eq!(res.text()?, "foo\n");
+    assert_eq!(res1.text()?, "foo\n");
+
+    // read a non-existing file
+    let res2 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/notfound.txt"))?;
+    assert_eq!(res2.status().as_u16(), 404);
+
+    // read a directory. This will fail with a 400 here as we have an explicit mime type.
+    let res3 = reqwest::blocking::get(format!("http://{host}/files/{component_id}/dir"))?;
+    assert_eq!(res3.status().as_u16(), 400);
 
     Ok(())
 }
@@ -306,13 +330,13 @@ fn make_file_server_api_definition_complex(
         draft: true
         routes:
         - method: Get
-          path: "/files/{component_id}/file"
+          path: "/files/{component_id}/{{file}}"
           binding:
             bindingType: file-server
             componentId:
               componentId: '{component_id}'
               version: 0
-            response: '{{ headers: {{Content-Type: "application/json"}}, status: 201u64, file-path: "/files/foo.txt" }}'
+            response: 'let file: str = request.path.file; {{ headers: {{Content-Type: "application/json"}}, status: 201u64, file-path: "/files/${{file}}" }}'
     "#,
     ))?)
 }
