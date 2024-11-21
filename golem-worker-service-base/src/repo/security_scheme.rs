@@ -109,7 +109,7 @@ pub trait SecuritySchemeRepo {
 
     async fn get(
         &self,
-        security_scheme_id: &String,
+        security_scheme_id: &str,
     ) -> Result<Option<SecuritySchemeRecord>, RepoError>;
 }
 
@@ -161,10 +161,10 @@ impl<Repo: SecuritySchemeRepo + Send + Sync> SecuritySchemeRepo for LoggedCompon
 
     async fn get(
         &self,
-        security_scheme_id: &String,
+        security_scheme_id: &str,
     ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
         let result = self.repo.get(security_scheme_id).await;
-        Self::logged_with_id("get", security_scheme_id, result)
+        Self::logged_with_id("get", &security_scheme_id.to_string(), result)
     }
 }
 
@@ -200,7 +200,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
     #[when(sqlx::Postgres -> get)]
     async fn get_postgres(
         &self,
-        security_scheme_id: &String,
+        security_scheme_id: &str,
     ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
         let security_scheme_record = sqlx::query_as::<_, SecuritySchemeRecord>(
             r#"
@@ -217,7 +217,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
                 WHERE c.security_scheme_metadata = $1
                 "#,
         )
-        .bind(security_scheme_id)
+        .bind(security_scheme_id.to_string())
         .fetch_optional(self.db_pool.deref())
         .await
         .map_err::<RepoError, _>(|e| e.into())?;
@@ -228,7 +228,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
     #[when(sqlx::Sqlite -> get)]
     async fn get(
         &self,
-        security_scheme_id: &String,
+        security_scheme_id: &str,
     ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
         let security_scheme_record = sqlx::query_as::<_, SecuritySchemeRecord>(
             r#"

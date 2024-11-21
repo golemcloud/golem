@@ -868,6 +868,7 @@ mod internal {
     use golem_common::model::ComponentId;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
+    use golem_service_base::repo::RepoError;
     use golem_wasm_ast::analysis::analysed_type::{field, record, str, tuple};
     use golem_wasm_ast::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
@@ -888,6 +889,9 @@ mod internal {
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
+    use golem_worker_service_base::repo::security_scheme::{
+        SecuritySchemeRecord, SecuritySchemeRepo,
+    };
     use golem_worker_service_base::service::gateway::security_scheme::{
         DefaultSecuritySchemeService, SecuritySchemeService,
     };
@@ -900,10 +904,45 @@ mod internal {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    struct TestSecuritySchemeRepo {
+        security_scheme: Arc<Mutex<HashMap<String, SecuritySchemeRecord>>>,
+    }
+
+    #[async_trait]
+    impl SecuritySchemeRepo for TestSecuritySchemeRepo {
+        async fn create(
+            &self,
+            security_scheme_record: &SecuritySchemeRecord,
+        ) -> Result<(), RepoError> {
+            self.security_scheme.lock().await.insert(
+                security_scheme_record.security_scheme_id.clone(),
+                security_scheme_record.clone(),
+            );
+            Ok(())
+        }
+
+        async fn get(
+            &self,
+            security_scheme_id: &str,
+        ) -> Result<Option<SecuritySchemeRecord>, RepoError> {
+            Ok(self
+                .security_scheme
+                .lock()
+                .await
+                .get(security_scheme_id)
+                .cloned())
+        }
+    }
 
     pub(crate) fn get_security_scheme_service(
     ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
-        Arc::new(DefaultSecuritySchemeService::default())
+        Arc::new(DefaultSecuritySchemeService::new(Arc::new(
+            TestSecuritySchemeRepo {
+                security_scheme: Arc::new(Mutex::new(HashMap::new())),
+            },
+        )))
     }
 
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}

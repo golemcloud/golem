@@ -122,7 +122,7 @@ impl<Namespace: Display + Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
 
                         match result {
                             Some(v) => SecuritySchemeWithProviderMetadata::try_from(v)
-                                .map_err(|err| SecuritySchemeServiceError::InternalError(err)),
+                                .map_err(SecuritySchemeServiceError::InternalError),
                             None => Err(SecuritySchemeServiceError::NotFound(
                                 security_scheme_identifier.clone(),
                             )),
@@ -155,7 +155,7 @@ impl<Namespace: Display + Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
                     namespace,
                     &security_scheme_with_provider_metadata,
                 )
-                .map_err(|err| SecuritySchemeServiceError::InternalError(err))?;
+                .map_err(SecuritySchemeServiceError::InternalError)?;
 
                 self.repo.create(&record).await.map_err(|err| {
                     SecuritySchemeServiceError::InternalError(err.to_safe_string())
