@@ -31,10 +31,29 @@ pub trait SecuritySchemeService<Namespace> {
         security_scheme_name: &SecuritySchemeIdentifier,
         namespace: &Namespace,
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
+
     async fn create(
         &self,
         namespace: &Namespace,
         security_scheme: &SecurityScheme,
+    ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
+
+    async fn create_constraints(
+        &self,
+        namespace: &Namespace,
+        security_scheme: &SecuritySchemeIdentifier,
+    ) -> Result<(), SecuritySchemeServiceError>;
+
+    async fn update(
+      &self,
+      namespace: &Namespace,
+      security_scheme: &SecurityScheme
+    ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
+
+    async fn delete(
+        &self,
+        namespace: &Namespace,
+        security_scheme: &SecurityScheme
     ) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError>;
 }
 
@@ -147,5 +166,17 @@ impl<Namespace: Clone + Hash + Eq + PartialEq + Send + Sync + 'static>
             }
             Err(err) => Err(SecuritySchemeServiceError::IdentityProviderError(err)),
         }
+    }
+
+    async fn create_constraints(&self, namespace: &Namespace, security_scheme: &SecuritySchemeIdentifier) -> Result<(), SecuritySchemeServiceError> {
+
+    }
+
+    async fn update(&self, namespace: &Namespace, security_scheme: &SecurityScheme) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
+        todo!()
+    }
+
+    async fn delete(&self, namespace: &Namespace, security_scheme: &SecurityScheme) -> Result<SecuritySchemeWithProviderMetadata, SecuritySchemeServiceError> {
+        todo!()
     }
 }

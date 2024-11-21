@@ -75,7 +75,7 @@ mod internal {
         let mut routes = vec![];
 
         for (_, scheme) in security_schemes {
-            let redirect_url = scheme.security_scheme.redirect_url().to_string();
+            let redirect_url = scheme.security_scheme.redirect_uri().to_string();
             let path = AllPathPatterns::parse(redirect_url.as_str())?;
             let method = MethodPattern::Get;
             let binding = GatewayBinding::static_binding(StaticBinding::http_auth_call_back(

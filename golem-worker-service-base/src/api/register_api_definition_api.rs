@@ -122,7 +122,7 @@ impl From<SecuritySchemeWithProviderMetadata> for SecuritySchemeData {
         let scheme_identifier = value.security_scheme.scheme_identifier().to_string();
         let client_id = value.security_scheme.client_id().to_string();
         let client_secret = value.security_scheme.client_secret().secret().to_string();
-        let redirect_url = value.security_scheme.redirect_url().to_string();
+        let redirect_url = value.security_scheme.redirect_uri().to_string();
         let scopes = value
             .security_scheme
             .scopes()

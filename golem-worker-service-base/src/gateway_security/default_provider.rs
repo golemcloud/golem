@@ -71,7 +71,7 @@ impl IdentityProvider for DefaultIdentityProvider {
             security_scheme.security_scheme.client_id().clone(),
             Some(security_scheme.security_scheme.client_secret().clone()),
         )
-        .set_redirect_uri(security_scheme.security_scheme.redirect_url());
+        .set_redirect_uri(security_scheme.security_scheme.redirect_uri());
 
         Ok(OpenIdClient { client })
     }

@@ -35,11 +35,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::Wo
 use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::config::RetryConfig;
 
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::config::DbConfig;
 use golem_service_base::db;
 use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
-use golem_worker_service_base::gateway_security::GoogleIdentityProvider;
 use golem_worker_service_base::service::gateway::api_deployment::{
     ApiDeploymentService, ApiDeploymentServiceDefault,
 };
@@ -185,14 +183,7 @@ impl Services {
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
-        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::new(
-            Cache::new(
-                Some(1024),
-                FullCacheEvictionMode::None,
-                BackgroundEvictionMode::None,
-                "security_Scheme",
-            ),
-        ));
+        let security_scheme_service = Arc::new(DefaultSecuritySchemeService::default());
 
         let definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,
