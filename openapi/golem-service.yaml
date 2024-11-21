@@ -3493,8 +3493,8 @@ components:
     ComponentFilePermissions:
       type: string
       enum:
-      - ReadOnly
-      - ReadWrite
+      - read-only
+      - read-write
     Cors:
       type: object
       properties:
