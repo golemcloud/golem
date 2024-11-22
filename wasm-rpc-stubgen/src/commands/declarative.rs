@@ -577,17 +577,17 @@ pub fn custom_command(config: Config, command: String) -> anyhow::Result<()> {
     if !all_custom_commands.contains(&command) {
         if all_custom_commands.is_empty() {
             bail!(
+                "Custom command {} not found, no custom command is available",
+                command.log_color_error_highlight(),
+            );
+        } else {
+            bail!(
                 "Custom command {} not found, available custom commands: {}",
                 command.log_color_error_highlight(),
                 all_custom_commands
                     .iter()
                     .map(|s| s.log_color_highlight())
                     .join(", ")
-            );
-        } else {
-            bail!(
-                "Custom command {} not found, no custom command is available",
-                command.log_color_error_highlight(),
             );
         }
     }
