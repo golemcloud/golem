@@ -7,8 +7,8 @@ use crate::log::{
 };
 use crate::model::oam;
 use crate::model::wasm_rpc::{
-    include_glob_patter_from_yaml_file, init_oam_app, Application, BuildStep, ComponentName,
-    ProfileName, WasmComponent, DEFAULT_CONFIG_FILE_NAME,
+    include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName, ProfileName,
+    DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::stub::{StubConfig, StubDefinition};
 use crate::validation::ValidatedResult;
@@ -24,7 +24,7 @@ use glob::glob;
 use itertools::Itertools;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -244,11 +244,6 @@ impl ApplicationContext {
     fn profile(&self) -> Option<&ProfileName> {
         self.config.profile.as_ref()
     }
-
-    /*fn component_matches_profile(&self, component_name: &ComponentName) -> bool {
-        self.application
-            .component_matches_profile(component_name, self.profile())
-    }*/
 
     fn update_wit_context(&mut self) -> anyhow::Result<()> {
         to_anyhow(
@@ -532,53 +527,55 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
         log_action("Cleaning", "components");
         let _indent = LogIndent::new();
 
-        fn clean_build_steps(
-            component: &WasmComponent,
-            build_steps: &[BuildStep],
-        ) -> anyhow::Result<()> {
-            for build_step in build_steps {
-                let build_dir = build_step
-                    .dir
-                    .as_ref()
-                    .map(|dir| component.source_dir().join(dir))
-                    .unwrap_or_else(|| component.source_dir().to_path_buf());
+        let all_profiles = {
+            let mut profiles = app
+                .all_profiles()
+                .into_iter()
+                .map(Some)
+                .collect::<HashSet<_>>();
+            profiles.insert(None);
+            profiles
+        };
+        let paths = {
+            let mut paths = BTreeSet::<(&'static str, PathBuf)>::new();
+            for (component_name, component) in app.components() {
+                for profile in &all_profiles {
+                    paths.insert((
+                        "output wit",
+                        app.component_output_wit(component_name, profile.as_ref()),
+                    ));
+                    paths.insert((
+                        "input wasm",
+                        app.component_input_wasm(component_name, profile.as_ref()),
+                    ));
+                    paths.insert((
+                        "output wasm",
+                        app.component_output_wasm(component_name, profile.as_ref()),
+                    ));
 
-                let outputs = compile_and_collect_globs(&build_dir, &build_step.outputs)?;
-                for output in outputs {
-                    delete_path("build step output", &output)?;
+                    let build = &app
+                        .component_properties(component_name, profile.as_ref())
+                        .build;
+                    for build_step in build {
+                        let build_dir = build_step
+                            .dir
+                            .as_ref()
+                            .map(|dir| component.source_dir().join(dir))
+                            .unwrap_or_else(|| component.source_dir().to_path_buf());
+
+                        paths.extend(
+                            compile_and_collect_globs(&build_dir, &build_step.outputs)?
+                                .into_iter()
+                                .map(|path| ("build output", path)),
+                        );
+                    }
                 }
             }
+            paths
+        };
 
-            Ok(())
-        }
-
-        for (component_name, _component) in app.components() {
-            log_action(
-                "Cleaning",
-                format!(
-                    "component {}",
-                    component_name.as_str().log_color_highlight()
-                ),
-            );
-            let _indent = LogIndent::new();
-
-            // TODO
-            /*
-            delete_path("wit output dir", &app.component_output_wit(component_name))?;
-            delete_path("wasm input", &app.component_input_wasm(component_name))?;
-            delete_path("wasm output", &app.component_output_wasm(component_name))?;
-
-            let component_build = app.component_properties(component_name);
-            clean_build_steps(component, &component_build.build)?;
-
-            for (profile, build_steps) in &component_build.build_profiles {
-                log_action(
-                    "Cleaning",
-                    format!("profile {}", profile.log_color_highlight()),
-                );
-                let _indent = LogIndent::new();
-                clean_build_steps(component, build_steps)?;
-            }*/
+        for (context, path) in paths {
+            delete_path(context, &path)?;
         }
     }
 
