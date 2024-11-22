@@ -255,6 +255,7 @@ impl From<ProjectError> for LimitedApiError {
             ProjectError::InternalRepoError(_)
             | ProjectError::FailedToCreateDefaultProject(_)
             | ProjectError::InternalProjectAuthorisationError(_)
+            | ProjectError::InternalConversionError { .. }
             | ProjectError::InternalPlanLimitError(_) => {
                 LimitedApiError::InternalError(Json(ErrorBody {
                     error: value.to_safe_string(),

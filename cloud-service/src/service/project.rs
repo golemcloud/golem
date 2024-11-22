@@ -1,13 +1,17 @@
 use crate::auth::AccountAuthorisation;
-use crate::model::{Project, ProjectData, ProjectType};
+use crate::model::{Project, ProjectData, ProjectPluginInstallationTarget, ProjectType};
 use crate::repo::project::{ProjectRecord, ProjectRepo};
 use crate::service::plan_limit::{PlanLimitError, PlanLimitService};
 use crate::service::project_auth::{ProjectAuthorisationError, ProjectAuthorisationService};
 use async_trait::async_trait;
 use cloud_common::model::Role;
-use golem_common::model::AccountId;
+use golem_common::model::plugin::{
+    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+};
 use golem_common::model::ProjectId;
+use golem_common::model::{AccountId, PluginInstallationId};
 use golem_common::SafeDisplay;
+use golem_service_base::repo::plugin_installation::PluginInstallationRecord;
 use golem_service_base::repo::RepoError;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -27,6 +31,8 @@ pub enum ProjectError {
     FailedToCreateDefaultProject(AccountId),
     #[error("Internal repository error: {0}")]
     InternalRepoError(#[from] RepoError),
+    #[error("Internal error: failed to convert {what}: {error}")]
+    InternalConversionError { what: String, error: String },
 }
 
 impl ProjectError {
@@ -43,6 +49,13 @@ impl ProjectError {
     {
         Self::LimitExceeded(error.to_string())
     }
+
+    pub fn conversion_error(what: impl AsRef<str>, error: String) -> Self {
+        Self::InternalConversionError {
+            what: what.as_ref().to_string(),
+            error,
+        }
+    }
 }
 
 impl SafeDisplay for ProjectError {
@@ -54,6 +67,7 @@ impl SafeDisplay for ProjectError {
             ProjectError::InternalProjectAuthorisationError(inner) => inner.to_safe_string(),
             ProjectError::FailedToCreateDefaultProject(_) => self.to_string(),
             ProjectError::InternalRepoError(inner) => inner.to_safe_string(),
+            ProjectError::InternalConversionError { .. } => self.to_string(),
         }
     }
 }
@@ -110,6 +124,35 @@ pub trait ProjectService {
         project_id: &ProjectId,
         auth: &AccountAuthorisation,
     ) -> Result<Option<Project>, ProjectError>;
+
+    /// Gets the list of installed plugins for a given project
+    async fn get_plugin_installations_for_project(
+        &self,
+        project_id: &ProjectId,
+        auth: &AccountAuthorisation,
+    ) -> Result<Vec<PluginInstallation>, ProjectError>;
+
+    async fn create_plugin_installation_for_project(
+        &self,
+        project_id: &ProjectId,
+        installation: PluginInstallationCreation,
+        auth: &AccountAuthorisation,
+    ) -> Result<PluginInstallation, ProjectError>;
+
+    async fn update_plugin_installation_for_project(
+        &self,
+        project_id: &ProjectId,
+        installation_id: &PluginInstallationId,
+        update: PluginInstallationUpdate,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), ProjectError>;
+
+    async fn delete_plugin_installation_for_project(
+        &self,
+        installation_id: &PluginInstallationId,
+        project_id: &ProjectId,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), ProjectError>;
 }
 
 pub struct ProjectServiceDefault {
@@ -285,6 +328,95 @@ impl ProjectService for ProjectServiceDefault {
             let result = self.project_repo.get(&project_id.0).await?;
             Ok(result.map(|p| p.into()))
         }
+    }
+
+    async fn get_plugin_installations_for_project(
+        &self,
+        project_id: &ProjectId,
+        auth: &AccountAuthorisation,
+    ) -> Result<Vec<PluginInstallation>, ProjectError> {
+        is_authorised(&Role::ViewProject, auth)?;
+        let owner_record = auth.as_plugin_owner().into();
+        let records = self
+            .project_repo
+            .get_installed_plugins(&owner_record, &project_id.0)
+            .await?;
+        records
+            .into_iter()
+            .map(PluginInstallation::try_from)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| ProjectError::conversion_error("plugin installation", e))
+    }
+
+    async fn create_plugin_installation_for_project(
+        &self,
+        project_id: &ProjectId,
+        installation: PluginInstallationCreation,
+        auth: &AccountAuthorisation,
+    ) -> Result<PluginInstallation, ProjectError> {
+        is_authorised(&Role::UpdateProject, auth)?;
+        let owner_record = auth.as_plugin_owner().into();
+
+        let installation = installation.with_generated_id();
+        let record = PluginInstallationRecord {
+            installation_id: installation.id.0,
+            plugin_name: installation.name.clone(),
+            plugin_version: installation.version.clone(),
+            priority: installation.priority,
+            parameters: serde_json::to_vec(&installation.parameters).map_err(|e| {
+                ProjectError::conversion_error("plugin installation parameters", e.to_string())
+            })?,
+            target: ProjectPluginInstallationTarget {
+                project_id: project_id.clone(),
+            }
+            .into(),
+            owner: owner_record,
+        };
+
+        self.project_repo.install_plugin(&record).await?;
+
+        Ok(installation)
+    }
+
+    async fn update_plugin_installation_for_project(
+        &self,
+        project_id: &ProjectId,
+        installation_id: &PluginInstallationId,
+        update: PluginInstallationUpdate,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), ProjectError> {
+        is_authorised(&Role::UpdateProject, auth)?;
+        let owner_record = auth.as_plugin_owner().into();
+
+        self.project_repo
+            .update_plugin_installation(
+                &owner_record,
+                &project_id.0,
+                &installation_id.0,
+                update.priority,
+                serde_json::to_vec(&update.parameters).map_err(|e| {
+                    ProjectError::conversion_error("plugin installation parameters", e.to_string())
+                })?,
+            )
+            .await?;
+
+        Ok(())
+    }
+
+    async fn delete_plugin_installation_for_project(
+        &self,
+        installation_id: &PluginInstallationId,
+        project_id: &ProjectId,
+        auth: &AccountAuthorisation,
+    ) -> Result<(), ProjectError> {
+        is_authorised(&Role::UpdateProject, auth)?;
+        let owner_record = auth.as_plugin_owner().into();
+
+        self.project_repo
+            .uninstall_plugin(&owner_record, &project_id.0, &installation_id.0)
+            .await?;
+
+        Ok(())
     }
 }
 

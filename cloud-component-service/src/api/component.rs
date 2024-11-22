@@ -1,14 +1,20 @@
-use crate::api::ApiTags;
-use crate::model::*;
-use crate::service::component::{ComponentError as ComponentServiceError, ComponentService};
+use crate::api::{ApiTags, ComponentError, Result};
+use crate::model::{Component, ComponentQuery};
+use crate::service::component::CloudComponentService;
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use futures_util::TryStreamExt;
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::ProjectId;
+use golem_common::model::plugin::{
+    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+};
+use golem_common::model::{
+    ComponentFilePathWithPermissionsList, Empty, PluginInstallationId, ProjectId,
+};
 use golem_common::model::{ComponentId, ComponentType};
-use golem_common::{recorded_http_api_request, SafeDisplay};
-use golem_service_base::model::*;
-use poem::error::ReadBodyError;
+use golem_common::recorded_http_api_request;
+use golem_component_service_base::model::{
+    InitialComponentFilesArchiveAndPermissions, UpdatePayload,
+};
+use golem_service_base::model::{ComponentName, ErrorBody, ErrorsBody, VersionedComponentId};
 use poem::Body;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::{Binary, Json};
@@ -17,115 +23,23 @@ use poem_openapi::*;
 use std::sync::Arc;
 use tracing::Instrument;
 
-#[derive(ApiResponse, Debug, Clone)]
-pub enum ComponentError {
-    /// Invalid request, returning with a list of issues detected in the request
-    #[oai(status = 400)]
-    BadRequest(Json<ErrorsBody>),
-    /// Unauthorized
-    #[oai(status = 401)]
-    Unauthorized(Json<ErrorBody>),
-    /// Maximum number of components exceeded
-    #[oai(status = 403)]
-    LimitExceeded(Json<ErrorBody>),
-    /// Component not found
-    #[oai(status = 404)]
-    NotFound(Json<ErrorBody>),
-    /// Component already exists
-    #[oai(status = 409)]
-    AlreadyExists(Json<ErrorBody>),
-    /// Internal server error
-    #[oai(status = 500)]
-    InternalError(Json<ErrorBody>),
-}
-
-impl TraceErrorKind for ComponentError {
-    fn trace_error_kind(&self) -> &'static str {
-        match &self {
-            ComponentError::BadRequest(_) => "BadRequest",
-            ComponentError::NotFound(_) => "NotFound",
-            ComponentError::AlreadyExists(_) => "AlreadyExists",
-            ComponentError::LimitExceeded(_) => "LimitExceeded",
-            ComponentError::Unauthorized(_) => "Unauthorized",
-            ComponentError::InternalError(_) => "InternalError",
-        }
-    }
-}
-
 #[derive(Multipart)]
+#[oai(rename_all = "camelCase")]
 pub struct UploadPayload {
     query: JsonField<ComponentQuery>,
     component: Upload,
-}
-
-type Result<T> = std::result::Result<T, ComponentError>;
-
-impl From<ComponentServiceError> for ComponentError {
-    fn from(value: ComponentServiceError) -> Self {
-        match value {
-            ComponentServiceError::Unauthorized(_) => {
-                ComponentError::Unauthorized(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::ComponentProcessing(_) => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_safe_string()],
-                }))
-            }
-            ComponentServiceError::UnknownComponentId(_)
-            | ComponentServiceError::UnknownVersionedComponentId(_)
-            | ComponentServiceError::UnknownProject(_) => {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec![value.to_safe_string()],
-                }))
-            }
-            ComponentServiceError::LimitExceeded(_) => {
-                ComponentError::LimitExceeded(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::AlreadyExists(_) => {
-                ComponentError::AlreadyExists(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
-            ComponentServiceError::InternalAuthServiceError(_)
-            | ComponentServiceError::InternalBaseComponentError(_)
-            | ComponentServiceError::InternalLimitError(_)
-            | ComponentServiceError::InternalProjectError(_)
-            | ComponentServiceError::InternalRepoError(_) => {
-                ComponentError::InternalError(Json(ErrorBody {
-                    error: value.to_safe_string(),
-                }))
-            }
-        }
-    }
-}
-
-impl From<ReadBodyError> for ComponentError {
-    fn from(value: ReadBodyError) -> Self {
-        ComponentError::InternalError(Json(ErrorBody {
-            error: value.to_string(),
-        }))
-    }
-}
-
-impl From<std::io::Error> for ComponentError {
-    fn from(value: std::io::Error) -> Self {
-        ComponentError::InternalError(Json(ErrorBody {
-            error: value.to_string(),
-        }))
-    }
+    component_type: Option<ComponentType>,
+    files_permissions: Option<ComponentFilePathWithPermissionsList>,
+    files: Option<Upload>,
 }
 
 pub struct ComponentApi {
-    component_service: Arc<dyn ComponentService + Sync + Send>,
+    component_service: Arc<CloudComponentService>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Component)]
 impl ComponentApi {
-    pub fn new(component_service: Arc<dyn ComponentService + Sync + Send>) -> Self {
+    pub fn new(component_service: Arc<CloudComponentService>) -> Self {
         Self { component_service }
     }
 
@@ -149,7 +63,7 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<crate::model::Component>>> {
+    ) -> Result<Json<Vec<Component>>> {
         let auth = CloudAuthCtx::new(token.secret());
         let response = self.component_service.get(&component_id.0, &auth).await?;
         Ok(Json(response))
@@ -159,9 +73,9 @@ impl ComponentApi {
     #[oai(
         path = "/:component_id/upload",
         method = "put",
-        operation_id = "update_component"
+        operation_id = "upload_component"
     )]
-    async fn update_component(
+    async fn upload_component(
         &self,
         component_id: Path<ComponentId>,
         wasm: Binary<Body>,
@@ -169,7 +83,7 @@ impl ComponentApi {
         /// is used.
         component_type: Query<Option<ComponentType>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::Component>> {
+    ) -> Result<Json<Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "update_component",
@@ -178,7 +92,47 @@ impl ComponentApi {
         let response = {
             let data = wasm.0.into_vec().await?;
             self.component_service
-                .update(&component_id.0, component_type.0, data, &auth)
+                .update(&component_id.0, component_type.0, data, None, &auth)
+                .instrument(record.span.clone())
+                .await
+                .map_err(|e| e.into())
+                .map(Json)
+        };
+        record.result(response)
+    }
+
+    /// Update a component
+    #[oai(
+        path = "/:component_id/updates",
+        method = "post",
+        operation_id = "update_component"
+    )]
+    async fn update_component(
+        &self,
+        component_id: Path<ComponentId>,
+        payload: UpdatePayload,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Component>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let record = recorded_http_api_request!(
+            "update_component",
+            component_id = component_id.0.to_string()
+        );
+        let response = {
+            let data = payload.component.into_vec().await?;
+            let files_file = payload.files.map(|f| f.into_file());
+
+            let files = files_file
+                .zip(payload.files_permissions)
+                .map(
+                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                        archive,
+                        files: permissions.values,
+                    },
+                );
+
+            self.component_service
+                .update(&component_id.0, payload.component_type, data, files, &auth)
                 .instrument(record.span.clone())
                 .await
                 .map_err(|e| e.into())
@@ -196,7 +150,7 @@ impl ComponentApi {
         &self,
         payload: UploadPayload,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::Component>> {
+    ) -> Result<Json<Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "create_component",
@@ -207,16 +161,25 @@ impl ComponentApi {
             let data = payload.component.into_vec().await?;
             let component_name = payload.query.0.component_name;
             let project_id = payload.query.0.project_id;
+
+            let files_file = payload.files.map(|f| f.into_file());
+
+            let files = files_file
+                .zip(payload.files_permissions)
+                .map(
+                    |(archive, permissions)| InitialComponentFilesArchiveAndPermissions {
+                        archive,
+                        files: permissions.values,
+                    },
+                );
+
             self.component_service
                 .create(
                     project_id,
                     &component_name,
-                    payload
-                        .query
-                        .0
-                        .component_type
-                        .unwrap_or(ComponentType::Durable),
+                    payload.component_type.unwrap_or(ComponentType::Durable),
                     data,
+                    files,
                     &auth,
                 )
                 .instrument(record.span.clone())
@@ -274,7 +237,7 @@ impl ComponentApi {
         #[oai(name = "component_id")] component_id: Path<ComponentId>,
         #[oai(name = "version")] version: Path<String>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::Component>> {
+    ) -> Result<Json<Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_component_metadata",
@@ -283,11 +246,7 @@ impl ComponentApi {
         );
 
         let response = {
-            let version_int = version.0.parse::<u64>().map_err(|_| {
-                ComponentError::BadRequest(Json(ErrorsBody {
-                    errors: vec!["Invalid version".to_string()],
-                }))
-            })?;
+            let version_int = Self::parse_version_path_segment(&version.0)?;
 
             let versioned_component_id = VersionedComponentId {
                 component_id: component_id.0,
@@ -317,7 +276,7 @@ impl ComponentApi {
         &self,
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<crate::model::Component>> {
+    ) -> Result<Json<Component>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_latest_component_metadata",
@@ -348,7 +307,7 @@ impl ComponentApi {
         #[oai(name = "component-name")]
         component_name: Query<Option<ComponentName>>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<Vec<crate::model::Component>>> {
+    ) -> Result<Json<Vec<Component>>> {
         let auth = CloudAuthCtx::new(token.secret());
         let record = recorded_http_api_request!(
             "get_components",
@@ -367,14 +326,148 @@ impl ComponentApi {
         record.result(response)
     }
 
-    fn handle_not_found(
-        response: Option<crate::model::Component>,
-    ) -> Result<Json<crate::model::Component>> {
+    /// Gets the list of plugins installed for the given component version
+    #[oai(
+        path = "/:component_id/versions/:version/plugins/installs",
+        method = "get",
+        operation_id = "get_installed_plugins"
+    )]
+    async fn get_installed_plugins(
+        &self,
+        component_id: Path<ComponentId>,
+        version: Path<String>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Vec<PluginInstallation>>> {
+        let auth = CloudAuthCtx::new(token.secret());
+        let record = recorded_http_api_request!(
+            "get_installed_plugins",
+            component_id = component_id.0.to_string(),
+            version = version.0,
+        );
+
+        let version_int = Self::parse_version_path_segment(&version.0)?;
+
+        let response = self
+            .component_service
+            .get_plugin_installations_for_component(&auth, &component_id.0, version_int)
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
+    }
+
+    /// Installs a new plugin for this component
+    #[oai(
+        path = "/:component_id/latest/plugins/installs",
+        method = "post",
+        operation_id = "install_plugin"
+    )]
+    async fn install_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        plugin: Json<PluginInstallationCreation>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<PluginInstallation>> {
+        let auth = CloudAuthCtx::new(token.secret());
+
+        let record = recorded_http_api_request!(
+            "install_plugin",
+            component_id = component_id.0.to_string(),
+            plugin_name = plugin.name.clone(),
+            plugin_version = plugin.version.clone()
+        );
+
+        let response = self
+            .component_service
+            .create_plugin_installation_for_component(&auth, &component_id.0, plugin.0)
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
+    }
+
+    /// Updates the priority or parameters of a plugin installation
+    #[oai(
+        path = "/:component_id/versions/latest/plugins/installs/:installation_id",
+        method = "put",
+        operation_id = "update_installed_plugin"
+    )]
+    async fn update_installed_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        installation_id: Path<PluginInstallationId>,
+        update: Json<PluginInstallationUpdate>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Empty>> {
+        let auth = CloudAuthCtx::new(token.secret());
+
+        let record = recorded_http_api_request!(
+            "update_installed_plugin",
+            component_id = component_id.0.to_string(),
+            installation_id = installation_id.0.to_string()
+        );
+
+        let response = self
+            .component_service
+            .update_plugin_installation_for_component(
+                &auth,
+                &installation_id.0,
+                &component_id.0,
+                update.0,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
+
+        record.result(response)
+    }
+
+    /// Uninstalls a plugin from this component
+    #[oai(
+        path = "/:component_id/latest/plugins/installs/:installation_id",
+        method = "delete",
+        operation_id = "uninstall_plugin"
+    )]
+    async fn uninstall_plugin(
+        &self,
+        component_id: Path<ComponentId>,
+        installation_id: Path<PluginInstallationId>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<Empty>> {
+        let auth = CloudAuthCtx::new(token.secret());
+
+        let record = recorded_http_api_request!(
+            "uninstall_plugin",
+            component_id = component_id.0.to_string(),
+            installation_id = installation_id.0.to_string()
+        );
+
+        let response = self
+            .component_service
+            .delete_plugin_installation_for_component(&auth, &installation_id.0, &component_id.0)
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
+
+        record.result(response)
+    }
+
+    fn handle_not_found(response: Option<Component>) -> Result<Json<Component>> {
         match response {
             Some(component) => Ok(Json(component)),
             None => Err(ComponentError::NotFound(Json(ErrorBody {
                 error: "Component not found".to_string(),
             }))),
         }
+    }
+
+    fn parse_version_path_segment(version: &str) -> Result<u64> {
+        version.parse::<u64>().map_err(|_| {
+            ComponentError::BadRequest(Json(ErrorsBody {
+                errors: vec!["Invalid version".to_string()],
+            }))
+        })
     }
 }

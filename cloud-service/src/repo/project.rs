@@ -2,14 +2,19 @@ use std::ops::Deref;
 use std::result::Result;
 use std::sync::Arc;
 
+use crate::model::{Project, ProjectData, ProjectPluginInstallationTarget, ProjectType};
+use crate::repo::plugin_installation::ProjectPluginInstallationTargetRow;
 use async_trait::async_trait;
+use cloud_common::model::CloudPluginOwner;
+use cloud_common::repo::CloudPluginOwnerRow;
 use conditional_trait_gen::trait_gen;
 use golem_common::model::ProjectId;
+use golem_service_base::repo::plugin_installation::{
+    DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
+};
 use golem_service_base::repo::RepoError;
 use sqlx::{Database, Pool, Row};
 use uuid::Uuid;
-
-use crate::model::{Project, ProjectData, ProjectType};
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct ProjectRecord {
@@ -67,15 +72,58 @@ pub trait ProjectRepo {
     async fn get_all(&self) -> Result<Vec<ProjectRecord>, RepoError>;
 
     async fn delete(&self, project_id: &Uuid) -> Result<(), RepoError>;
+
+    async fn get_installed_plugins(
+        &self,
+        owner: &CloudPluginOwnerRow,
+        project_id: &Uuid,
+    ) -> Result<
+        Vec<PluginInstallationRecord<CloudPluginOwner, ProjectPluginInstallationTarget>>,
+        RepoError,
+    >;
+
+    async fn install_plugin(
+        &self,
+        record: &PluginInstallationRecord<CloudPluginOwner, ProjectPluginInstallationTarget>,
+    ) -> Result<(), RepoError>;
+
+    async fn uninstall_plugin(
+        &self,
+        owner: &CloudPluginOwnerRow,
+        project_id: &Uuid,
+        plugin_installation_id: &Uuid,
+    ) -> Result<(), RepoError>;
+
+    async fn update_plugin_installation(
+        &self,
+        owner: &CloudPluginOwnerRow,
+        project_id: &Uuid,
+        plugin_installation_id: &Uuid,
+        new_priority: i32,
+        new_parameters: Vec<u8>,
+    ) -> Result<(), RepoError>;
 }
 
 pub struct DbProjectRepo<DB: Database> {
     db_pool: Arc<Pool<DB>>,
+    plugin_installation_queries: Arc<
+        dyn PluginInstallationRepoQueries<DB, CloudPluginOwner, ProjectPluginInstallationTarget>
+            + Send
+            + Sync,
+    >,
 }
 
-impl<DB: Database> DbProjectRepo<DB> {
+impl<DB: Database + Sync> DbProjectRepo<DB>
+where
+    DbPluginInstallationRepoQueries<DB>:
+        PluginInstallationRepoQueries<DB, CloudPluginOwner, ProjectPluginInstallationTarget>,
+{
     pub fn new(db_pool: Arc<Pool<DB>>) -> Self {
-        Self { db_pool }
+        let plugin_installation_queries = Arc::new(DbPluginInstallationRepoQueries::new());
+        Self {
+            db_pool,
+            plugin_installation_queries,
+        }
     }
 }
 
@@ -202,6 +250,75 @@ impl ProjectRepo for DbProjectRepo<sqlx::Postgres> {
 
         tx.commit().await?;
 
+        Ok(())
+    }
+
+    async fn get_installed_plugins(
+        &self,
+        owner: &CloudPluginOwnerRow,
+        project_id: &Uuid,
+    ) -> Result<
+        Vec<PluginInstallationRecord<CloudPluginOwner, ProjectPluginInstallationTarget>>,
+        RepoError,
+    > {
+        let target = ProjectPluginInstallationTargetRow {
+            project_id: *project_id,
+        };
+        let mut query = self.plugin_installation_queries.get_all(owner, &target);
+
+        Ok(query
+            .build_query_as::<PluginInstallationRecord<CloudPluginOwner, ProjectPluginInstallationTarget>>()
+            .fetch_all(self.db_pool.deref())
+            .await?)
+    }
+
+    async fn install_plugin(
+        &self,
+        record: &PluginInstallationRecord<CloudPluginOwner, ProjectPluginInstallationTarget>,
+    ) -> Result<(), RepoError> {
+        let mut query = self.plugin_installation_queries.create(record);
+
+        let _ = query.build().execute(self.db_pool.deref()).await?;
+        Ok(())
+    }
+
+    async fn uninstall_plugin(
+        &self,
+        owner: &CloudPluginOwnerRow,
+        project_id: &Uuid,
+        plugin_installation_id: &Uuid,
+    ) -> Result<(), RepoError> {
+        let target_row = ProjectPluginInstallationTargetRow {
+            project_id: *project_id,
+        };
+        let mut query =
+            self.plugin_installation_queries
+                .delete(owner, &target_row, plugin_installation_id);
+
+        let _ = query.build().execute(self.db_pool.deref()).await?;
+        Ok(())
+    }
+
+    async fn update_plugin_installation(
+        &self,
+        owner: &CloudPluginOwnerRow,
+        project_id: &Uuid,
+        plugin_installation_id: &Uuid,
+        new_priority: i32,
+        new_parameters: Vec<u8>,
+    ) -> Result<(), RepoError> {
+        let target_row = ProjectPluginInstallationTargetRow {
+            project_id: *project_id,
+        };
+        let mut query = self.plugin_installation_queries.update(
+            owner,
+            &target_row,
+            plugin_installation_id,
+            new_priority,
+            new_parameters,
+        );
+
+        let _ = query.build().execute(self.db_pool.deref()).await?;
         Ok(())
     }
 }

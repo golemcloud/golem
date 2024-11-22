@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use crate::api::common::ApiTags;
+use crate::service::auth::AuthService;
 use crate::service::worker::{WorkerError as WorkerServiceError, WorkerService};
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
 use cloud_common::clients::auth::AuthServiceError;
+use cloud_common::model::ProjectAction;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
@@ -171,6 +173,12 @@ impl From<WorkerServiceError> for WorkerError {
                         }),
                     }))
                 }
+                BaseServiceError::FileNotFound(_) => WorkerError::BadRequest(Json(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                })),
+                BaseServiceError::BadFileType(_) => WorkerError::BadRequest(Json(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                })),
             },
             WorkerServiceError::InternalAuthServiceError(_) => {
                 WorkerError::InternalError(Json(GolemErrorBody {
@@ -202,19 +210,22 @@ impl From<AuthServiceError> for WorkerError {
 }
 
 pub struct WorkerApi {
-    component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
-    worker_service: Arc<dyn WorkerService + Sync + Send>,
+    component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
+    worker_service: Arc<dyn WorkerService + Send + Sync>,
+    auth_service: Arc<dyn AuthService + Send + Sync>,
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
 impl WorkerApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
-        worker_service: Arc<dyn WorkerService + Sync + Send>,
+        component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        auth_service: Arc<dyn AuthService + Send + Sync>,
     ) -> Self {
         Self {
             component_service,
             worker_service,
+            auth_service,
         }
     }
 
@@ -265,6 +276,15 @@ impl WorkerApi {
 
             let worker_id = validated_worker_id(component_id, name)?;
 
+            let namespace = self
+                .auth_service
+                .is_authorized_by_component(
+                    &worker_id.component_id,
+                    ProjectAction::CreateWorker,
+                    &auth,
+                )
+                .await?;
+
             let _worker = self
                 .worker_service
                 .create(
@@ -272,7 +292,7 @@ impl WorkerApi {
                     latest_component.versioned_component_id.version,
                     args,
                     env,
-                    &auth,
+                    namespace,
                 )
                 .instrument(record.span.clone())
                 .await?;
@@ -305,9 +325,14 @@ impl WorkerApi {
 
         let record =
             recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::DeleteWorker, &auth)
+            .await?;
         let response = self
             .worker_service
-            .delete(&worker_id, &auth)
+            .delete(&worker_id, namespace)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -342,6 +367,11 @@ impl WorkerApi {
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
         );
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let response = self
             .worker_service
             .validate_and_invoke_and_await_typed(
@@ -350,7 +380,7 @@ impl WorkerApi {
                 function.0,
                 params.0.params,
                 None,
-                &auth,
+                namespace,
             )
             .instrument(record.span.clone())
             .await
@@ -386,6 +416,15 @@ impl WorkerApi {
             idempotency_key = idempotency_key.0.as_ref().map(|v| v.value.clone()),
             function = function.0
         );
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(
+                &target_worker_id.component_id,
+                ProjectAction::UpdateWorker,
+                &auth,
+            )
+            .await?;
         let response = self
             .worker_service
             .validate_and_invoke_and_await_typed(
@@ -394,7 +433,7 @@ impl WorkerApi {
                 function.0,
                 params.0.params,
                 None,
-                &auth,
+                namespace,
             )
             .instrument(record.span.clone())
             .await
@@ -432,6 +471,10 @@ impl WorkerApi {
             function = function.0
         );
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let response = self
             .worker_service
             .validate_and_invoke(
@@ -440,7 +483,7 @@ impl WorkerApi {
                 function.0,
                 params.0.params,
                 None,
-                &auth,
+                namespace,
             )
             .instrument(record.span.clone())
             .await
@@ -478,6 +521,14 @@ impl WorkerApi {
             function = function.0
         );
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(
+                &target_worker_id.component_id,
+                ProjectAction::UpdateWorker,
+                &auth,
+            )
+            .await?;
         let response = self
             .worker_service
             .validate_and_invoke(
@@ -486,7 +537,7 @@ impl WorkerApi {
                 function.0,
                 params.0.params,
                 None,
-                &auth,
+                namespace,
             )
             .instrument(record.span.clone())
             .await
@@ -521,9 +572,13 @@ impl WorkerApi {
 
         let CompleteParameters { oplog_idx, data } = params.0;
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let response = self
             .worker_service
-            .complete_promise(&worker_id, oplog_idx, data, &auth)
+            .complete_promise(&worker_id, oplog_idx, data, namespace)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -558,9 +613,17 @@ impl WorkerApi {
         let record =
             recorded_http_api_request!("interrupt_worker", worker_id = worker_id.to_string());
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let response = self
             .worker_service
-            .interrupt(&worker_id, recover_immediately.0.unwrap_or(false), &auth)
+            .interrupt(
+                &worker_id,
+                recover_immediately.0.unwrap_or(false),
+                namespace,
+            )
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -603,9 +666,13 @@ impl WorkerApi {
         let record =
             recorded_http_api_request!("get_worker_metadata", worker_id = worker_id.to_string());
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
         let response = self
             .worker_service
-            .get_metadata(&worker_id, &auth)
+            .get_metadata(&worker_id, namespace)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -658,6 +725,11 @@ impl WorkerApi {
             "get_workers_metadata",
             component_id = component_id.0.to_string()
         );
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&component_id.0, ProjectAction::ViewWorker, &auth)
+            .await?;
         let response = {
             let filter = match filter.0 {
                 Some(filters) if !filters.is_empty() => {
@@ -683,7 +755,7 @@ impl WorkerApi {
                     cursor.unwrap_or_default(),
                     count.0.unwrap_or(50),
                     precise.0.unwrap_or(false),
-                    &auth,
+                    namespace,
                 )
                 .instrument(record.span.clone())
                 .await
@@ -734,6 +806,10 @@ impl WorkerApi {
             component_id = component_id.0.to_string()
         );
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&component_id.0, ProjectAction::ViewWorker, &auth)
+            .await?;
         let response = self
             .worker_service
             .find_metadata(
@@ -742,7 +818,7 @@ impl WorkerApi {
                 params.cursor.clone().unwrap_or_default(),
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
-                &auth,
+                namespace,
             )
             .instrument(record.span.clone())
             .await
@@ -770,9 +846,14 @@ impl WorkerApi {
         let worker_id = validated_worker_id(component_id.0, worker_name.0)?;
 
         let record = recorded_http_api_request!("resume_worker", worker_id = worker_id.to_string());
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let response = self
             .worker_service
-            .resume(&worker_id, &auth)
+            .resume(&worker_id, namespace)
             .instrument(record.span.clone())
             .await
             .map_err(|e| e.into())
@@ -799,13 +880,17 @@ impl WorkerApi {
 
         let record = recorded_http_api_request!("update_worker", worker_id = worker_id.to_string());
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let response = self
             .worker_service
             .update(
                 &worker_id,
                 params.mode.clone().into(),
                 params.target_version,
-                &auth,
+                namespace,
             )
             .instrument(record.span.clone())
             .await
@@ -825,9 +910,10 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
-        from: Query<u64>,
+        from: Query<Option<u64>>,
         count: Query<u64>,
         cursor: Query<Option<OplogCursor>>,
+        query: Query<Option<String>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetOplogResponse>> {
         let auth = CloudAuthCtx::new(token.secret());
@@ -835,21 +921,63 @@ impl WorkerApi {
 
         let record = recorded_http_api_request!("get_oplog", worker_id = worker_id.to_string());
 
-        let response = self
-            .worker_service
-            .get_oplog(
-                &worker_id,
-                OplogIndex::from_u64(from.0),
-                cursor.0,
-                count.0,
-                &auth,
-            )
-            .instrument(record.span.clone())
-            .await
-            .map_err(|e| e.into())
-            .map(Json);
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
 
-        record.result(response)
+        match (from.0, query.0) {
+            (Some(_), Some(_)) => Err(WorkerError::BadRequest(Json(ErrorsBody {
+                errors: vec![
+                    "Cannot specify both the 'from' and the 'query' parameters".to_string()
+                ],
+            }))),
+            (Some(from), None) => {
+                let response = self
+                    .worker_service
+                    .get_oplog(
+                        &worker_id,
+                        OplogIndex::from_u64(from),
+                        cursor.0,
+                        count.0,
+                        namespace,
+                    )
+                    .instrument(record.span.clone())
+                    .await
+                    .map_err(|e| e.into())
+                    .map(Json);
+
+                record.result(response)
+            }
+            (None, Some(query)) => {
+                let response = self
+                    .worker_service
+                    .search_oplog(&worker_id, cursor.0, count.0, query, namespace)
+                    .instrument(record.span.clone())
+                    .await
+                    .map_err(|e| e.into())
+                    .map(Json);
+
+                record.result(response)
+            }
+            (None, None) => {
+                let response = self
+                    .worker_service
+                    .get_oplog(
+                        &worker_id,
+                        OplogIndex::INITIAL,
+                        cursor.0,
+                        count.0,
+                        namespace,
+                    )
+                    .instrument(record.span.clone())
+                    .await
+                    .map_err(|e| e.into())
+                    .map(Json);
+
+                record.result(response)
+            }
+        }
     }
 }
 

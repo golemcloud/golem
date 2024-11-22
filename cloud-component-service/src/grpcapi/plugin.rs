@@ -1,0 +1,308 @@
+use crate::grpcapi::{auth, bad_request_error};
+use crate::model::CloudPluginScope;
+use crate::service::plugin::CloudPluginService;
+use async_trait::async_trait;
+use cloud_api_grpc::proto::golem::cloud::component::v1::plugin_service_server::PluginService;
+use cloud_api_grpc::proto::golem::cloud::component::v1::{
+    get_plugin_response, list_plugins_response, CreatePluginRequest, GetPluginResponse,
+    GetPluginSuccessResponse, ListPluginsRequest, ListPluginsResponse, ListPluginsSuccessResponse,
+};
+use cloud_api_grpc::proto::golem::cloud::component::PluginDefinition;
+use cloud_common::model::CloudPluginOwner;
+use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
+use golem_api_grpc::proto::golem::component::v1::{
+    component_error, create_plugin_response, delete_plugin_response, ComponentError,
+    CreatePluginResponse, DeletePluginRequest, DeletePluginResponse, GetPluginRequest,
+    ListPluginVersionsRequest,
+};
+use golem_common::recorded_grpc_api_request;
+use golem_component_service_base::api::common::ComponentTraceErrorKind;
+use std::sync::Arc;
+use tonic::metadata::MetadataMap;
+use tonic::{Request, Response, Status};
+use tracing::Instrument;
+
+pub struct PluginGrpcApi {
+    plugin_service: Arc<CloudPluginService>,
+}
+
+impl PluginGrpcApi {
+    pub fn new(plugin_service: Arc<CloudPluginService>) -> Self {
+        Self { plugin_service }
+    }
+
+    async fn list_plugins(
+        &self,
+        request: &ListPluginsRequest,
+        metadata: MetadataMap,
+    ) -> Result<Vec<PluginDefinition>, ComponentError> {
+        let auth = auth(metadata)?;
+
+        let plugins = match &request.scope {
+            Some(scope) => {
+                let scope = scope
+                    .clone()
+                    .try_into()
+                    .map_err(|err| bad_request_error(&format!("Invalid plugin scope: {err}")))?;
+
+                self.plugin_service
+                    .list_plugins_for_scope(&auth, &scope)
+                    .await?
+            }
+            None => self.plugin_service.list_plugins(&auth).await?,
+        };
+
+        Ok(plugins.into_iter().map(plugin_definition_to_grpc).collect())
+    }
+
+    async fn list_plugin_versions(
+        &self,
+        request: &ListPluginVersionsRequest,
+        metadata: MetadataMap,
+    ) -> Result<Vec<PluginDefinition>, ComponentError> {
+        let auth = auth(metadata)?;
+
+        let plugins = self
+            .plugin_service
+            .list_plugin_versions(&auth, &request.name)
+            .await?;
+
+        Ok(plugins.into_iter().map(plugin_definition_to_grpc).collect())
+    }
+
+    async fn create_plugin(
+        &self,
+        request: &CreatePluginRequest,
+        metadata: MetadataMap,
+    ) -> Result<(), ComponentError> {
+        let auth = auth(metadata)?;
+
+        let plugin = plugin_definition_wo_owner_from_grpc(
+            request
+                .plugin
+                .clone()
+                .ok_or(bad_request_error("Missing plugin specification"))?,
+        )
+        .map_err(|err| bad_request_error(&format!("Invalid plugin specification: {err}")))?;
+
+        self.plugin_service.create_plugin(&auth, plugin).await?;
+
+        Ok(())
+    }
+
+    async fn get_plugin(
+        &self,
+        request: &GetPluginRequest,
+        metadata: MetadataMap,
+    ) -> Result<PluginDefinition, ComponentError> {
+        let auth = auth(metadata)?;
+
+        let plugin = self
+            .plugin_service
+            .get(&auth, &request.name, &request.version)
+            .await?;
+
+        match plugin {
+            Some(plugin) => Ok(plugin_definition_to_grpc(plugin)),
+            None => Err(ComponentError {
+                error: Some(component_error::Error::NotFound(ErrorBody {
+                    error: "Plugin not found".to_string(),
+                })),
+            }),
+        }
+    }
+
+    async fn delete_plugin(
+        &self,
+        request: &DeletePluginRequest,
+        metadata: MetadataMap,
+    ) -> Result<(), ComponentError> {
+        let auth = auth(metadata)?;
+
+        self.plugin_service
+            .delete(&auth, &request.name, &request.version)
+            .await?;
+
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl PluginService for PluginGrpcApi {
+    async fn list_plugins(
+        &self,
+        request: Request<ListPluginsRequest>,
+    ) -> Result<Response<ListPluginsResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!("list_plugins",);
+
+        let response = match self
+            .list_plugins(&request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(plugins) => record.succeed(list_plugins_response::Result::Success(
+                ListPluginsSuccessResponse { plugins },
+            )),
+            Err(error) => record.fail(
+                list_plugins_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(ListPluginsResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn list_plugin_versions(
+        &self,
+        request: Request<ListPluginVersionsRequest>,
+    ) -> Result<Response<ListPluginsResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!("list_plugin_versions",);
+
+        let response = match self
+            .list_plugin_versions(&request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(plugins) => record.succeed(list_plugins_response::Result::Success(
+                ListPluginsSuccessResponse { plugins },
+            )),
+            Err(error) => record.fail(
+                list_plugins_response::Result::Error(error.clone()),
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(ListPluginsResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn create_plugin(
+        &self,
+        request: Request<CreatePluginRequest>,
+    ) -> Result<Response<CreatePluginResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!("create_plugin",);
+
+        let response = match self
+            .create_plugin(&request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(CreatePluginResponse {
+                result: Some(create_plugin_response::Result::Success(Empty {})),
+            }),
+            Err(error) => record.fail(
+                CreatePluginResponse {
+                    result: Some(create_plugin_response::Result::Error(error.clone())),
+                },
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    async fn get_plugin(
+        &self,
+        request: Request<GetPluginRequest>,
+    ) -> Result<Response<GetPluginResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!("get_plugin",);
+
+        let response = match self
+            .get_plugin(&request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(plugin) => record.succeed(GetPluginResponse {
+                result: Some(get_plugin_response::Result::Success(
+                    GetPluginSuccessResponse {
+                        plugin: Some(plugin),
+                    },
+                )),
+            }),
+            Err(error) => record.fail(
+                GetPluginResponse {
+                    result: Some(get_plugin_response::Result::Error(error.clone())),
+                },
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(response))
+    }
+
+    async fn delete_plugin(
+        &self,
+        request: Request<DeletePluginRequest>,
+    ) -> Result<Response<DeletePluginResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!("delete_plugin",);
+
+        let response = match self
+            .delete_plugin(&request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(_) => record.succeed(DeletePluginResponse {
+                result: Some(delete_plugin_response::Result::Success(Empty {})),
+            }),
+            Err(error) => record.fail(
+                DeletePluginResponse {
+                    result: Some(delete_plugin_response::Result::Error(error.clone())),
+                },
+                &ComponentTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(response))
+    }
+}
+
+// NOTE: Can't define a `From` instance because the gRPC type is defined in `cloud-api-grpc` and the model is defined in `golem-component-service-base`
+fn plugin_definition_to_grpc(
+    plugin_definition: golem_component_service_base::model::PluginDefinition<
+        CloudPluginOwner,
+        CloudPluginScope,
+    >,
+) -> PluginDefinition {
+    PluginDefinition {
+        name: plugin_definition.name,
+        version: plugin_definition.version,
+        scope: Some(plugin_definition.scope.into()),
+        description: plugin_definition.description,
+        icon: plugin_definition.icon,
+        homepage: plugin_definition.homepage,
+        specs: Some(plugin_definition.specs.into()),
+    }
+}
+
+fn plugin_definition_wo_owner_from_grpc(
+    plugin_definition: PluginDefinition,
+) -> Result<
+    golem_component_service_base::model::PluginDefinitionWithoutOwner<CloudPluginScope>,
+    String,
+> {
+    Ok(
+        golem_component_service_base::model::PluginDefinitionWithoutOwner {
+            name: plugin_definition.name,
+            version: plugin_definition.version,
+            scope: plugin_definition
+                .scope
+                .ok_or("Missing scope field")?
+                .try_into()?,
+            description: plugin_definition.description,
+            icon: plugin_definition.icon,
+            homepage: plugin_definition.homepage,
+            specs: plugin_definition
+                .specs
+                .ok_or("Missing specs field")?
+                .try_into()?,
+        },
+    )
+}

@@ -1,6 +1,7 @@
 #[cfg(test)]
 test_r::enable!();
 
+#[allow(clippy::large_enum_variant)]
 pub mod proto {
     tonic::include_proto!("mod");
 

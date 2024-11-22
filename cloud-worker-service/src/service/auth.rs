@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace};
 use cloud_common::clients::auth::{AuthServiceError, BaseAuthService};
+use cloud_common::clients::grant::GrantService;
 use cloud_common::clients::project::ProjectService;
-use cloud_common::model::ProjectAction;
+use cloud_common::model::{ProjectAction, Role};
 use cloud_common::UriBackConversion;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -10,7 +11,7 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::{ComponentId, ProjectId};
+use golem_common::model::{AccountId, ComponentId, ProjectId};
 use golem_common::retries::with_retries;
 use golem_worker_service_base::app_config::ComponentServiceConfig;
 use golem_worker_service_base::service::component::ComponentServiceError;
@@ -40,12 +41,15 @@ pub struct CloudAuthService {
 
 impl CloudAuthService {
     pub fn new(
-        project_service: Arc<dyn ProjectService + Sync + Send>,
+        project_service: Arc<dyn ProjectService + Send + Sync>,
+        grant_service: Arc<dyn GrantService + Send + Sync>,
         component_service_config: ComponentServiceConfig,
     ) -> Self {
-        let common_auth = cloud_common::clients::auth::CloudAuthService::new(project_service);
+        let common_auth =
+            cloud_common::clients::auth::CloudAuthService::new(project_service, grant_service);
 
         let component_service_client = GrpcClient::new(
+            "auth_service",
             |channel| {
                 ComponentServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
@@ -99,7 +103,7 @@ impl CloudAuthService {
                         |(client, id, metadata)| {
                             Box::pin(async move {
                                 let response = client
-                                    .call(move |client| {
+                                    .call("get_latest_component", move |client| {
                                         let request = GetLatestComponentRequest {
                                             component_id: Some(id.clone().into()),
                                         };
@@ -147,15 +151,23 @@ impl CloudAuthService {
 }
 
 #[async_trait]
-impl cloud_common::clients::auth::BaseAuthService for CloudAuthService {
-    async fn is_authorized(
+impl BaseAuthService for CloudAuthService {
+    async fn authorize_role(
+        &self,
+        role: Role,
+        ctx: &CloudAuthCtx,
+    ) -> Result<AccountId, AuthServiceError> {
+        self.common_auth.authorize_role(role, ctx).await
+    }
+
+    async fn authorize_project_action(
         &self,
         project_id: &ProjectId,
         permission: ProjectAction,
         ctx: &CloudAuthCtx,
     ) -> Result<CloudNamespace, AuthServiceError> {
         self.common_auth
-            .is_authorized(project_id, permission, ctx)
+            .authorize_project_action(project_id, permission, ctx)
             .await
     }
 }
@@ -170,7 +182,8 @@ impl AuthService for CloudAuthService {
     ) -> Result<CloudNamespace, AuthServiceError> {
         let project_id = self.get_project(component_id, ctx).await?;
 
-        self.is_authorized(&project_id, permission, ctx).await
+        self.authorize_project_action(&project_id, permission, ctx)
+            .await
     }
 }
 

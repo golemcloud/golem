@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_env_filter;
 use golem_service_base::db;
@@ -7,9 +8,9 @@ use cloud_worker_service::app::{app, dump_openapi_yaml};
 use cloud_worker_service::config::load_or_dump_config;
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> anyhow::Result<()> {
     if std::env::args().any(|arg| arg == "--dump-openapi-yaml") {
-        println!("{}", dump_openapi_yaml().await?);
+        println!("{}", dump_openapi_yaml().await.map_err(|err| anyhow!(err))?);
         Ok(())
     } else if let Some(config) = load_or_dump_config() {
         init_tracing_with_default_env_filter(&config.base_config.tracing);
@@ -45,7 +46,7 @@ async fn main() -> std::io::Result<()> {
             }
         };
 
-        app(&config).await
+        Ok(app(&config).await?)
     } else {
         Ok(())
     }

@@ -1,6 +1,7 @@
 use crate::auth::{CloudAuthCtx, CloudNamespace};
+use crate::clients::grant::{GrantError, GrantService};
 use crate::clients::project::{ProjectError, ProjectService};
-use crate::model::{ProjectAction, TokenSecret};
+use crate::model::{ProjectAction, Role, TokenSecret};
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::worker::v1::{
@@ -16,7 +17,13 @@ use uuid::Uuid;
 
 #[async_trait]
 pub trait BaseAuthService {
-    async fn is_authorized(
+    async fn authorize_role(
+        &self,
+        role: Role,
+        ctx: &CloudAuthCtx,
+    ) -> Result<AccountId, AuthServiceError>;
+
+    async fn authorize_project_action(
         &self,
         project_id: &ProjectId,
         permission: ProjectAction,
@@ -26,18 +33,41 @@ pub trait BaseAuthService {
 
 #[derive(Clone)]
 pub struct CloudAuthService {
-    project_service: Arc<dyn ProjectService + Sync + Send>,
+    project_service: Arc<dyn ProjectService + Send + Sync>,
+    grant_service: Arc<dyn GrantService + Send + Sync>,
 }
 
 impl CloudAuthService {
-    pub fn new(project_service: Arc<dyn ProjectService + Sync + Send>) -> Self {
-        Self { project_service }
+    pub fn new(
+        project_service: Arc<dyn ProjectService + Send + Sync>,
+        grant_service: Arc<dyn GrantService + Send + Sync>,
+    ) -> Self {
+        Self {
+            project_service,
+            grant_service,
+        }
     }
 }
 
 #[async_trait]
 impl BaseAuthService for CloudAuthService {
-    async fn is_authorized(
+    async fn authorize_role(
+        &self,
+        role: Role,
+        ctx: &CloudAuthCtx,
+    ) -> Result<AccountId, AuthServiceError> {
+        let account_and_roles = self
+            .grant_service
+            .get_self_grants(&ctx.token_secret)
+            .await?;
+        if account_and_roles.roles.contains(&role) {
+            Ok(account_and_roles.account_id)
+        } else {
+            Err(AuthServiceError::Forbidden(format!("No role {role:?}")))
+        }
+    }
+
+    async fn authorize_project_action(
         &self,
         project_id: &ProjectId,
         permission: ProjectAction,
@@ -86,6 +116,39 @@ impl SafeDisplay for AuthServiceError {
             AuthServiceError::Unauthorized(_) => self.to_string(),
             AuthServiceError::Forbidden(_) => self.to_string(),
             AuthServiceError::InternalClientError(_) => self.to_string(),
+        }
+    }
+}
+
+impl From<GrantError> for AuthServiceError {
+    fn from(value: GrantError) -> Self {
+        use cloud_api_grpc::proto::golem::cloud::grant::v1::grant_error;
+
+        match value {
+            GrantError::Server(err) => match err.error {
+                Some(grant_error::Error::Unauthorized(error)) => {
+                    AuthServiceError::Unauthorized(error.error)
+                }
+                Some(grant_error::Error::InternalError(error)) => {
+                    AuthServiceError::internal_client_error(error.error)
+                }
+                Some(grant_error::Error::BadRequest(errors)) => {
+                    AuthServiceError::internal_client_error(errors.errors.join(", "))
+                }
+                Some(grant_error::Error::NotFound(error)) => {
+                    AuthServiceError::Forbidden(error.error)
+                }
+                None => AuthServiceError::internal_client_error("Unknown error"),
+            },
+            GrantError::Connection(status) => {
+                AuthServiceError::internal_client_error(format!("Connection error: {status}"))
+            }
+            GrantError::Transport(error) => {
+                AuthServiceError::internal_client_error(format!("Transport error: {error}"))
+            }
+            GrantError::Unknown(error) => {
+                AuthServiceError::internal_client_error(format!("Unknown error: {error}"))
+            }
         }
     }
 }

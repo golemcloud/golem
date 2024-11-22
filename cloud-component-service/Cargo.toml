@@ -22,6 +22,7 @@ golem-wasm-ast = { workspace = true }
 cloud-api-grpc = { path = "../cloud-api-grpc" }
 cloud-common = { path = "../cloud-common" }
 
+anyhow = { workspace = true}
 async-trait = { workspace = true }
 bincode = { workspace = true }
 chrono = { workspace = true }

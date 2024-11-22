@@ -167,7 +167,7 @@ impl ApiDomainServiceDefault {
         auth: &CloudAuthCtx,
     ) -> Result<CloudNamespace, ApiDomainServiceError> {
         self.auth_service
-            .is_authorized(project_id, permission, auth)
+            .authorize_project_action(project_id, permission, auth)
             .await
             .map_err(|e| e.into())
     }

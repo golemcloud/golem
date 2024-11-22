@@ -6,7 +6,8 @@ use derive_more::FromStr;
 use golem_common::model::{AccountId, ScanCursor, WorkerId};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
 use golem_service_base::model::{ResourceMetadata, UpdateRecord};
-use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSite, ApiVersion};
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::gateway_api_deployment::ApiSite;
 use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -122,11 +123,13 @@ pub struct ApiDefinitionInfo {
     pub version: ApiVersion,
 }
 
-impl From<golem_worker_service_base::api_definition::ApiDeployment<CloudNamespace>>
+impl From<golem_worker_service_base::gateway_api_deployment::ApiDeployment<CloudNamespace>>
     for ApiDeployment
 {
     fn from(
-        api_deployment: golem_worker_service_base::api_definition::ApiDeployment<CloudNamespace>,
+        api_deployment: golem_worker_service_base::gateway_api_deployment::ApiDeployment<
+            CloudNamespace,
+        >,
     ) -> Self {
         Self {
             api_definitions: api_deployment

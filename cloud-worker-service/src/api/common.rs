@@ -9,9 +9,9 @@ use cloud_common::clients::project::ProjectError;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::SafeDisplay;
 use golem_service_base::model::ErrorBody;
-use golem_worker_service_base::service::api_definition::ApiDefinitionError as BaseApiDefinitionError;
-use golem_worker_service_base::service::api_deployment::ApiDeploymentError;
-use golem_worker_service_base::service::http::http_api_definition_validator::RouteValidationError;
+use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionError as BaseApiDefinitionError;
+use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentError;
+use golem_worker_service_base::service::gateway::http_api_definition_validator::RouteValidationError;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, Tags, Union};
 
@@ -117,6 +117,9 @@ impl From<ApiDeploymentError<CloudNamespace>> for ApiEndpointError {
             ApiDeploymentError::ApiDefinitionsConflict(_) => ApiEndpointError::bad_request(value),
             ApiDeploymentError::InternalRepoError(_) => ApiEndpointError::internal(value),
             ApiDeploymentError::InternalConversionError { .. } => ApiEndpointError::internal(value),
+            ApiDeploymentError::ComponentConstraintCreateError(_) => {
+                ApiEndpointError::bad_request(value)
+            }
         }
     }
 }

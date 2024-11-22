@@ -7,16 +7,16 @@ use cloud_common::clients::auth::AuthServiceError;
 use cloud_common::model::ProjectAction;
 use golem_common::model::ProjectId;
 use golem_worker_service_base::{
-    api_definition::{
+    gateway_api_definition::{
         http::CompiledHttpApiDefinition, http::HttpApiDefinitionRequest, ApiDefinitionId,
         ApiVersion,
     },
     service::{
-        api_definition::{
+        gateway::api_definition::{
             ApiDefinitionError as BaseApiDefinitionError,
             ApiDefinitionService as BaseApiDefinitionService,
         },
-        http::http_api_definition_validator::RouteValidationError,
+        gateway::http_api_definition_validator::RouteValidationError,
     },
 };
 
@@ -29,14 +29,14 @@ pub trait ApiDefinitionService {
         project_id: &ProjectId,
         definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<CompiledHttpApiDefinition>;
+    ) -> ApiDefResult<CompiledHttpApiDefinition<CloudNamespace>>;
 
     async fn update(
         &self,
         project_id: &ProjectId,
         definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<CompiledHttpApiDefinition>;
+    ) -> ApiDefResult<CompiledHttpApiDefinition<CloudNamespace>>;
 
     async fn get(
         &self,
@@ -44,7 +44,7 @@ pub trait ApiDefinitionService {
         api_definition_id: &ApiDefinitionId,
         version: &ApiVersion,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Option<CompiledHttpApiDefinition>>;
+    ) -> ApiDefResult<Option<CompiledHttpApiDefinition<CloudNamespace>>>;
 
     async fn delete(
         &self,
@@ -58,14 +58,14 @@ pub trait ApiDefinitionService {
         &self,
         project_id: &ProjectId,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition>>;
+    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition<CloudNamespace>>>;
 
     async fn get_all_versions(
         &self,
         project_id: &ProjectId,
         api_id: &ApiDefinitionId,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition>>;
+    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition<CloudNamespace>>>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -105,10 +105,10 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         project_id: &ProjectId,
         definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<CompiledHttpApiDefinition> {
+    ) -> ApiDefResult<CompiledHttpApiDefinition<CloudNamespace>> {
         let namespace = self
             .auth_service
-            .is_authorized(project_id, ProjectAction::CreateApiDefinition, ctx)
+            .authorize_project_action(project_id, ProjectAction::CreateApiDefinition, ctx)
             .await?;
 
         let api_definition_request = definition.clone();
@@ -125,10 +125,10 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         project_id: &ProjectId,
         definition: &HttpApiDefinitionRequest,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<CompiledHttpApiDefinition> {
+    ) -> ApiDefResult<CompiledHttpApiDefinition<CloudNamespace>> {
         let namespace = self
             .auth_service
-            .is_authorized(project_id, ProjectAction::UpdateApiDefinition, ctx)
+            .authorize_project_action(project_id, ProjectAction::UpdateApiDefinition, ctx)
             .await?;
 
         let api_definition_request = definition.clone();
@@ -146,10 +146,10 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         api_definition_id: &ApiDefinitionId,
         version: &ApiVersion,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Option<CompiledHttpApiDefinition>> {
+    ) -> ApiDefResult<Option<CompiledHttpApiDefinition<CloudNamespace>>> {
         let namespace = self
             .auth_service
-            .is_authorized(project_id, ProjectAction::ViewApiDefinition, ctx)
+            .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, ctx)
             .await?;
 
         let api_definition = self
@@ -169,7 +169,7 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
     ) -> ApiDefResult<()> {
         let namespace = self
             .auth_service
-            .is_authorized(project_id, ProjectAction::DeleteApiDefinition, ctx)
+            .authorize_project_action(project_id, ProjectAction::DeleteApiDefinition, ctx)
             .await?;
 
         self.api_definition_service
@@ -183,10 +183,10 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         &self,
         project_id: &ProjectId,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition>> {
+    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition<CloudNamespace>>> {
         let namespace = self
             .auth_service
-            .is_authorized(project_id, ProjectAction::ViewApiDefinition, ctx)
+            .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, ctx)
             .await?;
 
         let api_definitions = self
@@ -202,10 +202,10 @@ impl ApiDefinitionService for ApiDefinitionServiceDefault {
         project_id: &ProjectId,
         api_id: &ApiDefinitionId,
         ctx: &CloudAuthCtx,
-    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition>> {
+    ) -> ApiDefResult<Vec<CompiledHttpApiDefinition<CloudNamespace>>> {
         let namespace = self
             .auth_service
-            .is_authorized(project_id, ProjectAction::ViewApiDefinition, ctx)
+            .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, ctx)
             .await?;
 
         let api_definitions = self

@@ -8,10 +8,23 @@ import public "golem/cloud/grant/v1/grant_error.proto";
 import public "golem/cloud/grant/role.proto";
 
 service CloudGrantService {
+  rpc GetSelfGrants (golem.common.Empty) returns (GetSelfGrantsResponse);
   rpc GetGrants (GetGrantsRequest) returns (GetGrantsResponse);
   rpc DeleteGrant (DeleteGrantRequest) returns (DeleteGrantResponse);
   rpc GetGrant (GetGrantRequest) returns (GetGrantResponse);
   rpc PutGrant (PutGrantRequest) returns (PutGrantResponse);
+}
+
+message GetSelfGrantsResponse {
+  oneof result {
+    GetSelfGrantsSuccessResponse success = 1;
+    golem.cloud.grant.v1.GrantError error = 2;
+  }
+}
+
+message GetSelfGrantsSuccessResponse {
+  golem.common.AccountId accountId = 1;
+  repeated golem.cloud.grant.Role roles = 2;
 }
 
 message GetGrantsRequest {

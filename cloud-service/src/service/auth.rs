@@ -85,7 +85,8 @@ impl AuthService for AuthServiceDefault {
             .account_grant_service
             .get(&token.account_id, &AccountAuthorisation::admin())
             .await?;
-        account_roles.append(&mut Role::all_project_roles()); // TODO; Capture them in account grants table and use monoidal addition of capabilities similar to project grants and capabilities
+        account_roles.extend(Role::all_project_roles()); // TODO; Capture them in account grants table and use monoidal addition of capabilities similar to project grants and capabilities
+        account_roles.extend(Role::all_plugin_roles()); // TODO; Capture them in account grants table and use monoidal addition of capabilities similar to project grants and capabilities
         let now = chrono::Utc::now();
         if token.expires_at > now {
             Ok(AccountAuthorisation::new(

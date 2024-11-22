@@ -52,6 +52,7 @@ impl From<project::ProjectError> for ProjectError {
             project::ProjectError::InternalRepoError(_)
             | project::ProjectError::FailedToCreateDefaultProject(_)
             | project::ProjectError::InternalProjectAuthorisationError(_)
+            | project::ProjectError::InternalConversionError { .. }
             | project::ProjectError::InternalPlanLimitError(_) => {
                 project_error::Error::InternalError(ErrorBody {
                     error: value.to_safe_string(),

@@ -1,7 +1,7 @@
 use golem_common::model::AccountId;
 
 use crate::model::Token;
-use cloud_common::model::Role;
+use cloud_common::model::{CloudPluginOwner, Role};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct AccountAuthorisation {
@@ -28,6 +28,12 @@ impl AccountAuthorisation {
 
     pub fn has_role(&self, role: &Role) -> bool {
         self.roles.contains(role)
+    }
+
+    pub fn as_plugin_owner(&self) -> CloudPluginOwner {
+        CloudPluginOwner {
+            account_id: self.token.account_id.clone(),
+        }
     }
 
     #[cfg(test)]

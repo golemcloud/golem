@@ -52,10 +52,49 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("ComponentType", "golem_common::model::ComponentType"),
             (
+                "ComponentFilePathWithPermissionsList",
+                "golem_common::model::ComponentFilePathWithPermissionsList",
+            ),
+            (
+                "CloudComponentOwner",
+                "cloud_common::model::CloudComponentOwner",
+            ),
+            ("CloudPluginScope", "crate::CloudPluginScope"),
+            ("CloudPluginOwner", "cloud_common::model::CloudPluginOwner"),
+            (
+                "GatewayBindingWithTypeInfo",
+                "golem_client::model::GatewayBindingWithTypeInfo",
+            ),
+            (
+                "HttpApiDefinitionWithTypeInfo",
+                "golem_client::model::HttpApiDefinitionWithTypeInfo",
+            ),
+            (
+                "InitialComponentFile",
+                "golem_common::model::InitialComponentFile",
+            ),
+            ("GolemError", "golem_client::model::GolemError"),
+            ("MethodPattern", "golem_client::model::MethodPattern"),
+            (
                 "OplogCursor",
                 "golem_common::model::public_oplog::OplogCursor",
             ),
+            (
+                "PluginInstallation",
+                "golem_client::model::PluginInstallation",
+            ),
+            (
+                "PluginInstallationCreation",
+                "golem_client::model::PluginInstallationCreation",
+            ),
+            ("ProjectAction", "cloud_common::model::ProjectAction"),
             ("PromiseId", "golem_common::model::PromiseId"),
+            ("RibInputTypeInfo", "golem_client::model::RibInputTypeInfo"),
+            (
+                "RouteWithTypeInfo",
+                "golem_client::model::RouteWithTypeInfo",
+            ),
+            ("Role", "cloud_common::model::Role"),
             ("ShardId", "golem_common::model::ShardId"),
             (
                 "TypeAnnotatedValue",
@@ -63,6 +102,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             ("WorkerFilter", "golem_common::model::WorkerFilter"),
             ("WorkerId", "golem_common::model::WorkerId"),
+            (
+                "WorkerServiceErrorsBody",
+                "golem_client::model::WorkerServiceErrorsBody",
+            ),
             ("WorkerStatus", "golem_common::model::WorkerStatus"),
             (
                 "PublicOplogEntry",

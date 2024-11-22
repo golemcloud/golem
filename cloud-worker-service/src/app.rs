@@ -10,7 +10,7 @@ use crate::config::WorkerServiceCloudConfig;
 use crate::service::ApiServices;
 use crate::{api, grpcapi};
 
-pub async fn dump_openapi_yaml() -> Result<String, std::io::Error> {
+pub async fn dump_openapi_yaml() -> Result<String, String> {
     let config = WorkerServiceCloudConfig::default();
     let services = ApiServices::new(&config).await?;
     Ok(api::make_open_api_service(services).spec_yaml())
@@ -30,7 +30,9 @@ pub async fn app(config: &WorkerServiceCloudConfig) -> std::io::Result<()> {
             .build(),
     );
 
-    let services: ApiServices = ApiServices::new(config).await?;
+    let services: ApiServices = ApiServices::new(config)
+        .await
+        .map_err(std::io::Error::other)?;
 
     let config = config.base_config.clone();
 

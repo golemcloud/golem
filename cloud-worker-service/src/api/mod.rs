@@ -38,6 +38,7 @@ pub fn make_open_api_service(
             WorkerApi::new(
                 services.component_service.clone(),
                 services.worker_service.clone(),
+                services.auth_service.clone(),
             ),
             ApiDefinitionApi::new(services.definition_service.clone()),
             ApiDeploymentApi::new(
@@ -55,7 +56,10 @@ pub fn make_open_api_service(
 
 pub fn management_routes(services: ApiServices) -> Route {
     let api_service = make_open_api_service(services.clone());
-    let connect_services = worker_connect::ConnectService::new(services.worker_service.clone());
+    let connect_services = worker_connect::ConnectService::new(
+        services.worker_service.clone(),
+        services.auth_service.clone(),
+    );
     let ui = api_service.swagger_ui();
     let spec = api_service.spec_endpoint_yaml();
     Route::new()
@@ -72,6 +76,7 @@ pub fn custom_http_request_route(services: ApiServices) -> Route {
     let api_handler = CustomHttpRequestApi::new(
         services.worker_request_to_http_service,
         services.http_request_api_definition_lookup_service,
+        services.fileserver_binding_handler,
     );
 
     Route::new().nest("/", api_handler)

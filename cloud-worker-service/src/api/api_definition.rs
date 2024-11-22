@@ -4,15 +4,14 @@ use std::sync::Arc;
 use crate::api::common::{ApiEndpointError, ApiTags};
 use crate::service::api_definition::ApiDefinitionService;
 use cloud_common::auth::{CloudAuthCtx, GolemSecurityScheme};
+use golem_common::json_yaml::JsonOrYaml;
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
 use golem_worker_service_base::api::HttpApiDefinitionRequest;
 use golem_worker_service_base::api::HttpApiDefinitionWithTypeInfo;
-use golem_worker_service_base::api_definition::http::{
-    get_api_definition, HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest,
-    JsonOpenApiDefinition,
-};
-use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiVersion};
+use golem_worker_service_base::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::http::OpenApiDefinitionRequest;
+use golem_worker_service_base::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -40,7 +39,7 @@ impl ApiDefinitionApi {
     async fn create_or_update_open_api(
         &self,
         project_id: Path<ProjectId>,
-        Json(openapi): Json<JsonOpenApiDefinition>,
+        openapi: JsonOrYaml<OpenApiDefinitionRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let project_id = &project_id.0;
@@ -50,7 +49,7 @@ impl ApiDefinitionApi {
             recorded_http_api_request!("import_open_api", project_id = project_id.0.to_string(),);
 
         let response = {
-            let definition = get_api_definition(openapi.0).map_err(|e| {
+            let definition = openapi.0.to_http_api_definition().map_err(|e| {
                 error!("Invalid Spec {}", e);
                 ApiEndpointError::bad_request(safe(e))
             })?;
@@ -79,7 +78,7 @@ impl ApiDefinitionApi {
     async fn create(
         &self,
         project_id: Path<ProjectId>,
-        payload: Json<HttpApiDefinitionRequest>,
+        payload: JsonOrYaml<HttpApiDefinitionRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let project_id = &project_id.0;
@@ -124,7 +123,7 @@ impl ApiDefinitionApi {
         project_id: Path<ProjectId>,
         id: Path<ApiDefinitionId>,
         version: Path<ApiVersion>,
-        payload: Json<HttpApiDefinitionRequest>,
+        payload: JsonOrYaml<HttpApiDefinitionRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<HttpApiDefinitionWithTypeInfo>, ApiEndpointError> {
         let project_id = &project_id.0;

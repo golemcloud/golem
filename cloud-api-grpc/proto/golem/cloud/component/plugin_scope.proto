@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package golem.cloud.component;
+
+import "golem/common/empty.proto";
+import "golem/common/project_id.proto";
+import "golem/component/plugin_definition.proto";
+
+message CloudPluginScope {
+  oneof scope {
+    golem.common.Empty global = 1;
+    golem.component.ComponentPluginScope component = 2;
+    ProjectPluginScope project = 3;
+  }
+}
+
+message ProjectPluginScope {
+  golem.common.ProjectId project_id = 1;
+}

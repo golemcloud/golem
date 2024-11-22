@@ -3,12 +3,12 @@ use cloud_common::clients::limit::LimitService;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_common::model::WorkerId;
-use golem_worker_service_base::service::worker::ConnectWorkerStream as BaseWorkerStream;
+use golem_worker_service_base::service::worker::WorkerStream;
 use std::sync::Arc;
 use tonic::Status;
 
 pub struct ConnectWorkerStream {
-    stream: BaseWorkerStream,
+    stream: WorkerStream<LogEvent>,
     worker_id: WorkerId,
     namespace: CloudNamespace,
     limit_service: Arc<dyn LimitService + Sync + Send>,
@@ -16,7 +16,7 @@ pub struct ConnectWorkerStream {
 
 impl ConnectWorkerStream {
     pub fn new(
-        stream: BaseWorkerStream,
+        stream: WorkerStream<LogEvent>,
         worker_id: WorkerId,
         namespace: CloudNamespace,
         limit_service: Arc<dyn LimitService + Sync + Send>,

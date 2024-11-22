@@ -11,7 +11,10 @@ include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 harness = false
 
 [dependencies]
-golem-common = "=1.0.23"
+golem-client = "=1.0.27"
+golem-common = "=1.0.27"
+cloud-common = { path = "../cloud-common" }
+
 golem-wasm-ast = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 
@@ -23,6 +26,7 @@ http = "^1.0"
 reqwest = { version = "^0.12", features = ["gzip", "json", "multipart", "stream"] }
 serde = { version = "^1.0", features = ["derive"] }
 serde_json = "^1.0"
+serde_yaml = "0.9.34+deprecated"
 tracing = "^0.1"
 uuid = { version = "^1.6", features = ["serde"] }
 
@@ -30,5 +34,5 @@ uuid = { version = "^1.6", features = ["serde"] }
 test-r = { workspace = true }
 
 [build-dependencies]
-golem-openapi-client-generator = "0.0.10"
+golem-openapi-client-generator = "0.0.12"
 relative-path = "1.9.2"

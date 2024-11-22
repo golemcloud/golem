@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashSet;
+use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
@@ -10,7 +11,8 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use derive_more::FromStr;
-use golem_common::model::{AccountId, ProjectId};
+use golem_common::model::plugin::PluginOwner;
+use golem_common::model::{AccountId, HasAccountId, ProjectId};
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
 use poem_openapi::types::{ParseFromJSON, ParseFromParameter, ParseResult, ToJSON};
 use poem_openapi::{Enum, Object};
@@ -21,6 +23,7 @@ use strum_macros::EnumIter;
 use uuid::Uuid;
 
 use crate::auth::CloudNamespace;
+use crate::repo::CloudPluginOwnerRow;
 use cloud_api_grpc::proto::golem::cloud::project::{Project, ProjectData};
 use golem_common::newtype_uuid;
 
@@ -155,7 +158,7 @@ impl TryFrom<i32> for ProjectAction {
 }
 
 impl Display for ProjectAction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match *self {
             ProjectAction::ViewComponent => write!(f, "ViewComponent"),
             ProjectAction::CreateComponent => write!(f, "CreateComponent"),
@@ -172,6 +175,31 @@ impl Display for ProjectAction {
             ProjectAction::CreateApiDefinition => write!(f, "CreateApiDefinition"),
             ProjectAction::UpdateApiDefinition => write!(f, "UpdateApiDefinition"),
             ProjectAction::DeleteApiDefinition => write!(f, "DeleteApiDefinition"),
+        }
+    }
+}
+
+impl FromStr for ProjectAction {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ViewComponent" => Ok(ProjectAction::ViewComponent),
+            "CreateComponent" => Ok(ProjectAction::CreateComponent),
+            "UpdateComponent" => Ok(ProjectAction::UpdateComponent),
+            "DeleteComponent" => Ok(ProjectAction::DeleteComponent),
+            "ViewWorker" => Ok(ProjectAction::ViewWorker),
+            "CreateWorker" => Ok(ProjectAction::CreateWorker),
+            "UpdateWorker" => Ok(ProjectAction::UpdateWorker),
+            "DeleteWorker" => Ok(ProjectAction::DeleteWorker),
+            "ViewProjectGrants" => Ok(ProjectAction::ViewProjectGrants),
+            "CreateProjectGrants" => Ok(ProjectAction::CreateProjectGrants),
+            "DeleteProjectGrants" => Ok(ProjectAction::DeleteProjectGrants),
+            "ViewApiDefinition" => Ok(ProjectAction::ViewApiDefinition),
+            "CreateApiDefinition" => Ok(ProjectAction::CreateApiDefinition),
+            "UpdateApiDefinition" => Ok(ProjectAction::UpdateApiDefinition),
+            "DeleteApiDefinition" => Ok(ProjectAction::DeleteApiDefinition),
+            _ => Err(format!("Unknown project action: {}", s)),
         }
     }
 }
@@ -273,7 +301,11 @@ pub enum Role {
     ViewProject,
     DeleteProject,
     CreateProject,
+    UpdateProject,
     InstanceServer,
+    ViewPlugin,
+    CreatePlugin,
+    DeletePlugin,
 }
 
 impl Role {
@@ -282,7 +314,16 @@ impl Role {
     }
 
     pub fn all_project_roles() -> Vec<Role> {
-        vec![Role::ViewProject, Role::DeleteProject, Role::CreateProject]
+        vec![
+            Role::ViewProject,
+            Role::DeleteProject,
+            Role::CreateProject,
+            Role::UpdateProject,
+        ]
+    }
+
+    pub fn all_plugin_roles() -> Vec<Role> {
+        vec![Role::ViewPlugin, Role::CreatePlugin, Role::DeletePlugin]
     }
 }
 
@@ -295,6 +336,10 @@ impl From<Role> for i32 {
             Role::DeleteProject => 3,
             Role::CreateProject => 4,
             Role::InstanceServer => 5,
+            Role::ViewPlugin => 6,
+            Role::CreatePlugin => 7,
+            Role::DeletePlugin => 8,
+            Role::UpdateProject => 9,
         }
     }
 }
@@ -310,6 +355,9 @@ impl TryFrom<i32> for Role {
             3 => Ok(Role::DeleteProject),
             4 => Ok(Role::CreateProject),
             5 => Ok(Role::InstanceServer),
+            6 => Ok(Role::ViewPlugin),
+            7 => Ok(Role::CreatePlugin),
+            8 => Ok(Role::DeletePlugin),
             _ => Err(format!("Invalid role: {}", value)),
         }
     }
@@ -326,13 +374,17 @@ impl FromStr for Role {
             "DeleteProject" => Ok(Role::DeleteProject),
             "CreateProject" => Ok(Role::CreateProject),
             "InstanceServer" => Ok(Role::InstanceServer),
+            "ViewPlugin" => Ok(Role::ViewPlugin),
+            "CreatePlugin" => Ok(Role::CreatePlugin),
+            "DeletePlugin" => Ok(Role::DeletePlugin),
+            "UpdateProject" => Ok(Role::UpdateProject),
             _ => Err(format!("Unknown role id: {}", s)),
         }
     }
 }
 
 impl Display for Role {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         match self {
             Role::Admin => write!(f, "Admin"),
             Role::MarketingAdmin => write!(f, "MarketingAdmin"),
@@ -340,6 +392,10 @@ impl Display for Role {
             Role::DeleteProject => write!(f, "DeleteProject"),
             Role::CreateProject => write!(f, "CreateProject"),
             Role::InstanceServer => write!(f, "InstanceServer"),
+            Role::ViewPlugin => write!(f, "ViewPlugin"),
+            Role::CreatePlugin => write!(f, "CreatePlugin"),
+            Role::DeletePlugin => write!(f, "DeletePlugin"),
+            Role::UpdateProject => write!(f, "UpdateProject"),
         }
     }
 }
@@ -375,4 +431,37 @@ impl TryFrom<Project> for ProjectView {
             description,
         })
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct CloudPluginOwner {
+    pub account_id: AccountId,
+}
+
+impl Display for CloudPluginOwner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.account_id)
+    }
+}
+
+impl FromStr for CloudPluginOwner {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self {
+            account_id: AccountId::from(s),
+        })
+    }
+}
+
+impl HasAccountId for CloudPluginOwner {
+    fn account_id(&self) -> AccountId {
+        self.account_id.clone()
+    }
+}
+
+impl PluginOwner for CloudPluginOwner {
+    type Row = CloudPluginOwnerRow;
 }

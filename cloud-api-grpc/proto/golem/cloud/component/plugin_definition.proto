@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package golem.cloud.component;
+
+import "golem/component/plugin_definition.proto";
+import public "golem/cloud/component/plugin_scope.proto";
+
+message PluginDefinition {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+  bytes icon = 4;
+  string homepage = 5;
+  golem.component.PluginTypeSpecificDefinition specs = 6;
+  golem.cloud.component.CloudPluginScope scope = 7;
+}

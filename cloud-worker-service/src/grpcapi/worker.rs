@@ -1,25 +1,30 @@
-use std::sync::Arc;
-
+use crate::service::auth::AuthService;
 use crate::service::worker::{self, ConnectWorkerStream, WorkerService};
 use cloud_common::auth::CloudAuthCtx;
 use cloud_common::clients::auth::get_authorisation_token;
+use cloud_common::model::ProjectAction;
+use futures::Stream;
+use futures::StreamExt;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
     complete_promise_response, delete_worker_response, get_oplog_response,
     get_worker_metadata_response, get_workers_metadata_response, interrupt_worker_response,
     invoke_and_await_json_response, invoke_and_await_response, invoke_and_await_typed_response,
-    invoke_response, launch_new_worker_response, resume_worker_response, update_worker_response,
-    worker_error, worker_execution_error, CompletePromiseRequest, CompletePromiseResponse,
-    ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, GetOplogRequest,
+    invoke_response, launch_new_worker_response, list_directory_response, resume_worker_response,
+    search_oplog_response, update_worker_response, worker_error, worker_execution_error,
+    CompletePromiseRequest, CompletePromiseResponse, ConnectWorkerRequest, DeleteWorkerRequest,
+    DeleteWorkerResponse, GetFileContentsRequest, GetFileContentsResponse, GetOplogRequest,
     GetOplogResponse, GetOplogSuccessResponse, GetWorkerMetadataRequest, GetWorkerMetadataResponse,
     GetWorkersMetadataRequest, GetWorkersMetadataResponse, GetWorkersMetadataSuccessResponse,
     InterruptWorkerRequest, InterruptWorkerResponse, InvokeAndAwaitJsonRequest,
     InvokeAndAwaitJsonResponse, InvokeAndAwaitRequest, InvokeAndAwaitResponse,
     InvokeAndAwaitTypedResponse, InvokeJsonRequest, InvokeRequest, InvokeResponse,
     LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, UnknownError, UpdateWorkerRequest,
-    UpdateWorkerResponse, WorkerError as GrpcWorkerError, WorkerExecutionError,
+    ListDirectoryRequest, ListDirectoryResponse, ResumeWorkerRequest, ResumeWorkerResponse,
+    SearchOplogRequest, SearchOplogResponse, SearchOplogSuccessResponse, UnknownError,
+    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
+    WorkerExecutionError,
 };
 use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
 use golem_common::grpc::{
@@ -28,22 +33,27 @@ use golem_common::grpc::{
     proto_worker_id_string,
 };
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{ComponentVersion, ScanCursor, TargetWorkerId, WorkerFilter, WorkerId};
+use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_common::SafeDisplay;
-use golem_service_base::model::validate_worker_name;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_worker_service_base::api::WorkerTraceErrorKind;
+use golem_worker_service_base::grpcapi::{
+    bad_request_error, error_to_status, parse_json_invoke_parameters, validate_component_file_path,
+    validate_protobuf_target_worker_id, validate_protobuf_worker_id, validated_worker_id,
+};
 use golem_worker_service_base::service::component::ComponentService;
 use golem_worker_service_base::service::worker::WorkerServiceError;
+use std::pin::Pin;
+use std::sync::Arc;
 use tap::TapFallible;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 
 pub struct WorkerGrpcApi {
-    component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
-    worker_service: Arc<dyn WorkerService + Sync + Send>,
+    component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
+    worker_service: Arc<dyn WorkerService + Send + Sync>,
+    auth_service: Arc<dyn AuthService + Send + Sync>,
 }
 
 #[async_trait::async_trait]
@@ -467,16 +477,108 @@ impl GrpcWorkerService for WorkerGrpcApi {
             result: Some(response),
         }))
     }
+
+    async fn search_oplog(
+        &self,
+        request: Request<SearchOplogRequest>,
+    ) -> Result<Response<SearchOplogResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "search_oplog",
+            worker_id = proto_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .search_oplog(request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(response) => record.succeed(search_oplog_response::Result::Success(response)),
+            Err(error) => record.fail(
+                search_oplog_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(SearchOplogResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn list_directory(
+        &self,
+        request: Request<ListDirectoryRequest>,
+    ) -> Result<Response<ListDirectoryResponse>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "get_file_contents",
+            worker_id = proto_target_worker_id_string(&request.worker_id),
+        );
+
+        let response = match self
+            .list_directory(request, metadata)
+            .instrument(record.span.clone())
+            .await
+        {
+            Ok(response) => record.succeed(list_directory_response::Result::Success(response)),
+            Err(error) => record.fail(
+                list_directory_response::Result::Error(error.clone()),
+                &WorkerTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(
+            golem_api_grpc::proto::golem::worker::v1::ListDirectoryResponse {
+                result: Some(response),
+            },
+        ))
+    }
+
+    type GetFileContentsStream =
+        Pin<Box<dyn Stream<Item = Result<GetFileContentsResponse, Status>> + Send + 'static>>;
+
+    async fn get_file_contents(
+        &self,
+        request: Request<GetFileContentsRequest>,
+    ) -> Result<Response<Self::GetFileContentsStream>, Status> {
+        let (metadata, _, request) = request.into_parts();
+        let record = recorded_grpc_api_request!(
+            "get_file_contents",
+            worker_id = proto_target_worker_id_string(&request.worker_id),
+        );
+
+        let stream = self
+            .get_file_contents(request, metadata)
+            .instrument(record.span.clone())
+            .await;
+
+        let stream = match stream {
+            Ok(stream) => record.succeed(stream),
+            Err(error) => {
+                let res = golem_api_grpc::proto::golem::worker::v1::GetFileContentsResponse {
+                    result: Some(
+                        golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Error(error.clone())
+                    )
+                };
+                let err_stream: Self::GetFileContentsStream =
+                    Box::pin(tokio_stream::iter(vec![Ok(res)]));
+                record.fail(err_stream, &WorkerTraceErrorKind(&error))
+            }
+        };
+        Ok(Response::new(stream))
+    }
 }
 
 impl WorkerGrpcApi {
     pub fn new(
-        component_service: Arc<dyn ComponentService<CloudAuthCtx> + Sync + Send>,
-        worker_service: Arc<dyn WorkerService + Sync + Send>,
+        component_service: Arc<dyn ComponentService<CloudAuthCtx> + Send + Sync>,
+        worker_service: Arc<dyn WorkerService + Send + Sync>,
+        auth_service: Arc<dyn AuthService + Send + Sync>,
     ) -> Self {
         Self {
             component_service,
             worker_service,
+            auth_service,
         }
     }
 
@@ -515,6 +617,10 @@ impl WorkerGrpcApi {
 
         let worker_id = validated_worker_id(component_id, request.name)?;
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::CreateWorker, &auth)
+            .await?;
         let worker = self
             .worker_service
             .create(
@@ -522,7 +628,7 @@ impl WorkerGrpcApi {
                 latest_component.versioned_component_id.version,
                 request.args,
                 request.env,
-                &auth,
+                namespace,
             )
             .await?;
 
@@ -538,7 +644,11 @@ impl WorkerGrpcApi {
 
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
-        self.worker_service.delete(&worker_id, &auth).await?;
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::DeleteWorker, &auth)
+            .await?;
+        self.worker_service.delete(&worker_id, namespace).await?;
 
         Ok(())
     }
@@ -555,9 +665,13 @@ impl WorkerGrpcApi {
             .complete_parameters
             .ok_or_else(|| bad_request_error("Missing complete parameters"))?;
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let result = self
             .worker_service
-            .complete_promise(&worker_id, parameters.oplog_idx, parameters.data, &auth)
+            .complete_promise(&worker_id, parameters.oplog_idx, parameters.data, namespace)
             .await?;
 
         Ok(result)
@@ -571,7 +685,14 @@ impl WorkerGrpcApi {
         let auth = self.auth(metadata)?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
-        let metadata = self.worker_service.get_metadata(&worker_id, &auth).await?;
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
+        let metadata = self
+            .worker_service
+            .get_metadata(&worker_id, namespace)
+            .await?;
 
         Ok(metadata.into())
     }
@@ -596,6 +717,10 @@ impl WorkerGrpcApi {
                 _ => None,
             };
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
         let (new_cursor, workers) = self
             .worker_service
             .find_metadata(
@@ -604,7 +729,7 @@ impl WorkerGrpcApi {
                 request.cursor.map(|c| c.into()).unwrap_or_default(),
                 request.count,
                 request.precise,
-                &auth,
+                namespace,
             )
             .await?;
 
@@ -621,8 +746,12 @@ impl WorkerGrpcApi {
         let auth = self.auth(metadata)?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         self.worker_service
-            .interrupt(&worker_id, request.recover_immediately, &auth)
+            .interrupt(&worker_id, request.recover_immediately, namespace)
             .await?;
 
         Ok(())
@@ -640,6 +769,10 @@ impl WorkerGrpcApi {
             .invoke_parameters
             .ok_or_else(|| bad_request_error("Missing invoke parameters"))?;
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         self.worker_service
             .invoke(
                 &worker_id,
@@ -647,7 +780,7 @@ impl WorkerGrpcApi {
                 request.function,
                 params.params,
                 request.context,
-                &auth,
+                namespace,
             )
             .await?;
 
@@ -669,6 +802,10 @@ impl WorkerGrpcApi {
             .ok_or_else(|| bad_request_error("Missing idempotency key"))?
             .into();
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         self.worker_service
             .validate_and_invoke(
                 &worker_id,
@@ -676,7 +813,7 @@ impl WorkerGrpcApi {
                 request.function,
                 params,
                 request.context,
-                &auth,
+                namespace,
             )
             .await?;
 
@@ -695,6 +832,10 @@ impl WorkerGrpcApi {
             .invoke_parameters
             .ok_or(bad_request_error("Missing invoke parameters"))?;
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let result = self
             .worker_service
             .invoke_and_await(
@@ -703,7 +844,7 @@ impl WorkerGrpcApi {
                 request.function,
                 params.params,
                 request.context,
-                &auth,
+                namespace,
             )
             .await?;
 
@@ -724,6 +865,10 @@ impl WorkerGrpcApi {
             .ok_or_else(|| bad_request_error("Missing idempotency key"))?
             .into();
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let result = self
             .worker_service
             .validate_and_invoke_and_await_typed(
@@ -732,7 +877,7 @@ impl WorkerGrpcApi {
                 request.function,
                 params,
                 request.context,
-                &auth,
+                namespace,
             )
             .await?;
 
@@ -763,6 +908,10 @@ impl WorkerGrpcApi {
             .ok_or_else(|| bad_request_error("Missing idempotency key"))?
             .into();
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         let result = self
             .worker_service
             .invoke_and_await_typed(
@@ -771,7 +920,7 @@ impl WorkerGrpcApi {
                 request.function,
                 params.params,
                 request.context,
-                &auth,
+                namespace,
             )
             .await?;
 
@@ -790,7 +939,11 @@ impl WorkerGrpcApi {
         let auth = self.auth(metadata)?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
-        self.worker_service.resume(&worker_id, &auth).await?;
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
+        self.worker_service.resume(&worker_id, namespace).await?;
 
         Ok(())
     }
@@ -802,7 +955,12 @@ impl WorkerGrpcApi {
     ) -> Result<ConnectWorkerStream, GrpcWorkerError> {
         let auth = self.auth(metadata)?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
-        let stream = self.worker_service.connect(&worker_id, &auth).await?;
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
+        let stream = self.worker_service.connect(&worker_id, namespace).await?;
 
         Ok(stream)
     }
@@ -815,9 +973,17 @@ impl WorkerGrpcApi {
         let worker_id = validate_protobuf_worker_id(request.worker_id.clone())?;
 
         let auth = self.auth(metadata)?;
-
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .await?;
         self.worker_service
-            .update(&worker_id, request.mode(), request.target_version, &auth)
+            .update(
+                &worker_id,
+                request.mode(),
+                request.target_version,
+                namespace,
+            )
             .await?;
 
         Ok(())
@@ -831,6 +997,10 @@ impl WorkerGrpcApi {
         let auth = self.auth(metadata)?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
         let result = self
             .worker_service
             .get_oplog(
@@ -838,7 +1008,7 @@ impl WorkerGrpcApi {
                 OplogIndex::from_u64(request.from_oplog_index),
                 request.cursor.map(|cursor| cursor.into()),
                 request.count,
-                &auth,
+                namespace,
             )
             .await?;
 
@@ -847,9 +1017,11 @@ impl WorkerGrpcApi {
                 .entries
                 .into_iter()
                 .map(|e| {
-                    let entry: Result<golem_api_grpc::proto::golem::worker::OplogEntry, String> =
-                        e.try_into();
-                    entry
+                    let entry: Result<
+                        golem_api_grpc::proto::golem::worker::OplogEntryWithIndex,
+                        String,
+                    > = e.try_into();
+                    entry.map(|e| e.entry.unwrap())
                 })
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|err| GrpcWorkerError {
@@ -863,6 +1035,120 @@ impl WorkerGrpcApi {
             first_index_in_chunk: result.first_index_in_chunk,
             last_index: result.last_index,
         })
+    }
+
+    async fn search_oplog(
+        &self,
+        request: SearchOplogRequest,
+        metadata: MetadataMap,
+    ) -> Result<SearchOplogSuccessResponse, GrpcWorkerError> {
+        let auth = self.auth(metadata)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
+        let result = self
+            .worker_service
+            .search_oplog(
+                &worker_id,
+                request.cursor.map(|cursor| cursor.into()),
+                request.count,
+                request.query,
+                namespace,
+            )
+            .await?;
+
+        Ok(SearchOplogSuccessResponse {
+            entries: result
+                .entries
+                .into_iter()
+                .map(|e| {
+                    let entry: Result<
+                        golem_api_grpc::proto::golem::worker::OplogEntryWithIndex,
+                        String,
+                    > = e.try_into();
+                    entry
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| GrpcWorkerError {
+                    error: Some(worker_error::Error::InternalError(WorkerExecutionError {
+                        error: Some(worker_execution_error::Error::Unknown(UnknownError {
+                            details: format!("Failed to convert oplog entry: {err:?}"),
+                        })),
+                    })),
+                })?,
+            next: result.next.map(|c| c.into()),
+            last_index: result.last_index,
+        })
+    }
+
+    async fn list_directory(
+        &self,
+        request: ListDirectoryRequest,
+        metadata: MetadataMap,
+    ) -> Result<
+        golem_api_grpc::proto::golem::worker::v1::ListDirectorySuccessResponse,
+        GrpcWorkerError,
+    > {
+        let auth = self.auth(metadata)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let file_path = validate_component_file_path(request.path)?;
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
+        let result = self
+            .worker_service
+            .list_directory(&worker_id, file_path, namespace)
+            .await?;
+
+        Ok(
+            golem_api_grpc::proto::golem::worker::v1::ListDirectorySuccessResponse {
+                nodes: result.into_iter().map(|e| e.into()).collect(),
+            },
+        )
+    }
+
+    async fn get_file_contents(
+        &self,
+        request: GetFileContentsRequest,
+        metadata: MetadataMap,
+    ) -> Result<<Self as GrpcWorkerService>::GetFileContentsStream, GrpcWorkerError> {
+        let auth = self.auth(metadata)?;
+        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let file_path = validate_component_file_path(request.file_path)?;
+
+        let namespace = self
+            .auth_service
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .await?;
+        let stream = self
+            .worker_service
+            .get_file_contents(
+                &worker_id,
+                file_path,
+                namespace,
+            )
+            .await?
+            .map(|item|
+                match item {
+                    Ok(data) =>
+                        Ok(golem_api_grpc::proto::golem::worker::v1::GetFileContentsResponse {
+                            result: Some(golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Success(data.into())),
+                        }),
+                    Err(error) =>
+                        Ok(golem_api_grpc::proto::golem::worker::v1::GetFileContentsResponse {
+                            result: Some(golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Error(error.into())),
+                        })
+                }
+
+            )
+            ;
+
+        Ok(Box::pin(stream))
     }
 }
 
@@ -909,6 +1195,14 @@ impl From<worker::WorkerError> for worker_error::Error {
                         })),
                     })
                 }
+                WorkerServiceError::FileNotFound(_) => {
+                    worker_error::Error::BadRequest(ErrorsBody {
+                        errors: vec![error.to_safe_string()],
+                    })
+                }
+                WorkerServiceError::BadFileType(_) => worker_error::Error::BadRequest(ErrorsBody {
+                    errors: vec![error.to_safe_string()],
+                }),
             },
             worker::WorkerError::Forbidden(error) => {
                 worker_error::Error::LimitExceeded(ErrorBody { error })
@@ -928,180 +1222,4 @@ impl From<worker::WorkerError> for worker_error::Error {
             }),
         }
     }
-}
-
-// TODO: this should be defined in one of the base libraries
-fn validated_worker_id(
-    component_id: golem_common::model::ComponentId,
-    worker_name: String,
-) -> Result<WorkerId, GrpcWorkerError> {
-    validate_worker_name(&worker_name)
-        .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))?;
-    Ok(WorkerId {
-        component_id,
-        worker_name,
-    })
-}
-
-// TODO: this should be defined in one of the base libraries
-fn validated_target_worker_id(
-    component_id: golem_common::model::ComponentId,
-    worker_name: Option<String>,
-) -> Result<TargetWorkerId, GrpcWorkerError> {
-    if let Some(worker_name) = &worker_name {
-        validate_worker_name(worker_name)
-            .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))?;
-    }
-    Ok(TargetWorkerId {
-        component_id,
-        worker_name,
-    })
-}
-
-// TODO: this should be defined in one of the base libraries
-fn validate_protobuf_worker_id(
-    worker_id: Option<golem_api_grpc::proto::golem::worker::WorkerId>,
-) -> Result<WorkerId, GrpcWorkerError> {
-    let worker_id = worker_id.ok_or_else(|| bad_request_error("Missing worker id"))?;
-    let worker_id: WorkerId = worker_id
-        .try_into()
-        .map_err(|e| bad_request_error(format!("Invalid worker id: {e}")))?;
-    validated_worker_id(worker_id.component_id, worker_id.worker_name)
-}
-
-// TODO: this should be defined in one of the base libraries
-fn validate_protobuf_target_worker_id(
-    worker_id: Option<golem_api_grpc::proto::golem::worker::TargetWorkerId>,
-) -> Result<TargetWorkerId, GrpcWorkerError> {
-    let worker_id = worker_id.ok_or_else(|| bad_request_error("Missing worker id"))?;
-    let worker_id: TargetWorkerId = worker_id
-        .try_into()
-        .map_err(|e| bad_request_error(format!("Invalid target worker id: {e}")))?;
-    validated_target_worker_id(worker_id.component_id, worker_id.worker_name)
-}
-
-fn bad_request_error<T>(error: T) -> GrpcWorkerError
-where
-    T: Into<String>,
-{
-    GrpcWorkerError {
-        error: Some(worker_error::Error::BadRequest(ErrorsBody {
-            errors: vec![error.into()],
-        })),
-    }
-}
-
-fn error_to_status(error: GrpcWorkerError) -> Status {
-    match error.error {
-        Some(worker_error::Error::BadRequest(ErrorsBody { errors })) => {
-            Status::invalid_argument(format!("Bad Request: {:?}", errors))
-        }
-        Some(worker_error::Error::Unauthorized(ErrorBody { error })) => {
-            Status::unauthenticated(error)
-        }
-        Some(worker_error::Error::LimitExceeded(ErrorBody { error })) => {
-            Status::resource_exhausted(error)
-        }
-        Some(worker_error::Error::NotFound(ErrorBody { error })) => Status::not_found(error),
-        Some(worker_error::Error::AlreadyExists(ErrorBody { error })) => {
-            Status::already_exists(error)
-        }
-        Some(worker_error::Error::InternalError(WorkerExecutionError { error: None })) => {
-            Status::unknown("Unknown error")
-        }
-
-        Some(worker_error::Error::InternalError(WorkerExecutionError {
-            error: Some(golem_error),
-        })) => {
-            let message = match golem_error {
-                worker_execution_error::Error::InvalidRequest(err) => {
-                    format!("Invalid Request: {}", err.details)
-                }
-                worker_execution_error::Error::WorkerAlreadyExists(err) => {
-                    format!("Worker Already Exists: Worker ID = {:?}", err.worker_id)
-                }
-                worker_execution_error::Error::WorkerCreationFailed(err) => format!(
-                    "Worker Creation Failed: Worker ID = {:?}, Details: {}",
-                    err.worker_id, err.details
-                ),
-                worker_execution_error::Error::FailedToResumeWorker(err) => {
-                    format!("Failed To Resume Worker: Worker ID = {:?}", err.worker_id)
-                }
-                worker_execution_error::Error::ComponentDownloadFailed(err) => format!(
-                    "Component Download Failed: Component ID = {:?}, Version: {}, Reason: {}",
-                    err.component_id, err.component_version, err.reason
-                ),
-                worker_execution_error::Error::ComponentParseFailed(err) => format!(
-                    "Component Parse Failed: Component ID = {:?}, Version: {}, Reason: {}",
-                    err.component_id, err.component_version, err.reason
-                ),
-                worker_execution_error::Error::GetLatestVersionOfComponentFailed(err) => format!(
-                    "Get Latest Version Of Component Failed: Component ID = {:?}, Reason: {}",
-                    err.component_id, err.reason
-                ),
-                worker_execution_error::Error::PromiseNotFound(err) => {
-                    format!("Promise Not Found: Promise ID = {:?}", err.promise_id)
-                }
-                worker_execution_error::Error::PromiseDropped(err) => {
-                    format!("Promise Dropped: Promise ID = {:?}", err.promise_id)
-                }
-                worker_execution_error::Error::PromiseAlreadyCompleted(err) => format!(
-                    "Promise Already Completed: Promise ID = {:?}",
-                    err.promise_id
-                ),
-                worker_execution_error::Error::Interrupted(err) => format!(
-                    "Interrupted: Recover Immediately = {}",
-                    err.recover_immediately
-                ),
-                worker_execution_error::Error::ParamTypeMismatch(_) => {
-                    "Parameter Type Mismatch".to_string()
-                }
-                worker_execution_error::Error::NoValueInMessage(_) => {
-                    "No Value In Message".to_string()
-                }
-                worker_execution_error::Error::ValueMismatch(err) => {
-                    format!("Value Mismatch: {}", err.details)
-                }
-                worker_execution_error::Error::UnexpectedOplogEntry(err) => format!(
-                    "Unexpected Oplog Entry: Expected = {}, Got = {}",
-                    err.expected, err.got
-                ),
-                worker_execution_error::Error::RuntimeError(err) => {
-                    format!("Runtime Error: {}", err.details)
-                }
-                worker_execution_error::Error::InvalidShardId(err) => format!(
-                    "Invalid Shard ID: Shard ID = {:?}, Shard IDs: {:?}",
-                    err.shard_id, err.shard_ids
-                ),
-                worker_execution_error::Error::PreviousInvocationFailed(_) => {
-                    "Previous Invocation Failed".to_string()
-                }
-                worker_execution_error::Error::PreviousInvocationExited(_) => {
-                    "Previous Invocation Exited".to_string()
-                }
-                worker_execution_error::Error::Unknown(err) => {
-                    format!("Unknown Error: {}", err.details)
-                }
-                worker_execution_error::Error::InvalidAccount(_) => "Invalid Account".to_string(),
-                worker_execution_error::Error::WorkerNotFound(err) => {
-                    format!("Worker Not Found: Worker ID = {:?}", err.worker_id)
-                }
-                worker_execution_error::Error::ShardingNotReady(_) => {
-                    "Sharding Not Ready".to_string()
-                }
-            };
-            Status::internal(message)
-        }
-        None => Status::unknown("Unknown error"),
-    }
-}
-
-fn parse_json_invoke_parameters(
-    parameters: &[String],
-) -> Result<Vec<TypeAnnotatedValue>, GrpcWorkerError> {
-    parameters
-        .iter()
-        .map(|param| serde_json::from_str(param))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| bad_request_error(format!("Failed to parse JSON parameters: {err:?}")))
 }

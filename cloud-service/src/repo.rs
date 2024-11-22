@@ -1,3 +1,4 @@
+use crate::model::ProjectPluginInstallationTarget;
 use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_components::{AccountComponentsRepo, DbAccountComponentsRepo};
 use crate::repo::account_connections::{AccountConnectionsRepo, DbAccountConnectionsRepo};
@@ -13,6 +14,10 @@ use crate::repo::project::{DbProjectRepo, ProjectRepo};
 use crate::repo::project_grant::{DbProjectGrantRepo, ProjectGrantRepo};
 use crate::repo::project_policy::{DbProjectPolicyRepo, ProjectPolicyRepo};
 use crate::repo::token::{DbTokenRepo, TokenRepo};
+use cloud_common::model::CloudPluginOwner;
+use golem_service_base::repo::plugin_installation::{
+    DbPluginInstallationRepoQueries, PluginInstallationRepoQueries,
+};
 use oauth2_web_flow_state::{DbOAuth2FlowState, OAuth2WebFlowStateRepo};
 use sqlx::{Pool, Postgres, Sqlite};
 use std::sync::Arc;
@@ -29,6 +34,7 @@ pub mod account_workers;
 pub mod oauth2_token;
 pub mod oauth2_web_flow_state;
 pub mod plan;
+pub mod plugin_installation;
 pub mod project;
 pub mod project_grant;
 pub mod project_policy;
@@ -63,7 +69,7 @@ impl Repositories {
         Self::new(db_pool)
     }
 
-    pub fn new<DB: sqlx::Database>(db_pool: Arc<Pool<DB>>) -> Self
+    pub fn new<DB: sqlx::Database + Sync>(db_pool: Arc<Pool<DB>>) -> Self
     where
         DbPlanRepo<DB>: PlanRepo,
         DbAccountRepo<DB>: AccountRepo,
@@ -81,6 +87,8 @@ impl Repositories {
         DbProjectRepo<DB>: ProjectRepo,
         DbTokenRepo<DB>: TokenRepo,
         DbOAuth2FlowState<DB>: OAuth2WebFlowStateRepo,
+        DbPluginInstallationRepoQueries<DB>:
+            PluginInstallationRepoQueries<DB, CloudPluginOwner, ProjectPluginInstallationTarget>,
     {
         let plan_repo: Arc<dyn PlanRepo + Sync + Send> = Arc::new(DbPlanRepo::new(db_pool.clone()));
 

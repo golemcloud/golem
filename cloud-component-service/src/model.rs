@@ -1,17 +1,238 @@
-use cloud_common::auth::CloudNamespace;
+use crate::repo::{CloudComponentOwnerRow, CloudPluginScopeRow};
+use crate::service::component::CloudComponentService;
+use async_trait::async_trait;
+use cloud_common::auth::CloudAuthCtx;
+use cloud_common::model::CloudPluginOwner;
+use golem_common::model::component::ComponentOwner;
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_common::model::{ComponentType, ProjectId};
+use golem_common::model::plugin::ComponentPluginScope;
+use golem_common::model::{
+    AccountId, ComponentId, ComponentType, Empty, HasAccountId, InitialComponentFile, ProjectId,
+};
+use golem_component_service_base::model::PluginScope;
+use golem_component_service_base::service::plugin::PluginError;
 use golem_service_base::model::{ComponentName, VersionedComponentId};
-use poem_openapi::Object;
+use poem_openapi::types::{ParseError, ParseFromParameter, ParseResult};
+use poem_openapi::{Object, Union};
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+use std::sync::Arc;
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct CloudComponentOwner {
+    pub project_id: ProjectId,
+    pub account_id: AccountId,
+}
+
+impl Display for CloudComponentOwner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.account_id, self.project_id)
+    }
+}
+
+impl FromStr for CloudComponentOwner {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parts: Vec<&str> = s.split(':').collect();
+        if parts.len() != 2 {
+            return Err(format!("Invalid namespace: {s}"));
+        }
+
+        Ok(Self {
+            project_id: ProjectId::try_from(parts[1])?,
+            account_id: AccountId::from(parts[0]),
+        })
+    }
+}
+
+impl HasAccountId for CloudComponentOwner {
+    fn account_id(&self) -> AccountId {
+        self.account_id.clone()
+    }
+}
+
+impl ComponentOwner for CloudComponentOwner {
+    type Row = CloudComponentOwnerRow;
+    type PluginOwner = CloudPluginOwner;
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ProjectPluginScope {
+    pub project_id: ProjectId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Union)]
+#[oai(discriminator_name = "type", one_of = true)]
+#[serde(tag = "type")]
+pub enum CloudPluginScope {
+    Global(Empty),
+    Component(ComponentPluginScope),
+    Project(ProjectPluginScope),
+}
+
+impl CloudPluginScope {
+    pub fn global() -> Self {
+        CloudPluginScope::Global(Empty {})
+    }
+
+    pub fn component(component_id: ComponentId) -> Self {
+        CloudPluginScope::Component(ComponentPluginScope { component_id })
+    }
+
+    pub fn project(project_id: ProjectId) -> Self {
+        CloudPluginScope::Project(ProjectPluginScope { project_id })
+    }
+}
+
+impl Default for CloudPluginScope {
+    fn default() -> Self {
+        CloudPluginScope::global()
+    }
+}
+
+impl Display for CloudPluginScope {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            CloudPluginScope::Global(_) => write!(f, "global"),
+            CloudPluginScope::Component(scope) => write!(f, "component:{}", scope.component_id),
+            CloudPluginScope::Project(scope) => write!(f, "project:{}", scope.project_id),
+        }
+    }
+}
+
+impl ParseFromParameter for CloudPluginScope {
+    fn parse_from_parameter(value: &str) -> ParseResult<Self> {
+        if value == "global" {
+            Ok(Self::global())
+        } else if let Some(id_part) = value.strip_prefix("component:") {
+            let component_id = ComponentId::try_from(id_part);
+            match component_id {
+                Ok(component_id) => Ok(Self::component(component_id)),
+                Err(err) => Err(ParseError::custom(err)),
+            }
+        } else if let Some(id_part) = value.strip_prefix("project:") {
+            let project_id = ProjectId::try_from(id_part);
+            match project_id {
+                Ok(project_id) => Ok(Self::project(project_id)),
+                Err(err) => Err(ParseError::custom(err)),
+            }
+        } else {
+            Err(ParseError::custom("Unexpected representation of plugin scope - must be 'global', 'component:<component_id>' or 'project:<project_id>'"))
+        }
+    }
+}
+
+impl From<CloudPluginScope> for cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
+    fn from(scope: CloudPluginScope) -> Self {
+        match scope {
+            CloudPluginScope::Global(_) => cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
+                scope: Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Global(
+                    golem_api_grpc::proto::golem::common::Empty {},
+                )),
+            },
+            CloudPluginScope::Component(scope) => cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
+                scope: Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Component(
+                    golem_api_grpc::proto::golem::component::ComponentPluginScope {
+                        component_id: Some(scope.component_id.into()),
+                    },
+                )),
+            },
+            CloudPluginScope::Project(scope) => cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope {
+                scope: Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Project(
+                    cloud_api_grpc::proto::golem::cloud::component::ProjectPluginScope {
+                        project_id: Some(scope.project_id.into()),
+                    },
+                )),
+            },
+        }
+    }
+}
+
+impl TryFrom<cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope>
+    for CloudPluginScope
+{
+    type Error = String;
+
+    fn try_from(
+        proto: cloud_api_grpc::proto::golem::cloud::component::CloudPluginScope,
+    ) -> Result<Self, Self::Error> {
+        match proto.scope {
+            Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Global(
+                _,
+            )) => Ok(Self::global()),
+            Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Component(
+                scope,
+            )) => Ok(Self::component(scope.component_id.ok_or("Missing component_id")?.try_into()?)),
+            Some(cloud_api_grpc::proto::golem::cloud::component::cloud_plugin_scope::Scope::Project(
+                scope,
+            )) => Ok(Self::project(scope.project_id.ok_or("Missing project_id")?.try_into()?)),
+            None => Err("Missing scope".to_string()),
+        }
+    }
+}
+
+#[async_trait]
+impl PluginScope for CloudPluginScope {
+    type Row = CloudPluginScopeRow;
+
+    type RequestContext = (Arc<CloudComponentService>, CloudAuthCtx);
+
+    async fn accessible_scopes(
+        &self,
+        context: Self::RequestContext,
+    ) -> Result<Vec<Self>, PluginError> {
+        match self {
+            CloudPluginScope::Global(_) =>
+            // In global scope we only have access to plugins in global scope
+            {
+                Ok(vec![self.clone()])
+            }
+            CloudPluginScope::Component(component) => {
+                // In a component scope we have access to
+                // - plugins in that particular scope
+                // - plugins of the component's owner project
+                // - and all the global ones
+
+                let (component_service, auth_ctx) = context;
+                let component = component_service
+                    .get_latest_version(&component.component_id, &auth_ctx)
+                    .await?;
+
+                let project = component.map(|component| component.project_id);
+
+                if let Some(project_id) = project {
+                    Ok(vec![
+                        Self::global(),
+                        Self::project(project_id),
+                        self.clone(),
+                    ])
+                } else {
+                    Ok(vec![Self::global(), self.clone()])
+                }
+            }
+            CloudPluginScope::Project(_) =>
+            // In a project scope we have access to plugins in that particular scope, and all the global ones
+            {
+                Ok(vec![Self::global(), self.clone()])
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct ComponentQuery {
     pub project_id: Option<ProjectId>,
     pub component_name: ComponentName,
-    pub component_type: Option<ComponentType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
@@ -25,6 +246,7 @@ pub struct Component {
     pub project_id: ProjectId,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub component_type: Option<ComponentType>,
+    pub files: Vec<InitialComponentFile>,
 }
 
 impl Component {
@@ -37,6 +259,7 @@ impl Component {
             project_id,
             created_at: component.created_at,
             component_type: component.component_type,
+            files: component.files,
         }
     }
 }
@@ -59,6 +282,12 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             }
             None => None,
         };
+        let files = value
+            .files
+            .into_iter()
+            .map(|f| f.try_into())
+            .collect::<Result<Vec<_>, _>>()?;
+
         Ok(Self {
             versioned_component_id: value
                 .versioned_component_id
@@ -70,6 +299,7 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
             created_at,
             component_type,
+            files,
         })
     }
 }
@@ -89,20 +319,22 @@ impl From<Component> for golem_api_grpc::proto::golem::component::Component {
                 let c: golem_api_grpc::proto::golem::component::ComponentType = c.into();
                 c.into()
             }),
+            files: value.files.into_iter().map(|f| f.into()).collect(),
         }
     }
 }
 
-impl From<golem_component_service_base::model::Component<CloudNamespace>> for Component {
-    fn from(value: golem_component_service_base::model::Component<CloudNamespace>) -> Self {
+impl From<golem_component_service_base::model::Component<CloudComponentOwner>> for Component {
+    fn from(value: golem_component_service_base::model::Component<CloudComponentOwner>) -> Self {
         Self {
             versioned_component_id: value.versioned_component_id,
             component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,
-            project_id: value.namespace.project_id,
+            project_id: value.owner.project_id,
             created_at: Some(value.created_at),
             component_type: Some(value.component_type),
+            files: value.files,
         }
     }
 }

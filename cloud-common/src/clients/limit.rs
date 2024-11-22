@@ -60,6 +60,7 @@ pub struct LimitServiceDefault {
 impl LimitServiceDefault {
     pub fn new(config: &RemoteCloudServiceConfig) -> Self {
         let limit_service_client: GrpcClient<CloudLimitsServiceClient<Channel>> = GrpcClient::new(
+            "limit",
             |channel| {
                 CloudLimitsServiceClient::new(channel)
                     .send_compressed(CompressionEncoding::Gzip)
@@ -104,7 +105,7 @@ impl LimitService for LimitServiceDefault {
             |(client, account_id, component_id, count, size, token)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("update-component-limit", move |client| {
                             let request = authorised_request(
                                 UpdateComponentLimitRequest {
                                     account_id: Some(account_id.clone().into()),
@@ -156,7 +157,7 @@ impl LimitService for LimitServiceDefault {
             |(client, account_id, worker_id, value, token)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("update-worker-limit", move |client| {
                             let request = authorised_request(
                                 UpdateWorkerLimitRequest {
                                     account_id: Some(account_id.clone().into()),
@@ -208,7 +209,7 @@ impl LimitService for LimitServiceDefault {
             |(client, account_id, worker_id, value, token)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("update-worker-connection-limit", move |client| {
                             let request = authorised_request(
                                 UpdateWorkerLimitRequest {
                                     account_id: Some(account_id.clone().into()),
@@ -258,7 +259,7 @@ impl LimitService for LimitServiceDefault {
             |(client, id, token)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("get-resource-limits", move |client| {
                             let request = authorised_request(
                                 GetResourceLimitsRequest {
                                     account_id: Some(id.clone().into()),

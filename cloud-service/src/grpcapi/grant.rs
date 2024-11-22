@@ -7,9 +7,10 @@ use crate::service::account_grant::{AccountGrantService, AccountGrantServiceErro
 use crate::service::auth::{AuthService, AuthServiceError};
 use cloud_api_grpc::proto::golem::cloud::grant::v1::cloud_grant_service_server::CloudGrantService;
 use cloud_api_grpc::proto::golem::cloud::grant::v1::{
-    delete_grant_response, get_grant_response, get_grants_response, grant_error,
-    put_grant_response, DeleteGrantRequest, DeleteGrantResponse, GetGrantRequest, GetGrantResponse,
-    GetGrantsRequest, GetGrantsResponse, GetGrantsSuccessResponse, GrantError, PutGrantRequest,
+    delete_grant_response, get_grant_response, get_grants_response, get_self_grants_response,
+    grant_error, put_grant_response, DeleteGrantRequest, DeleteGrantResponse, GetGrantRequest,
+    GetGrantResponse, GetGrantsRequest, GetGrantsResponse, GetGrantsSuccessResponse,
+    GetSelfGrantsResponse, GetSelfGrantsSuccessResponse, GrantError, PutGrantRequest,
     PutGrantResponse,
 };
 use cloud_common::model::Role;
@@ -93,6 +94,27 @@ impl GrantGrpcApi {
                 })),
             }),
         }
+    }
+
+    async fn get_self(
+        &self,
+        metadata: MetadataMap,
+    ) -> Result<GetSelfGrantsSuccessResponse, GrantError> {
+        let auth = self.auth(metadata).await?;
+        let values = self
+            .account_grant_service
+            .get(&auth.token.account_id, &auth)
+            .await?;
+
+        let roles = values
+            .iter()
+            .map(|a| a.clone().into())
+            .collect::<Vec<i32>>();
+
+        Ok(GetSelfGrantsSuccessResponse {
+            account_id: Some(auth.token.account_id.into()),
+            roles,
+        })
     }
 
     async fn get_by_account(
@@ -196,6 +218,27 @@ impl GrantGrpcApi {
 
 #[async_trait::async_trait]
 impl CloudGrantService for GrantGrpcApi {
+    async fn get_self_grants(
+        &self,
+        request: Request<Empty>,
+    ) -> Result<Response<GetSelfGrantsResponse>, Status> {
+        let (m, _, _) = request.into_parts();
+
+        let record = recorded_grpc_api_request!("get_self_account_grants", account_id = "?");
+
+        let response = match self.get_self(m).instrument(record.span.clone()).await {
+            Ok(result) => record.succeed(get_self_grants_response::Result::Success(result)),
+            Err(error) => record.fail(
+                get_self_grants_response::Result::Error(error.clone()),
+                &GrantTraceErrorKind(&error),
+            ),
+        };
+
+        Ok(Response::new(GetSelfGrantsResponse {
+            result: Some(response),
+        }))
+    }
+
     async fn get_grants(
         &self,
         request: Request<GetGrantsRequest>,

@@ -5,6 +5,7 @@ pub mod config;
 pub mod grpcapi;
 pub mod metrics;
 pub mod model;
+pub mod repo;
 pub mod service;
 
 #[cfg(test)]

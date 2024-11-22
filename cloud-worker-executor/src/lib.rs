@@ -8,6 +8,7 @@ use golem_worker_executor_base::services::active_workers::ActiveWorkers;
 use golem_worker_executor_base::services::blob_store::BlobStoreService;
 use golem_worker_executor_base::services::component::ComponentService;
 use golem_worker_executor_base::services::events::Events;
+use golem_worker_executor_base::services::file_loader::FileLoader;
 use golem_worker_executor_base::services::golem_config::GolemConfig;
 use golem_worker_executor_base::services::key_value::KeyValueService;
 use golem_worker_executor_base::services::oplog::OplogService;
@@ -70,6 +71,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         scheduler_service: Arc<dyn SchedulerService + Send + Sync>,
         worker_proxy: Arc<dyn WorkerProxy + Send + Sync>,
         events: Arc<Events>,
+        file_loader: Arc<FileLoader>,
     ) -> anyhow::Result<All<Context>> {
         let additional_golem_config = self.additional_golem_config.clone();
         let resource_limits =
@@ -100,6 +102,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             scheduler_service.clone(),
             worker_activator.clone(),
             events.clone(),
+            file_loader.clone(),
             extra_deps.clone(),
         ));
 
@@ -124,6 +127,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             worker_activator.clone(),
             worker_proxy.clone(),
             events.clone(),
+            file_loader.clone(),
             extra_deps,
         ))
     }

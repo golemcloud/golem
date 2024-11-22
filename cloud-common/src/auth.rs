@@ -8,7 +8,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::model::TokenSecret;
 use bincode::{Decode, Encode};
-use golem_common::model::{AccountId, ProjectId};
+use golem_common::model::{AccountId, HasAccountId, ProjectId};
 use serde::Deserialize;
 use std::str::FromStr;
 
@@ -165,6 +165,12 @@ impl TryFrom<String> for CloudNamespace {
             project_id: ProjectId::try_from(parts[1])?,
             account_id: AccountId::from(parts[0]),
         })
+    }
+}
+
+impl HasAccountId for CloudNamespace {
+    fn account_id(&self) -> AccountId {
+        self.account_id.clone()
     }
 }
 

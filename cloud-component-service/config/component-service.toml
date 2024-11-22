@@ -4,6 +4,12 @@ grpc_port = 9091
 http_port = 8081
 workspace = "release"
 
+[blob_storage]
+type = "LocalFileSystem"
+
+[blob_storage.config]
+root = "../data/blob_storage"
+
 [cloud_service]
 access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
 host = "localhost"

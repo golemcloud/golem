@@ -21,6 +21,7 @@ harness = false
 [dependencies]
 golem-common = { workspace = true }
 golem-api-grpc = { workspace = true }
+golem-rib = { workspace = true }
 golem-wasm-rpc = { workspace = true }
 golem-worker-service-base = { workspace = true }
 golem-service-base = { workspace = true }

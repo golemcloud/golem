@@ -6,20 +6,21 @@ use crate::model::ApiDeploymentRequest;
 use crate::service::api_domain::RegisterDomainRoute;
 use crate::service::auth::AuthService;
 use cloud_common::auth::{CloudAuthCtx, CloudNamespace, GolemSecurityScheme};
+use cloud_common::model::ProjectAction;
 use golem_common::model::ProjectId;
 use golem_common::{recorded_http_api_request, safe};
-use golem_worker_service_base::api_definition::{ApiDefinitionId, ApiSiteString};
-use golem_worker_service_base::service::api_definition::ApiDefinitionIdWithVersion;
+use golem_worker_service_base::gateway_api_definition::ApiDefinitionId;
+use golem_worker_service_base::gateway_api_deployment;
+use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
+use golem_worker_service_base::service::gateway::api_definition::ApiDefinitionIdWithVersion;
+use golem_worker_service_base::service::gateway::api_deployment::ApiDeploymentService;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
-
-use cloud_common::model::ProjectAction;
-use golem_worker_service_base::service::api_deployment::ApiDeploymentService;
 use tracing::Instrument;
 
 pub struct ApiDeploymentApi {
-    deployment_service: Arc<dyn ApiDeploymentService<CloudNamespace> + Sync + Send>,
+    deployment_service: Arc<dyn ApiDeploymentService<CloudAuthCtx, CloudNamespace> + Sync + Send>,
     auth_service: Arc<dyn AuthService + Sync + Send>,
     domain_route: Arc<dyn RegisterDomainRoute + Sync + Send>,
 }
@@ -27,7 +28,9 @@ pub struct ApiDeploymentApi {
 #[OpenApi(prefix_path = "/v1/api/deployments", tag = ApiTags::ApiDeployment)]
 impl ApiDeploymentApi {
     pub fn new(
-        deployment_service: Arc<dyn ApiDeploymentService<CloudNamespace> + Sync + Send>,
+        deployment_service: Arc<
+            dyn ApiDeploymentService<CloudAuthCtx, CloudNamespace> + Sync + Send,
+        >,
         auth_service: Arc<dyn AuthService + Sync + Send>,
         domain_route: Arc<dyn RegisterDomainRoute + Sync + Send>,
     ) -> Self {
@@ -48,7 +51,7 @@ impl ApiDeploymentApi {
         token: GolemSecurityScheme,
     ) -> Result<Json<ApiDeployment>, ApiEndpointError> {
         let token = token.secret();
-        let project_id = &payload.project_id;
+        let project_id = &payload.0.project_id;
         let record = recorded_http_api_request!(
             "deploy",
             site = payload.0.site.to_string(),
@@ -59,7 +62,7 @@ impl ApiDeploymentApi {
 
             let namespace = self
                 .auth_service
-                .is_authorized(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+                .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
                 .instrument(record.span.clone())
                 .await?;
 
@@ -74,14 +77,14 @@ impl ApiDeploymentApi {
 
             let payload_deployment = &payload.0;
 
-            let api_deployment = golem_worker_service_base::api_definition::ApiDeploymentRequest {
+            let api_deployment = gateway_api_deployment::ApiDeploymentRequest {
                 namespace: namespace.clone(),
                 api_definition_keys: api_definition_infos.clone(),
                 site: payload_deployment.site.clone(),
             };
 
             self.deployment_service
-                .deploy(&api_deployment)
+                .deploy(&api_deployment, &auth_ctx)
                 .instrument(record.span.clone())
                 .await?;
 
@@ -133,7 +136,7 @@ impl ApiDeploymentApi {
 
             let namespace = self
                 .auth_service
-                .is_authorized(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+                .authorize_project_action(&project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
                 .instrument(record.span.clone())
                 .await?;
 
@@ -180,7 +183,7 @@ impl ApiDeploymentApi {
 
             let _ = self
                 .auth_service
-                .is_authorized(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+                .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
                 .instrument(record.span.clone())
                 .await?;
 
@@ -218,7 +221,7 @@ impl ApiDeploymentApi {
 
             let namespace = self
                 .auth_service
-                .is_authorized(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
+                .authorize_project_action(project_id, ProjectAction::ViewApiDefinition, &auth_ctx)
                 .instrument(record.span.clone())
                 .await?;
 

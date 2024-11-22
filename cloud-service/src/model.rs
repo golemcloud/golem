@@ -1,15 +1,16 @@
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::str::FromStr;
-
 use chrono::{TimeZone, Utc};
 use cloud_common::model::*;
 use cloud_common::model::{PlanId, ProjectPolicyId, TokenId};
 use golem_api_grpc::proto::golem::worker::Level;
+use golem_common::model::plugin::PluginInstallationTarget;
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::model::*;
 use poem_openapi::{Enum, Object};
+use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DurationSeconds};
+use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 use uuid::Uuid;
 
 #[derive(
@@ -833,4 +834,25 @@ pub struct ExternalLogin {
     pub name: Option<String>,
     pub email: Option<String>,
     pub verified_emails: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ProjectPluginInstallationTarget {
+    pub project_id: ProjectId,
+}
+
+impl Display for ProjectPluginInstallationTarget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.project_id)
+    }
+}
+
+impl PluginInstallationTarget for ProjectPluginInstallationTarget {
+    type Row = crate::repo::plugin_installation::ProjectPluginInstallationTargetRow;
+
+    fn table_name() -> &'static str {
+        "project_plugin_installation"
+    }
 }

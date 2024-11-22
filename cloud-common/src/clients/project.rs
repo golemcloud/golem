@@ -47,6 +47,7 @@ impl ProjectServiceDefault {
     pub fn new(config: &RemoteCloudServiceConfig) -> Self {
         let project_service_client: GrpcClient<CloudProjectServiceClient<Channel>> =
             GrpcClient::new(
+                "project",
                 |channel| {
                     CloudProjectServiceClient::new(channel)
                         .send_compressed(CompressionEncoding::Gzip)
@@ -86,7 +87,7 @@ impl ProjectService for ProjectServiceDefault {
             |(client, id, token)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("get-project", move |client| {
                             let request = authorised_request(
                                 GetProjectRequest {
                                     project_id: Some(id.clone().into()),
@@ -123,7 +124,7 @@ impl ProjectService for ProjectServiceDefault {
             |(client, token)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("get-default-project", move |client| {
                             let request =
                                 authorised_request(GetDefaultProjectRequest {}, &token.value);
                             Box::pin(client.get_default_project(request))
@@ -164,7 +165,7 @@ impl ProjectService for ProjectServiceDefault {
             |(client, id, token)| {
                 Box::pin(async move {
                     let response = client
-                        .call(move |client| {
+                        .call("get-project-actions", move |client| {
                             let request = authorised_request(
                                 GetProjectActionsRequest {
                                     project_id: Some(id.clone().into()),
@@ -271,9 +272,4 @@ impl SafeDisplay for ProjectError {
     }
 }
 
-impl std::error::Error for ProjectError {
-    // TODO
-    // fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-    //     Some(&self.source)
-    // }
-}
+impl std::error::Error for ProjectError {}

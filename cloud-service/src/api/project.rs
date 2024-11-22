@@ -5,7 +5,10 @@ use crate::service::project::ProjectService;
 use crate::service::project_auth::ProjectAuthorisationService;
 use cloud_common::auth::GolemSecurityScheme;
 use cloud_common::model::ProjectAction;
-use golem_common::model::ProjectId;
+use golem_common::model::plugin::{
+    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
+};
+use golem_common::model::{Empty, PluginInstallationId, ProjectId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::model::ErrorBody;
 use poem_openapi::param::{Path, Query};
@@ -103,7 +106,7 @@ impl ProjectApi {
     ///
     /// Creates a new project. The ownerAccountId must be the caller's account ID.
     #[oai(path = "/", method = "post", operation_id = "create_project")]
-    async fn post_project(
+    async fn create_project(
         &self,
         request: Json<ProjectDataRequest>,
         token: GolemSecurityScheme,
@@ -231,6 +234,143 @@ impl ProjectApi {
                 .await?;
             Ok(Json(Vec::from_iter(result.actions.actions)))
         };
+
+        record.result(response)
+    }
+
+    /// Gets the list of plugins installed for the given project
+    #[oai(
+        path = "/:project_id/plugins/installs",
+        method = "get",
+        operation_id = "get_installed_plugins"
+    )]
+    async fn get_installed_plugins(
+        &self,
+        project_id: Path<ProjectId>,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Vec<PluginInstallation>>> {
+        let record = recorded_http_api_request!(
+            "get_installed_plugins",
+            project_id = project_id.0.to_string(),
+        );
+        let auth = self
+            .auth_service
+            .authorization(token.as_ref())
+            .instrument(record.span.clone())
+            .await?;
+
+        let response = self
+            .project_service
+            .get_plugin_installations_for_project(&project_id, &auth)
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
+    }
+
+    /// Installs a new plugin for this project
+    #[oai(
+        path = "/:project_id/plugins/installs",
+        method = "post",
+        operation_id = "install_plugin"
+    )]
+    async fn install_plugin(
+        &self,
+        project_id: Path<ProjectId>,
+        plugin: Json<PluginInstallationCreation>,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<PluginInstallation>> {
+        let record = recorded_http_api_request!(
+            "install_plugin",
+            project_id = project_id.0.to_string(),
+            plugin_name = plugin.name.clone(),
+            plugin_version = plugin.version.clone()
+        );
+        let auth = self
+            .auth_service
+            .authorization(token.as_ref())
+            .instrument(record.span.clone())
+            .await?;
+
+        let response = self
+            .project_service
+            .create_plugin_installation_for_project(&project_id, plugin.0, &auth)
+            .await
+            .map_err(|e| e.into())
+            .map(Json);
+
+        record.result(response)
+    }
+
+    /// Updates the priority or parameters of a plugin installation
+    #[oai(
+        path = "/:project_id/plugins/installs/:installation_id",
+        method = "put",
+        operation_id = "update_installed_plugin"
+    )]
+    async fn update_installed_plugin(
+        &self,
+        project_id: Path<ProjectId>,
+        installation_id: Path<PluginInstallationId>,
+        update: Json<PluginInstallationUpdate>,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "update_installed_plugin",
+            project_id = project_id.0.to_string(),
+            installation_id = installation_id.0.to_string()
+        );
+        let auth = self
+            .auth_service
+            .authorization(token.as_ref())
+            .instrument(record.span.clone())
+            .await?;
+
+        let response = self
+            .project_service
+            .update_plugin_installation_for_project(
+                &project_id.0,
+                &installation_id.0,
+                update.0,
+                &auth,
+            )
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
+
+        record.result(response)
+    }
+
+    /// Uninstalls a plugin from this project
+    #[oai(
+        path = "/:project_id/latest/plugins/installs/:installation_id",
+        method = "delete",
+        operation_id = "uninstall_plugin"
+    )]
+    async fn uninstall_plugin(
+        &self,
+        project_id: Path<ProjectId>,
+        installation_id: Path<PluginInstallationId>,
+        token: GolemSecurityScheme,
+    ) -> LimitedApiResult<Json<Empty>> {
+        let record = recorded_http_api_request!(
+            "uninstall_plugin",
+            project_id = project_id.0.to_string(),
+            installation_id = installation_id.0.to_string()
+        );
+        let auth = self
+            .auth_service
+            .authorization(token.as_ref())
+            .instrument(record.span.clone())
+            .await?;
+
+        let response = self
+            .project_service
+            .delete_plugin_installation_for_project(&installation_id.0, &project_id.0, &auth)
+            .await
+            .map_err(|e| e.into())
+            .map(|_| Json(Empty {}));
 
         record.result(response)
     }
