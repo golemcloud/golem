@@ -21,7 +21,7 @@ use golem_service_base::auth::DefaultNamespace;
 
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 
-use crate::internal::TestResponse;
+use crate::internal::{InitialRedirectData, TestResponse};
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
@@ -39,6 +39,7 @@ use golem_worker_service_base::{api, gateway_api_definition};
 use http::{HeaderMap, HeaderValue, Method};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use serde_json::Value;
+use url::Url;
 
 // The tests that focus on end to end workflow of API Gateway, without involving any real workers,
 // and stays independent of other modules.
@@ -168,32 +169,42 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
       response
     "#;
 
+    let redirect_url = RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
+
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding_with_multiple_securities(
             "foo/{user-id}",
             worker_name,
             response_mapping,
+            &redirect_url,
         )
         .await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let initial_redirect_response_to_identity_provider =
+        execute(&api_request, &api_specification).await;
 
-    dbg!(test_response.clone());
+    // The first response will be a redirect from the auth middleware which
+    // redirects to the open id connector login
+    let initial_redirection_opt = match initial_redirect_response_to_identity_provider.clone() {
+        TestResponse::RedirectResponse { redirect_url } => {
+            let query = redirect_url.query();
+            let query_components =
+                ApiInputPath::query_components_from_str(query.unwrap_or_default());
 
-    let result = (
-        test_response.get_function_name().unwrap(),
-        test_response.get_function_params().unwrap(),
-    );
+            Some(internal::get_query_components_from_initial_redirect_response(&query_components))
+        }
+        _ => None,
+    };
 
-    let expected = (
-        "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("a".to_string()),
-            Value::String("a".to_string()),
-        ]),
-    );
 
-    assert_eq!(result, expected);
+    let initial_redirect_url_data = initial_redirection_opt.expect("Expected initial redirection");
+
+    let decoded_auth_call_back = internal::decode_url(&initial_redirect_url_data.redirect_uri);
+
+    assert_eq!(Url::parse(&decoded_auth_call_back).unwrap(), redirect_url.url().clone());
+    //let redirect_uri_obtained = initial_redirect_url_data.redirect_uri.as_str();
+
+    assert_eq!(1, 2);
 }
 
 #[test]
@@ -776,6 +787,7 @@ async fn get_api_spec_worker_binding_with_security(
     rib_expression: &str,
 ) -> HttpApiDefinition {
     let security_scheme_identifier = SecuritySchemeIdentifier::new("openId1".to_string());
+    let redirect_url = RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
 
     let yaml_string = format!(
         r#"
@@ -815,7 +827,7 @@ async fn get_api_spec_worker_binding_with_security(
         security_scheme_identifier,
         ClientId::new("foo".to_string()),
         ClientSecret::new("bar".to_string()),
-        RedirectUrl::new("http://abc.com/d/e".to_string()).unwrap(),
+        redirect_url,
         vec![
             Scope::new("user".to_string()),
             Scope::new("email".to_string()),
@@ -843,6 +855,7 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
     path_pattern: &str,
     worker_name: &str,
     rib_expression: &str,
+    auth_call_back_url: &RedirectUrl,
 ) -> HttpApiDefinition {
     let security_scheme_identifier1 = SecuritySchemeIdentifier::new("openId1".to_string());
     let security_scheme_identifier2 = SecuritySchemeIdentifier::new("openId2".to_string());
@@ -903,7 +916,7 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
         security_scheme_identifier1,
         ClientId::new("foo1".to_string()),
         ClientSecret::new("bar1".to_string()),
-        RedirectUrl::new("http://abc.com/d/e".to_string()).unwrap(),
+        auth_call_back_url.clone(),
         vec![
             Scope::new("user".to_string()),
             Scope::new("email".to_string()),
@@ -915,7 +928,7 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
         security_scheme_identifier2,
         ClientId::new("foo2".to_string()),
         ClientSecret::new("bar2".to_string()),
-        RedirectUrl::new("http://abc.com/d/e".to_string()).unwrap(),
+        auth_call_back_url.clone(),
         vec![
             Scope::new("user".to_string()),
             Scope::new("email".to_string()),
@@ -1168,7 +1181,10 @@ mod internal {
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
         WorkerResponse,
     };
-    use golem_worker_service_base::gateway_middleware::Cors;
+    use golem_worker_service_base::gateway_middleware::{
+        Cors, HttpMiddleware, Middleware, Middlewares,
+    };
+    use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
@@ -1185,7 +1201,7 @@ mod internal {
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
-        ACCESS_CONTROL_MAX_AGE,
+        ACCESS_CONTROL_MAX_AGE, LOCATION,
     };
     use openidconnect::core::{
         CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
@@ -1403,7 +1419,7 @@ mod internal {
                     get_test_response_for_worker_binding(response, binding).await
                 }
 
-                ResolvedBinding::FileServer(binding) => {
+                ResolvedBinding::FileServer(_) => {
                     unimplemented!("File server binding test response is not handled")
                 }
             }
@@ -1622,22 +1638,10 @@ mod internal {
             CoreJweKeyManagementAlgorithm::EcdhEsAesKeyWrap256,
         ];
         let new_provider_metadata = CoreProviderMetadata::new(
-            IssuerUrl::new(
-                "https://rp.certification.openid.net:8080/openidconnect-rs/rp-response_type-code"
-                    .to_string(),
-            )
-            .unwrap(),
-            AuthUrl::new(
-                "https://rp.certification.openid.net:8080/openidconnect-rs/\
-                 rp-response_type-code/authorization"
-                    .to_string(),
-            )
-            .unwrap(),
-            JsonWebKeySetUrl::new(
-                "https://rp.certification.openid.net:8080/static/jwks_3INbZl52IrrPCp2j.json"
-                    .to_string(),
-            )
-            .unwrap(),
+            IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+            AuthUrl::new("https://accounts.google.com/o/oauth2/v2/auth".to_string()).unwrap(),
+            JsonWebKeySetUrl::new("https://www.googleapis.com/oauth2/v3/certs".to_string())
+                .unwrap(),
             vec![ResponseTypes::new(vec![CoreResponseType::Code])],
             vec![
                 CoreSubjectIdentifierType::Public,
@@ -1693,7 +1697,7 @@ mod internal {
         .set_require_request_uri_registration(Some(true))
         .set_registration_endpoint(Some(
             RegistrationUrl::new(
-                "https://rp.certification.openid.net:8080/openidconnect-rs/\
+                "https://accounts.google.com/openidconnect-rs/\
                  rp-response_type-code/registration"
                     .to_string(),
             )
@@ -1709,12 +1713,8 @@ mod internal {
             CoreJweContentEncryptionAlgorithm::Aes256Gcm,
         ]))
         .set_userinfo_endpoint(Some(
-            UserInfoUrl::new(
-                "https://rp.certification.openid.net:8080/openidconnect-rs/\
-                 rp-response_type-code/userinfo"
-                    .to_string(),
-            )
-            .unwrap(),
+            UserInfoUrl::new("https://openidconnect.googleapis.com/v1/userinfo".to_string())
+                .unwrap(),
         ))
         .set_token_endpoint_auth_methods_supported(Some(vec![
             CoreClientAuthMethod::ClientSecretPost,
@@ -1758,12 +1758,7 @@ mod internal {
         .set_request_uri_parameter_supported(Some(true))
         .set_request_parameter_supported(Some(true))
         .set_token_endpoint(Some(
-            TokenUrl::new(
-                "https://rp.certification.openid.net:8080/openidconnect-rs/\
-                 rp-response_type-code/token"
-                    .to_string(),
-            )
-            .unwrap(),
+            TokenUrl::new("https://oauth2.googleapis.com/token".to_string()).unwrap(),
         ))
         .set_id_token_encryption_alg_values_supported(Some(all_encryption_algs.clone()))
         .set_userinfo_encryption_alg_values_supported(Some(all_encryption_algs))
@@ -1810,22 +1805,22 @@ mod internal {
 
         let allow_headers = headers
             .get(ACCESS_CONTROL_ALLOW_HEADERS)
-            .map(|x| x.to_str().unwrap().to_string())
+            .map(|x| x.to_str().unwrap())
             .expect("Cors preflight response expects allow_headers");
 
         let allow_origin = headers
             .get(ACCESS_CONTROL_ALLOW_ORIGIN)
-            .map(|x| x.to_str().unwrap().to_string())
+            .map(|x| x.to_str().unwrap())
             .expect("Cors preflight response expects allow_origin");
 
         let allow_methods = headers
             .get(ACCESS_CONTROL_ALLOW_METHODS)
-            .map(|x| x.to_str().unwrap().to_string())
+            .map(|x| x.to_str().unwrap())
             .expect("Cors preflight response expects allow_method");
 
         let expose_headers = headers
             .get(ACCESS_CONTROL_EXPOSE_HEADERS)
-            .map(|x| x.to_str().unwrap().to_string());
+            .map(|x| x.to_str().unwrap());
 
         let max_age = headers
             .get(ACCESS_CONTROL_MAX_AGE)
@@ -1836,10 +1831,10 @@ mod internal {
             .map(|x| x.to_str().unwrap().parse::<bool>().unwrap());
 
         TestResponse::CorsPreflightResponse(Cors::new(
-            allow_origin.as_str(),
-            allow_methods.as_str(),
-            allow_headers.as_str(),
-            expose_headers.map(|x| x.as_str()),
+            allow_origin,
+            allow_methods,
+            allow_headers,
+            expose_headers,
             allow_credentials,
             max_age,
         ))
@@ -1849,6 +1844,20 @@ mod internal {
         response: Response,
         binding: &ResolvedWorkerBinding<DefaultNamespace>,
     ) -> TestResponse {
+        let headers = response.headers().clone();
+
+        // If the binding contains middlewares that can return with a redirect instead of
+        // propagating the worker response, we capture that
+        if is_middleware_redirect(&binding.middlewares) {
+            let location = headers
+                .get(LOCATION)
+                .map(|x| x.to_str().unwrap().to_string())
+                .expect("Cors preflight response expects allow_origin");
+            return TestResponse::RedirectResponse {
+                redirect_url: Url::parse(location.as_str()).expect("Invalid redirect location url"),
+            };
+        }
+
         let bytes = response
             .into_body()
             .into_bytes()
@@ -1876,9 +1885,7 @@ mod internal {
             function_name: function_name.expect("Worker response expects function_name"),
             function_params: function_params.expect("Worker response expects function_params"),
             cors_middleware_headers: {
-                if binding.middlewares.get_cors() {
-                    let headers = response.headers();
-
+                if binding.middlewares.get_cors().is_some() {
                     let cors_header_allow_origin = headers
                         .get(ACCESS_CONTROL_ALLOW_ORIGIN)
                         .map(|x| x.to_str().unwrap().to_string())
@@ -1902,5 +1909,90 @@ mod internal {
                 }
             },
         }
+    }
+
+    // Spotting if there is a middleware that can respond with a redirect response
+    // instead of passing it through to the worker or other bindings.
+    fn is_middleware_redirect(middlewares: &Middlewares) -> bool {
+        // If the binding contains middlewares that can return with a redirect instead of
+        // propagating the worker response, we capture that
+
+        let mut can_redirect = false;
+        for middleware in middlewares.0.iter() {
+            match middleware {
+                // Input middleware that can redirect
+                Middleware::Http(HttpMiddleware::AuthenticateRequest(_)) => {
+                    can_redirect = true;
+                    break;
+                }
+                // Output middleware
+                Middleware::Http(HttpMiddleware::AddCorsHeaders(_)) => {}
+            }
+        }
+
+        can_redirect
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct InitialRedirectData {
+        pub response_type: String,
+        pub client_id: String,
+        pub state: String,
+        pub redirect_uri: String,
+        pub scope: String,
+        pub nonce: String,
+    }
+
+    pub(crate) fn get_query_components_from_initial_redirect_response(
+        query_components: &HashMap<String, String>,
+    ) -> InitialRedirectData {
+        let response_type = query_components
+            .get("response_type")
+            .expect("response_type is missing");
+        let client_id = query_components
+            .get("client_id")
+            .expect("client_id is missing");
+        let state = query_components.get("state").expect("state is missing");
+        let redirect_uri = query_components
+            .get("redirect_uri")
+            .expect("redirect_uri is missing");
+        let scope = query_components.get("scope").expect("scope is missing");
+        let nonce = query_components.get("nonce").expect("nonce is missing");
+
+        InitialRedirectData {
+            response_type: response_type.to_string(),
+            client_id: client_id.to_string(),
+            state: state.to_string(),
+            redirect_uri: redirect_uri.to_string(),
+            scope: scope.to_string(),
+            nonce: nonce.to_string(),
+        }
+    }
+
+   pub(crate) fn decode_url(encoded: &str) -> String {
+        let mut decoded = String::new();
+        let mut chars = encoded.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            if c == '%' {
+                // Ensure there's enough chars after '%' to form a valid hexadecimal code
+                if let (Some(hex1), Some(hex2)) = (chars.next(), chars.next()) {
+                    // Convert the two hexadecimal characters to a byte
+                    if let Ok(byte) = u8::from_str_radix(&format!("{}{}", hex1, hex2), 16) {
+                        decoded.push(byte as char);
+                    } else {
+                        // If the hex is invalid, just append the '%' and characters as is
+                        decoded.push('%');
+                        decoded.push(hex1);
+                        decoded.push(hex2);
+                    }
+                }
+            } else {
+                // Append regular characters directly to the decoded string
+                decoded.push(c);
+            }
+        }
+
+        decoded
     }
 }

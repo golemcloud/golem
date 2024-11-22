@@ -61,20 +61,27 @@ impl ApiInputPath {
     // Return the value of each query variable in a HashMap
     pub fn query_components(&self) -> Option<HashMap<String, String>> {
         if let Some(query_path) = self.query_path.clone() {
-            let mut query_components: HashMap<String, String> = HashMap::new();
-            let query_parts = query_path.split('&').map(|x| x.trim());
+            let query_components = Self::query_components_from_str(&query_path);
 
-            for part in query_parts {
-                let key_value: Vec<&str> = part.split('=').map(|x| x.trim()).collect();
-
-                if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
-                    query_components.insert(key.to_string(), value.to_string());
-                }
-            }
             Some(query_components)
         } else {
             None
         }
+    }
+
+    pub fn query_components_from_str(query_path: &str) -> HashMap<String, String> {
+        let mut query_components: HashMap<String, String> = HashMap::new();
+        let query_parts = query_path.split('&').map(|x| x.trim());
+
+        for part in query_parts {
+            let key_value: Vec<&str> = part.split('=').map(|x| x.trim()).collect();
+
+            if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
+                query_components.insert(key.to_string(), value.to_string());
+            }
+        }
+
+        query_components
     }
 }
 
