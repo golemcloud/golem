@@ -7,8 +7,8 @@ use crate::log::{
 };
 use crate::model::oam;
 use crate::model::wasm_rpc::{
-    include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName, ProfileName,
-    DEFAULT_CONFIG_FILE_NAME,
+    include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName, CustomCommand,
+    ProfileName, WasmComponent, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::stub::{StubConfig, StubDefinition};
 use crate::validation::ValidatedResult;
@@ -373,51 +373,7 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
         let _indent = LogIndent::new();
 
         for build_step in &component_properties.build {
-            let build_dir = build_step
-                .dir
-                .as_ref()
-                .map(|dir| component.source_dir().join(dir))
-                .unwrap_or_else(|| component.source_dir().to_path_buf());
-
-            if !build_step.inputs.is_empty() && !build_step.outputs.is_empty() {
-                let inputs = compile_and_collect_globs(&build_dir, &build_step.inputs)?;
-                let outputs = compile_and_collect_globs(&build_dir, &build_step.outputs)?;
-
-                if is_up_to_date(ctx.config.skip_up_to_date_checks, || inputs, || outputs) {
-                    log_skipping_up_to_date(format!(
-                        "executing command: {} in directory {}",
-                        build_step.command.log_color_highlight(),
-                        build_dir.log_color_highlight()
-                    ));
-                    continue;
-                }
-            }
-
-            log_action(
-                "Executing",
-                format!("command: {}", build_step.command.log_color_highlight()),
-            );
-
-            let command_tokens = build_step.command.split(' ').collect::<Vec<_>>();
-            if command_tokens.is_empty() {
-                return Err(anyhow!("Empty command!"));
-            }
-
-            let result = Command::new(command_tokens[0])
-                .args(command_tokens.iter().skip(1))
-                .current_dir(build_dir)
-                .status()
-                .with_context(|| "Failed to execute command".to_string())?;
-
-            if !result.success() {
-                return Err(anyhow!(format!(
-                    "Command failed with exit code: {}",
-                    result
-                        .code()
-                        .map(|code| code.to_string().log_color_error_highlight().to_string())
-                        .unwrap_or_else(|| "?".to_string())
-                )));
-            }
+            execute_custom_command(&ctx, component, &build_step)?;
         }
     }
 
@@ -553,10 +509,9 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
                         app.component_output_wasm(component_name, profile.as_ref()),
                     ));
 
-                    let build = &app
-                        .component_properties(component_name, profile.as_ref())
-                        .build;
-                    for build_step in build {
+                    let properties = &app.component_properties(component_name, profile.as_ref());
+
+                    for build_step in &properties.build {
                         let build_dir = build_step
                             .dir
                             .as_ref()
@@ -569,6 +524,13 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
                                 .map(|path| ("build output", path)),
                         );
                     }
+
+                    paths.extend(
+                        properties
+                            .clean
+                            .iter()
+                            .map(|path| ("clean target", component.source_dir().join(path))),
+                    );
                 }
             }
             paths
@@ -603,6 +565,58 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
         let _indent = LogIndent::new();
 
         delete_path("application build dir", &app.build_dir())?;
+    }
+
+    Ok(())
+}
+
+pub fn custom_command(config: Config, command: String) -> anyhow::Result<()> {
+    let ctx = ApplicationContext::new(config)?;
+
+    let all_custom_commands = ctx.application.all_custom_commands(ctx.profile());
+    if !all_custom_commands.contains(&command) {
+        if all_custom_commands.is_empty() {
+            bail!(
+                "Custom command {} not found, available custom commands: {}",
+                command.log_color_error_highlight(),
+                all_custom_commands
+                    .iter()
+                    .map(|s| s.log_color_highlight())
+                    .join(", ")
+            );
+        } else {
+            bail!(
+                "Custom command {} not found, no custom command is available",
+                command.log_color_error_highlight(),
+            );
+        }
+    }
+
+    log_action(
+        "Executing",
+        format!("custom command {}", command.log_color_highlight()),
+    );
+    let _indent = LogIndent::new();
+
+    for (component_name, component) in ctx.application.components() {
+        let properties = &ctx
+            .application
+            .component_properties(component_name, ctx.profile());
+        if let Some(custom_command) = properties.custom_commands.get(&command) {
+            log_action(
+                "Executing",
+                format!(
+                    "custom command {} for component {}",
+                    command.log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
+                ),
+            );
+            let _indent = LogIndent::new();
+
+            for step in custom_command {
+                execute_custom_command(&ctx, component, step)?;
+            }
+        }
     }
 
     Ok(())
@@ -1184,6 +1198,60 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
             ),
         );
         fs::copy(from, to)?;
+    }
+
+    Ok(())
+}
+
+fn execute_custom_command(
+    ctx: &ApplicationContext,
+    component: &WasmComponent,
+    command: &CustomCommand,
+) -> anyhow::Result<()> {
+    let build_dir = command
+        .dir
+        .as_ref()
+        .map(|dir| component.source_dir().join(dir))
+        .unwrap_or_else(|| component.source_dir().to_path_buf());
+
+    if !command.inputs.is_empty() && !command.outputs.is_empty() {
+        let inputs = compile_and_collect_globs(&build_dir, &command.inputs)?;
+        let outputs = compile_and_collect_globs(&build_dir, &command.outputs)?;
+
+        if is_up_to_date(ctx.config.skip_up_to_date_checks, || inputs, || outputs) {
+            log_skipping_up_to_date(format!(
+                "executing command: {} in directory {}",
+                command.command.log_color_highlight(),
+                build_dir.log_color_highlight()
+            ));
+            return Ok(());
+        }
+    }
+
+    log_action(
+        "Executing",
+        format!("command: {}", command.command.log_color_highlight()),
+    );
+
+    let command_tokens = command.command.split(' ').collect::<Vec<_>>();
+    if command_tokens.is_empty() {
+        return Err(anyhow!("Empty command!"));
+    }
+
+    let result = Command::new(command_tokens[0])
+        .args(command_tokens.iter().skip(1))
+        .current_dir(build_dir)
+        .status()
+        .with_context(|| "Failed to execute command".to_string())?;
+
+    if !result.success() {
+        return Err(anyhow!(format!(
+            "Command failed with exit code: {}",
+            result
+                .code()
+                .map(|code| code.to_string().log_color_error_highlight().to_string())
+                .unwrap_or_else(|| "?".to_string())
+        )));
     }
 
     Ok(())
