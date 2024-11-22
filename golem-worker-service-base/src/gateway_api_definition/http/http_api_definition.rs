@@ -330,8 +330,14 @@ impl FromStr for AllPathPatterns {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         parse_path_pattern(s)
-            .map(|(_, result)| result)
             .map_err(|err| err.to_string())
+            .and_then(|(leftover, result)| {
+                if !leftover.is_empty() {
+                    Err("Failed to parse path".to_string())
+                } else {
+                    Ok(result)
+                }
+            })
     }
 }
 
@@ -519,7 +525,7 @@ mod tests {
 
     #[test]
     fn split_path_works_with_single_value() {
-        let path_pattern = "foo";
+        let path_pattern = "/foo";
         let result = AllPathPatterns::parse(path_pattern);
 
         let expected = AllPathPatterns {
@@ -532,7 +538,7 @@ mod tests {
 
     #[test]
     fn split_path_works_with_multiple_values() {
-        let path_pattern = "foo/bar";
+        let path_pattern = "/foo/bar";
         let result = AllPathPatterns::parse(path_pattern);
 
         let expected = AllPathPatterns {
@@ -545,7 +551,7 @@ mod tests {
 
     #[test]
     fn split_path_works_with_variables() {
-        let path_pattern = "foo/bar/{var}";
+        let path_pattern = "/foo/bar/{var}";
         let result = AllPathPatterns::parse(path_pattern);
 
         let expected = AllPathPatterns {
@@ -562,7 +568,7 @@ mod tests {
 
     #[test]
     fn split_path_works_with_variables_and_queries() {
-        let path_pattern = "foo/bar/{var}?{userid1}&{userid2}";
+        let path_pattern = "/foo/bar/{var}?{userid1}&{userid2}";
         let result = AllPathPatterns::parse(path_pattern);
 
         let expected = AllPathPatterns {
@@ -741,22 +747,22 @@ mod tests {
             assert_eq!(core_http_definition, decoded);
         }
         test_encode_decode(
-            "foo/{user-id}",
+            "/foo/{user-id}",
             "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
         test_encode_decode(
-            "foo/{user-id}",
+            "/foo/{user-id}",
             "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.body.foo); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
         test_encode_decode(
-            "foo/{user-id}",
+            "/foo/{user-id}",
             "let x: str = request.path.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(request.path.user-id); {status: if result.user == \"admin\" then 401 else 200 } }",
         );
         test_encode_decode(
-            "foo",
+            "/foo",
             "let x: str = request.body.user-id; \"shopping-cart-${if x>100 then 0 else 1}\"",
             "${ let result = golem:it/api.{do-something}(\"foo\"); {status: if result.user == \"admin\" then 401 else 200 } }",
         );

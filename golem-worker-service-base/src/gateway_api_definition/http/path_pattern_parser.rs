@@ -180,6 +180,6 @@ mod tests {
         );
 
         // {+var} is not allowed in the middle of the path
-        assert!(parse_path_pattern("/api/{foo}/{+others}/{bar}").is_err());
+        assert!(AllPathPatterns::parse("/api/{foo}/{+others}/{bar}").is_err());
     }
 }
