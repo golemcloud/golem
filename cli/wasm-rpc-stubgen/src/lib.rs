@@ -315,6 +315,6 @@ fn dec_build_args_to_config(args: DeclarativeBuildArgs) -> commands::declarative
             }
         },
         skip_up_to_date_checks: args.force_build,
-        profile: args.profile,
+        profile: args.profile.map(|profile| profile.into()),
     }
 }
