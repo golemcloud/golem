@@ -202,7 +202,7 @@ pub enum App {
     Build(DeclarativeBuildArgs),
     /// Clean outputs
     Clean(DeclarativeBuildArgs),
-    ///x Run custom command
+    /// Run custom command
     CustomCommand(DeclarativeCustomCommand),
 }
 
