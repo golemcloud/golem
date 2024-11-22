@@ -1,5 +1,4 @@
 use crate::fs::{OverwriteSafeAction, OverwriteSafeActionPlan, PathExtra};
-use crate::model::wasm_rpc::ComponentName;
 use crate::validation::ValidatedResult;
 use colored::{ColoredString, Colorize};
 use std::path::{Path, PathBuf};
@@ -233,11 +232,5 @@ impl LogColorize for PathBuf {
 impl<P: AsRef<Path>> LogColorize for PathExtra<P> {
     fn as_str(&self) -> impl Colorize {
         ColoredString::from(self.display().to_string())
-    }
-}
-
-impl LogColorize for ComponentName {
-    fn as_str(&self) -> impl Colorize {
-        self.as_str()
     }
 }

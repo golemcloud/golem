@@ -393,6 +393,12 @@ enum RenderedWasmComponentProperties {
     },
 }
 
+pub struct ComponentEffectiveTemplateAndProfile<'a> {
+    pub template_name: Option<&'a str>,
+    pub profile: Option<&'a ProfileName>,
+    pub is_requested_profile: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Application {
     common_wasm_build: Option<WasmBuild>,
@@ -906,8 +912,8 @@ impl Application {
                         vec![],
                         format!(
                             "Component {} references unknown component {} as dependency",
-                            component_name.log_color_highlight(),
-                            dep_component_name.log_color_error_highlight(),
+                            component_name.as_str().log_color_highlight(),
+                            dep_component_name.as_str().log_color_error_highlight(),
                         ),
                     )
                 })
@@ -1028,7 +1034,7 @@ impl Application {
                         format!(
                             "Wasm rpc stub build {} references unknown component {}",
                             wasm_rpc_stub_build.name.log_color_highlight(),
-                            component_name.log_color_error_highlight(),
+                            component_name.as_str().log_color_error_highlight(),
                         ),
                     )
                 })
@@ -1226,28 +1232,71 @@ impl Application {
         }
     }
 
-    pub fn component_matches_profile(
-        &self,
+    pub fn component_effective_template_and_profile<'a>(
+        &'a self,
         component_name: &ComponentName,
-        profile: Option<&ProfileName>,
-    ) -> bool {
+        profile: Option<&'a ProfileName>,
+    ) -> ComponentEffectiveTemplateAndProfile<'a> {
         match &self.component(component_name).properties {
-            WasmComponentPropertySource::Explicit { .. } => profile.is_none(),
-            WasmComponentPropertySource::ExplicitWithProfiles { profiles, .. } => match profile {
-                Some(profile) => profiles.contains_key(profile),
-                None => true,
+            WasmComponentPropertySource::Explicit { .. } => ComponentEffectiveTemplateAndProfile {
+                template_name: None,
+                profile: None,
+                is_requested_profile: false,
             },
-            WasmComponentPropertySource::Template { .. } => self
-                .rendered_wasm_component_properties
-                .get(component_name)
-                .map(|properties| match properties {
-                    RenderedWasmComponentProperties::Single { .. } => profile.is_none(),
-                    RenderedWasmComponentProperties::Profiles { profiles, .. } => match profile {
-                        Some(profile) => profiles.contains_key(profile),
-                        None => true,
+            WasmComponentPropertySource::ExplicitWithProfiles {
+                default_profile,
+                profiles,
+            } => match profile {
+                Some(profile) if profiles.contains_key(profile) => {
+                    ComponentEffectiveTemplateAndProfile {
+                        template_name: None,
+                        profile: Some(profile),
+                        is_requested_profile: true,
+                    }
+                }
+                _ => ComponentEffectiveTemplateAndProfile {
+                    template_name: None,
+                    profile: Some(default_profile),
+                    is_requested_profile: false,
+                },
+            },
+            WasmComponentPropertySource::Template { template_name } => {
+                let properties = self
+                    .rendered_wasm_component_properties
+                    .get(component_name)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "Rendered component properties not found for {}",
+                            component_name
+                        )
+                    });
+                match properties {
+                    RenderedWasmComponentProperties::Single { .. } => {
+                        ComponentEffectiveTemplateAndProfile {
+                            template_name: Some(template_name),
+                            profile: None,
+                            is_requested_profile: false,
+                        }
+                    }
+                    RenderedWasmComponentProperties::Profiles {
+                        default_profile,
+                        profiles,
+                    } => match profile {
+                        Some(profile) if profiles.contains_key(profile) => {
+                            ComponentEffectiveTemplateAndProfile {
+                                template_name: Some(template_name),
+                                profile: Some(profile),
+                                is_requested_profile: true,
+                            }
+                        }
+                        _ => ComponentEffectiveTemplateAndProfile {
+                            template_name: Some(template_name),
+                            profile: Some(default_profile),
+                            is_requested_profile: false,
+                        },
                     },
-                })
-                .unwrap_or_default(),
+                }
+            }
         }
     }
 
@@ -1257,25 +1306,19 @@ impl Application {
         profile: Option<&ProfileName>,
     ) -> &WasmComponentProperties {
         match &self.component(component_name).properties {
-            WasmComponentPropertySource::Explicit { properties } => match profile {
-                Some(profile) => {
-                    panic!(
-                        "Component {} has not profiles, requested profile: {}",
-                        component_name, profile,
-                    )
-                }
-                None => properties,
-            },
+            WasmComponentPropertySource::Explicit { properties } => properties,
             WasmComponentPropertySource::ExplicitWithProfiles {
                 default_profile,
                 profiles,
             } => {
                 let profile = profile.unwrap_or(&default_profile);
                 profiles.get(profile).unwrap_or_else(|| {
-                    panic!(
-                        "Requested profile {} for component {} not found",
-                        profile, component_name
-                    )
+                    profiles.get(default_profile).unwrap_or_else(|| {
+                        panic!(
+                            "Default profile {} for {} not found",
+                            default_profile, component_name
+                        )
+                    })
                 })
             }
             WasmComponentPropertySource::Template { .. } => {
@@ -1284,27 +1327,24 @@ impl Application {
                     .get(component_name)
                     .unwrap_or_else(|| {
                         panic!(
-                            "Rendered component properties not found: {}",
+                            "Rendered component properties not found for {}",
                             component_name
                         )
                     });
                 match properties {
-                    RenderedWasmComponentProperties::Single { properties } => match profile {
-                        Some(profile) => {
-                            panic!("Requested profile {} for templated component {}, which does not have profiles", profile, component_name);
-                        }
-                        None => properties,
-                    },
+                    RenderedWasmComponentProperties::Single { properties } => properties,
                     RenderedWasmComponentProperties::Profiles {
                         default_profile,
                         profiles,
                     } => {
-                        let profile = profile.unwrap_or(&default_profile);
+                        let profile = profile.unwrap_or(default_profile);
                         profiles.get(profile).unwrap_or_else(|| {
-                            panic!(
-                                "Requested profile {} for templated component {} not found",
-                                profile, component_name
-                            )
+                            profiles.get(default_profile).unwrap_or_else(|| {
+                                panic!(
+                                    "Default (rendered) profile {} for {} not found",
+                                    default_profile, component_name
+                                )
+                            })
                         })
                     }
                 }
