@@ -67,27 +67,174 @@ impl ApplicationContext {
             }),
         )?;
 
-        if let Some(profile) = &ctx.config.profile {
-            let all_profiles = ctx.application.all_profiles();
-            if all_profiles.is_empty() {
-                bail!(
-                    "Profile {} not found, no available profiles",
-                    profile.as_str().log_color_error_highlight(),
-                );
-            } else if !all_profiles.contains(profile) {
-                bail!(
-                    "Profile {} not found, available profiles: {}",
-                    profile.as_str().log_color_error_highlight(),
-                    all_profiles
-                        .into_iter()
-                        .map(|s| s.as_str().log_color_highlight())
-                        .join(", ")
-                );
-            } else {
-                log_action(
-                    "Selected",
-                    format!("profile: {}", profile.as_str().log_color_highlight()),
-                );
+        // Selecting and validating profiles
+        {
+            match &ctx.config.profile {
+                Some(profile) => {
+                    let all_profiles = ctx.application.all_profiles();
+                    if all_profiles.is_empty() {
+                        bail!(
+                            "Profile {} not found, no available profiles",
+                            profile.as_str().log_color_error_highlight(),
+                        );
+                    } else if !all_profiles.contains(profile) {
+                        bail!(
+                            "Profile {} not found, available profiles: {}",
+                            profile.as_str().log_color_error_highlight(),
+                            all_profiles
+                                .into_iter()
+                                .map(|s| s.as_str().log_color_highlight())
+                                .join(", ")
+                        );
+                    }
+                    log_action(
+                        "Selecting",
+                        format!(
+                            "profiles, requested profile: {}",
+                            profile.as_str().log_color_highlight()
+                        ),
+                    );
+                }
+                None => {
+                    log_action("Selecting", "profiles, no profile was requested");
+                }
+            }
+
+            let _indent = LogIndent::new();
+            for component_name in ctx.application.component_names() {
+                let selection = ctx
+                    .application
+                    .component_effective_template_and_profile(component_name, ctx.profile());
+
+                match (
+                    selection.profile,
+                    selection.template_name,
+                    ctx.profile().is_some(),
+                    selection.is_requested_profile,
+                ) {
+                    (None, None, false, _) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "default build for {}",
+                                component_name.as_str().log_color_highlight()
+                            ),
+                        );
+                    }
+                    (None, None, true, _) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "default build for {}, component has no profiles",
+                                component_name.as_str().log_color_highlight()
+                            ),
+                        );
+                    }
+                    (None, Some(template), false, _) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "default build for {} using template {}",
+                                component_name.as_str().log_color_highlight(),
+                                template.log_color_highlight()
+                            ),
+                        );
+                    }
+                    (None, Some(template), true, _) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "default build for {} using template {}, component has no profiles",
+                                component_name.as_str().log_color_highlight(),
+                                template.log_color_highlight()
+                            ),
+                        );
+                    }
+                    (Some(profile), None, false, false) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "default profile {} for {}",
+                                profile.as_str().log_color_highlight(),
+                                component_name.as_str().log_color_highlight()
+                            ),
+                        );
+                    }
+                    (Some(profile), None, true, false) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "default profile {} for {}, component has no matching requested profile",
+                                profile.as_str().log_color_highlight(),
+                                component_name.as_str().log_color_highlight()
+                            ),
+                        );
+                    }
+                    (Some(profile), Some(template), false, false) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "default profile {} for {} using template {}",
+                                profile.as_str().log_color_highlight(),
+                                component_name.as_str().log_color_highlight(),
+                                template.log_color_highlight()
+                            ),
+                        );
+                    }
+                    (Some(profile), Some(template), true, false) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "default profile {} for {} using template {}, component has no matching requested profile",
+                                profile.as_str().log_color_highlight(),
+                                component_name.as_str().log_color_highlight(),
+                                template.log_color_highlight()
+                            ),
+                        );
+                    }
+                    (Some(profile), None, false, true) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "profile {} for {}",
+                                profile.as_str().log_color_highlight(),
+                                component_name.as_str().log_color_highlight()
+                            ),
+                        );
+                    }
+                    (Some(profile), None, true, true) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "requested profile {} for {}",
+                                profile.as_str().log_color_highlight(),
+                                component_name.as_str().log_color_highlight()
+                            ),
+                        );
+                    }
+                    (Some(profile), Some(template), false, true) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "profile {} for {} using template {}",
+                                profile.as_str().log_color_highlight(),
+                                component_name.as_str().log_color_highlight(),
+                                template.log_color_highlight()
+                            ),
+                        );
+                    }
+                    (Some(profile), Some(template), true, true) => {
+                        log_action(
+                            "Selected",
+                            format!(
+                                "requested profile {} for {} using template {}",
+                                profile.as_str().log_color_highlight(),
+                                component_name.as_str().log_color_highlight(),
+                                template.log_color_highlight()
+                            ),
+                        );
+                    }
+                }
             }
         }
 
@@ -98,10 +245,10 @@ impl ApplicationContext {
         self.config.profile.as_ref()
     }
 
-    fn component_matches_profile(&self, component_name: &ComponentName) -> bool {
+    /*fn component_matches_profile(&self, component_name: &ComponentName) -> bool {
         self.application
             .component_matches_profile(component_name, self.profile())
-    }
+    }*/
 
     fn update_wit_context(&mut self) -> anyhow::Result<()> {
         to_anyhow(
@@ -209,18 +356,6 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
     let _indent = LogIndent::new();
 
     for (component_name, component) in ctx.application.components() {
-        if !ctx.component_matches_profile(component_name) {
-            log_warn_action(
-                "Skipping",
-                format!(
-                    "building {}, no build steps for profile {}",
-                    component_name.log_color_highlight(),
-                    ctx.profile().unwrap().as_str().log_color_highlight()
-                ),
-            );
-            continue;
-        }
-
         let component_properties = ctx
             .application
             .component_properties(component_name, ctx.profile());
@@ -230,7 +365,7 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
                 "Skipping",
                 format!(
                     "building {}, no build steps",
-                    component_name.log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
                 ),
             );
             continue;
@@ -238,7 +373,7 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
 
         log_action(
             "Building",
-            format!("{}", component_name.log_color_highlight()),
+            format!("{}", component_name.as_str().log_color_highlight()),
         );
         let _indent = LogIndent::new();
 
@@ -304,11 +439,6 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
     let _indent = LogIndent::new();
 
     for (component_name, component) in ctx.application.components() {
-        if !ctx.component_matches_profile(component_name) {
-            // TODO: log
-            continue;
-        }
-
         let input_wasm = ctx
             .application
             .component_input_wasm(component_name, ctx.profile());
@@ -328,9 +458,9 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
                 component
                     .wasm_rpc_dependencies
                     .iter()
-                    .map(|s| s.log_color_highlight())
+                    .map(|s| s.as_str().log_color_highlight())
                     .join(", "),
-                component_name.log_color_highlight(),
+                component_name.as_str().log_color_highlight(),
             ));
             continue;
         }
@@ -353,9 +483,9 @@ async fn post_component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()
                     component
                         .wasm_rpc_dependencies
                         .iter()
-                        .map(|s| s.log_color_highlight())
+                        .map(|s| s.as_str().log_color_highlight())
                         .join(", "),
-                    component_name.log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
                 ),
             );
             let _indent = LogIndent::new();
@@ -425,7 +555,10 @@ pub fn clean(config: Config) -> anyhow::Result<()> {
         for (component_name, _component) in app.components() {
             log_action(
                 "Cleaning",
-                format!("component {}", component_name.log_color_highlight()),
+                format!(
+                    "component {}",
+                    component_name.as_str().log_color_highlight()
+                ),
             );
             let _indent = LogIndent::new();
 
@@ -519,7 +652,7 @@ fn load_app_validated(config: &Config) -> ValidatedResult<Application> {
             format!(
                 "components: {}",
                 app.component_names()
-                    .map(|s| s.log_color_highlight())
+                    .map(|s| s.as_str().log_color_highlight())
                     .join(", ")
             )
         }
@@ -764,7 +897,7 @@ fn create_base_output_wit(
     ) {
         log_skipping_up_to_date(format!(
             "creating base output wit directory for {}",
-            component_name.log_color_highlight()
+            component_name.as_str().log_color_highlight()
         ));
         Ok(false)
     } else {
@@ -772,7 +905,7 @@ fn create_base_output_wit(
             "Creating",
             format!(
                 "base output wit directory for {}",
-                component_name.log_color_highlight(),
+                component_name.as_str().log_color_highlight(),
             ),
         );
         let _indent = LogIndent::new();
@@ -854,7 +987,7 @@ fn create_output_wit(
     ) {
         log_skipping_up_to_date(format!(
             "creating output wit directory for {}",
-            component_name.log_color_highlight()
+            component_name.as_str().log_color_highlight()
         ));
         Ok(false)
     } else {
@@ -862,7 +995,7 @@ fn create_output_wit(
             "Creating",
             format!(
                 "output wit directory for {}",
-                component_name.log_color_highlight(),
+                component_name.as_str().log_color_highlight(),
             ),
         );
         let _indent = LogIndent::new();
@@ -888,7 +1021,7 @@ fn update_cargo_toml(
     let component_input_wit_parent = component_input_wit.parent().with_context(|| {
         anyhow!(
             "Failed to get parent for component {}",
-            component_name.log_color_highlight()
+            component_name.as_str().log_color_highlight()
         )
     })?;
     let cargo_toml = component_input_wit_parent.join("Cargo.toml");
@@ -946,13 +1079,16 @@ async fn build_stub(
     ) {
         log_skipping_up_to_date(format!(
             "building wasm rpc stub for {}",
-            component_name.log_color_highlight()
+            component_name.as_str().log_color_highlight()
         ));
         Ok(false)
     } else {
         log_action(
             "Building",
-            format!("wasm rpc stub for {}", component_name.log_color_highlight()),
+            format!(
+                "wasm rpc stub for {}",
+                component_name.as_str().log_color_highlight()
+            ),
         );
         let _indent = LogIndent::new();
 
@@ -985,7 +1121,7 @@ fn add_stub_deps(ctx: &ApplicationContext, component_name: &ComponentName) -> Re
             "Adding",
             format!(
                 "stub wit dependencies to {}",
-                component_name.log_color_highlight()
+                component_name.as_str().log_color_highlight()
             ),
         );
 
@@ -996,8 +1132,8 @@ fn add_stub_deps(ctx: &ApplicationContext, component_name: &ComponentName) -> Re
                 "Adding",
                 format!(
                     "{} stub wit dependency to {}",
-                    dep_component_name.log_color_highlight(),
-                    component_name.log_color_highlight()
+                    dep_component_name.as_str().log_color_highlight(),
+                    component_name.as_str().log_color_highlight()
                 ),
             );
             let _indent = LogIndent::new();

@@ -263,11 +263,6 @@ impl ResolvedWitApplication {
         profile: Option<&ProfileName>,
     ) {
         for (component_name, component) in app.components() {
-            if !app.component_matches_profile(component_name, profile) {
-                // TODO: check if it is okay to skip here
-                continue;
-            }
-
             validation.push_context("component name", component_name.to_string());
 
             let input_wit_dir = app.component_input_wit(component_name, profile);
@@ -277,7 +272,7 @@ impl ResolvedWitApplication {
                 "Resolving",
                 format!(
                     "component wit dirs for {} ({}, {})",
-                    component_name.log_color_highlight(),
+                    component_name.as_str().log_color_highlight(),
                     input_wit_dir.log_color_highlight(),
                     output_wit_dir.log_color_highlight(),
                 ),
@@ -288,7 +283,7 @@ impl ResolvedWitApplication {
                     UnresolvedPackageGroup::parse_dir(&input_wit_dir).with_context(|| {
                         anyhow!(
                             "Failed to parse component {} main package in input wit dir {}",
-                            component_name.log_color_error_highlight(),
+                            component_name.as_str().log_color_error_highlight(),
                             input_wit_dir.log_color_highlight(),
                         )
                     })?;
@@ -567,7 +562,7 @@ impl ResolvedWitApplication {
         self.components.get(component_name).ok_or_else(|| {
             anyhow!(
                 "Component not found: {}",
-                component_name.log_color_error_highlight()
+                component_name.as_str().log_color_error_highlight()
             )
         })
     }
