@@ -115,6 +115,12 @@ mod raw {
         pub unknown_properties: UnknownProperties,
     }
 
+    impl HasUnknownProperties for WasmComponentProperties {
+        fn unknown_properties(&self) -> &UnknownProperties {
+            &self.unknown_properties
+        }
+    }
+
     #[derive(Clone, Debug, Serialize, Deserialize)]
     #[serde(rename_all = "camelCase")]
     pub struct WasmComponentPropertiesComponentSpecific {
@@ -324,7 +330,7 @@ mod template {
         }
     }
 
-    impl<C: Serialize> Template<C> for raw::WasmComponentProperties {
+    impl<C: Serialize> Template<C> for WasmComponentProperties {
         type Rendered = WasmComponentProperties;
 
         fn render(
@@ -334,14 +340,10 @@ mod template {
         ) -> Result<Self::Rendered, minijinja::Error> {
             Ok(WasmComponentProperties {
                 build: self.build.render(env, ctx)?,
-                input_wit: self.input_wit.render(env, ctx)?.unwrap_or_default().into(),
-                output_wit: self.output_wit.render(env, ctx)?.unwrap_or_default().into(),
-                input_wasm: self.input_wasm.render(env, ctx)?.unwrap_or_default().into(),
-                output_wasm: self
-                    .output_wasm
-                    .render(env, ctx)?
-                    .unwrap_or_default()
-                    .into(),
+                input_wit: self.input_wit.render(env, ctx)?,
+                output_wit: self.output_wit.render(env, ctx)?,
+                input_wasm: self.input_wasm.render(env, ctx)?,
+                output_wasm: self.output_wasm.render(env, ctx)?,
             })
         }
     }
@@ -608,147 +610,13 @@ impl Application {
             (Ok(properties), false) => {
                 properties.add_unknown_property_warns(Vec::new, validation);
 
-                // TODO: validate
-                /*for build_step in &properties.properties.build {
-                    let has_inputs = !build_step.inputs.is_empty();
-                    let has_outputs = !build_step.outputs.is_empty();
-
-                    if (has_inputs && !has_outputs) || (!has_inputs && has_outputs) {
-                        validation.push_context("command", build_step.command.clone());
-                        validation.add_warn(
-                            "Using inputs and outputs only has effect when both defined"
-                                .to_string(),
-                        );
-                        validation.pop_context();
-                    }
-                }
-
-                if !properties.build_profiles.is_empty() && !properties.build.is_empty() {
-                    validation.add_warn(
-                        "If buildProfiles is defined then build will be ignored".to_string(),
-                    );
-                }
-
-                if !properties.build_profiles.is_empty()
-                    && properties.default_build_profile.is_none()
-                {
-                    validation.add_error("If buildProfiles is defined then defaultBuildProfile also have to be defined".to_string());
-                }
-
-                if properties.build_profiles.is_empty()
-                    && properties.default_build_profile.is_some()
-                {
-                    validation.add_error("If defaultBuildProfile is defined then buildProfiles also have to be defined".to_string());
-                }
-
-                if let Some(default_build_profile) = &properties.default_build_profile {
-                    if !properties
-                        .build_profiles
-                        .contains_key(default_build_profile)
-                    {
-                        validation.add_error(format!(
-                            "The defined defaultBuildProfile ({}) if not found in buildProfiles",
-                            default_build_profile.log_color_error_highlight()
-                        ))
-                    }
-                }*/
-
-                let properties = match properties.component_template {
-                    Some(template_name) => {
-                        // TODO: validate
-                        /*for (property_defined, property_name) in [
-                            (properties.input_wit.is_some(), "inputWit"),
-                            (properties.output_wit.is_some(), "outputWit"),
-                            (!properties.build.is_empty(), "build"),
-                            (!properties.build_profiles.is_empty(), "buildProfiles"),
-                            (
-                                properties.default_build_profile.is_some(),
-                                "defaultBuildProfile",
-                            ),
-                            (properties.input_wasm.is_some(), "inputWasm"),
-                            (properties.output_wasm.is_some(), "outputWasm"),
-                        ] {
-                            if property_defined {
-                                validation.add_warn(format!(
-                                    "Component property {} is ignored when componentTemplate is defined",
-                                    property_name.log_color_error_highlight()
-                                ))
-                            }
-                        }*/
-
-                        Some(WasmComponentPropertySource::Template { template_name })
-                    }
-                    None => {
-                        // TODO: validate
-                        /*
-                        for (property, property_name) in [
-                            (&properties.input_wit, "inputWit"),
-                            (&properties.output_wit, "outputWit"),
-                            (&properties.input_wasm, "inputWasm"),
-                            (&properties.output_wasm, "outputWasm"),
-                        ] {
-                            if property.is_none() {
-                                validation.add_error(format!("Component property {} must be defined, unless componentTemplate is defined", property_name.log_color_error_highlight()))
-                            }
-                        }*/
-
-                        if properties.profiles.is_empty() {
-                            let properties = properties.properties;
-                            Some(WasmComponentPropertySource::Explicit {
-                                properties: WasmComponentProperties {
-                                    build: properties.build,
-                                    input_wit: properties.input_wit.unwrap_or_default().into(),
-                                    output_wit: properties.output_wit.unwrap_or_default().into(),
-                                    input_wasm: properties.input_wasm.unwrap_or_default().into(),
-                                    output_wasm: properties.output_wasm.unwrap_or_default().into(),
-                                },
-                            })
-                        } else {
-                            match properties.default_profile {
-                                Some(default_profile) => {
-                                    Some(WasmComponentPropertySource::ExplicitWithProfiles {
-                                        default_profile: default_profile.into(),
-                                        profiles: properties
-                                            .profiles
-                                            .into_iter()
-                                            .map(|(profile_name, properties)| {
-                                                (
-                                                    profile_name.into(),
-                                                    // TODO: dup
-                                                    WasmComponentProperties {
-                                                        build: properties.build,
-                                                        input_wit: properties
-                                                            .input_wit
-                                                            .unwrap_or_default()
-                                                            .into(),
-                                                        output_wit: properties
-                                                            .output_wit
-                                                            .unwrap_or_default()
-                                                            .into(),
-                                                        input_wasm: properties
-                                                            .input_wasm
-                                                            .unwrap_or_default()
-                                                            .into(),
-                                                        output_wasm: properties
-                                                            .output_wasm
-                                                            .unwrap_or_default()
-                                                            .into(),
-                                                    },
-                                                )
-                                            })
-                                            .collect(),
-                                    })
-                                }
-                                None => {
-                                    // TODO:
-                                    validation
-                                        .add_error("TODO: missing default profile".to_string());
-                                    None
-                                }
-                            }
-                        }
-                    }
-                };
+                let properties = Self::convert_wasm_component_properties(
+                    validation,
+                    Some(properties.component_template),
+                    properties.profiles,
+                    properties.default_profile,
+                    properties.properties,
+                );
 
                 properties.map(|properties| WasmComponent {
                     name: component.name.into(),
@@ -768,14 +636,35 @@ impl Application {
     ) -> Option<WasmBuild> {
         let result = match component.typed_properties::<raw::WasmComponentBuildProperties>() {
             Ok(properties) => {
-                // TODO: validate component templates
                 properties.add_unknown_property_warns(Vec::new, validation);
+
+                let component_templates = properties
+                    .component_templates
+                    .into_iter()
+                    .filter_map(|(template_name, template)| {
+                        validation.push_context("template", template_name.clone());
+
+                        template.add_unknown_property_warns(Vec::new, validation);
+
+                        let component_source = Self::convert_wasm_component_properties(
+                            validation,
+                            None,
+                            template.profiles,
+                            template.default_profile,
+                            template.properties,
+                        );
+
+                        validation.pop_context();
+
+                        component_source.map(|component_source| (template_name, component_source))
+                    })
+                    .collect::<HashMap<_, _>>();
 
                 let wasm_rpc_stub_build = WasmBuild {
                     source: source.to_path_buf(),
                     name: component.name,
                     build_dir: properties.build_dir.map(|s| s.into()),
-                    component_templates: properties.component_templates,
+                    component_templates,
                     wit_deps: properties.wit_deps.into_iter().map(|s| s.into()).collect(),
                 };
 
@@ -798,6 +687,180 @@ impl Application {
         });
 
         result
+    }
+
+    fn convert_wasm_component_properties(
+        validation: &mut ValidationBuilder,
+        component_template: Option<Option<String>>,
+        profiles: HashMap<String, raw::WasmComponentProperties>,
+        default_profile: Option<String>,
+        properties: raw::WasmComponentProperties,
+    ) -> Option<WasmComponentPropertySource> {
+        fn unwrap_validated_properties(
+            properties: raw::WasmComponentProperties,
+        ) -> WasmComponentProperties {
+            WasmComponentProperties {
+                build: properties.build,
+                input_wit: properties.input_wit.unwrap(),
+                output_wit: properties.output_wit.unwrap(),
+                input_wasm: properties.input_wasm.unwrap(),
+                output_wasm: properties.output_wasm.unwrap(),
+            }
+        }
+
+        let property_ignored_unless_defined_message = {
+            if component_template.is_some() {
+                format!(
+                    "{} or {}",
+                    "componentTemplate".log_color_highlight(),
+                    "profile".log_color_highlight()
+                )
+            } else {
+                "profile".log_color_highlight().to_string()
+            }
+        };
+
+        for build_step in &properties.build {
+            let has_inputs = !build_step.inputs.is_empty();
+            let has_outputs = !build_step.outputs.is_empty();
+
+            if (has_inputs && !has_outputs) || (!has_inputs && has_outputs) {
+                validation.push_context("command", build_step.command.clone());
+                validation.add_warn(format!(
+                    "Using {} and {} only has effect when both defined",
+                    "inputs".log_color_highlight(),
+                    "outputs".log_color_highlight()
+                ));
+                validation.pop_context();
+            }
+        }
+
+        if !profiles.is_empty() && !properties.build.is_empty() {
+            validation.add_warn(format!(
+                "If {} is defined then {} will be ignored",
+                "profiles".log_color_highlight(),
+                "build".log_color_highlight()
+            ));
+        }
+
+        if !profiles.is_empty() && default_profile.is_none() {
+            validation.add_error(format!(
+                "If {} is defined then {} also have to be defined",
+                "profiles".log_color_highlight(),
+                "defaultProfile".log_color_highlight()
+            ));
+        }
+
+        if profiles.is_empty() && default_profile.is_some() {
+            validation.add_error(format!(
+                "If {} is defined then {} also have to be defined",
+                "defaultProfile".log_color_highlight(),
+                "profiles".log_color_highlight(),
+            ));
+        }
+
+        if let Some(default_profile) = &default_profile {
+            if !profiles.contains_key(default_profile) {
+                validation.add_error(format!(
+                    "The defined {} ({}) if not found in {}",
+                    "defaultProfile".log_color_highlight(),
+                    default_profile.log_color_error_highlight(),
+                    "profiles".log_color_highlight(),
+                ));
+            }
+        }
+
+        match component_template {
+            Some(Some(template_name)) => {
+                for (property_defined, property_name) in [
+                    (properties.input_wit.is_some(), "inputWit"),
+                    (properties.output_wit.is_some(), "outputWit"),
+                    (!properties.build.is_empty(), "build"),
+                    (properties.input_wasm.is_some(), "inputWasm"),
+                    (properties.output_wasm.is_some(), "outputWasm"),
+                    (!profiles.is_empty(), "profiles"),
+                    (default_profile.is_some(), "defaultProfile"),
+                ] {
+                    if property_defined {
+                        validation.add_warn(format!(
+                            "Component property {} is ignored when {} is defined",
+                            property_name.log_color_error_highlight(),
+                            "componentTemplate".log_color_highlight(),
+                        ))
+                    }
+                }
+
+                Some(WasmComponentPropertySource::Template { template_name })
+            }
+            _ => {
+                if profiles.is_empty() {
+                    let mut any_mandatory_property_missing = false;
+                    for (property, property_name) in [
+                        (&properties.input_wit, "inputWit"),
+                        (&properties.output_wit, "outputWit"),
+                        (&properties.input_wasm, "inputWasm"),
+                        (&properties.output_wasm, "outputWasm"),
+                    ] {
+                        if property.is_none() {
+                            any_mandatory_property_missing = true;
+                            validation.add_error(format!(
+                                "Component property {} must be defined, unless {} is defined",
+                                property_name.log_color_error_highlight(),
+                                property_ignored_unless_defined_message
+                            ))
+                        }
+                    }
+
+                    (!any_mandatory_property_missing).then_some(
+                        WasmComponentPropertySource::Explicit {
+                            properties: unwrap_validated_properties(properties),
+                        },
+                    )
+                } else {
+                    default_profile.map(|default_profile|
+                        WasmComponentPropertySource::ExplicitWithProfiles {
+                            default_profile: default_profile.into(),
+                            profiles: profiles
+                                .into_iter()
+                                .filter_map(|(profile_name, properties)| {
+                                    validation.push_context("profile", profile_name.clone());
+
+                                    properties.add_unknown_property_warns(Vec::new, validation);
+
+                                    let mut any_mandatory_property_missing = false;
+                                    for (property, property_name) in [
+                                        (&properties.input_wit, "inputWit"),
+                                        (&properties.output_wit, "outputWit"),
+                                        (&properties.input_wasm, "inputWasm"),
+                                        (&properties.output_wasm, "outputWasm"),
+                                    ] {
+                                        if property.is_none() {
+                                            any_mandatory_property_missing = true;
+                                            validation.add_error(
+                                                format!(
+                                                    "Component property {} for profile {} must be defined, unless {} is defined",
+                                                    property_name.log_color_error_highlight(),
+                                                    profile_name.log_color_highlight(),
+                                                    property_ignored_unless_defined_message,
+                                                )
+                                            );
+                                        }
+                                    }
+
+                                    validation.pop_context();
+
+                                    (!any_mandatory_property_missing).then_some(
+                                        (
+                                            profile_name.into(),
+                                            unwrap_validated_properties(properties),
+                                        )
+                                    )
+                                })
+                                .collect(),
+                        })
+                }
+            }
+        }
     }
 
     fn convert_wasm_rpc_stub_build(
@@ -1065,10 +1128,31 @@ impl Application {
             let template_context = minijinja::context! { componentName => component_name.as_str() };
 
             match templates.and_then(|templates| templates.get(template_name)) {
-                Some(template) => match &template.default_profile {
-                    Some(default_profile) => {
-                        let profiles = template
-                            .profiles
+                Some(template) => match template {
+                    WasmComponentPropertySource::Explicit { properties } => match properties
+                        .render(&env, &template_context)
+                    {
+                        Ok(properties) => {
+                            rendered.insert(
+                                component_name.clone(),
+                                RenderedWasmComponentProperties::Single { properties },
+                            );
+                        }
+                        Err(err) => {
+                            validation.push_context("component name", component_name.to_string());
+                            validation.push_context("template name", template_name.to_string());
+
+                            validation
+                                .add_error(format!("Failed to render component template: {}", err));
+                            validation.pop_context();
+                            validation.pop_context();
+                        }
+                    },
+                    WasmComponentPropertySource::ExplicitWithProfiles {
+                        default_profile,
+                        profiles,
+                    } => {
+                        let profiles = profiles
                             .iter()
                             .filter_map(|(profile_name, template)| {
                                 match template.render(&env, &template_context) {
@@ -1108,23 +1192,9 @@ impl Application {
                             },
                         );
                     }
-                    None => match template.properties.render(&env, &template_context) {
-                        Ok(properties) => {
-                            rendered.insert(
-                                component_name.clone(),
-                                RenderedWasmComponentProperties::Single { properties },
-                            );
-                        }
-                        Err(err) => {
-                            validation.push_context("component name", component_name.to_string());
-                            validation.push_context("template name", template_name.to_string());
-
-                            validation
-                                .add_error(format!("Failed to render component template: {}", err));
-                            validation.pop_context();
-                            validation.pop_context();
-                        }
-                    },
+                    WasmComponentPropertySource::Template { .. } => {
+                        panic!("Unexpected template property source for template");
+                    }
                 },
                 None => {
                     validation.add_error(format!(
@@ -1500,13 +1570,14 @@ impl Application {
 
 pub type BuildStep = raw::BuildStep;
 
+// NOTE: we do not use PathBuf here for fields, rather Strings, as values might be templated
 #[derive(Clone, Debug)]
 pub struct WasmComponentProperties {
     pub build: Vec<raw::BuildStep>,
-    pub input_wit: PathBuf,
-    pub output_wit: PathBuf,
-    pub input_wasm: PathBuf,
-    pub output_wasm: PathBuf,
+    pub input_wit: String,
+    pub output_wit: String,
+    pub input_wasm: String,
+    pub output_wasm: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1568,7 +1639,7 @@ pub struct WasmBuild {
     source: PathBuf,
     name: String,
     build_dir: Option<PathBuf>,
-    component_templates: HashMap<String, raw::WasmComponentPropertiesTemplate>,
+    component_templates: HashMap<String, WasmComponentPropertySource>,
     wit_deps: Vec<PathBuf>,
 }
 

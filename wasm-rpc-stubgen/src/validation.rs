@@ -214,7 +214,7 @@ impl ValidationBuilder {
                     self.context
                         .iter()
                         .map(|c| format!("{}: {}", c.name, c.value.log_color_highlight()))
-                        .join(", ")
+                        .join("\n")
                 )
             } else {
                 format!(
@@ -222,7 +222,7 @@ impl ValidationBuilder {
                     self.context
                         .iter()
                         .map(|c| format!("{}: {}", c.name, c.value.log_color_highlight()))
-                        .join("\n")
+                        .join(", ")
                 )
             }
         };
