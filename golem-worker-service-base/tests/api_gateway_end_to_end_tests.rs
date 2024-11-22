@@ -1390,7 +1390,7 @@ mod internal {
                 ResolvedBinding::Static(static_binding) => {
                     match static_binding {
                         StaticBinding::HttpCorsPreflight(_) => {
-                            get_response_for_static_preflight(response)
+                            get_test_response_for_static_preflight(response)
                         }
                         // If binding was http auth call back, we expect a redirect to the original Url
                         StaticBinding::HttpAuthCallBack(_) => {
@@ -1400,7 +1400,7 @@ mod internal {
                 }
 
                 ResolvedBinding::Worker(binding) => {
-                    get_response_for_worker_binding(response, binding).await
+                    get_test_response_for_worker_binding(response, binding).await
                 }
 
                 ResolvedBinding::FileServer(binding) => {
@@ -1805,7 +1805,7 @@ mod internal {
         .unwrap()
     }
 
-    fn get_response_for_static_preflight(response: Response) -> TestResponse {
+    fn get_test_response_for_static_preflight(response: Response) -> TestResponse {
         let headers = response.headers();
 
         let allow_headers = headers
@@ -1845,7 +1845,7 @@ mod internal {
         ))
     }
 
-    async fn get_response_for_worker_binding(
+    async fn get_test_response_for_worker_binding(
         response: Response,
         binding: &ResolvedWorkerBinding<DefaultNamespace>,
     ) -> TestResponse {
