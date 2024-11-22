@@ -1014,12 +1014,6 @@ impl Application {
             ));
         }
 
-        if wasm_builds.len() == 1 {
-            for (_template_name, _build) in &wasm_builds[0].component_templates {
-                // TODO: validate templates
-            }
-        }
-
         wasm_builds.into_iter().next()
     }
 
@@ -1400,7 +1394,7 @@ impl Application {
                 default_profile,
                 profiles,
             } => {
-                let profile = profile.unwrap_or(&default_profile);
+                let profile = profile.unwrap_or(default_profile);
                 profiles.get(profile).unwrap_or_else(|| {
                     profiles.get(default_profile).unwrap_or_else(|| {
                         panic!(
