@@ -120,7 +120,7 @@ impl<Namespace: Clone + Send + Sync + 'static> WorkerServiceRibInterpreter<Names
                         .map(|v| v.result)
                         .map_err(|e| e.to_string())
                 }
-                .boxed() // This ensures the future is boxed with the correct type
+                .boxed()
             }
         });
         let result = rib::interpret(expr, rib_input, worker_invoke_function)

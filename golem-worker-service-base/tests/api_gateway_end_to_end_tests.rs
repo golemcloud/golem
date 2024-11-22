@@ -27,14 +27,17 @@ use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::GatewayBindingResolver;
 use golem_worker_service_base::gateway_execution::gateway_input_executor::{
-    DefaultGatewayBindingExecutor, GatewayInputExecutor, Input,
+    DefaultGatewayInputExecutor, GatewayInputExecutor, Input,
 };
 use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessionStore;
 use golem_worker_service_base::gateway_middleware::Cors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
-use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
+use golem_worker_service_base::gateway_security::{
+    DefaultIdentityProviderResolver, Provider, SecurityScheme, SecuritySchemeIdentifier,
+};
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::{HeaderMap, HeaderValue, Method};
+use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use serde_json::Value;
 
 // The tests that focus on end to end workflow of API Gateway, without involving any real workers,
@@ -61,7 +64,7 @@ async fn execute(
         .await
         .unwrap();
 
-    let test_executor = DefaultGatewayBindingExecutor::new(
+    let test_executor = DefaultGatewayInputExecutor::new(
         internal::get_test_rib_interpreter(),
         internal::get_test_file_server_binding_handler(),
         Arc::new(DefaultAuthCallBack),
@@ -770,6 +773,8 @@ async fn get_api_spec_worker_binding_with_security(
     worker_name: &str,
     rib_expression: &str,
 ) -> HttpApiDefinition {
+    let security_scheme_identifier = SecuritySchemeIdentifier::new("openId1".to_string());
+
     let yaml_string = format!(
         r#"
           id: users-api
@@ -780,7 +785,7 @@ async fn get_api_spec_worker_binding_with_security(
           routes:
           - method: Get
             path: {}
-            security: openId1
+            security: {}
             binding:
               type: wit-worker
               componentId:
@@ -790,7 +795,7 @@ async fn get_api_spec_worker_binding_with_security(
               response: '${{{}}}'
 
         "#,
-        path_pattern, worker_name, rib_expression
+        path_pattern, security_scheme_identifier, worker_name, rib_expression
     );
 
     // Serde is available only for user facing HttpApiDefinition
@@ -801,12 +806,31 @@ async fn get_api_spec_worker_binding_with_security(
         http_api_definition_request.try_into().unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+    let security_scheme_service = internal::get_security_scheme_service();
+
+    let security_scheme = SecurityScheme::new(
+        Provider::Google,
+        security_scheme_identifier,
+        ClientId::new("foo".to_string()),
+        ClientSecret::new("bar".to_string()),
+        RedirectUrl::new("http://abc.com/d/e".to_string()).unwrap(),
+        vec![
+            Scope::new("user".to_string()),
+            Scope::new("email".to_string()),
+        ],
+    );
+
+    // Make sure security scheme is added to golem
+    security_scheme_service
+        .create(&DefaultNamespace(), &security_scheme)
+        .await
+        .unwrap();
 
     HttpApiDefinition::from_http_api_definition_request(
         &DefaultNamespace(),
         core_request,
         create_at,
-        &internal::get_security_scheme_service(),
+        &security_scheme_service,
     )
     .await
     .unwrap()
@@ -818,6 +842,9 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
     worker_name: &str,
     rib_expression: &str,
 ) -> HttpApiDefinition {
+    let security_scheme_identifier1 = SecuritySchemeIdentifier::new("openId1".to_string());
+    let security_scheme_identifier2 = SecuritySchemeIdentifier::new("openId2".to_string());
+
     let yaml_string = format!(
         r#"
           id: users-api
@@ -851,20 +878,57 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
         path_pattern, worker_name, rib_expression, path_pattern, worker_name, rib_expression
     );
 
-    // Serde is available only for user facing HttpApiDefinition
-    let http_api_definition_request: api::HttpApiDefinitionRequest =
+    let user_facing_definition_request: api::HttpApiDefinitionRequest =
         serde_yaml::from_str(yaml_string.as_str()).unwrap();
 
-    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
-        http_api_definition_request.try_into().unwrap();
+    let core_definition_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+        user_facing_definition_request.try_into().unwrap();
+
+    let security_scheme_service = internal::get_security_scheme_service();
+
+    let security_scheme1 = SecurityScheme::new(
+        Provider::Google,
+        security_scheme_identifier1,
+        ClientId::new("foo1".to_string()),
+        ClientSecret::new("bar1".to_string()),
+        RedirectUrl::new("http://abc.com/d/e".to_string()).unwrap(),
+        vec![
+            Scope::new("user".to_string()),
+            Scope::new("email".to_string()),
+        ],
+    );
+
+    let security_scheme2 = SecurityScheme::new(
+        Provider::Google,
+        security_scheme_identifier2,
+        ClientId::new("foo2".to_string()),
+        ClientSecret::new("bar2".to_string()),
+        RedirectUrl::new("http://abc.com/d/e".to_string()).unwrap(),
+        vec![
+            Scope::new("user".to_string()),
+            Scope::new("email".to_string()),
+        ],
+    );
+
+    // Make sure security scheme 1 is added to golem
+    security_scheme_service
+        .create(&DefaultNamespace(), &security_scheme1)
+        .await
+        .unwrap();
+
+    // Make sure security scheme 2 is added to golem
+    security_scheme_service
+        .create(&DefaultNamespace(), &security_scheme2)
+        .await
+        .unwrap();
 
     let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
 
     HttpApiDefinition::from_http_api_definition_request(
         &DefaultNamespace(),
-        core_request,
+        core_definition_request,
         create_at,
-        &internal::get_security_scheme_service(),
+        &security_scheme_service,
     )
     .await
     .unwrap()

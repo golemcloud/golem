@@ -29,7 +29,7 @@ use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 use crate::gateway_binding::GatewayBindingResolver;
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use crate::gateway_execution::gateway_input_executor::{
-    DefaultGatewayBindingExecutor, GatewayInputExecutor, Input,
+    DefaultGatewayInputExecutor, GatewayInputExecutor, Input,
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
@@ -68,7 +68,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
 
         let auth_call_back_binding_handler = Arc::new(DefaultAuthCallBack);
 
-        let gateway_binding_executor = Arc::new(DefaultGatewayBindingExecutor {
+        let gateway_binding_executor = Arc::new(DefaultGatewayInputExecutor {
             evaluator,
             file_server_binding_handler,
             auth_call_back_binding_handler,

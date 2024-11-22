@@ -81,13 +81,13 @@ impl<Namespace: Clone> Input<Namespace> {
     }
 }
 
-pub struct DefaultGatewayBindingExecutor<Namespace> {
+pub struct DefaultGatewayInputExecutor<Namespace> {
     pub evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
     pub file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     pub auth_call_back_binding_handler: Arc<dyn AuthCallBackBindingHandler + Sync + Send>,
 }
 
-impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
+impl<Namespace: Clone> DefaultGatewayInputExecutor<Namespace> {
     pub fn new(
         evaluator: Arc<dyn WorkerServiceRibInterpreter<Namespace> + Sync + Send>,
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
@@ -271,7 +271,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
 
 #[async_trait]
 impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync>
-    GatewayInputExecutor<Namespace, Response> for DefaultGatewayBindingExecutor<Namespace>
+    GatewayInputExecutor<Namespace, Response> for DefaultGatewayInputExecutor<Namespace>
 {
     async fn execute_binding(&self, input: &Input<Namespace>) -> Response
     where
