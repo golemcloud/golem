@@ -296,10 +296,9 @@ impl ResolvedWitApplication {
                     .collect();
 
                 let input_contained_package_deps = {
-                    let deps_path = app
-                        .component_properties(component_name, profile)
-                        .input_wit
-                        .join("deps");
+                    let deps_path =
+                        Path::new(&app.component_properties(component_name, profile).input_wit)
+                            .join("deps");
                     if !deps_path.exists() {
                         HashSet::new()
                     } else {

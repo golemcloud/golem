@@ -1,3 +1,4 @@
+use crate::log::LogColorize;
 use crate::validation::ValidationBuilder;
 use std::collections::BTreeMap;
 
@@ -25,7 +26,10 @@ pub trait HasUnknownProperties {
         validation_builder.add_warns(self.unknown_properties().keys(), |unknown_property_name| {
             Some((
                 vec![],
-                format!("Unknown property: {}", unknown_property_name),
+                format!(
+                    "Unknown property: {}",
+                    unknown_property_name.log_color_highlight()
+                ),
             ))
         });
 
