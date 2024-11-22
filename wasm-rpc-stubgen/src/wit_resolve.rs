@@ -1,6 +1,6 @@
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
-use crate::model::wasm_rpc::{Application, ComponentName};
+use crate::model::wasm_rpc::{Application, ComponentName, ProfileName};
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use crate::{fs, naming};
 use anyhow::{anyhow, bail, Context, Error};
@@ -182,7 +182,7 @@ pub struct ResolvedWitApplication {
 }
 
 impl ResolvedWitApplication {
-    pub fn new(app: &Application) -> ValidatedResult<Self> {
+    pub fn new(app: &Application, profile: Option<&ProfileName>) -> ValidatedResult<Self> {
         log_action("Resolving", "application wit directories");
         let _indent = LogIndent::new();
 
@@ -196,7 +196,7 @@ impl ResolvedWitApplication {
 
         let mut validation = ValidationBuilder::new();
 
-        resolved_app.add_components_from_app(&mut validation, app);
+        resolved_app.add_components_from_app(&mut validation, app, profile);
 
         resolved_app.validate_package_names(&mut validation);
         resolved_app.collect_component_deps(app, &mut validation);
@@ -256,12 +256,22 @@ impl ResolvedWitApplication {
         self.components.insert(component_name, resolved_component);
     }
 
-    fn add_components_from_app(&mut self, validation: &mut ValidationBuilder, app: &Application) {
+    fn add_components_from_app(
+        &mut self,
+        validation: &mut ValidationBuilder,
+        app: &Application,
+        profile: Option<&ProfileName>,
+    ) {
         for (component_name, component) in app.components() {
+            if !app.component_matches_profile(component_name, profile) {
+                // TODO: check if it is okay to skip here
+                continue;
+            }
+
             validation.push_context("component name", component_name.to_string());
 
-            let input_wit_dir = app.component_input_wit(component_name);
-            let output_wit_dir = app.component_output_wit(component_name);
+            let input_wit_dir = app.component_input_wit(component_name, profile);
+            let output_wit_dir = app.component_output_wit(component_name, profile);
 
             log_action(
                 "Resolving",
@@ -291,7 +301,10 @@ impl ResolvedWitApplication {
                     .collect();
 
                 let input_contained_package_deps = {
-                    let deps_path = app.component_properties(component_name).input_wit.join("deps");
+                    let deps_path = app
+                        .component_properties(component_name, profile)
+                        .input_wit
+                        .join("deps");
                     if !deps_path.exists() {
                         HashSet::new()
                     } else {
