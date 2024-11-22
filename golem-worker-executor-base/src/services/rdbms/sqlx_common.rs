@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 #[derive(Clone)]
 pub(crate) struct SqlxRdbms<DB>
@@ -80,13 +80,18 @@ where
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     info!(
-                        "{} create pool: {}, connections: {}",
-                        name, key_clone, pool_config.max_connections
+                        rdbms_type = name,
+                        pool_key = key_clone.to_string(),
+                        "create pool, connections: {}",
+                        pool_config.max_connections
                     );
                     let result = key_clone.create_pool(&pool_config).await.map_err(|e| {
                         error!(
-                            "{} create pool: {}, connections: {} - error {}",
-                            name, key_clone, pool_config.max_connections, e
+                            rdbms_type = name,
+                            pool_key = key_clone.to_string(),
+                            "create pool, connections: {}, error: {}",
+                            pool_config.max_connections,
+                            e
                         );
                         Error::ConnectionFailure(e.to_string())
                     })?;
@@ -147,7 +152,11 @@ where
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error> {
         let start = Instant::now();
         let key = RdbmsPoolKey::new(address.to_string());
-        info!("{} create connection - pool: {}", self.rdbms_type, key);
+        info!(
+            rdbms_type = self.rdbms_type,
+            pool_key = key.to_string(),
+            "create connection",
+        );
         let result = self.get_or_create(&key, worker_id).await;
         let _ = self.record_metrics("create", start, result)?;
         Ok(key)
@@ -174,10 +183,10 @@ where
         params: Vec<DbValue>,
     ) -> Result<u64, Error> {
         let start = Instant::now();
-        info!(
-            "{} execute - pool: {}, statement: {}, params count: {}",
-            self.rdbms_type,
-            key,
+        debug!(
+            rdbms_type = self.rdbms_type,
+            pool_key = key.to_string(),
+            "execute - statement: {}, params count: {}",
             statement,
             params.len()
         );
@@ -189,8 +198,11 @@ where
 
         let result = result.map_err(|e| {
             error!(
-                "{} execute - pool: {}, statement: {} - error: {}",
-                self.rdbms_type, key, statement, e
+                rdbms_type = self.rdbms_type,
+                pool_key = key.to_string(),
+                "execute - statement: {}, error: {}",
+                statement,
+                e
             );
             e
         });
@@ -205,10 +217,10 @@ where
         params: Vec<DbValue>,
     ) -> Result<Arc<dyn DbResultSet + Send + Sync>, Error> {
         let start = Instant::now();
-        info!(
-            "{} query - pool: {}, statement: {}, params count: {}",
-            self.rdbms_type,
-            key,
+        debug!(
+            rdbms_type = self.rdbms_type,
+            pool_key = key.to_string(),
+            "query - statement: {}, params count: {}",
             statement,
             params.len()
         );
@@ -222,8 +234,11 @@ where
 
         let result = result.map_err(|e| {
             error!(
-                "{} query - pool: {}, statement: {} - error: {}",
-                self.rdbms_type, key, statement, e
+                rdbms_type = self.rdbms_type,
+                pool_key = key.to_string(),
+                "query - statement: {}, error: {}",
+                statement,
+                e
             );
             e
         });
@@ -337,19 +352,19 @@ where
     DbRow: for<'a> TryFrom<&'a DB::Row, Error = String>,
 {
     async fn get_columns(&self) -> Result<Vec<DbColumn>, Error> {
-        info!("{} get columns", self.rdbms_type);
+        debug!(rdbms_type = self.rdbms_type, "get columns");
         Ok(self.columns.clone())
     }
 
     async fn get_next(&self) -> Result<Option<Vec<DbRow>>, Error> {
         let mut rows = self.first_rows.lock().await;
         if rows.is_some() {
-            info!("{} get next - initial", self.rdbms_type);
+            debug!(rdbms_type = self.rdbms_type, "get next - initial");
             let result = rows.clone();
             *rows = None;
             Ok(result)
         } else {
-            info!("{} get next", self.rdbms_type);
+            debug!(rdbms_type = self.rdbms_type, "get next");
             let mut stream = self.row_stream.lock().await;
             let next = stream.next().await;
 

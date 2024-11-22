@@ -501,7 +501,7 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::DbNull),
             }
         }
-        // _ => match column.type_info().kind() {
+        // _ => match column.type_info().kind() { // enum in postgres is custom type
         //     PgTypeKind::Enum(_) => {
         //         let v: Option<String> = row.try_get(index).map_err(|e| e.to_string())?;
         //         match v {
@@ -702,48 +702,3 @@ pub(crate) mod pg_type_name {
     pub(crate) const XML: &str = "XML";
     pub(crate) const XML_ARRAY: &str = "XML_ARRAY";
 }
-
-// pub mod types {
-//     use sqlx::{Decode, Encode, Type};
-//     use sqlx::error::BoxDynError;
-//     use sqlx::postgres::{PgArgumentBuffer, PgHasArrayType, PgTypeInfo, PgValueFormat, PgValueRef, Postgres};
-//     use tokio_postgres::types::IsNull;
-//
-//     struct PgEnum(String);
-//
-//
-//     impl Type<Postgres> for PgEnum {
-//         fn type_info() -> PgTypeInfo {
-//             PgTypeInfo::with_name()
-//         }
-//
-//         fn compatible(ty: &PgTypeInfo) -> bool {
-//
-//         }
-//     }
-//
-//     impl PgHasArrayType for PgEnum {
-//         fn array_type_info() -> PgTypeInfo {
-//             PgTypeInfo::TEXT
-//         }
-//     }
-//
-//     impl Encode<'_, Postgres> for PgEnum {
-//         fn encode_by_ref(&self, buf: &mut PgArgumentBuffer) -> IsNull {
-//             buf.extend_from_slice(self.as_bytes());
-//
-//             IsNull::No
-//         }
-//     }
-//
-//     impl Decode<'_, Postgres> for PgEnum {
-//         fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
-//             match value.format() {
-//                 PgValueFormat::Binary => Uuid::from_slice(value.as_bytes()?),
-//                 PgValueFormat::Text => value.as_str()?.parse(),
-//             }
-//                 .map_err(Into::into)
-//         }
-//     }
-//
-// }
