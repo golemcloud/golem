@@ -82,7 +82,11 @@ pub fn log_warn_action<T: AsRef<str>>(action: &str, subject: T) {
 pub fn log_skipping_up_to_date<T: AsRef<str>>(subject: T) {
     log_warn_action(
         "Skipping",
-        format!("{}, already up-to-date", subject.as_ref()),
+        format!(
+            "{}, {}",
+            subject.as_ref(),
+            "UP-TO-DATE".log_color_ok_highlight()
+        ),
     );
 }
 
@@ -202,6 +206,10 @@ pub trait LogColorize {
 
     fn log_color_error_highlight(&self) -> ColoredString {
         self.as_str().bold().red().underline()
+    }
+
+    fn log_color_ok_highlight(&self) -> ColoredString {
+        self.as_str().bold().green()
     }
 }
 
