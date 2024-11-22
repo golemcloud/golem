@@ -59,7 +59,7 @@ async fn execute(
     )
     .unwrap();
 
-    let resolved_route = api_request
+    let resolved_gateway_binding = api_request
         .resolve_gateway_binding(vec![compiled])
         .await
         .unwrap();
@@ -71,13 +71,13 @@ async fn execute(
     );
 
     let input = Input::new(
-        &resolved_route,
+        &resolved_gateway_binding,
         &GatewaySessionStore::in_memory(),
         Arc::new(DefaultIdentityProviderResolver),
     );
 
     let poem_response: poem::Response = test_executor.execute_binding(&input).await;
-    TestResponse::from_live_response(poem_response).await
+    TestResponse::from_poem_response(poem_response, &resolved_gateway_binding).await
 }
 
 #[test]
@@ -178,6 +178,8 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
 
     let test_response = execute(&api_request, &api_specification).await;
 
+    dbg!(test_response.clone());
+
     let result = (
         test_response.get_function_name().unwrap(),
         test_response.get_function_params().unwrap(),
@@ -187,7 +189,7 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
         "golem:it/api.{get-cart-contents}".to_string(),
         Value::Array(vec![
             Value::String("a".to_string()),
-            Value::String("b".to_string()),
+            Value::String("a".to_string()),
         ]),
     );
 
@@ -851,11 +853,12 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
           version: 0.0.1
           createdAt: 2024-08-21T07:42:15.696Z
           security:
-          - openId1
-          - openId2
+          - {}
+          - {}
           routes:
           - method: Get
             path: {}
+            security: {}
             binding:
               type: wit-worker
               componentId:
@@ -865,7 +868,7 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
               response: '${{{}}}'
           - method: Post
             path: {}
-            security: openId2
+            security: {}
             binding:
               type: wit-worker
               componentId:
@@ -875,7 +878,8 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
               response: '${{{}}}'
 
         "#,
-        path_pattern, worker_name, rib_expression, path_pattern, worker_name, rib_expression
+        security_scheme_identifier1, security_scheme_identifier2,
+        path_pattern, security_scheme_identifier1, worker_name, rib_expression, path_pattern, security_scheme_identifier2, worker_name, rib_expression
     );
 
     let user_facing_definition_request: api::HttpApiDefinitionRequest =
@@ -1148,7 +1152,7 @@ mod internal {
     use golem_worker_service_base::gateway_execution::file_server_binding_handler::{
         FileServerBindingHandler, FileServerBindingResult,
     };
-    use golem_worker_service_base::gateway_execution::gateway_binding_resolver::WorkerDetail;
+    use golem_worker_service_base::gateway_execution::gateway_binding_resolver::{ResolvedBinding, ResolvedGatewayBinding, WorkerDetail};
     use golem_worker_service_base::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
         WorkerResponse,
@@ -1191,6 +1195,7 @@ mod internal {
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use url::Url;
+    use golem_worker_service_base::gateway_binding::StaticBinding;
 
     struct TestSecuritySchemeRepo {
         security_scheme: Arc<Mutex<HashMap<String, SecuritySchemeRecord>>>,
@@ -1345,23 +1350,117 @@ mod internal {
     }
 
     #[derive(Debug, Clone)]
-    pub(crate) struct TestResponse {
-        // test function execution simply propagates these details in response body
-        worker_name: Option<String>,
-        function_name: Option<String>,
-        function_params: Option<Value>,
-        // If the execution involves middleware or if the request is a preflight request
-        // we may get these headers
-        cors_header_allow_credentials: Option<bool>,
-        cors_header_allow_origin: Option<String>,
-        cors_header_expose_headers: Option<String>,
-        cors_header_allow_methods: Option<String>,
-        cors_header_allow_headers: Option<String>,
+    pub(crate) enum TestResponse {
+        WorkerResponse {
+            worker_name: String,
+            function_name: String,
+            function_params: Value,
+            cors_middleware_headers: Option<CorsMiddlewareHeadersInResponse> // if binding has cors middleware configured
+        },
+        CorsPreflightResponse(CorsPreflightResponseHeaders), // preflight test response
+        RedirectResponse {
+            redirect_url: Url
+        } // If any middleware resulted in redirect
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct CorsMiddlewareHeadersInResponse {
+        cors_header_allow_origin: String,
+        cors_header_allow_credentials: Option<String>, // If cors middleware is applied
+        cors_header_expose_headers: Option<String> // If cors middleware is applied
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct CorsPreflightResponseHeaders {
+        cors_header_allow_origin: String,
+        cors_header_allow_methods: String,
+        cors_header_allow_headers: String,
         cors_header_max_age: Option<u64>,
+        cors_header_allow_credentials: Option<bool>,
+        cors_header_expose_headers: Option<String>,
     }
 
     impl TestResponse {
-        pub async fn from_live_response(response: poem::Response) -> Self {
+        pub async fn from_poem_response(response: poem::Response, resolved_gateway_binding: &ResolvedGatewayBinding<DefaultNamespace>) -> Self {
+
+            match resolved_gateway_binding.resolved_binding {
+                ResolvedBinding::Static(static_binding) =>  {
+                    match static_binding  {
+                        StaticBinding::HttpCorsPreflight(_) => {
+                            let headers = response.headers();
+
+                            let allow_headers = headers
+                                .get(ACCESS_CONTROL_ALLOW_HEADERS)
+                                .map(|x| x.to_str().unwrap().to_string()).expect("Cors preflight response expects allow_headers");
+
+                            let allow_origin = headers
+                                .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+                                .map(|x| x.to_str().unwrap().to_string()).expect("Cors preflight response expects allow_origin");
+
+                            let allow_methods = headers
+                                .get(ACCESS_CONTROL_ALLOW_METHODS)
+                                .map(|x| x.to_str().unwrap().to_string()).expect("Cors preflight response expects allow_method");
+
+                            let expose_headers = headers
+                                .get(ACCESS_CONTROL_EXPOSE_HEADERS)
+                                .map(|x| x.to_str().unwrap().to_string());
+
+                            let max_age = headers
+                                .get(ACCESS_CONTROL_MAX_AGE)
+                                .map(|x| x.to_str().unwrap().parse::<u64>().unwrap());
+
+                            let allow_credentials = headers
+                                .get(ACCESS_CONTROL_ALLOW_CREDENTIALS)
+                                .map(|x| x.to_str().unwrap().parse::<bool>().unwrap());
+
+                            TestResponse::CorsPreflightResponse(CorsPreflightResponseHeaders {
+                                cors_header_allow_origin: allow_origin,
+                                cors_header_allow_methods: allow_methods,
+                                cors_header_allow_headers: allow_headers,
+                                cors_header_expose_headers: expose_headers,
+                                cors_header_allow_credentials: allow_credentials,
+                                cors_header_max_age: max_age
+                            })
+                        }
+
+                        // If binding was http auth call back, we expect a redirect to the original Url
+                        StaticBinding::HttpAuthCallBack(_) => {
+                           unimplemented!("Http auth call back test response is not handled")
+                        }
+                    }
+                }
+
+                ResolvedBinding::Worker(binding) => {
+                    let bytes = response.into_body().into_bytes().await.ok().expect("TestResponse for worker-binding expects a response body");
+
+                    let body_json: Value = serde_json::from_slice(&bytes).expect("Failed to read the response body");
+
+                    let worker_name = body_json
+                        .get("worker_name")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+
+                    let function_name = body_json
+                        .get("function_name")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+
+                    let function_params = body_json.get("function_params").cloned();
+
+                    TestResponse::WorkerResponse {
+                        worker_name: worker_name.expect("Worker response expects worker_name"),
+                        function_name: function_name.expect("Worker response expects function_name"),
+                        function_params: function_params.expect("Worker response expects function_params"),
+                        cors_middleware_headers: {
+                            if binding.middlewares.get_cors() {
+
+                            }
+                        }
+
+                    }
+                }
+            }
+
             let headers = response.headers();
 
             let allow_headers = headers

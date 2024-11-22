@@ -64,6 +64,7 @@ impl<Namespace: Send + Sync> MiddlewareIn<Namespace, poem::Response> for HttpReq
     ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
         match &input.resolved_gateway_binding.request_details {
             GatewayRequestDetails::Http(http_request) => {
+                dbg!("here?");
                 self.apply_http_auth(
                     http_request,
                     &input.session_store,

@@ -191,16 +191,9 @@ impl TryFrom<RouteRequestData> for RouteRequest {
         let path = AllPathPatterns::parse(value.path.as_str())?;
         let binding = GatewayBinding::try_from(value.binding.clone())?;
 
-        let mut security = None;
-
-        // The partial info about auth is fed to the security field of RouteRequest
-        // before it goes in as a middleware, which requires full info about auth
-        // This is to reduce significant amount of code changes
-        if let Some(middleware_data) = value.binding.middleware {
-            if let Some(auth) = middleware_data.auth {
-                security = Some(SecuritySchemeReference::from(auth))
-            }
-        }
+        let security = value.security.map(|s| SecuritySchemeReference {
+            security_scheme_identifier: SecuritySchemeIdentifier::new(s)
+        });
 
         Ok(Self {
             method: value.method,
@@ -583,8 +576,8 @@ impl TryInto<crate::gateway_api_definition::http::HttpApiDefinitionRequest>
     ) -> Result<crate::gateway_api_definition::http::HttpApiDefinitionRequest, Self::Error> {
         let mut routes = Vec::new();
 
-        for route_data in self.routes {
-            let v = RouteRequest::try_from(route_data)?;
+        for route_request_data in self.routes {
+            let v = RouteRequest::try_from(route_request_data)?;
             routes.push(v);
         }
 

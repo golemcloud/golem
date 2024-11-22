@@ -60,6 +60,7 @@ impl Middlewares {
                 Middleware::Http(http_middleware) => match http_middleware {
                     HttpMiddleware::AddCorsHeaders(_) => {}
                     HttpMiddleware::AuthenticateRequest(auth) => {
+                        dbg!("m i here?/");
                         let result = auth.process_input(input).await?;
                         match result {
                             MiddlewareSuccess::Redirect(response) => {

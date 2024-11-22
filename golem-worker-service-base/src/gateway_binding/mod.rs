@@ -22,7 +22,7 @@ use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 pub(crate) use gateway_binding_compiled::*;
 use golem_service_base::model::VersionedComponentId;
 use rib::Expr;
-pub(crate) use static_binding::*;
+pub use static_binding::*;
 use std::ops::Deref;
 pub(crate) use worker_binding::*;
 pub(crate) use worker_binding_compiled::*;
