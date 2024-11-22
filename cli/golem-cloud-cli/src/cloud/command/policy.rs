@@ -1,8 +1,9 @@
 use clap::Subcommand;
 
-use crate::cloud::model::{ProjectAction, ProjectPolicyId};
+use crate::cloud::model::ProjectPolicyId;
 use crate::cloud::service::policy::ProjectPolicyService;
 use golem_cli::model::{GolemError, GolemResult};
+use golem_cloud_client::model::ProjectAction;
 
 #[derive(Subcommand, Debug)]
 #[command()]

@@ -1,10 +1,9 @@
 use async_trait::async_trait;
-use golem_cloud_client::model::{ProjectActions, ProjectPolicy, ProjectPolicyData};
+use golem_cloud_client::model::{ProjectAction, ProjectActions, ProjectPolicy, ProjectPolicyData};
 use tracing::info;
 
-use crate::cloud::clients::action_cli_to_api;
 use crate::cloud::clients::errors::CloudGolemError;
-use crate::cloud::model::{ProjectAction, ProjectPolicyId};
+use crate::cloud::model::ProjectPolicyId;
 
 #[async_trait]
 pub trait ProjectPolicyClient {
@@ -31,8 +30,6 @@ impl<C: golem_cloud_client::api::ProjectPolicyClient + Sync + Send> ProjectPolic
     ) -> Result<ProjectPolicy, CloudGolemError> {
         info!("Creation project policy");
 
-        let actions: Vec<golem_cloud_client::model::ProjectAction> =
-            actions.into_iter().map(action_cli_to_api).collect();
         let data = ProjectPolicyData {
             name,
             project_actions: ProjectActions { actions },

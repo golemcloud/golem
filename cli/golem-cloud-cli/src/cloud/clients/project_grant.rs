@@ -1,10 +1,9 @@
 use async_trait::async_trait;
-use golem_cloud_client::model::{ProjectGrant, ProjectGrantDataRequest};
+use golem_cloud_client::model::{ProjectAction, ProjectGrant, ProjectGrantDataRequest};
 use tracing::info;
 
-use crate::cloud::clients::action_cli_to_api;
 use crate::cloud::clients::errors::CloudGolemError;
-use crate::cloud::model::{ProjectAction, ProjectPolicyId};
+use crate::cloud::model::ProjectPolicyId;
 use golem_cli::cloud::AccountId;
 use golem_common::uri::cloud::urn::ProjectUrn;
 
@@ -65,7 +64,7 @@ impl<C: golem_cloud_client::api::ProjectGrantClient + Sync + Send> ProjectGrantC
             grantee_account_id: account_id.id,
             project_policy_id: None,
             project_policy_name: None,
-            project_actions: actions.into_iter().map(action_cli_to_api).collect(),
+            project_actions: actions,
         };
 
         Ok(self

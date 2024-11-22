@@ -10,10 +10,6 @@ use golem_common::uri::cloud::uri::{ComponentUri, ProjectUri, ToOssUri};
 use golem_common::uri::cloud::url::ProjectUrl;
 use golem_common::uri::cloud::urn::ProjectUrn;
 use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 use uuid::Uuid;
 
 #[derive(Clone, PartialEq, Eq, Debug, Display, FromStr, Into)]
@@ -248,115 +244,6 @@ impl ComponentRefSplit<ProjectRef> for CloudComponentUriOrName {
                 );
 
                 (uri, Some(p))
-            }
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter, Serialize, Deserialize)]
-pub enum Role {
-    Admin,
-    MarketingAdmin,
-    ViewProject,
-    DeleteProject,
-    CreateProject,
-    InstanceServer,
-}
-
-impl Display for Role {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            Role::Admin => "Admin",
-            Role::MarketingAdmin => "MarketingAdmin",
-            Role::ViewProject => "ViewProject",
-            Role::DeleteProject => "DeleteProject",
-            Role::CreateProject => "CreateProject",
-            Role::InstanceServer => "InstanceServer",
-        };
-
-        Display::fmt(s, f)
-    }
-}
-
-impl FromStr for Role {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Admin" => Ok(Role::Admin),
-            "MarketingAdmin" => Ok(Role::MarketingAdmin),
-            "ViewProject" => Ok(Role::ViewProject),
-            "DeleteProject" => Ok(Role::DeleteProject),
-            "CreateProject" => Ok(Role::CreateProject),
-            "InstanceServer" => Ok(Role::InstanceServer),
-            _ => {
-                let all = Role::iter()
-                    .map(|x| format!("\"{x}\""))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                Err(format!("Unknown role: {s}. Expected one of {all}"))
-            }
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, Debug, EnumIter)]
-pub enum ProjectAction {
-    ViewComponent,
-    CreateComponent,
-    UpdateComponent,
-    DeleteComponent,
-    ViewWorker,
-    CreateWorker,
-    UpdateWorker,
-    DeleteWorker,
-    ViewProjectGrants,
-    CreateProjectGrants,
-    DeleteProjectGrants,
-}
-
-impl Display for ProjectAction {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            ProjectAction::ViewComponent => "ViewComponent",
-            ProjectAction::CreateComponent => "CreateComponent",
-            ProjectAction::UpdateComponent => "UpdateComponent",
-            ProjectAction::DeleteComponent => "DeleteComponent",
-            ProjectAction::ViewWorker => "ViewWorker",
-            ProjectAction::CreateWorker => "CreateWorker",
-            ProjectAction::UpdateWorker => "UpdateWorker",
-            ProjectAction::DeleteWorker => "DeleteWorker",
-            ProjectAction::ViewProjectGrants => "ViewProjectGrants",
-            ProjectAction::CreateProjectGrants => "CreateProjectGrants",
-            ProjectAction::DeleteProjectGrants => "DeleteProjectGrants",
-        };
-
-        Display::fmt(s, f)
-    }
-}
-
-impl FromStr for ProjectAction {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ViewComponent" => Ok(ProjectAction::ViewComponent),
-            "CreateComponent" => Ok(ProjectAction::CreateComponent),
-            "UpdateComponent" => Ok(ProjectAction::UpdateComponent),
-            "DeleteComponent" => Ok(ProjectAction::DeleteComponent),
-            "ViewWorker" => Ok(ProjectAction::ViewWorker),
-            "CreateWorker" => Ok(ProjectAction::CreateWorker),
-            "UpdateWorker" => Ok(ProjectAction::UpdateWorker),
-            "DeleteWorker" => Ok(ProjectAction::DeleteWorker),
-            "ViewProjectGrants" => Ok(ProjectAction::ViewProjectGrants),
-            "CreateProjectGrants" => Ok(ProjectAction::CreateProjectGrants),
-            "DeleteProjectGrants" => Ok(ProjectAction::DeleteProjectGrants),
-            _ => {
-                let all = ProjectAction::iter()
-                    .map(|x| format!("\"{x}\""))
-                    .collect::<Vec<String>>()
-                    .join(", ");
-                Err(format!("Unknown action: {s}. Expected one of {all}"))
             }
         }
     }
@@ -711,6 +598,7 @@ pub mod to_cli {
                 component_type: self
                     .component_type
                     .unwrap_or(golem_client::model::ComponentType::Durable),
+                files: self.files,
             }
         }
     }

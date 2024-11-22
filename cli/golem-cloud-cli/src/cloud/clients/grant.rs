@@ -1,7 +1,7 @@
 use crate::cloud::clients::errors::CloudGolemError;
-use crate::cloud::model::Role;
 use async_trait::async_trait;
 use golem_cli::cloud::AccountId;
+use golem_cloud_client::model::Role;
 use tracing::info;
 
 #[async_trait]
@@ -23,21 +23,17 @@ impl<C: golem_cloud_client::api::GrantClient + Sync + Send> GrantClient for Gran
 
         let roles = self.client.get_account_grants(&account_id.id).await?;
 
-        Ok(roles.into_iter().map(api_to_cli).collect())
+        Ok(roles)
     }
 
     async fn get(&self, account_id: &AccountId, role: Role) -> Result<Role, CloudGolemError> {
         info!("Getting account role.");
-        let role = cli_to_api(role);
 
-        Ok(api_to_cli(
-            self.client.get_account_grant(&account_id.id, &role).await?,
-        ))
+        Ok(self.client.get_account_grant(&account_id.id, &role).await?)
     }
 
     async fn put(&self, account_id: &AccountId, role: Role) -> Result<(), CloudGolemError> {
         info!("Adding account role.");
-        let role = cli_to_api(role);
 
         let _ = self
             .client
@@ -49,7 +45,6 @@ impl<C: golem_cloud_client::api::GrantClient + Sync + Send> GrantClient for Gran
 
     async fn delete(&self, account_id: &AccountId, role: Role) -> Result<(), CloudGolemError> {
         info!("Deleting account role.");
-        let role = cli_to_api(role);
 
         let _ = self
             .client
@@ -57,27 +52,5 @@ impl<C: golem_cloud_client::api::GrantClient + Sync + Send> GrantClient for Gran
             .await?;
 
         Ok(())
-    }
-}
-
-fn api_to_cli(role: golem_cloud_client::model::Role) -> Role {
-    match role {
-        golem_cloud_client::model::Role::Admin {} => Role::Admin,
-        golem_cloud_client::model::Role::MarketingAdmin {} => Role::MarketingAdmin,
-        golem_cloud_client::model::Role::ViewProject {} => Role::ViewProject,
-        golem_cloud_client::model::Role::DeleteProject {} => Role::DeleteProject,
-        golem_cloud_client::model::Role::CreateProject {} => Role::CreateProject,
-        golem_cloud_client::model::Role::InstanceServer {} => Role::InstanceServer,
-    }
-}
-
-fn cli_to_api(role: Role) -> golem_cloud_client::model::Role {
-    match role {
-        Role::Admin {} => golem_cloud_client::model::Role::Admin,
-        Role::MarketingAdmin {} => golem_cloud_client::model::Role::MarketingAdmin,
-        Role::ViewProject {} => golem_cloud_client::model::Role::ViewProject,
-        Role::DeleteProject {} => golem_cloud_client::model::Role::DeleteProject,
-        Role::CreateProject {} => golem_cloud_client::model::Role::CreateProject,
-        Role::InstanceServer {} => golem_cloud_client::model::Role::InstanceServer,
     }
 }

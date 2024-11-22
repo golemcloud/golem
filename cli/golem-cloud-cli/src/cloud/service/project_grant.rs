@@ -1,10 +1,11 @@
 use crate::cloud::clients::project_grant::ProjectGrantClient;
 use crate::cloud::model::text::project::ProjectShareView;
-use crate::cloud::model::{ProjectAction, ProjectPolicyId, ProjectRef};
+use crate::cloud::model::{ProjectPolicyId, ProjectRef};
 use crate::cloud::service::project::ProjectService;
 use async_trait::async_trait;
 use golem_cli::cloud::AccountId;
 use golem_cli::model::{GolemError, GolemResult};
+use golem_cloud_client::model::ProjectAction;
 use std::sync::Arc;
 
 #[async_trait]

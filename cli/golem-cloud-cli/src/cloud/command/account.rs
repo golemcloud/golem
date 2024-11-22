@@ -1,10 +1,10 @@
 use clap::Subcommand;
 use golem_cli::cloud::AccountId;
 
-use crate::cloud::model::Role;
 use crate::cloud::service::account::AccountService;
 use crate::cloud::service::grant::GrantService;
 use golem_cli::model::{GolemError, GolemResult};
+use golem_cloud_client::model::Role;
 
 #[derive(Subcommand, Debug)]
 #[command()]

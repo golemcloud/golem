@@ -1,9 +1,10 @@
-use std::io::Read;
-
 use async_trait::async_trait;
 use golem_cli::clients::component::ComponentClient;
 use golem_cli::cloud::ProjectId;
-use golem_cloud_client::model::ComponentQuery;
+use golem_cloud_client::model::{ComponentQuery, PluginInstallationCreation};
+use std::collections::HashMap;
+use std::io::Read;
+use std::path::Path;
 use tokio::fs::File;
 use tracing::info;
 
@@ -12,8 +13,11 @@ use crate::cloud::model::to_cli::ToCli;
 use crate::cloud::model::to_cloud::ToCloud;
 use golem_cli::model::component::Component;
 use golem_cli::model::{ComponentName, GolemError, PathBufOrStdin};
-use golem_client::model::ComponentType;
+use golem_client::model::{
+    ComponentFilePathWithPermissionsList, ComponentType, PluginInstallation,
+};
 use golem_common::uri::oss::urn::ComponentUrn;
+use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct ComponentClientLive<C: golem_cloud_client::api::ComponentClient + Sync + Send> {
@@ -78,13 +82,24 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
         file: PathBufOrStdin,
         project: &Option<Self::ProjectContext>,
         component_type: ComponentType,
+        files_archive: Option<&Path>,
+        files_permissions: Option<&ComponentFilePathWithPermissionsList>,
     ) -> Result<Component, GolemError> {
         info!("Adding component {name:?} from {file:?}");
 
         let query = ComponentQuery {
             project_id: project.map(|ProjectId(id)| id),
             component_name: name.0,
-            component_type: Some(component_type.to_cloud()),
+        };
+
+        let files_archive_file = match files_archive {
+            Some(fa) => {
+                let file = File::open(fa)
+                    .await
+                    .map_err(|e| GolemError(format!("Can't open component files archive: {e}")))?;
+                Some(file)
+            }
+            None => None,
         };
 
         let component = match file {
@@ -94,7 +109,13 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client
-                    .create_component(&query, file)
+                    .create_component(
+                        &query,
+                        file,
+                        Some(&component_type),
+                        files_permissions,
+                        files_archive_file,
+                    )
                     .await
                     .map_err(CloudGolemError::from)?
             }
@@ -106,7 +127,13 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .create_component(&query, bytes)
+                    .create_component(
+                        &query,
+                        bytes,
+                        Some(&component_type),
+                        files_permissions,
+                        files_archive_file,
+                    )
                     .await
                     .map_err(CloudGolemError::from)?
             }
@@ -120,8 +147,20 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
         urn: ComponentUrn,
         file: PathBufOrStdin,
         component_type: Option<ComponentType>,
+        files_archive: Option<&Path>,
+        files_permissions: Option<&ComponentFilePathWithPermissionsList>,
     ) -> Result<Component, GolemError> {
         info!("Updating component {urn} from {file:?}");
+
+        let files_archive_file = match files_archive {
+            Some(fa) => {
+                let file = File::open(fa)
+                    .await
+                    .map_err(|e| GolemError(format!("Can't open component files archive: {e}")))?;
+                Some(file)
+            }
+            None => None,
+        };
 
         let component = match file {
             PathBufOrStdin::Path(path) => {
@@ -130,7 +169,13 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Can't open component file: {e}")))?;
 
                 self.client
-                    .update_component(&urn.id.0, component_type.to_cloud().as_ref(), file)
+                    .update_component(
+                        &urn.id.0,
+                        component_type.to_cloud().as_ref(),
+                        file,
+                        files_permissions,
+                        files_archive_file,
+                    )
                     .await
                     .map_err(CloudGolemError::from)?
             }
@@ -142,12 +187,72 @@ impl<C: golem_cloud_client::api::ComponentClient + Sync + Send> ComponentClient
                     .map_err(|e| GolemError(format!("Failed to read stdin: {e:?}")))?;
 
                 self.client
-                    .update_component(&urn.id.0, component_type.to_cloud().as_ref(), bytes)
+                    .update_component(
+                        &urn.id.0,
+                        component_type.to_cloud().as_ref(),
+                        bytes,
+                        files_permissions,
+                        files_archive_file,
+                    )
                     .await
                     .map_err(CloudGolemError::from)?
             }
         };
 
         Ok(component.to_cli())
+    }
+
+    async fn install_plugin(
+        &self,
+        urn: &ComponentUrn,
+        plugin_name: &str,
+        plugin_version: &str,
+        priority: i32,
+        parameters: HashMap<String, String>,
+    ) -> Result<PluginInstallation, GolemError> {
+        info!("Installing plugin {plugin_name} version {plugin_version} to {urn}");
+
+        Ok(self
+            .client
+            .install_plugin(
+                &urn.id.0,
+                &PluginInstallationCreation {
+                    name: plugin_name.to_string(),
+                    version: plugin_version.to_string(),
+                    priority,
+                    parameters,
+                },
+            )
+            .await
+            .map_err(CloudGolemError::from)?)
+    }
+
+    async fn get_installations(
+        &self,
+        urn: &ComponentUrn,
+        version: u64,
+    ) -> Result<Vec<PluginInstallation>, GolemError> {
+        info!("Getting plugin installations for {urn} version {version}");
+
+        Ok(self
+            .client
+            .get_installed_plugins(&urn.id.0, &version.to_string())
+            .await
+            .map_err(CloudGolemError::from)?)
+    }
+
+    async fn uninstall_plugin(
+        &self,
+        urn: &ComponentUrn,
+        installation_id: &Uuid,
+    ) -> Result<(), GolemError> {
+        info!("Uninstalling plugin {installation_id} from {urn}");
+
+        self.client
+            .uninstall_plugin(&urn.id.0, installation_id)
+            .await
+            .map_err(CloudGolemError::from)?;
+
+        Ok(())
     }
 }

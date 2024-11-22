@@ -7,8 +7,8 @@ use assert2::assert;
 use chrono::{DateTime, Utc};
 use golem_cli::model::component::ComponentView;
 use golem_client::model::{
-    GolemWorkerBinding, GolemWorkerBindingWithTypeInfo, HttpApiDefinitionRequest,
-    HttpApiDefinitionWithTypeInfo, MethodPattern, RibInputTypeInfo, Route, RouteWithTypeInfo,
+    GatewayBindingData, GatewayBindingType, GatewayBindingWithTypeInfo, HttpApiDefinitionRequest,
+    HttpApiDefinitionWithTypeInfo, MethodPattern, RibInputTypeInfo, RouteData, RouteWithTypeInfo,
     VersionedComponentId,
 };
 use serde_json::json;
@@ -127,17 +127,25 @@ fn golem_def_with_response(
         id: id.to_string(),
         version: "0.1.0".to_string(),
         draft: true,
-        routes: vec![Route {
+        routes: vec![RouteData {
             method: MethodPattern::Get,
             path: "/{user-id}/get-cart-contents".to_string(),
-            binding: GolemWorkerBinding {
-                component_id: VersionedComponentId {
+            binding: GatewayBindingData {
+                binding_type: Some(GatewayBindingType::Default),
+                component_id: Some(VersionedComponentId {
                     component_id: Uuid::parse_str(component_id).unwrap(),
                     version: 0,
-                },
-                worker_name: "\"foo\"".to_string(),
+                }),
+                worker_name: Some("\"foo\"".to_string()),
                 idempotency_key: None,
-                response,
+                response: Some(response),
+                middleware: None,
+                allow_origin: None,
+                allow_methods: None,
+                allow_headers: None,
+                expose_headers: None,
+                max_age: None,
+                allow_credentials: None,
             },
         }],
     }
@@ -174,13 +182,13 @@ pub fn make_open_api_file(
         "x-golem-api-definition-version": "0.1.0",
         "paths": {
             "/{user-id}/get-cart-contents": {
-              "x-golem-worker-bridge": {
-                "worker-name": "\"foo\"",
-                "component-id": component_id,
-                "component-version": component_version,
-                "response" : "let status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
-              },
               "get": {
+                "x-golem-api-gateway-binding": {
+                    "worker-name": "\"foo\"",
+                    "component-id": component_id,
+                    "component-version": component_version,
+                    "response" : "let status: u64 = 200; {headers : {ContentType: \"json\", userid: \"foo\"}, body: \"foo\", status: status}"
+                },
                 "summary": "Get Cart Contents",
                 "description": "Get the contents of a user's cart",
                 "parameters": [
@@ -253,11 +261,12 @@ pub fn to_definition(
                 RouteWithTypeInfo {
                     method: v.method,
                     path: v.path,
-                    binding: GolemWorkerBindingWithTypeInfo {
+                    binding: GatewayBindingWithTypeInfo {
                         component_id: v.binding.component_id,
                         worker_name: v.binding.worker_name.clone(),
                         idempotency_key: v.binding.idempotency_key.clone(),
                         response: v.binding.response,
+                        binding_type: Some(GatewayBindingType::Default),
                         response_mapping_input: Some(RibInputTypeInfo {
                             types: HashMap::new(),
                         }),
@@ -265,6 +274,7 @@ pub fn to_definition(
                             types: HashMap::new(),
                         }),
                         idempotency_key_input: None,
+                        cors_preflight: None,
                     },
                 }
             })

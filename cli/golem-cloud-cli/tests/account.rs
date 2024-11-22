@@ -7,7 +7,7 @@ use golem_cloud_cli::cloud::model::text::account::GrantGetView;
 use golem_cloud_cli::cloud::model::text::account::{
     AccountAddView, AccountGetView, AccountUpdateView,
 };
-use golem_cloud_cli::cloud::model::Role;
+use golem_cloud_client::model::Role;
 use test_r::core::{DynamicTestRegistration, TestType};
 use test_r::{add_test, inherit_test_dep, test_dep, test_gen};
 

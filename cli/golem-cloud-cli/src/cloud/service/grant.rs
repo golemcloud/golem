@@ -1,9 +1,9 @@
 use crate::cloud::clients::grant::GrantClient;
 use crate::cloud::model::text::account::GrantGetView;
-use crate::cloud::model::Role;
 use async_trait::async_trait;
 use golem_cli::cloud::AccountId;
 use golem_cli::model::{GolemError, GolemResult};
+use golem_cloud_client::model::Role;
 
 #[async_trait]
 pub trait GrantService {

@@ -1,10 +1,9 @@
 pub mod account {
-    use crate::cloud::model::Role;
     use golem_cli::model::text::fmt::*;
-    use golem_cloud_client::model::Account;
+    use golem_cloud_client::model::{Account, Role};
     use serde::{Deserialize, Serialize};
 
-    fn account_fields(account: &Account) -> Vec<(&'static str, String)> {
+    fn account_fields(account: &Account) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
 
         fields
@@ -26,7 +25,7 @@ pub mod account {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             account_fields(&self.0)
         }
     }
@@ -39,7 +38,7 @@ pub mod account {
             format!("Added account {}", format_message_highlight(&self.0.id))
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             account_fields(&self.0)
         }
     }
@@ -52,7 +51,7 @@ pub mod account {
             format!("Updated account {}", format_message_highlight(&self.0.id))
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             account_fields(&self.0)
         }
     }
@@ -92,7 +91,7 @@ pub mod api_domain {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             let mut fields = FieldsBuilder::new();
 
             fields
@@ -147,7 +146,7 @@ pub mod certificate {
     use serde::{Deserialize, Serialize};
     use uuid::Uuid;
 
-    fn certificate_fields(certificate: &Certificate) -> Vec<(&'static str, String)> {
+    fn certificate_fields(certificate: &Certificate) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
 
         fields
@@ -170,7 +169,7 @@ pub mod certificate {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             certificate_fields(&self.0)
         }
     }
@@ -213,7 +212,7 @@ pub mod project {
     use itertools::Itertools;
     use serde::{Deserialize, Serialize};
 
-    fn project_fields(project: &ProjectView) -> Vec<(&'static str, String)> {
+    fn project_fields(project: &ProjectView) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
 
         fields
@@ -241,7 +240,7 @@ pub mod project {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             project_fields(&self.0)
         }
     }
@@ -267,7 +266,7 @@ pub mod project {
             format!("Added project {}", format_message_highlight(&self.0.name))
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             project_fields(&self.0)
         }
     }
@@ -315,7 +314,7 @@ pub mod project {
             "Shared project".to_string()
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             let mut field = FieldsBuilder::new();
 
             field
@@ -328,7 +327,7 @@ pub mod project {
         }
     }
 
-    fn project_policy_fields(policy: &ProjectPolicy) -> Vec<(&'static str, String)> {
+    fn project_policy_fields(policy: &ProjectPolicy) -> Vec<(String, String)> {
         let mut fields = FieldsBuilder::new();
 
         fields
@@ -361,7 +360,7 @@ pub mod project {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             project_policy_fields(&self.0)
         }
     }
@@ -377,7 +376,7 @@ pub mod project {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             project_policy_fields(&self.0)
         }
     }
@@ -403,7 +402,7 @@ pub mod token {
             )
         }
 
-        fn fields(&self) -> Vec<(&'static str, String)> {
+        fn fields(&self) -> Vec<(String, String)> {
             let mut fields = FieldsBuilder::new();
 
             fields

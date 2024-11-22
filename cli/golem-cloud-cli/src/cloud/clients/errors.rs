@@ -1,20 +1,12 @@
+use golem_cli::oss::clients::errors::{display_golem_error, display_worker_service_errors_body};
 use golem_cloud_client::api::{
     AccountError, ApiCertificateError, ApiDefinitionError, ApiDeploymentError, ApiDomainError,
     ComponentError, GrantError, HealthCheckError, LoginCurrentLoginTokenError,
     LoginLoginOauth2Error, LoginOauth2WebFlowCallbackGithubError, LoginOauth2WebFlowPollError,
-    LoginOauth2WebFlowStartError, LoginStartLoginOauth2Error, ProjectError, ProjectGrantError,
-    ProjectPolicyError, TokenError,
+    LoginOauth2WebFlowStartError, LoginStartLoginOauth2Error, PluginError, ProjectError,
+    ProjectGrantError, ProjectPolicyError, TokenError,
 };
 use golem_cloud_client::api::{LoginCompleteLoginOauth2Error, WorkerError};
-use golem_cloud_client::model::{
-    GolemError, GolemErrorComponentDownloadFailed, GolemErrorComponentParseFailed,
-    GolemErrorFailedToResumeWorker, GolemErrorGetLatestVersionOfComponentFailed,
-    GolemErrorInterrupted, GolemErrorInvalidRequest, GolemErrorInvalidShardId,
-    GolemErrorPromiseAlreadyCompleted, GolemErrorPromiseDropped, GolemErrorPromiseNotFound,
-    GolemErrorRuntimeError, GolemErrorUnexpectedOplogEntry, GolemErrorUnknown,
-    GolemErrorValueMismatch, GolemErrorWorkerAlreadyExists, GolemErrorWorkerCreationFailed,
-    GolemErrorWorkerNotFound, PromiseId, WorkerId, WorkerServiceErrorsBody,
-};
 use itertools::Itertools;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -298,141 +290,15 @@ impl ResponseContentErrorMapper for ApiDomainError {
     }
 }
 
-fn display_golem_error(error: GolemError) -> String {
-    match error {
-        GolemError::InvalidRequest(GolemErrorInvalidRequest { details }) => {
-            format!("Invalid request: {details}")
+impl ResponseContentErrorMapper for PluginError {
+    fn map(self) -> String {
+        match self {
+            PluginError::Error400(errors) => errors.errors.iter().join(", "),
+            PluginError::Error401(error) => error.error,
+            PluginError::Error403(error) => error.error,
+            PluginError::Error404(error) => error.error,
+            PluginError::Error409(error) => error.error,
+            PluginError::Error500(error) => error.error,
         }
-        GolemError::WorkerAlreadyExists(GolemErrorWorkerAlreadyExists { worker_id }) => {
-            format!("Worker already exists: {}", display_worker_id(worker_id))
-        }
-        GolemError::WorkerNotFound(GolemErrorWorkerNotFound { worker_id }) => {
-            format!("Worker not found: {}", display_worker_id(worker_id))
-        }
-        GolemError::WorkerCreationFailed(GolemErrorWorkerCreationFailed { worker_id, details }) => {
-            format!(
-                "Failed to create worker {}: {}",
-                display_worker_id(worker_id),
-                details
-            )
-        }
-        GolemError::FailedToResumeWorker(inner) => {
-            let GolemErrorFailedToResumeWorker { worker_id, reason } = *inner;
-            format!(
-                "Failed to resume worker {}: {}",
-                display_worker_id(worker_id),
-                display_golem_error(reason)
-            )
-        }
-        GolemError::ComponentDownloadFailed(GolemErrorComponentDownloadFailed {
-            component_id,
-            reason,
-        }) => {
-            format!(
-                "Failed to download component {}#{}: {}",
-                component_id.component_id, component_id.version, reason
-            )
-        }
-        GolemError::ComponentParseFailed(GolemErrorComponentParseFailed {
-            component_id,
-            reason,
-        }) => {
-            format!(
-                "Failed to parse component {}#{}: {}",
-                component_id.component_id, component_id.version, reason
-            )
-        }
-        GolemError::GetLatestVersionOfComponentFailed(
-            GolemErrorGetLatestVersionOfComponentFailed {
-                component_id,
-                reason,
-            },
-        ) => {
-            format!(
-                "Failed to get latest version of component {}: {}",
-                component_id, reason
-            )
-        }
-        GolemError::PromiseNotFound(GolemErrorPromiseNotFound { promise_id }) => {
-            format!("Promise not found: {}", display_promise_id(promise_id))
-        }
-        GolemError::PromiseDropped(GolemErrorPromiseDropped { promise_id }) => {
-            format!("Promise dropped: {}", display_promise_id(promise_id))
-        }
-        GolemError::PromiseAlreadyCompleted(GolemErrorPromiseAlreadyCompleted { promise_id }) => {
-            format!(
-                "Promise already completed: {}",
-                display_promise_id(promise_id)
-            )
-        }
-        GolemError::Interrupted(GolemErrorInterrupted {
-            recover_immediately,
-        }) => {
-            if recover_immediately {
-                "Simulated crash".to_string()
-            } else {
-                "Worker interrupted".to_string()
-            }
-        }
-        GolemError::ParamTypeMismatch(_) => "Parameter type mismatch".to_string(),
-        GolemError::NoValueInMessage(_) => "No value in message".to_string(),
-        GolemError::ValueMismatch(GolemErrorValueMismatch { details }) => {
-            format!("Parameter value mismatch: {}", details)
-        }
-        GolemError::UnexpectedOplogEntry(GolemErrorUnexpectedOplogEntry { expected, got }) => {
-            format!("Unexpected oplog entry: expected {}, got {}", expected, got)
-        }
-        GolemError::RuntimeError(GolemErrorRuntimeError { details }) => {
-            format!("Runtime error: {}", details)
-        }
-        GolemError::InvalidShardId(GolemErrorInvalidShardId {
-            shard_id,
-            shard_ids,
-        }) => {
-            format!(
-                "Invalid shard id: {} not in [{}]",
-                shard_id,
-                shard_ids.iter().map(|id| id.to_string()).join(", ")
-            )
-        }
-        GolemError::PreviousInvocationFailed(_) => {
-            "The previously invoked function failed".to_string()
-        }
-        GolemError::PreviousInvocationExited(_) => {
-            "The previously invoked function exited".to_string()
-        }
-        GolemError::Unknown(GolemErrorUnknown { details }) => {
-            format!("Unknown error: {}", details)
-        }
-        GolemError::InvalidAccount(_) => "Invalid account".to_string(),
-        GolemError::ShardingNotReady(_) => "Sharding not ready".to_string(),
-    }
-}
-
-fn display_worker_id(worker_id: WorkerId) -> String {
-    format!("{}/{}", worker_id.component_id, worker_id.worker_name)
-}
-
-fn display_promise_id(promise_id: PromiseId) -> String {
-    format!(
-        "{}/{}",
-        display_worker_id(promise_id.worker_id),
-        promise_id.oplog_idx
-    )
-}
-
-fn display_worker_service_errors_body(error: WorkerServiceErrorsBody) -> String {
-    match error {
-        WorkerServiceErrorsBody::Messages(messages) => messages.errors.iter().join(", "),
-        WorkerServiceErrorsBody::Validation(validation) => validation
-            .errors
-            .iter()
-            .map(|e| {
-                format!(
-                    "{}/{}/{}/{}",
-                    e.method, e.path, e.component.component_id, e.detail
-                )
-            })
-            .join("\n"),
     }
 }

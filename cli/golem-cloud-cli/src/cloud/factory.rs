@@ -7,6 +7,7 @@ use crate::cloud::clients::component::ComponentClientLive;
 use crate::cloud::clients::domain::{DomainClient, DomainClientLive};
 use crate::cloud::clients::grant::{GrantClient, GrantClientLive};
 use crate::cloud::clients::login::{LoginClient, LoginClientLive};
+use crate::cloud::clients::plugin::PluginClientLive;
 use crate::cloud::clients::policy::{ProjectPolicyClient, ProjectPolicyClientLive};
 use crate::cloud::clients::project::{ProjectClient, ProjectClientLive};
 use crate::cloud::clients::project_grant::{ProjectGrantClient, ProjectGrantClientLive};
@@ -26,7 +27,9 @@ use async_trait::async_trait;
 use golem_cli::clients::api_definition::ApiDefinitionClient;
 use golem_cli::clients::api_deployment::ApiDeploymentClient;
 use golem_cli::clients::component::ComponentClient;
+use golem_cli::clients::file_download::{FileDownloadClient, FileDownloadClientLive};
 use golem_cli::clients::health_check::HealthCheckClient;
+use golem_cli::clients::plugin::PluginClient;
 use golem_cli::clients::worker::WorkerClient;
 use golem_cli::cloud::{CloudAuthenticationConfig, ProjectId};
 use golem_cli::config::{CloudProfile, Config, HttpClientConfig, Profile, ProfileName};
@@ -35,7 +38,10 @@ use golem_cli::init::ProfileAuth;
 use golem_cli::model::GolemError;
 use golem_cli::oss::factory::{make_reqwest_client, OssServiceFactoryConfig};
 use golem_cli::service::project::ProjectResolver;
-use golem_cloud_client::{Context, Security};
+use golem_cloud_client::model::{
+    PluginDefinitionCloudPluginOwnerCloudPluginScope, PluginDefinitionWithoutOwnerCloudPluginScope,
+};
+use golem_cloud_client::{CloudPluginScope, Context, Security};
 use itertools::Itertools;
 use std::path::Path;
 use std::sync::Arc;
@@ -62,6 +68,7 @@ pub struct CloudServiceFactory {
     pub auth: CloudAuthentication,
     http_client_service: reqwest::Client,
     http_client_health_check: reqwest::Client,
+    http_client_file_download: reqwest::Client,
 }
 
 impl CloudServiceFactory {
@@ -73,6 +80,8 @@ impl CloudServiceFactory {
             make_reqwest_client(&config.oss_config.service_http_client_config)?;
         let health_check_http_client =
             make_reqwest_client(&config.oss_config.health_check_http_client_config)?;
+        let file_download_http_client =
+            make_reqwest_client(&config.oss_config.file_download_http_client_config)?;
 
         let auth = Self::authenticate(
             auth_config,
@@ -86,6 +95,7 @@ impl CloudServiceFactory {
             auth,
             http_client_service: service_http_client,
             http_client_health_check: health_check_http_client,
+            http_client_file_download: file_download_http_client.clone(),
         })
     }
 
@@ -121,6 +131,9 @@ impl CloudServiceFactory {
                         allow_insecure,
                     ),
                     health_check_http_client_config: HttpClientConfig::new_for_service_calls(
+                        allow_insecure,
+                    ),
+                    file_download_http_client_config: HttpClientConfig::new_for_file_download(
                         allow_insecure,
                     ),
                     allow_insecure,
@@ -351,12 +364,21 @@ impl CloudServiceFactory {
 impl ServiceFactory for CloudServiceFactory {
     type ProjectRef = ProjectRef;
     type ProjectContext = ProjectId;
+    type PluginDefinition = PluginDefinitionCloudPluginOwnerCloudPluginScope;
+    type PluginDefinitionWithoutOwner = PluginDefinitionWithoutOwnerCloudPluginScope;
+    type PluginScope = CloudPluginScope;
 
     fn project_resolver(
         &self,
     ) -> Arc<dyn ProjectResolver<Self::ProjectRef, Self::ProjectContext> + Send + Sync> {
         Arc::new(CloudProjectResolver {
             service: self.project_service(),
+        })
+    }
+
+    fn file_download_client(&self) -> Box<dyn FileDownloadClient + Send + Sync> {
+        Box::new(FileDownloadClientLive {
+            client: self.http_client_file_download.clone(),
         })
     }
 
@@ -429,6 +451,24 @@ impl ServiceFactory for CloudServiceFactory {
                 })
             })
             .collect()
+    }
+
+    fn plugin_client(
+        &self,
+    ) -> Arc<
+        dyn PluginClient<
+                PluginDefinition = Self::PluginDefinition,
+                PluginDefinitionWithoutOwner = Self::PluginDefinitionWithoutOwner,
+                PluginScope = Self::PluginScope,
+                ProjectContext = Self::ProjectContext,
+            > + Send
+            + Sync,
+    > {
+        Arc::new(PluginClientLive {
+            client: golem_cloud_client::api::PluginClientLive {
+                context: self.component_context(),
+            },
+        })
     }
 }
 

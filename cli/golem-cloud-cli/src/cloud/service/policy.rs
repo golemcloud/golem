@@ -1,8 +1,9 @@
 use crate::cloud::clients::policy::ProjectPolicyClient;
 use crate::cloud::model::text::project::{ProjectPolicyAddView, ProjectPolicyGetView};
-use crate::cloud::model::{ProjectAction, ProjectPolicyId};
+use crate::cloud::model::ProjectPolicyId;
 use async_trait::async_trait;
 use golem_cli::model::{GolemError, GolemResult};
+use golem_cloud_client::model::ProjectAction;
 
 #[async_trait]
 pub trait ProjectPolicyService {
