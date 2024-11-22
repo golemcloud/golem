@@ -1118,7 +1118,7 @@ mod internal {
     use openidconnect::{
         AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId,
         ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail,
-        IdToken, IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce, RegistrationUrl,
+        IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce, RegistrationUrl,
         ResponseTypes, Scope, StandardClaims, SubjectIdentifier, TokenUrl, UserInfoUrl,
     };
     use rib::RibResult;
@@ -1160,6 +1160,7 @@ mod internal {
 
     struct TestIdentityProvider {}
 
+    #[async_trait]
     impl IdentityProvider for TestIdentityProvider {
         async fn get_provider_metadata(
             &self,
@@ -1200,7 +1201,7 @@ mod internal {
             &self,
             _client: &OpenIdClient,
             _core_token_response: CoreTokenResponse,
-            nonce: &Nonce,
+            _nonce: &Nonce,
         ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
             Ok(CoreIdTokenClaims::new(
                 IssuerUrl::new("https://server.example.com".to_string()).unwrap(),
@@ -1218,13 +1219,13 @@ mod internal {
 
         fn get_authorization_url(
             &self,
-            client: &OpenIdClient,
-            scopes: Vec<Scope>,
+            _client: &OpenIdClient,
+            _scopes: Vec<Scope>,
         ) -> AuthorizationUrl {
             AuthorizationUrl {
                 url: Url::parse("https:// example. net").unwrap(),
                 csrf_state: CsrfToken::new_random(),
-                nonce: Nonce("nonce".to_string()),
+                nonce: Nonce::new("nonce".to_string()),
             }
         }
     }
@@ -1232,7 +1233,7 @@ mod internal {
     struct TestIdentityProviderResolver;
 
     impl IdentityProviderResolver for TestIdentityProviderResolver {
-        fn resolve(&self, provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
+        fn resolve(&self, _provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
             Arc::new(TestIdentityProvider {})
         }
     }
@@ -1543,209 +1544,6 @@ mod internal {
     }
 
     fn get_test_provider_metadata() -> GolemIdentityProviderMetadata {
-        // Fetched from: https://rp.certification.openid.net:8080/openidconnect-rs/
-        //     rp-response_type-code/.well-known/openid-configuration
-        let json_response_standard = "\
-            \"issuer\":\"https://rp.certification.openid.net:8080/openidconnect-rs/rp-response_type-code\",\
-            \"authorization_endpoint\":\"https://rp.certification.openid.net:8080/openidconnect-rs/rp-response_type-code/authorization\",\
-            \"token_endpoint\":\"https://rp.certification.openid.net:8080/openidconnect-rs/rp-response_type-code/token\",\
-            \"userinfo_endpoint\":\"https://rp.certification.openid.net:8080/openidconnect-rs/rp-response_type-code/userinfo\",\
-            \"jwks_uri\":\"https://rp.certification.openid.net:8080/static/jwks_3INbZl52IrrPCp2j.json\",\
-            \"registration_endpoint\":\"https://rp.certification.openid.net:8080/openidconnect-rs/rp-response_type-code/registration\",\
-            \"scopes_supported\":[\
-               \"email\",\
-               \"phone\",\
-               \"profile\",\
-               \"openid\",\
-               \"address\",\
-               \"offline_access\",\
-               \"openid\"\
-            ],\
-            \"response_types_supported\":[\
-               \"code\"\
-            ],\
-            \"response_modes_supported\":[\
-               \"query\",\
-               \"fragment\",\
-               \"form_post\"\
-            ],\
-            \"grant_types_supported\":[\
-               \"authorization_code\",\
-               \"implicit\",\
-               \"urn:ietf:params:oauth:grant-type:jwt-bearer\",\
-               \"refresh_token\"\
-            ],\
-            \"acr_values_supported\":[\
-               \"PASSWORD\"\
-            ],\
-            \"subject_types_supported\":[\
-               \"public\",\
-               \"pairwise\"\
-            ],\
-            \"id_token_signing_alg_values_supported\":[\
-               \"RS256\",\
-               \"RS384\",\
-               \"RS512\",\
-               \"ES256\",\
-               \"ES384\",\
-               \"ES512\",\
-               \"HS256\",\
-               \"HS384\",\
-               \"HS512\",\
-               \"PS256\",\
-               \"PS384\",\
-               \"PS512\",\
-               \"none\"\
-            ],\
-            \"id_token_encryption_alg_values_supported\":[\
-               \"RSA1_5\",\
-               \"RSA-OAEP\",\
-               \"RSA-OAEP-256\",\
-               \"A128KW\",\
-               \"A192KW\",\
-               \"A256KW\",\
-               \"ECDH-ES\",\
-               \"ECDH-ES+A128KW\",\
-               \"ECDH-ES+A192KW\",\
-               \"ECDH-ES+A256KW\"\
-            ],\
-            \"id_token_encryption_enc_values_supported\":[\
-               \"A128CBC-HS256\",\
-               \"A192CBC-HS384\",\
-               \"A256CBC-HS512\",\
-               \"A128GCM\",\
-               \"A192GCM\",\
-               \"A256GCM\"\
-            ],\
-            \"userinfo_signing_alg_values_supported\":[\
-               \"RS256\",\
-               \"RS384\",\
-               \"RS512\",\
-               \"ES256\",\
-               \"ES384\",\
-               \"ES512\",\
-               \"HS256\",\
-               \"HS384\",\
-               \"HS512\",\
-               \"PS256\",\
-               \"PS384\",\
-               \"PS512\",\
-               \"none\"\
-            ],\
-            \"userinfo_encryption_alg_values_supported\":[\
-               \"RSA1_5\",\
-               \"RSA-OAEP\",\
-               \"RSA-OAEP-256\",\
-               \"A128KW\",\
-               \"A192KW\",\
-               \"A256KW\",\
-               \"ECDH-ES\",\
-               \"ECDH-ES+A128KW\",\
-               \"ECDH-ES+A192KW\",\
-               \"ECDH-ES+A256KW\"\
-            ],\
-            \"userinfo_encryption_enc_values_supported\":[\
-               \"A128CBC-HS256\",\
-               \"A192CBC-HS384\",\
-               \"A256CBC-HS512\",\
-               \"A128GCM\",\
-               \"A192GCM\",\
-               \"A256GCM\"\
-            ],\
-            \"request_object_signing_alg_values_supported\":[\
-               \"RS256\",\
-               \"RS384\",\
-               \"RS512\",\
-               \"ES256\",\
-               \"ES384\",\
-               \"ES512\",\
-               \"HS256\",\
-               \"HS384\",\
-               \"HS512\",\
-               \"PS256\",\
-               \"PS384\",\
-               \"PS512\",\
-               \"none\"\
-            ],\
-            \"request_object_encryption_alg_values_supported\":[\
-               \"RSA1_5\",\
-               \"RSA-OAEP\",\
-               \"RSA-OAEP-256\",\
-               \"A128KW\",\
-               \"A192KW\",\
-               \"A256KW\",\
-               \"ECDH-ES\",\
-               \"ECDH-ES+A128KW\",\
-               \"ECDH-ES+A192KW\",\
-               \"ECDH-ES+A256KW\"\
-            ],\
-            \"request_object_encryption_enc_values_supported\":[\
-               \"A128CBC-HS256\",\
-               \"A192CBC-HS384\",\
-               \"A256CBC-HS512\",\
-               \"A128GCM\",\
-               \"A192GCM\",\
-               \"A256GCM\"\
-            ],\
-            \"token_endpoint_auth_methods_supported\":[\
-               \"client_secret_post\",\
-               \"client_secret_basic\",\
-               \"client_secret_jwt\",\
-               \"private_key_jwt\"\
-            ],\
-            \"token_endpoint_auth_signing_alg_values_supported\":[\
-               \"RS256\",\
-               \"RS384\",\
-               \"RS512\",\
-               \"ES256\",\
-               \"ES384\",\
-               \"ES512\",\
-               \"HS256\",\
-               \"HS384\",\
-               \"HS512\",\
-               \"PS256\",\
-               \"PS384\",\
-               \"PS512\"\
-            ],\
-            \"claim_types_supported\":[\
-               \"normal\",\
-               \"aggregated\",\
-               \"distributed\"\
-            ],\
-            \"claims_supported\":[\
-               \"name\",\
-               \"given_name\",\
-               \"middle_name\",\
-               \"picture\",\
-               \"email_verified\",\
-               \"birthdate\",\
-               \"sub\",\
-               \"address\",\
-               \"zoneinfo\",\
-               \"email\",\
-               \"gender\",\
-               \"preferred_username\",\
-               \"family_name\",\
-               \"website\",\
-               \"profile\",\
-               \"phone_number_verified\",\
-               \"nickname\",\
-               \"updated_at\",\
-               \"phone_number\",\
-               \"locale\"\
-            ],\
-            \"claims_parameter_supported\":true,\
-            \"request_parameter_supported\":true,\
-            \"request_uri_parameter_supported\":true,\
-            \"require_request_uri_registration\":true";
-
-        let json_response = format!(
-            "{{{},{}}}",
-            json_response_standard,
-            "\"end_session_endpoint\":\"https://rp.certification.openid.net:8080/openidconnect-rs/rp-response_type-code/end_session\",\
-            \"version\":\"3.0\""
-        );
-
         let all_signing_algs = vec![
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha384,
@@ -1931,7 +1729,7 @@ mod internal {
             "PASSWORD".to_string(),
         )]));
 
-        serde_json::from_str(&json_response).unwrap()
+        new_provider_metadata
     }
 
     pub fn get_id_token() -> CoreIdToken {

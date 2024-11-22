@@ -45,6 +45,7 @@ use golem_worker_service_base::api;
 use golem_worker_service_base::gateway_api_deployment::{
     ApiDeploymentRequest, ApiSite, ApiSiteString,
 };
+use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
 use golem_worker_service_base::repo::security_scheme::{DbSecuritySchemeRepo, SecuritySchemeRepo};
 use golem_worker_service_base::service::gateway::security_scheme::{
     DefaultSecuritySchemeService, SecuritySchemeService,
@@ -246,8 +247,13 @@ async fn test_services(
 
     let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
+    let identity_provider_resolver = Arc::new(DefaultIdentityProviderResolver);
+
     let security_scheme_service: Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> =
-        Arc::new(DefaultSecuritySchemeService::new(security_scheme_repo));
+        Arc::new(DefaultSecuritySchemeService::new(
+            security_scheme_repo,
+            identity_provider_resolver,
+        ));
 
     let definition_service: Arc<
         dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,

@@ -156,7 +156,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
         RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
     {
         match self
-            .resolve_rib_inputs(&request_details, resolved_binding)
+            .resolve_rib_inputs(request_details, resolved_binding)
             .await
         {
             Ok((request_rib_input, worker_rib_input)) => {
@@ -164,7 +164,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
                     .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
                     .await
                 {
-                    Ok(result) => result.to_response(&request_details, session_store).await,
+                    Ok(result) => result.to_response(request_details, session_store).await,
                     Err(err) => {
                         err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
                     }
@@ -187,7 +187,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
         FileServerBindingResult: ToResponse<R>,
     {
         match self
-            .resolve_rib_inputs(&request_details, resolved_binding)
+            .resolve_rib_inputs(request_details, resolved_binding)
             .await
         {
             Ok((request_rib_input, worker_rib_input)) => {
@@ -203,7 +203,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
                                 worker_response,
                             )
                             .await
-                            .to_response(&request_details, session_store)
+                            .to_response(request_details, session_store)
                             .await
                     }
                     Err(err) => {
@@ -228,7 +228,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
                 let authorisation_result = self
                     .auth_call_back_binding_handler
                     .handle_auth_call_back(
-                        &http_request,
+                        http_request,
                         security_scheme_with_metadata,
                         &input.session_store,
                         &input.identity_provider_resolver,
@@ -292,25 +292,25 @@ impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync>
             ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
                 cors_preflight
                     .clone()
-                    .to_response(&request_details, &input.session_store)
+                    .to_response(request_details, &input.session_store)
                     .await
             }
 
             ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
-                self.handle_http_auth_call_binding(&auth_call_back.security_scheme, &input)
+                self.handle_http_auth_call_binding(&auth_call_back.security_scheme, input)
                     .await
             }
 
             ResolvedBinding::Worker(resolved_worker_binding) => {
                 let result =
-                    Self::redirect_or_continue(&input, &resolved_worker_binding.middlewares).await;
+                    Self::redirect_or_continue(input, &resolved_worker_binding.middlewares).await;
 
                 match result {
                     Some(r) => r,
                     None => {
                         let mut response = self
                             .handle_worker_binding::<Response>(
-                                &request_details,
+                                request_details,
                                 resolved_worker_binding,
                                 &input.session_store,
                             )
@@ -333,7 +333,7 @@ impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync>
 
             ResolvedBinding::FileServer(resolved_file_server_binding) => {
                 let result =
-                    Self::redirect_or_continue(&input, &resolved_file_server_binding.middlewares)
+                    Self::redirect_or_continue(input, &resolved_file_server_binding.middlewares)
                         .await;
 
                 match result {
