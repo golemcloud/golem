@@ -373,7 +373,7 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
         let _indent = LogIndent::new();
 
         for build_step in &component_properties.build {
-            execute_external_command(&ctx, component, &build_step)?;
+            execute_external_command(ctx, component, build_step)?;
         }
     }
 
