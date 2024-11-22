@@ -43,6 +43,24 @@ impl Default for Cors {
 }
 
 impl Cors {
+    pub fn new(
+        allow_origin: &str,
+        allow_methods: &str,
+        allow_headers: &str,
+        expose_headers: Option<&str>,
+        allow_credentials: Option<bool>,
+        max_age: Option<u64>,
+    ) -> Cors {
+        Cors {
+            allow_origin: allow_origin.to_string(),
+            allow_methods: allow_methods.to_string(),
+            allow_headers: allow_headers.to_string(),
+            expose_headers: expose_headers.map(|x| x.to_string()),
+            allow_credentials,
+            max_age,
+        }
+    }
+
     pub fn get_allow_origin(&self) -> String {
         self.allow_origin.clone()
     }

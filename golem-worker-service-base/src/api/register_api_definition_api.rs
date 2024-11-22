@@ -192,7 +192,7 @@ impl TryFrom<RouteRequestData> for RouteRequest {
         let binding = GatewayBinding::try_from(value.binding.clone())?;
 
         let security = value.security.map(|s| SecuritySchemeReference {
-            security_scheme_identifier: SecuritySchemeIdentifier::new(s)
+            security_scheme_identifier: SecuritySchemeIdentifier::new(s),
         });
 
         Ok(Self {
