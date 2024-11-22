@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_security::{GolemIdentityProviderMetadata, IdentityProvider, SecurityScheme};
-use std::sync::Arc;
+use crate::gateway_security::{GolemIdentityProviderMetadata, SecurityScheme};
 
 // This can exist as part of the middleware to initiate the authorisation workflow
 // redirecting user to provider login page, or it can be part of the static binding

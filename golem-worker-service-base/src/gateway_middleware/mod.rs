@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::GatewayRequestDetails;
 use crate::gateway_execution::gateway_input_executor::Input;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;

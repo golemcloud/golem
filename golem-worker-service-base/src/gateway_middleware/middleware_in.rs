@@ -12,15 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::{GatewayRequestDetails, ResolvedGatewayBinding};
+use crate::gateway_binding::GatewayRequestDetails;
 use crate::gateway_execution::gateway_input_executor::Input;
-use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_middleware::HttpRequestAuthentication;
-use crate::gateway_security::IdentityProviderResolver;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
-use prost::Name;
-use std::sync::Arc;
 
 // Implementation note: We have multiple `Middleware` (see `Middlewares`).
 // While some middlewares are  specific to `MiddlewareIn` other are specific to `MiddlewareOut`.

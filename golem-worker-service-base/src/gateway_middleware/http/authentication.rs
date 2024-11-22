@@ -1,9 +1,7 @@
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::{MiddlewareInError, MiddlewareSuccess};
-use crate::gateway_security::{
-    IdentityProvider, IdentityProviderResolver, SecuritySchemeWithProviderMetadata,
-};
+use crate::gateway_security::{IdentityProviderResolver, SecuritySchemeWithProviderMetadata};
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
 use openidconnect::{ClaimsVerificationError, Nonce, Scope};
