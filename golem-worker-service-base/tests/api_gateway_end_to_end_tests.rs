@@ -1390,45 +1390,8 @@ mod internal {
                 ResolvedBinding::Static(static_binding) => {
                     match static_binding {
                         StaticBinding::HttpCorsPreflight(_) => {
-                            let headers = response.headers();
-
-                            let allow_headers = headers
-                                .get(ACCESS_CONTROL_ALLOW_HEADERS)
-                                .map(|x| x.to_str().unwrap().to_string())
-                                .expect("Cors preflight response expects allow_headers");
-
-                            let allow_origin = headers
-                                .get(ACCESS_CONTROL_ALLOW_ORIGIN)
-                                .map(|x| x.to_str().unwrap().to_string())
-                                .expect("Cors preflight response expects allow_origin");
-
-                            let allow_methods = headers
-                                .get(ACCESS_CONTROL_ALLOW_METHODS)
-                                .map(|x| x.to_str().unwrap().to_string())
-                                .expect("Cors preflight response expects allow_method");
-
-                            let expose_headers = headers
-                                .get(ACCESS_CONTROL_EXPOSE_HEADERS)
-                                .map(|x| x.to_str().unwrap().to_string());
-
-                            let max_age = headers
-                                .get(ACCESS_CONTROL_MAX_AGE)
-                                .map(|x| x.to_str().unwrap().parse::<u64>().unwrap());
-
-                            let allow_credentials = headers
-                                .get(ACCESS_CONTROL_ALLOW_CREDENTIALS)
-                                .map(|x| x.to_str().unwrap().parse::<bool>().unwrap());
-
-                            TestResponse::CorsPreflightResponse(Cors::new(
-                                allow_origin.as_str(),
-                                allow_methods.as_str(),
-                                allow_headers.as_str(),
-                                expose_headers.map(|x| x.as_str()),
-                                allow_credentials,
-                                max_age,
-                            ))
+                            get_response_for_static_preflight(response)
                         }
-
                         // If binding was http auth call back, we expect a redirect to the original Url
                         StaticBinding::HttpAuthCallBack(_) => {
                             unimplemented!("Http auth call back test response is not handled")
@@ -1840,6 +1803,46 @@ mod internal {
             None,
         )
         .unwrap()
+    }
+
+    fn get_response_for_static_preflight(response: Response) -> TestResponse {
+        let headers = response.headers();
+
+        let allow_headers = headers
+            .get(ACCESS_CONTROL_ALLOW_HEADERS)
+            .map(|x| x.to_str().unwrap().to_string())
+            .expect("Cors preflight response expects allow_headers");
+
+        let allow_origin = headers
+            .get(ACCESS_CONTROL_ALLOW_ORIGIN)
+            .map(|x| x.to_str().unwrap().to_string())
+            .expect("Cors preflight response expects allow_origin");
+
+        let allow_methods = headers
+            .get(ACCESS_CONTROL_ALLOW_METHODS)
+            .map(|x| x.to_str().unwrap().to_string())
+            .expect("Cors preflight response expects allow_method");
+
+        let expose_headers = headers
+            .get(ACCESS_CONTROL_EXPOSE_HEADERS)
+            .map(|x| x.to_str().unwrap().to_string());
+
+        let max_age = headers
+            .get(ACCESS_CONTROL_MAX_AGE)
+            .map(|x| x.to_str().unwrap().parse::<u64>().unwrap());
+
+        let allow_credentials = headers
+            .get(ACCESS_CONTROL_ALLOW_CREDENTIALS)
+            .map(|x| x.to_str().unwrap().parse::<bool>().unwrap());
+
+        TestResponse::CorsPreflightResponse(Cors::new(
+            allow_origin.as_str(),
+            allow_methods.as_str(),
+            allow_headers.as_str(),
+            expose_headers.map(|x| x.as_str()),
+            allow_credentials,
+            max_age,
+        ))
     }
 
     async fn get_response_for_worker_binding(
