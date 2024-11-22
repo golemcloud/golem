@@ -181,10 +181,10 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
         session_store: &GatewaySessionStore,
     ) -> R
     where
-        FileServerBindingResult: ToResponse<R>,
         RibResult: ToResponse<R>,
         EvaluationError: ToResponseFromSafeDisplay<R>,
         RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
+        FileServerBindingResult: ToResponse<R>,
     {
         match self
             .resolve_rib_inputs(&request_details, resolved_binding)
@@ -245,7 +245,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
         }
     }
 
-    async fn redirect_or_continue<Namespace, Response>(
+    async fn redirect_or_continue<Response>(
         input: &Input<Namespace>,
         middlewares: &Middlewares,
     ) -> Option<Response>
