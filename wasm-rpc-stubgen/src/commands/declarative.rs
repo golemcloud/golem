@@ -1220,7 +1220,7 @@ fn execute_external_command(
 
         if is_up_to_date(ctx.config.skip_up_to_date_checks, || inputs, || outputs) {
             log_skipping_up_to_date(format!(
-                "executing external command: {} in directory {}",
+                "executing external command '{}' in directory {}",
                 command.command.log_color_highlight(),
                 build_dir.log_color_highlight()
             ));
@@ -1231,8 +1231,9 @@ fn execute_external_command(
     log_action(
         "Executing",
         format!(
-            "external command: {}",
-            command.command.log_color_highlight()
+            "external command '{}' in directory {}",
+            command.command.log_color_highlight(),
+            build_dir.log_color_highlight()
         ),
     );
 
