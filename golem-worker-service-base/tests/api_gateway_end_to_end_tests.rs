@@ -196,12 +196,14 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
         _ => None,
     };
 
-
     let initial_redirect_url_data = initial_redirection_opt.expect("Expected initial redirection");
 
     let decoded_auth_call_back = internal::decode_url(&initial_redirect_url_data.redirect_uri);
 
-    assert_eq!(Url::parse(&decoded_auth_call_back).unwrap(), redirect_url.url().clone());
+    assert_eq!(
+        Url::parse(&decoded_auth_call_back).unwrap(),
+        redirect_url.url().clone()
+    );
     //let redirect_uri_obtained = initial_redirect_url_data.redirect_uri.as_str();
 
     assert_eq!(1, 2);
@@ -1969,7 +1971,7 @@ mod internal {
         }
     }
 
-   pub(crate) fn decode_url(encoded: &str) -> String {
+    pub(crate) fn decode_url(encoded: &str) -> String {
         let mut decoded = String::new();
         let mut chars = encoded.chars().peekable();
 
