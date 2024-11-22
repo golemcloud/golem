@@ -22,7 +22,6 @@ use anyhow::{anyhow, bail, Context, Error};
 use colored::Colorize;
 use glob::glob;
 use itertools::Itertools;
-use log::log;
 use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
