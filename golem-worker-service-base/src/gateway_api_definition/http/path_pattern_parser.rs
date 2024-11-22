@@ -15,9 +15,9 @@
 use nom::branch::alt;
 use nom::bytes::complete::take_while1;
 use nom::character::complete::{char, multispace0};
-use nom::combinator::{map, opt};
+use nom::combinator::{map, map_res, not, opt, peek};
 
-use nom::multi::{separated_list0, separated_list1};
+use nom::multi::{many0, separated_list0};
 use nom::sequence::{delimited, preceded, tuple};
 use nom::IResult;
 
@@ -26,10 +26,8 @@ use crate::gateway_api_definition::http::{
 };
 
 pub fn parse_path_pattern(input: &str) -> IResult<&str, AllPathPatterns> {
-    let (input, (path, query)) = tuple((
-        delimited(opt(char('/')), path_parser, opt(char('/'))),
-        opt(preceded(char('?'), query_parser)),
-    ))(input)?;
+    let (input, (path, query)) =
+        tuple((path_parser, opt(preceded(char('?'), query_parser))))(input)?;
 
     Ok((
         input,
@@ -46,13 +44,22 @@ fn path_parser(input: &str) -> IResult<&str, Vec<PathPattern>> {
         alt((path_var_parser, literal_parser)),
         multispace0,
     );
-    let (input, patterns) = separated_list1(char('/'), item_parser)(input)?;
+    let final_item_parser = delimited(multispace0, catch_all_path_var_parser, multispace0);
+    let (input, (mut patterns, final_pattern)) = tuple((
+        many0(preceded(char('/'), item_parser)),
+        opt(preceded(char('/'), final_item_parser)),
+    ))(input)?;
+
+    if let Some(final_pattern) = final_pattern {
+        patterns.push(final_pattern);
+    };
 
     let indexed_patterns = patterns
         .into_iter()
         .map(|pattern| match pattern {
             ParsedPattern::Literal(literal) => PathPattern::literal(literal),
             ParsedPattern::Var(var) => PathPattern::var(var),
+            ParsedPattern::CatchAllVar(var) => PathPattern::catch_all_var(var),
         })
         .collect();
 
@@ -70,15 +77,38 @@ fn query_param_parser(input: &str) -> IResult<&str, QueryInfo> {
 }
 
 fn path_var_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
-    map(place_holder_parser::parse_place_holder, |x| {
-        ParsedPattern::Var(x)
-    })(input)
+    map_res(
+        place_holder_parser::parse_place_holder,
+        path_var_inner_parser,
+    )(input)
+}
+
+fn path_var_inner_parser(
+    input: &str,
+) -> Result<ParsedPattern<'_>, nom::Err<nom::error::Error<&str>>> {
+    let (i, _) = peek(not(char('+')))(input)?;
+    Ok(ParsedPattern::Var(i))
+}
+
+fn catch_all_path_var_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
+    map_res(
+        place_holder_parser::parse_place_holder,
+        catch_all_path_var_inner_parser,
+    )(input)
+}
+
+fn catch_all_path_var_inner_parser(
+    input: &str,
+) -> Result<ParsedPattern<'_>, nom::Err<nom::error::Error<&str>>> {
+    let (i, _) = char('+')(input)?;
+    Ok(ParsedPattern::CatchAllVar(i))
 }
 
 #[derive(Debug)]
 enum ParsedPattern<'a> {
     Literal(&'a str),
     Var(&'a str),
+    CatchAllVar(&'a str),
 }
 
 fn literal_parser(input: &str) -> IResult<&str, ParsedPattern<'_>> {
@@ -134,5 +164,22 @@ mod tests {
             },
             result.unwrap().1
         );
+
+        let result = parse_path_pattern("/api/{id}/{+others}");
+
+        assert_eq!(
+            AllPathPatterns {
+                path_patterns: vec![
+                    PathPattern::Literal(LiteralInfo("api".to_string())),
+                    PathPattern::var("id"),
+                    PathPattern::catch_all_var("others")
+                ],
+                query_params: vec![]
+            },
+            result.unwrap().1
+        );
+
+        // {+var} is not allowed in the middle of the path
+        assert!(AllPathPatterns::parse("/api/{foo}/{+others}/{bar}").is_err());
     }
 }
