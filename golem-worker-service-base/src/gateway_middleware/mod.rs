@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_binding::GatewayRequestDetails;
+use crate::gateway_execution::gateway_input_executor::Input;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_security::SecuritySchemeWithProviderMetadata;
 pub use http::*;
@@ -48,20 +49,19 @@ impl Middlewares {
             .collect()
     }
 
-    pub async fn process_middleware_in<R>(
+    pub async fn process_middleware_in<Namespace, Response>(
         &self,
-        session_store: &GatewaySessionStore,
-        input: &GatewayRequestDetails,
-    ) -> Result<MiddlewareSuccess<R>, MiddlewareInError>
+        input: &Input<Namespace>,
+    ) -> Result<MiddlewareSuccess<Response>, MiddlewareInError>
     where
-        HttpRequestAuthentication: MiddlewareIn<R>,
+        HttpRequestAuthentication: MiddlewareIn<Namespace, Response>,
     {
         for middleware in self.0.iter() {
             match middleware {
                 Middleware::Http(http_middleware) => match http_middleware {
                     HttpMiddleware::AddCorsHeaders(_) => {}
                     HttpMiddleware::AuthenticateRequest(auth) => {
-                        let result = auth.process_input(input, session_store).await?;
+                        let result = auth.process_input(input).await?;
                         match result {
                             MiddlewareSuccess::Redirect(response) => {
                                 return Ok(MiddlewareSuccess::Redirect(response))

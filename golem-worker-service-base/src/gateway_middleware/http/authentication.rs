@@ -1,11 +1,14 @@
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{DataKey, GatewaySessionStore, SessionId};
 use crate::gateway_middleware::{MiddlewareInError, MiddlewareSuccess};
-use crate::gateway_security::SecuritySchemeWithProviderMetadata;
+use crate::gateway_security::{
+    IdentityProvider, IdentityProviderResolver, SecuritySchemeWithProviderMetadata,
+};
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdToken, CoreIdTokenClaims};
 use openidconnect::{ClaimsVerificationError, Nonce, Scope};
 use std::str::FromStr;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpRequestAuthentication {
@@ -21,8 +24,10 @@ impl HttpRequestAuthentication {
         &self,
         input: &HttpRequestDetails,
         session_store: &GatewaySessionStore,
+        identity_provider_resolver: &Arc<dyn IdentityProviderResolver + Send + Sync>,
     ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
-        let identity_provider = &self.security_scheme.identity_provider();
+        let identity_provider = identity_provider_resolver
+            .resolve(&self.security_scheme.security_scheme.provider_type());
 
         let open_id_client = identity_provider
             .get_client(&self.security_scheme)
@@ -60,7 +65,7 @@ impl HttpRequestAuthentication {
                         internal::redirect(
                             session_store,
                             input,
-                            identity_provider,
+                            &identity_provider,
                             &open_id_client,
                             self,
                         )
@@ -75,7 +80,7 @@ impl HttpRequestAuthentication {
             internal::redirect(
                 session_store,
                 input,
-                identity_provider,
+                &identity_provider,
                 &open_id_client,
                 self,
             )

@@ -16,8 +16,8 @@ use golem_common::SafeDisplay;
 use http::StatusCode;
 use poem::Body;
 
-pub trait ToResponseFromSafeDisplay<A> {
-    fn to_response_from_safe_display<F>(&self, get_status_code: F) -> A
+pub trait ToResponseFromSafeDisplay<Response> {
+    fn to_response_from_safe_display<F>(&self, get_status_code: F) -> Response
     where
         Self: SafeDisplay,
         F: Fn(&Self) -> StatusCode,

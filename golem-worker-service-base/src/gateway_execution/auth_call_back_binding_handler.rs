@@ -16,11 +16,14 @@ use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
 };
-use crate::gateway_security::{IdentityProviderError, SecuritySchemeWithProviderMetadata};
+use crate::gateway_security::{
+    IdentityProviderError, IdentityProviderResolver, SecuritySchemeWithProviderMetadata,
+};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use openidconnect::core::{CoreIdTokenClaims, CoreTokenResponse};
 use openidconnect::{AuthorizationCode, Nonce, OAuth2TokenResponse};
+use std::sync::Arc;
 
 pub type AuthCallBackResult = Result<AuthorisationSuccess, AuthorisationError>;
 
@@ -29,8 +32,9 @@ pub trait AuthCallBackBindingHandler {
     async fn handle_auth_call_back(
         &self,
         http_request_details: &HttpRequestDetails,
-        security_scheme_internal: &SecuritySchemeWithProviderMetadata,
-        session: &GatewaySessionStore,
+        security_scheme: &SecuritySchemeWithProviderMetadata,
+        gateway_session_store: &GatewaySessionStore,
+        identity_provider_resolver: &Arc<dyn IdentityProviderResolver + Send + Sync>,
     ) -> AuthCallBackResult;
 }
 
@@ -112,9 +116,14 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         http_request_details: &HttpRequestDetails,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
         session_store: &GatewaySessionStore,
+        identity_provider_resolver: &Arc<dyn IdentityProviderResolver + Send + Sync>,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
         let query_params = &http_request_details.request_path_values;
-        let identity_provider = security_scheme_with_metadata.identity_provider();
+        let identity_provider = identity_provider_resolver.resolve(
+            &security_scheme_with_metadata
+                .security_scheme
+                .provider_type(),
+        );
 
         let code_value = query_params
             .get("code")

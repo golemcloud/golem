@@ -62,6 +62,7 @@ use golem_worker_service_base::service::gateway::security_scheme::{
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
+use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
 
 #[derive(Clone)]
 pub struct Services {
@@ -222,8 +223,10 @@ impl Services {
 
         let api_definition_validator_service = Arc::new(HttpApiDefinitionValidator {});
 
+        let identity_provider_resolver = Arc::new(DefaultIdentityProviderResolver);
+
         let security_scheme_service =
-            Arc::new(DefaultSecuritySchemeService::new(security_scheme_repo));
+            Arc::new(DefaultSecuritySchemeService::new(security_scheme_repo, identity_provider_resolver));
 
         let definition_service: Arc<
             dyn ApiDefinitionService<EmptyAuthCtx, DefaultNamespace> + Sync + Send,

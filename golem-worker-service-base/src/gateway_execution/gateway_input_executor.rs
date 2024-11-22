@@ -30,7 +30,7 @@ use crate::gateway_middleware::{
     MiddlewareOut, MiddlewareOutError, MiddlewareSuccess, Middlewares,
 };
 use crate::gateway_rib_interpreter::{EvaluationError, WorkerServiceRibInterpreter};
-use crate::gateway_security::SecuritySchemeWithProviderMetadata;
+use crate::gateway_security::{IdentityProviderResolver, SecuritySchemeWithProviderMetadata};
 use async_trait::async_trait;
 use http::StatusCode;
 use rib::{RibInput, RibResult};
@@ -44,12 +44,8 @@ use std::sync::Arc;
 // ResponseType depends on the protocol
 // The workflow doesn't need to be changed for each protocol
 #[async_trait]
-pub trait GatewayBindingExecutor<Namespace, Response> {
-    async fn execute_binding(
-        &self,
-        binding: &ResolvedGatewayBinding<Namespace>,
-        session: GatewaySessionStore,
-    ) -> Response
+pub trait GatewayInputExecutor<Namespace, Response> {
+    async fn execute_binding(&self, input: &Input<Namespace>) -> Response
     where
         EvaluationError: ToResponseFromSafeDisplay<Response>,
         RibInputTypeMismatch: ToResponseFromSafeDisplay<Response>,
@@ -59,8 +55,30 @@ pub trait GatewayBindingExecutor<Namespace, Response> {
         FileServerBindingResult: ToResponse<Response>,
         CorsPreflight: ToResponse<Response>,
         AuthCallBackResult: ToResponse<Response>,
-        HttpRequestAuthentication: MiddlewareIn<Response>,
+        HttpRequestAuthentication: MiddlewareIn<Namespace, Response>,
         CorsPreflight: MiddlewareOut<Response>;
+}
+
+// A product of actual request input (contained in the ResolvedGatewayBinding)
+// and other details and resolvers that are needed to process the input.
+pub struct Input<Namespace> {
+    pub resolved_gateway_binding: ResolvedGatewayBinding<Namespace>,
+    pub session_store: GatewaySessionStore,
+    pub identity_provider_resolver: Arc<dyn IdentityProviderResolver + Send + Sync>,
+}
+
+impl<Namespace: Clone> Input<Namespace> {
+    pub fn new(
+        resolved_gateway_binding: &ResolvedGatewayBinding<Namespace>,
+        session_store: &GatewaySessionStore,
+        identity_provider_resolver: Arc<dyn IdentityProviderResolver + Send + Sync>,
+    ) -> Self {
+        Input {
+            resolved_gateway_binding: resolved_gateway_binding.clone(),
+            session_store: session_store.clone(),
+            identity_provider_resolver,
+        }
+    }
 }
 
 pub struct DefaultGatewayBindingExecutor<Namespace> {
@@ -128,7 +146,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
 
     async fn handle_worker_binding<R>(
         &self,
-        binding: &ResolvedGatewayBinding<Namespace>,
+        request_details: &GatewayRequestDetails,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
         session_store: &GatewaySessionStore,
     ) -> R
@@ -138,7 +156,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
         RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
     {
         match self
-            .resolve_rib_inputs(&binding.request_details, resolved_binding)
+            .resolve_rib_inputs(&request_details, resolved_binding)
             .await
         {
             Ok((request_rib_input, worker_rib_input)) => {
@@ -146,11 +164,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
                     .get_rib_result(request_rib_input, worker_rib_input, resolved_binding)
                     .await
                 {
-                    Ok(result) => {
-                        result
-                            .to_response(&binding.request_details, session_store)
-                            .await
-                    }
+                    Ok(result) => result.to_response(&request_details, session_store).await,
                     Err(err) => {
                         err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
                     }
@@ -162,7 +176,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
 
     async fn handle_file_server_binding<R>(
         &self,
-        binding: &ResolvedGatewayBinding<Namespace>,
+        request_details: &GatewayRequestDetails,
         resolved_binding: &ResolvedWorkerBinding<Namespace>,
         session_store: &GatewaySessionStore,
     ) -> R
@@ -173,7 +187,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
         RibInputTypeMismatch: ToResponseFromSafeDisplay<R>,
     {
         match self
-            .resolve_rib_inputs(&binding.request_details, resolved_binding)
+            .resolve_rib_inputs(&request_details, resolved_binding)
             .await
         {
             Ok((request_rib_input, worker_rib_input)) => {
@@ -189,7 +203,7 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
                                 worker_response,
                             )
                             .await
-                            .to_response(&binding.request_details, session_store)
+                            .to_response(&request_details, session_store)
                             .await
                     }
                     Err(err) => {
@@ -201,46 +215,46 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
         }
     }
 
-    async fn handle_http_auth_call_binding<R>(
+    async fn handle_http_auth_call_binding<Response>(
         &self,
-        binding: &ResolvedGatewayBinding<Namespace>,
         security_scheme_with_metadata: &SecuritySchemeWithProviderMetadata,
-        session_store: &GatewaySessionStore,
-    ) -> R
+        input: &Input<Namespace>,
+    ) -> Response
     where
-        AuthCallBackResult: ToResponse<R>,
+        AuthCallBackResult: ToResponse<Response>,
     {
-        match &binding.request_details {
+        match &input.resolved_gateway_binding.request_details {
             GatewayRequestDetails::Http(http_request) => {
                 let authorisation_result = self
                     .auth_call_back_binding_handler
                     .handle_auth_call_back(
-                        http_request,
+                        &http_request,
                         security_scheme_with_metadata,
-                        session_store,
+                        &input.session_store,
+                        &input.identity_provider_resolver,
                     )
                     .await;
 
                 authorisation_result
-                    .to_response(&binding.request_details, session_store)
+                    .to_response(
+                        &input.resolved_gateway_binding.request_details,
+                        &input.session_store,
+                    )
                     .await
             }
         }
     }
 
-    async fn redirect_or_continue<R>(
-        request_details: &GatewayRequestDetails,
-        session: &GatewaySessionStore,
-        middlewares: Middlewares,
-    ) -> Option<R>
+    async fn redirect_or_continue<Namespace, Response>(
+        input: &Input<Namespace>,
+        middlewares: &Middlewares,
+    ) -> Option<Response>
     where
-        HttpRequestAuthentication: MiddlewareIn<R>,
-        CorsPreflight: MiddlewareOut<R>,
-        MiddlewareInError: ToResponseFromSafeDisplay<R>,
+        HttpRequestAuthentication: MiddlewareIn<Namespace, Response>,
+        CorsPreflight: MiddlewareOut<Response>,
+        MiddlewareInError: ToResponseFromSafeDisplay<Response>,
     {
-        let input_middleware_result = middlewares
-            .process_middleware_in(session, request_details)
-            .await;
+        let input_middleware_result = middlewares.process_middleware_in(input).await;
 
         match input_middleware_result {
             Ok(incoming_middleware_result) => match incoming_middleware_result {
@@ -257,13 +271,9 @@ impl<Namespace: Clone> DefaultGatewayBindingExecutor<Namespace> {
 
 #[async_trait]
 impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync>
-    GatewayBindingExecutor<Namespace, Response> for DefaultGatewayBindingExecutor<Namespace>
+    GatewayInputExecutor<Namespace, Response> for DefaultGatewayBindingExecutor<Namespace>
 {
-    async fn execute_binding(
-        &self,
-        binding: &ResolvedGatewayBinding<Namespace>,
-        session: GatewaySessionStore,
-    ) -> Response
+    async fn execute_binding(&self, input: &Input<Namespace>) -> Response
     where
         RibResult: ToResponse<Response>,
         EvaluationError: ToResponseFromSafeDisplay<Response>,
@@ -273,48 +283,42 @@ impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync>
         FileServerBindingResult: ToResponse<Response>, // FileServerBindingResult can be a direct response in a file server endpoint
         CorsPreflight: ToResponse<Response>, // Cors can be a direct response in a cors preflight endpoint
         AuthCallBackResult: ToResponse<Response>, // AuthCallBackResult can be a direct response in auth callback endpoint
-        HttpRequestAuthentication: MiddlewareIn<Response>, // HttpAuthorizer can authorise input
+        HttpRequestAuthentication: MiddlewareIn<Namespace, Response>, // HttpAuthorizer can authorise input
         CorsPreflight: MiddlewareOut<Response>, // CorsPreflight can be a middleware in other endpoints
     {
-        match &binding.resolved_binding {
+        let binding = &input.resolved_gateway_binding.resolved_binding;
+        let request_details = &input.resolved_gateway_binding.request_details;
+        match &binding {
             ResolvedBinding::Static(StaticBinding::HttpCorsPreflight(cors_preflight)) => {
                 cors_preflight
                     .clone()
-                    .to_response(&binding.request_details, &session)
+                    .to_response(&request_details, &input.session_store)
                     .await
             }
 
             ResolvedBinding::Static(StaticBinding::HttpAuthCallBack(auth_call_back)) => {
-                self.handle_http_auth_call_binding(
-                    binding,
-                    &auth_call_back.security_scheme,
-                    &session,
-                )
-                .await
+                self.handle_http_auth_call_binding(&auth_call_back.security_scheme, &input)
+                    .await
             }
 
             ResolvedBinding::Worker(resolved_worker_binding) => {
-                let result = Self::redirect_or_continue(
-                    &binding.request_details,
-                    &session,
-                    resolved_worker_binding.middlewares.clone(),
-                )
-                .await;
+                let result =
+                    Self::redirect_or_continue(&input, &resolved_worker_binding.middlewares).await;
 
                 match result {
                     Some(r) => r,
                     None => {
                         let mut response = self
                             .handle_worker_binding::<Response>(
-                                binding,
+                                &request_details,
                                 resolved_worker_binding,
-                                &session,
+                                &input.session_store,
                             )
                             .await;
 
                         let middleware_out_result = resolved_worker_binding
                             .middlewares
-                            .process_middleware_out(&session, &mut response)
+                            .process_middleware_out(&input.session_store, &mut response)
                             .await;
 
                         match middleware_out_result {
@@ -328,20 +332,17 @@ impl<Namespace: Send + Sync + Clone, Response: Debug + Send + Sync>
             }
 
             ResolvedBinding::FileServer(resolved_file_server_binding) => {
-                let result = Self::redirect_or_continue(
-                    &binding.request_details,
-                    &session,
-                    resolved_file_server_binding.middlewares.clone(),
-                )
-                .await;
+                let result =
+                    Self::redirect_or_continue(&input, &resolved_file_server_binding.middlewares)
+                        .await;
 
                 match result {
                     Some(r) => r,
                     None => {
                         self.handle_file_server_binding::<Response>(
-                            binding,
+                            request_details,
                             resolved_file_server_binding,
-                            &session,
+                            &input.session_store,
                         )
                         .await
                     }

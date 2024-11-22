@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::gateway_security::{
-    IdentityProviderError, SecurityScheme, SecuritySchemeIdentifier,
+    IdentityProviderError, IdentityProviderResolver, SecurityScheme, SecuritySchemeIdentifier,
     SecuritySchemeWithProviderMetadata,
 };
 use crate::repo::security_scheme::{SecuritySchemeRecord, SecuritySchemeRepo};
@@ -81,10 +81,14 @@ pub type SecuritySchemeCache<N> = Cache<
 pub struct DefaultSecuritySchemeService<Namespace> {
     cache: SecuritySchemeCache<Namespace>,
     repo: Arc<dyn SecuritySchemeRepo + Sync + Send>,
+    identity_provider_resolver: Arc<dyn IdentityProviderResolver + Sync + Send>,
 }
 
 impl<Namespace: Send + Sync + Clone + Hash + Eq + 'static> DefaultSecuritySchemeService<Namespace> {
-    pub fn new(repo: Arc<dyn SecuritySchemeRepo + Sync + Send>) -> Self {
+    pub fn new(
+        repo: Arc<dyn SecuritySchemeRepo + Sync + Send>,
+        identity_provider_resolver: Arc<dyn IdentityProviderResolver + Sync + Send>,
+    ) -> Self {
         DefaultSecuritySchemeService {
             cache: Cache::new(
                 Some(1024),
@@ -93,6 +97,7 @@ impl<Namespace: Send + Sync + Clone + Hash + Eq + 'static> DefaultSecurityScheme
                 "security_scheme",
             ),
             repo,
+            identity_provider_resolver,
         }
     }
 }

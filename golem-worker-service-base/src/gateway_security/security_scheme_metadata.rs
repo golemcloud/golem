@@ -24,12 +24,6 @@ pub struct SecuritySchemeWithProviderMetadata {
     pub provider_metadata: GolemIdentityProviderMetadata,
 }
 
-impl SecuritySchemeWithProviderMetadata {
-    pub fn identity_provider(&self) -> Arc<dyn IdentityProvider + Send + Sync> {
-        self.security_scheme.identity_provider()
-    }
-}
-
 impl TryFrom<golem_api_grpc::proto::golem::apidefinition::SecurityWithProviderMetadata>
     for SecuritySchemeWithProviderMetadata
 {

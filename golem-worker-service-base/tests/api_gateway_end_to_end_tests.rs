@@ -25,13 +25,14 @@ use crate::internal::TestResponse;
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
-use golem_worker_service_base::gateway_execution::gateway_binding_executor::{
-    DefaultGatewayBindingExecutor, GatewayBindingExecutor,
-};
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::GatewayBindingResolver;
+use golem_worker_service_base::gateway_execution::gateway_input_executor::{
+    DefaultGatewayBindingExecutor, GatewayInputExecutor, Input,
+};
 use golem_worker_service_base::gateway_execution::gateway_session::GatewaySessionStore;
 use golem_worker_service_base::gateway_middleware::Cors;
 use golem_worker_service_base::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
+use golem_worker_service_base::gateway_security::DefaultIdentityProviderResolver;
 use golem_worker_service_base::{api, gateway_api_definition};
 use http::{HeaderMap, HeaderValue, Method};
 use serde_json::Value;
@@ -66,9 +67,13 @@ async fn execute(
         Arc::new(DefaultAuthCallBack),
     );
 
-    let poem_response: poem::Response = test_executor
-        .execute_binding(&resolved_route, GatewaySessionStore::in_memory())
-        .await;
+    let input = Input::new(
+        &resolved_route,
+        &GatewaySessionStore::in_memory(),
+        Arc::new(DefaultIdentityProviderResolver),
+    );
+
+    let poem_response: poem::Response = test_executor.execute_binding(&input).await;
     TestResponse::from_live_response(poem_response).await
 }
 
@@ -1063,6 +1068,7 @@ async fn get_api_spec_for_cors_preflight_default_and_actual_endpoint(
 
 mod internal {
     use async_trait::async_trait;
+    use chrono::{Duration, TimeZone, Utc};
     use golem_common::model::ComponentId;
     use golem_service_base::auth::DefaultNamespace;
     use golem_service_base::model::VersionedComponentId;
@@ -1087,7 +1093,10 @@ mod internal {
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
-    use golem_worker_service_base::gateway_security::GolemIdentityProviderMetadata;
+    use golem_worker_service_base::gateway_security::{
+        AuthorizationUrl, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError,
+        IdentityProviderResolver, OpenIdClient, Provider, SecuritySchemeWithProviderMetadata,
+    };
     use golem_worker_service_base::repo::security_scheme::{
         SecuritySchemeRecord, SecuritySchemeRepo,
     };
@@ -1100,19 +1109,24 @@ mod internal {
         ACCESS_CONTROL_MAX_AGE,
     };
     use openidconnect::core::{
-        CoreClaimName, CoreClaimType, CoreClientAuthMethod, CoreGrantType,
-        CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm,
-        CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreSubjectIdentifierType,
+        CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
+        CoreIdTokenClaims, CoreIdTokenFields, CoreJweContentEncryptionAlgorithm,
+        CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata,
+        CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey, CoreSubjectIdentifierType,
+        CoreTokenResponse, CoreTokenType,
     };
     use openidconnect::{
-        AuthUrl, AuthenticationContextClass, IssuerUrl, JsonWebKeySetUrl, RegistrationUrl,
-        ResponseTypes, Scope, TokenUrl, UserInfoUrl,
+        AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId,
+        ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail,
+        IdToken, IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce, RegistrationUrl,
+        ResponseTypes, Scope, StandardClaims, SubjectIdentifier, TokenUrl, UserInfoUrl,
     };
     use rib::RibResult;
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
+    use url::Url;
 
     struct TestSecuritySchemeRepo {
         security_scheme: Arc<Mutex<HashMap<String, SecuritySchemeRecord>>>,
@@ -1144,13 +1158,96 @@ mod internal {
         }
     }
 
+    struct TestIdentityProvider {}
+
+    impl IdentityProvider for TestIdentityProvider {
+        async fn get_provider_metadata(
+            &self,
+            _provider: &Provider,
+        ) -> Result<GolemIdentityProviderMetadata, IdentityProviderError> {
+            Ok(get_test_provider_metadata())
+        }
+
+        async fn exchange_code_for_tokens(
+            &self,
+            _client: &OpenIdClient,
+            _code: &AuthorizationCode,
+        ) -> Result<CoreTokenResponse, IdentityProviderError> {
+            Ok(CoreTokenResponse::new(
+                AccessToken::new("some_secret".to_string()),
+                CoreTokenType::Bearer,
+                CoreIdTokenFields::new(Some(get_id_token()), EmptyExtraTokenFields {}),
+            ))
+        }
+
+        fn get_client(
+            &self,
+            _security_scheme: &SecuritySchemeWithProviderMetadata,
+        ) -> Result<OpenIdClient, IdentityProviderError> {
+            let core_client = CoreClient::new(
+                ClientId::new("aaa".to_string()),
+                Some(ClientSecret::new("bbb".to_string())),
+                IssuerUrl::new("https://example".to_string()).unwrap(),
+                AuthUrl::new("https://example/authorize".to_string()).unwrap(),
+                Some(TokenUrl::new("https://example/token".to_string()).unwrap()),
+                None,
+                JsonWebKeySet::default(),
+            );
+            Ok(OpenIdClient::new(core_client))
+        }
+
+        fn get_claims(
+            &self,
+            _client: &OpenIdClient,
+            _core_token_response: CoreTokenResponse,
+            nonce: &Nonce,
+        ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
+            Ok(CoreIdTokenClaims::new(
+                IssuerUrl::new("https://server.example.com".to_string()).unwrap(),
+                vec![Audience::new("s6BhdRkqt3".to_string())],
+                Utc.timestamp_opt(1311281970, 0)
+                    .single()
+                    .expect("valid timestamp"),
+                Utc.timestamp_opt(1311280970, 0)
+                    .single()
+                    .expect("valid timestamp"),
+                StandardClaims::new(SubjectIdentifier::new("24400320".to_string())),
+                EmptyAdditionalClaims {},
+            ))
+        }
+
+        fn get_authorization_url(
+            &self,
+            client: &OpenIdClient,
+            scopes: Vec<Scope>,
+        ) -> AuthorizationUrl {
+            AuthorizationUrl {
+                url: Url::parse("https:// example. net").unwrap(),
+                csrf_state: CsrfToken::new_random(),
+                nonce: Nonce("nonce".to_string()),
+            }
+        }
+    }
+
+    struct TestIdentityProviderResolver;
+
+    impl IdentityProviderResolver for TestIdentityProviderResolver {
+        fn resolve(&self, provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
+            Arc::new(TestIdentityProvider {})
+        }
+    }
+
     pub(crate) fn get_security_scheme_service(
     ) -> Arc<dyn SecuritySchemeService<DefaultNamespace> + Send + Sync> {
-        Arc::new(DefaultSecuritySchemeService::new(Arc::new(
-            TestSecuritySchemeRepo {
-                security_scheme: Arc::new(Mutex::new(HashMap::new())),
-            },
-        )))
+        let repo = Arc::new(TestSecuritySchemeRepo {
+            security_scheme: Arc::new(Mutex::new(HashMap::new())),
+        });
+
+        let identity_provider_resolver = Arc::new(TestIdentityProviderResolver);
+
+        let default = DefaultSecuritySchemeService::new(repo, identity_provider_resolver);
+
+        Arc::new(default)
     }
 
     pub(crate) struct TestApiGatewayWorkerRequestExecutor {}
@@ -1835,5 +1932,28 @@ mod internal {
         )]));
 
         serde_json::from_str(&json_response).unwrap()
+    }
+
+    pub fn get_id_token() -> CoreIdToken {
+        CoreIdToken::new(
+            CoreIdTokenClaims::new(
+                IssuerUrl::new("https://accounts.example.com".to_string()).unwrap(),
+                vec![Audience::new("client-id-123".to_string())],
+                Utc::now() + Duration::seconds(300),
+                Utc::now(),
+                StandardClaims::new(SubjectIdentifier::new(
+                    "5f83e0ca-2b8e-4e8c-ba0a-f80fe9bc3632".to_string(),
+                ))
+                .set_email(Some(EndUserEmail::new("bob@example.com".to_string())))
+                .set_email_verified(Some(true)),
+                EmptyAdditionalClaims {},
+            ),
+            &CoreRsaPrivateSigningKey::from_pem("", Some(JsonWebKeyId::new("key1".to_string())))
+                .expect("Invalid RSA private key"),
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+            Some(&AccessToken::new("access_token".to_string())),
+            None,
+        )
+        .unwrap()
     }
 }

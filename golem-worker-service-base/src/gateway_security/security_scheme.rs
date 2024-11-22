@@ -54,6 +54,7 @@ impl SecurityScheme {
 
 // May be relaxed to just a string as we make it more configurable
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Enum)]
+#[serde(rename_all = "lowercase")]
 pub enum Provider {
     Google,
     Facebook,
@@ -173,15 +174,6 @@ impl PartialEq for SecurityScheme {
 impl SecurityScheme {
     pub fn provider_type(&self) -> Provider {
         self.provider_type.clone()
-    }
-
-    pub fn identity_provider(&self) -> Arc<dyn IdentityProvider + Send + Sync> {
-        match self.provider_type() {
-            Provider::Google => Arc::new(DefaultIdentityProvider),
-            Provider::Facebook => Arc::new(DefaultIdentityProvider),
-            Provider::Gitlab => Arc::new(DefaultIdentityProvider),
-            Provider::Microsoft => Arc::new(DefaultIdentityProvider),
-        }
     }
 
     pub fn scheme_identifier(&self) -> SecuritySchemeIdentifier {

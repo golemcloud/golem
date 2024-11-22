@@ -28,12 +28,13 @@ use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 
 use crate::gateway_binding::GatewayBindingResolver;
 use crate::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
-use crate::gateway_execution::gateway_binding_executor::{
-    DefaultGatewayBindingExecutor, GatewayBindingExecutor,
+use crate::gateway_execution::gateway_input_executor::{
+    DefaultGatewayBindingExecutor, GatewayInputExecutor, Input,
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
 use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
+use crate::gateway_security::DefaultIdentityProviderResolver;
 
 // Executes custom request with the help of worker_request_executor and definition_service
 // This is a common API projects can make use of, similar to healthcheck service
@@ -45,7 +46,7 @@ pub struct CustomHttpRequestApi<Namespace> {
             + Send,
     >,
     pub gateway_binding_executor:
-        Arc<dyn GatewayBindingExecutor<Namespace, poem::Response> + Sync + Send>,
+        Arc<dyn GatewayInputExecutor<Namespace, poem::Response> + Sync + Send>,
     pub gateway_session_store: GatewaySessionStore,
 }
 
@@ -144,13 +145,13 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             .await
         {
             Ok(resolved_gateway_binding) => {
-                let response: poem::Response = self
-                    .gateway_binding_executor
-                    .execute_binding(
-                        &resolved_gateway_binding,
-                        self.gateway_session_store.clone(),
-                    )
-                    .await;
+                let input = Input::new(
+                    &resolved_gateway_binding,
+                    &self.gateway_session_store,
+                    Arc::new(DefaultIdentityProviderResolver),
+                );
+                let response: poem::Response =
+                    self.gateway_binding_executor.execute_binding(&input).await;
 
                 response
             }

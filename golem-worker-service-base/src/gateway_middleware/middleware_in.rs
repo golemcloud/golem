@@ -12,11 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_binding::GatewayRequestDetails;
+use crate::gateway_binding::{GatewayRequestDetails, ResolvedGatewayBinding};
+use crate::gateway_execution::gateway_input_executor::Input;
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_middleware::HttpRequestAuthentication;
+use crate::gateway_security::IdentityProviderResolver;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
+use prost::Name;
+use std::sync::Arc;
 
 // Implementation note: We have multiple `Middleware` (see `Middlewares`).
 // While some middlewares are  specific to `MiddlewareIn` other are specific to `MiddlewareOut`.
@@ -28,11 +32,10 @@ use golem_common::SafeDisplay;
 // The middleware decides which protocol out of `GatewayRequestDetails` to process.
 // This approach centralizes middleware management, and easy to add new middlewares without worrying about protocols.
 #[async_trait]
-pub trait MiddlewareIn<Out> {
+pub trait MiddlewareIn<Namespace, Out> {
     async fn process_input(
         &self,
-        input: &GatewayRequestDetails,
-        session_store: &GatewaySessionStore,
+        input: &Input<Namespace>,
     ) -> Result<MiddlewareSuccess<Out>, MiddlewareInError>;
 }
 
@@ -58,15 +61,19 @@ pub enum MiddlewareSuccess<Out> {
 }
 
 #[async_trait]
-impl MiddlewareIn<poem::Response> for HttpRequestAuthentication {
+impl<Namespace: Send + Sync> MiddlewareIn<Namespace, poem::Response> for HttpRequestAuthentication {
     async fn process_input(
         &self,
-        input: &GatewayRequestDetails,
-        session_store: &GatewaySessionStore,
+        input: &Input<Namespace>,
     ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
-        match input {
+        match &input.resolved_gateway_binding.request_details {
             GatewayRequestDetails::Http(http_request) => {
-                self.apply_http_auth(http_request, session_store).await
+                self.apply_http_auth(
+                    http_request,
+                    &input.session_store,
+                    &input.identity_provider_resolver,
+                )
+                .await
             }
         }
     }
