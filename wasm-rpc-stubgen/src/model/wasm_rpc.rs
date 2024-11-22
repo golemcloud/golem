@@ -248,7 +248,7 @@ mod raw {
 }
 
 mod template {
-    use crate::model::wasm_rpc::{raw, CustomCommand, WasmComponentProperties};
+    use crate::model::wasm_rpc::{raw, ExternalCommand, WasmComponentProperties};
     use serde::Serialize;
     use std::collections::HashMap;
 
@@ -318,14 +318,14 @@ mod template {
     }
 
     impl<C: Serialize> Template<C> for raw::CustomCommand {
-        type Rendered = CustomCommand;
+        type Rendered = ExternalCommand;
 
         fn render(
             &self,
             env: &minijinja::Environment,
             ctx: &C,
         ) -> Result<Self::Rendered, minijinja::Error> {
-            Ok(CustomCommand {
+            Ok(ExternalCommand {
                 command: self.command.render(env, ctx)?,
                 dir: self.dir.render(env, ctx)?,
                 inputs: self.inputs.render(env, ctx)?,
@@ -1587,7 +1587,7 @@ impl Application {
     }
 }
 
-pub type CustomCommand = raw::CustomCommand;
+pub type ExternalCommand = raw::CustomCommand;
 
 // NOTE: we do not use PathBuf here for fields, rather Strings, as values might be templated
 #[derive(Clone, Debug)]
@@ -1643,15 +1643,15 @@ pub enum BuildStepsLookupResult<'a> {
     NoBuildSteps,
     NoBuildStepsForRequestedProfile,
     BuildSteps {
-        build_steps: &'a [CustomCommand],
+        build_steps: &'a [ExternalCommand],
     },
     BuildStepsForDefaultProfile {
         profile: &'a str,
-        build_steps: &'a [CustomCommand],
+        build_steps: &'a [ExternalCommand],
     },
     BuildStepsForRequestedProfile {
         profile: &'a str,
-        build_steps: &'a [CustomCommand],
+        build_steps: &'a [ExternalCommand],
     },
 }
 

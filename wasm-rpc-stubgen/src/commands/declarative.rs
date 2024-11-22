@@ -7,7 +7,7 @@ use crate::log::{
 };
 use crate::model::oam;
 use crate::model::wasm_rpc::{
-    include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName, CustomCommand,
+    include_glob_patter_from_yaml_file, init_oam_app, Application, ComponentName, ExternalCommand,
     ProfileName, WasmComponent, DEFAULT_CONFIG_FILE_NAME,
 };
 use crate::stub::{StubConfig, StubDefinition};
@@ -373,7 +373,7 @@ fn component_build_ctx(ctx: &ApplicationContext) -> anyhow::Result<()> {
         let _indent = LogIndent::new();
 
         for build_step in &component_properties.build {
-            execute_custom_command(&ctx, component, &build_step)?;
+            execute_external_command(&ctx, component, &build_step)?;
         }
     }
 
@@ -614,7 +614,7 @@ pub fn custom_command(config: Config, command: String) -> anyhow::Result<()> {
             let _indent = LogIndent::new();
 
             for step in custom_command {
-                execute_custom_command(&ctx, component, step)?;
+                execute_external_command(&ctx, component, step)?;
             }
         }
     }
@@ -1203,10 +1203,10 @@ fn copy_wit_sources(source: &Path, target: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn execute_custom_command(
+fn execute_external_command(
     ctx: &ApplicationContext,
     component: &WasmComponent,
-    command: &CustomCommand,
+    command: &ExternalCommand,
 ) -> anyhow::Result<()> {
     let build_dir = command
         .dir
@@ -1220,7 +1220,7 @@ fn execute_custom_command(
 
         if is_up_to_date(ctx.config.skip_up_to_date_checks, || inputs, || outputs) {
             log_skipping_up_to_date(format!(
-                "executing command: {} in directory {}",
+                "executing external command: {} in directory {}",
                 command.command.log_color_highlight(),
                 build_dir.log_color_highlight()
             ));
@@ -1230,7 +1230,10 @@ fn execute_custom_command(
 
     log_action(
         "Executing",
-        format!("command: {}", command.command.log_color_highlight()),
+        format!(
+            "external command: {}",
+            command.command.log_color_highlight()
+        ),
     );
 
     let command_tokens = command.command.split(' ').collect::<Vec<_>>();
