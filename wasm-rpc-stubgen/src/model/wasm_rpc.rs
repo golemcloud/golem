@@ -88,7 +88,7 @@ mod raw {
     pub const OAM_COMPONENT_TYPE_WASM_RPC_STUB_BUILD: &str = "wasm-rpc-stub-build";
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
-    pub struct BuildStep {
+    pub struct CustomCommand {
         pub command: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub dir: Option<String>,
@@ -106,11 +106,15 @@ mod raw {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub output_wit: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        pub build: Vec<BuildStep>,
+        pub build: Vec<CustomCommand>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub input_wasm: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub output_wasm: Option<String>,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        pub custom_commands: HashMap<String, Vec<CustomCommand>>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub clean: Vec<String>,
         #[serde(flatten)]
         pub unknown_properties: UnknownProperties,
     }
@@ -244,7 +248,7 @@ mod raw {
 }
 
 mod template {
-    use crate::model::wasm_rpc::{raw, BuildStep, WasmComponentProperties};
+    use crate::model::wasm_rpc::{raw, CustomCommand, WasmComponentProperties};
     use serde::Serialize;
     use std::collections::HashMap;
 
@@ -313,15 +317,15 @@ mod template {
         }
     }
 
-    impl<C: Serialize> Template<C> for raw::BuildStep {
-        type Rendered = BuildStep;
+    impl<C: Serialize> Template<C> for raw::CustomCommand {
+        type Rendered = CustomCommand;
 
         fn render(
             &self,
             env: &minijinja::Environment,
             ctx: &C,
         ) -> Result<Self::Rendered, minijinja::Error> {
-            Ok(BuildStep {
+            Ok(CustomCommand {
                 command: self.command.render(env, ctx)?,
                 dir: self.dir.render(env, ctx)?,
                 inputs: self.inputs.render(env, ctx)?,
@@ -344,6 +348,8 @@ mod template {
                 output_wit: self.output_wit.render(env, ctx)?,
                 input_wasm: self.input_wasm.render(env, ctx)?,
                 output_wasm: self.output_wasm.render(env, ctx)?,
+                custom_commands: self.custom_commands.render(env, ctx)?,
+                clean: self.clean.render(env, ctx)?,
             })
         }
     }
@@ -705,6 +711,8 @@ impl Application {
                 output_wit: properties.output_wit.unwrap(),
                 input_wasm: properties.input_wasm.unwrap(),
                 output_wasm: properties.output_wasm.unwrap(),
+                custom_commands: properties.custom_commands,
+                clean: properties.clean,
             }
         }
 
@@ -1270,6 +1278,17 @@ impl Application {
             .collect()
     }
 
+    pub fn all_custom_commands(&self, profile: Option<&ProfileName>) -> BTreeSet<String> {
+        self.component_names()
+            .flat_map(|component_name| {
+                self.component_properties(component_name, profile)
+                    .custom_commands
+                    .keys()
+                    .cloned()
+            })
+            .collect()
+    }
+
     pub fn build_dir(&self) -> PathBuf {
         self.common_wasm_build
             .as_ref()
@@ -1568,16 +1587,18 @@ impl Application {
     }
 }
 
-pub type BuildStep = raw::BuildStep;
+pub type CustomCommand = raw::CustomCommand;
 
 // NOTE: we do not use PathBuf here for fields, rather Strings, as values might be templated
 #[derive(Clone, Debug)]
 pub struct WasmComponentProperties {
-    pub build: Vec<raw::BuildStep>,
+    pub build: Vec<raw::CustomCommand>,
     pub input_wit: String,
     pub output_wit: String,
     pub input_wasm: String,
     pub output_wasm: String,
+    pub custom_commands: HashMap<String, Vec<raw::CustomCommand>>,
+    pub clean: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1622,15 +1643,15 @@ pub enum BuildStepsLookupResult<'a> {
     NoBuildSteps,
     NoBuildStepsForRequestedProfile,
     BuildSteps {
-        build_steps: &'a [BuildStep],
+        build_steps: &'a [CustomCommand],
     },
     BuildStepsForDefaultProfile {
         profile: &'a str,
-        build_steps: &'a [BuildStep],
+        build_steps: &'a [CustomCommand],
     },
     BuildStepsForRequestedProfile {
         profile: &'a str,
-        build_steps: &'a [BuildStep],
+        build_steps: &'a [CustomCommand],
     },
 }
 

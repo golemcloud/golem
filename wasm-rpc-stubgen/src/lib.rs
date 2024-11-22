@@ -202,6 +202,8 @@ pub enum App {
     Build(DeclarativeBuildArgs),
     /// Clean outputs
     Clean(DeclarativeBuildArgs),
+    ///x Run custom command
+    CustomCommand(DeclarativeCustomCommand),
 }
 
 #[derive(clap::Args, Debug)]
@@ -223,6 +225,15 @@ pub struct DeclarativeBuildArgs {
     /// Selects a build profile
     #[clap(long, short)]
     pub profile: Option<String>,
+}
+
+#[derive(clap::Args, Debug)]
+#[command(version, about, long_about = None)]
+pub struct DeclarativeCustomCommand {
+    #[clap(flatten)]
+    args: DeclarativeBuildArgs,
+    #[arg(value_name = "custom command")]
+    command: String,
 }
 
 pub fn generate(args: GenerateArgs) -> anyhow::Result<()> {
@@ -302,6 +313,9 @@ pub async fn run_declarative_command(command: App) -> anyhow::Result<()> {
         }
         App::Build(args) => commands::declarative::build(dec_build_args_to_config(args)).await,
         App::Clean(args) => commands::declarative::clean(dec_build_args_to_config(args)),
+        App::CustomCommand(args) => {
+            commands::declarative::custom_command(dec_build_args_to_config(args.args), args.command)
+        }
     }
 }
 
