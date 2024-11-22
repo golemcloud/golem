@@ -363,10 +363,12 @@ impl Serialize for AllPathPatterns {
     }
 }
 
+/// Invariant: PathPattern::CatchAllVar is only allowed at the end of the path
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
 pub enum PathPattern {
     Literal(LiteralInfo),
     Var(VarInfo),
+    CatchAllVar(VarInfo),
 }
 
 impl PathPattern {
@@ -379,6 +381,12 @@ impl PathPattern {
             key_name: value.into(),
         })
     }
+
+    pub fn catch_all_var(value: impl Into<String>) -> PathPattern {
+        PathPattern::CatchAllVar(VarInfo {
+            key_name: value.into(),
+        })
+    }
 }
 
 impl Display for PathPattern {
@@ -386,6 +394,7 @@ impl Display for PathPattern {
         match self {
             PathPattern::Literal(info) => write!(f, "{}", info.0),
             PathPattern::Var(info) => write!(f, "{{{}}}", info.key_name),
+            PathPattern::CatchAllVar(info) => write!(f, "{{+{}}}", info.key_name),
         }
     }
 }

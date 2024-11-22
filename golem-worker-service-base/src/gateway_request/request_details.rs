@@ -24,7 +24,7 @@ pub enum GatewayRequestDetails {
 }
 impl GatewayRequestDetails {
     pub fn from(
-        path_params: &HashMap<VarInfo, &str>,
+        path_params: &HashMap<VarInfo, String>,
         query_variable_values: &HashMap<String, String>,
         query_variable_names: &[QueryInfo],
         request_body: &Value,
@@ -106,7 +106,7 @@ impl HttpRequestDetails {
     }
 
     fn from_input_http_request(
-        path_params: &HashMap<VarInfo, &str>,
+        path_params: &HashMap<VarInfo, String>,
         query_variable_values: &HashMap<String, String>,
         query_variable_names: &[QueryInfo],
         request_body: &Value,
@@ -130,7 +130,7 @@ impl HttpRequestDetails {
 pub struct RequestPathValues(pub JsonKeyValues);
 
 impl RequestPathValues {
-    fn from(path_variables: &HashMap<VarInfo, &str>) -> RequestPathValues {
+    fn from(path_variables: &HashMap<VarInfo, String>) -> RequestPathValues {
         let record_fields: Vec<JsonKeyValue> = path_variables
             .iter()
             .map(|(key, value)| JsonKeyValue {

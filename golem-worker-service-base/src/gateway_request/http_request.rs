@@ -69,9 +69,15 @@ pub mod router {
     use crate::gateway_execution::router::{Router, RouterPattern};
 
     #[derive(Debug, Clone)]
+    pub enum PathParamExtractor {
+        Single { var_info: VarInfo, index: usize },
+        AllFollowing { var_info: VarInfo, index: usize },
+    }
+
+    #[derive(Debug, Clone)]
     pub struct RouteEntry<Namespace> {
         // size is the index of all path patterns.
-        pub path_params: Vec<(VarInfo, usize)>,
+        pub path_params: Vec<PathParamExtractor>,
         pub query_params: Vec<QueryInfo>,
         pub namespace: Namespace,
         pub binding: GatewayBindingCompiled,
@@ -92,7 +98,14 @@ pub mod router {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, x)| match x {
-                    PathPattern::Var(var_info) => Some((var_info.clone(), i)),
+                    PathPattern::Var(var_info) => Some(PathParamExtractor::Single {
+                        var_info: var_info.clone(),
+                        index: i,
+                    }),
+                    PathPattern::CatchAllVar(var_info) => Some(PathParamExtractor::AllFollowing {
+                        var_info: var_info.clone(),
+                        index: i,
+                    }),
                     _ => None,
                 })
                 .collect();
