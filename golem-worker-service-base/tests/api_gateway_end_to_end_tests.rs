@@ -40,6 +40,7 @@ use http::{HeaderMap, HeaderValue, Method};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use serde_json::Value;
 use url::Url;
+use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 
 // The tests that focus on end to end workflow of API Gateway, without involving any real workers,
 // and stays independent of other modules.
@@ -201,9 +202,24 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
     let decoded_auth_call_back = internal::decode_url(&initial_redirect_url_data.redirect_uri);
 
     assert_eq!(
+        // The url embedded in the initial redirect should be the same as the redirect url
+        // specified in the security scheme
         Url::parse(&decoded_auth_call_back).unwrap(),
         redirect_url.url().clone()
     );
+
+    // Manually call back the auth_call_back endpoint by assuming the identity-provider
+    let call_back_request_from_identity_provider =
+        internal::request_from_identity_provider_to_auth_call_back_endpoint(
+            initial_redirect_url_data.state.as_str(),
+            "foo_code",
+            initial_redirect_url_data.scope.as_str(),
+            "/auth/callback",
+            "localhost"
+        );
+
+
+    dbg!(call_back_request_from_identity_provider);
     //let redirect_uri_obtained = initial_redirect_url_data.redirect_uri.as_str();
 
     assert_eq!(1, 2);
@@ -711,6 +727,7 @@ fn get_api_request(
     req_body: serde_json::Value,
 ) -> InputHttpRequest {
     InputHttpRequest {
+        host: ApiSiteString("localhost".to_string()),
         input_path: ApiInputPath {
             base_path: base_path.to_string(),
             query_path: query_path.map(|x| x.to_string()),
@@ -725,9 +742,10 @@ fn get_preflight_api_request(
     base_path: &str,
     query_path: Option<&str>,
     headers: &HeaderMap,
-    req_body: serde_json::Value,
+    req_body: Value,
 ) -> InputHttpRequest {
     InputHttpRequest {
+        host: ApiSiteString("localhost".to_string()),
         input_path: ApiInputPath {
             base_path: base_path.to_string(),
             query_path: query_path.map(|x| x.to_string()),
@@ -1218,11 +1236,13 @@ mod internal {
         IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce, RegistrationUrl,
         ResponseTypes, Scope, StandardClaims, SubjectIdentifier, TokenUrl, UserInfoUrl,
     };
-    use poem::Response;
+    use poem::{Request, Response};
     use rib::RibResult;
     use serde_json::Value;
     use std::collections::HashMap;
+    use std::str::FromStr;
     use std::sync::Arc;
+    use http::{Method, Uri};
     use tokio::sync::Mutex;
     use url::Url;
 
@@ -1971,30 +1991,51 @@ mod internal {
         }
     }
 
+    // Simple decoder only for test
     pub(crate) fn decode_url(encoded: &str) -> String {
         let mut decoded = String::new();
         let mut chars = encoded.chars().peekable();
 
         while let Some(c) = chars.next() {
             if c == '%' {
-                // Ensure there's enough chars after '%' to form a valid hexadecimal code
                 if let (Some(hex1), Some(hex2)) = (chars.next(), chars.next()) {
-                    // Convert the two hexadecimal characters to a byte
                     if let Ok(byte) = u8::from_str_radix(&format!("{}{}", hex1, hex2), 16) {
                         decoded.push(byte as char);
                     } else {
-                        // If the hex is invalid, just append the '%' and characters as is
                         decoded.push('%');
                         decoded.push(hex1);
                         decoded.push(hex2);
                     }
                 }
             } else {
-                // Append regular characters directly to the decoded string
                 decoded.push(c);
             }
         }
 
         decoded
+    }
+
+
+    pub(crate) fn request_from_identity_provider_to_auth_call_back_endpoint(
+        state: &str,
+        code: &str,
+        scope: &str,
+        redirect_path: &str,
+        redirect_host: &str
+    ) -> Request {
+        let uri = Uri::from_str(
+            format!(
+                "{}?state={}&code={}&scope={}&prompt=consent"
+                redirect_path, state, code, scope
+            ).as_str()
+        ).unwrap();
+
+        let request =
+            poem::Request::builder().method(Method::GET).uri(uri).header(
+              "host", redirect_host
+            ).header("connection", "keep-alive")
+                .header("referer", "https://accounts.google.com/");
+
+        request.finish()
     }
 }

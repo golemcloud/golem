@@ -41,7 +41,7 @@ use crate::gateway_security::DefaultIdentityProviderResolver;
 #[derive(Clone)]
 pub struct CustomHttpRequestApi<Namespace> {
     pub api_definition_lookup_service: Arc<
-        dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<Namespace>>
+        dyn ApiDefinitionsLookup<InputHttpRequest, ApiDefinition = CompiledHttpApiDefinition<Namespace>>
             + Sync
             + Send,
     >,
@@ -56,9 +56,9 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send,
         >,
         api_definition_lookup_service: Arc<
-            dyn ApiDefinitionsLookup<InputHttpRequest, CompiledHttpApiDefinition<Namespace>>
-                + Sync
-                + Send,
+            dyn ApiDefinitionsLookup<InputHttpRequest, ApiDefinition = CompiledHttpApiDefinition<Namespace>>
+            + Sync
+            + Send,
         >,
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     ) -> Self {
@@ -84,85 +84,55 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        let (req_parts, body) = request.into_parts();
-        let headers = req_parts.headers;
-        let uri = req_parts.uri;
+        let input_http_request_result =
+            InputHttpRequest::from_request(request).await;
 
-        let host = match headers.get(HOST).and_then(|h| h.to_str().ok()) {
-            Some(host) => host.to_string(),
-            None => {
-                return Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string("Missing host".to_string()));
-            }
-        };
+        match input_http_request_result {
+            Ok(input_http_request) => {
+                let possible_api_definitions = match self
+                    .api_definition_lookup_service
+                    .get(&input_http_request)
+                    .await
+                {
+                    Ok(api_defs) => api_defs,
+                    Err(api_defs_lookup_error) => {
+                        error!(
+                        "API request host: {} - error: {}",
+                        input_http_request.host, api_defs_lookup_error
+                    );
+                        return Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(Body::from_string("Internal error".to_string()));
+                    }
+                };
 
-        info!("API request host: {}", host);
+                match input_http_request
+                    .resolve_gateway_binding(possible_api_definitions)
+                    .await
+                {
+                    Ok(resolved_gateway_binding) => {
+                        let input = Input::new(
+                            &resolved_gateway_binding,
+                            &self.gateway_session_store,
+                            Arc::new(DefaultIdentityProviderResolver),
+                        );
+                        let response: poem::Response =
+                            self.gateway_binding_executor.execute_binding(&input).await;
 
-        let json_request_body: serde_json::Value = if body.is_empty() {
-            serde_json::Value::Null
-        } else {
-            match body.into_json().await {
-                Ok(json_request_body) => json_request_body,
-                Err(err) => {
-                    error!("API request host: {} - error: {}", host, err);
-                    return Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Body::from_string("Request body parse error".to_string()));
+                        response
+                    }
+
+                    Err(msg) => {
+                        error!("Failed to resolve the API definition; error: {}", msg);
+
+                        Response::builder()
+                            .status(StatusCode::METHOD_NOT_ALLOWED)
+                            .finish()
+                    }
                 }
+
             }
-        };
-
-        let input_http_request = InputHttpRequest {
-            input_path: ApiInputPath {
-                base_path: uri.path().to_string(),
-                query_path: uri.query().map(|x| x.to_string()),
-            },
-            headers,
-            req_method: req_parts.method,
-            req_body: json_request_body,
-        };
-
-        let possible_api_definitions = match self
-            .api_definition_lookup_service
-            .get(input_http_request.clone())
-            .await
-        {
-            Ok(api_defs) => api_defs,
-            Err(api_defs_lookup_error) => {
-                error!(
-                    "API request host: {} - error: {}",
-                    host, api_defs_lookup_error
-                );
-                return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from_string("Internal error".to_string()));
-            }
-        };
-
-        match input_http_request
-            .resolve_gateway_binding(possible_api_definitions)
-            .await
-        {
-            Ok(resolved_gateway_binding) => {
-                let input = Input::new(
-                    &resolved_gateway_binding,
-                    &self.gateway_session_store,
-                    Arc::new(DefaultIdentityProviderResolver),
-                );
-                let response: poem::Response =
-                    self.gateway_binding_executor.execute_binding(&input).await;
-
-                response
-            }
-
-            Err(msg) => {
-                error!("Failed to resolve the API definition; error: {}", msg);
-
-                Response::builder()
-                    .status(StatusCode::METHOD_NOT_ALLOWED)
-                    .finish()
-            }
+            Err(response) => response.into()
         }
     }
 }
