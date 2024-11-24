@@ -28,16 +28,10 @@ use crate::services::rdbms::types::{DbResultSet, DbValue, Error};
 use async_trait::async_trait;
 use golem_common::model::WorkerId;
 use itertools::Itertools;
-use lazy_static::lazy_static;
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::sync::Arc;
-
-lazy_static! {
-    static ref MASK_ADDRESS_REGEX: Regex = Regex::new(r"(?i)([a-z]+)://([^:]+):([^@]+)@")
-        .expect("Failed to compile mask address regex");
-}
+use url::Url;
 
 pub trait RdbmsType {}
 
@@ -121,18 +115,68 @@ impl RdbmsService for RdbmsServiceDefault {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RdbmsPoolKey {
-    pub address: String,
+    pub address: Url,
 }
 
 impl RdbmsPoolKey {
-    pub fn new(address: String) -> Self {
+    pub fn new(address: Url) -> Self {
         Self { address }
     }
 
+    pub fn from(address: &str) -> Result<Self, String> {
+        Ok(RdbmsPoolKey {
+            address: Url::parse(address).map_err(|e| e.to_string())?,
+        })
+    }
+
     pub fn masked_address(&self) -> String {
-        MASK_ADDRESS_REGEX
-            .replace_all(self.address.as_str(), "$1://$2:*****@")
-            .to_string()
+        let mut output: String = self.address.scheme().to_string();
+        output.push_str("://");
+
+        let username = self.address.username();
+        output.push_str(username);
+
+        let password = self.address.password();
+        if password.is_some() {
+            output.push_str(":*****");
+        }
+
+        if let Some(h) = self.address.host_str() {
+            if !username.is_empty() || password.is_some() {
+                output.push('@');
+            }
+
+            output.push_str(h);
+
+            if let Some(p) = self.address.port() {
+                output.push(':');
+                output.push_str(p.to_string().as_str());
+            }
+        }
+
+        output.push_str(self.address.path());
+
+        let query_pairs = self.address.query_pairs();
+
+        if query_pairs.count() > 0 {
+            output.push('?');
+        }
+        for (index, (key, value)) in query_pairs.enumerate() {
+            let key = &*key;
+            output.push_str(key);
+            output.push('=');
+
+            if key == "password" || key == "secret" {
+                output.push_str("*****");
+            } else {
+                output.push_str(&value);
+            }
+            if index < query_pairs.count() - 1 {
+                output.push('&');
+            }
+        }
+
+        output
     }
 }
 

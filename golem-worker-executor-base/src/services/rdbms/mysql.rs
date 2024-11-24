@@ -26,7 +26,6 @@ use futures_util::stream::BoxStream;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
 use std::sync::Arc;
-use url::Url;
 
 pub(crate) const MYSQL: &str = "mysql";
 
@@ -50,21 +49,20 @@ impl Display for MysqlType {
 
 #[async_trait]
 impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
-    async fn create_pool(
-        &self,
-        config: &RdbmsPoolConfig,
-    ) -> Result<Pool<sqlx::MySql>, sqlx::Error> {
-        let url: Url = self.address.parse().map_err(sqlx::Error::config)?;
-        if url.scheme() != "mysql" {
-            Err(sqlx::Error::Configuration(
-                format!("scheme '{}' in url is invalid", url.scheme()).into(),
-            ))?
+    async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<sqlx::MySql>, Error> {
+        if self.address.scheme() != "mysql" {
+            Err(Error::ConnectionFailure(format!(
+                "scheme '{}' in url is invalid",
+                self.address.scheme()
+            )))?
         }
-        let options = sqlx::mysql::MySqlConnectOptions::from_url(&url)?;
+        let options = sqlx::mysql::MySqlConnectOptions::from_url(&self.address)
+            .map_err(|e| Error::ConnectionFailure(e.to_string()))?;
         sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(config.max_connections)
             .connect_with(options)
             .await
+            .map_err(|e| Error::ConnectionFailure(e.to_string()))
     }
 }
 

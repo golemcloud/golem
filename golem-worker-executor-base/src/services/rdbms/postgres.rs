@@ -28,7 +28,6 @@ use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
 use std::sync::Arc;
-use url::Url;
 use uuid::Uuid;
 
 pub(crate) const POSTGRES: &str = "postgres";
@@ -53,21 +52,20 @@ impl Display for PostgresType {
 
 #[async_trait]
 impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
-    async fn create_pool(
-        &self,
-        config: &RdbmsPoolConfig,
-    ) -> Result<Pool<sqlx::Postgres>, sqlx::Error> {
-        let url: Url = self.address.parse().map_err(sqlx::Error::config)?;
-        if url.scheme() != "postgres" && url.scheme() != "postgresql" {
-            Err(sqlx::Error::Configuration(
-                format!("scheme '{}' in url is invalid", url.scheme()).into(),
-            ))?
+    async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<sqlx::Postgres>, Error> {
+        if self.address.scheme() != "postgres" && self.address.scheme() != "postgresql" {
+            Err(Error::ConnectionFailure(format!(
+                "scheme '{}' in url is invalid",
+                self.address.scheme()
+            )))?
         }
-        let options = PgConnectOptions::from_url(&url)?;
+        let options = PgConnectOptions::from_url(&self.address)
+            .map_err(|e| Error::ConnectionFailure(e.to_string()))?;
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(config.max_connections)
             .connect_with(options)
             .await
+            .map_err(|e| Error::ConnectionFailure(e.to_string()))
     }
 }
 

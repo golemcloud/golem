@@ -93,7 +93,7 @@ where
                             pool_config.max_connections,
                             e
                         );
-                        Error::ConnectionFailure(e.to_string())
+                        e
                     })?;
                     Ok(Arc::new(result))
                 })
@@ -151,15 +151,20 @@ where
 {
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error> {
         let start = Instant::now();
-        let key = RdbmsPoolKey::new(address.to_string());
-        info!(
-            rdbms_type = self.rdbms_type,
-            pool_key = key.to_string(),
-            "create connection",
-        );
-        let result = self.get_or_create(&key, worker_id).await;
-        let _ = self.record_metrics("create", start, result)?;
-        Ok(key)
+
+        let result = {
+            let key = RdbmsPoolKey::from(address).map_err(Error::ConnectionFailure)?;
+            info!(
+                rdbms_type = self.rdbms_type,
+                pool_key = key.to_string(),
+                "create connection",
+            );
+
+            let _ = self.get_or_create(&key, worker_id).await?;
+
+            Ok(key)
+        };
+        self.record_metrics("create", start, result)
     }
 
     fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
@@ -257,7 +262,7 @@ where
 
 #[async_trait]
 pub(crate) trait PoolCreator<DB: Database> {
-    async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<DB>, sqlx::Error>;
+    async fn create_pool(&self, config: &RdbmsPoolConfig) -> Result<Pool<DB>, Error>;
 }
 
 #[async_trait]

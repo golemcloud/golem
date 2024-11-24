@@ -444,7 +444,7 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
     expected: Option<u64>,
 ) {
     let mut fibers = JoinSet::new();
-    for db_address in db_addresses {
+    for db_address in &db_addresses {
         for _ in 0..count {
             let rdbms_clone = rdbms.clone();
             let db_address_clone = db_address.clone();
@@ -480,6 +480,8 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         let _ = rdbms.remove(&pool_key, &worker_id);
     }
 
+    check!(rdbms_status.pools.len() == db_addresses.len());
+
     for (worker_id, pool_key) in workers_pools {
         let worker_ids = rdbms_status.pools.get(&pool_key);
 
@@ -506,9 +508,7 @@ async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.postgres(),
         "pg://user:password@localhost:3506",
-        Error::ConnectionFailure(
-            "error with configuration: scheme 'pg' in url is invalid".to_string(),
-        ),
+        Error::ConnectionFailure("scheme 'pg' in url is invalid".to_string()),
     )
     .await;
 
@@ -669,9 +669,7 @@ async fn mysql_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
     rdbms_connection_err_test(
         rdbms_service.mysql(),
         "msql://user:password@localhost:3506",
-        Error::ConnectionFailure(
-            "error with configuration: scheme 'msql' in url is invalid".to_string(),
-        ),
+        Error::ConnectionFailure("scheme 'msql' in url is invalid".to_string()),
     )
     .await;
 
@@ -769,17 +767,18 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
 
 #[test]
 fn test_rdbms_pool_key_masked_address() {
-    let key = RdbmsPoolKey::new("mysql://user:password@localhost:3306".to_string());
-    check!(key.masked_address() == "mysql://user:*****@localhost:3306".to_string());
-    let key = RdbmsPoolKey::new("mysql://user@localhost:3306".to_string());
-    check!(key.masked_address() == "mysql://user@localhost:3306".to_string());
-    let key = RdbmsPoolKey::new("mysql://localhost:3306".to_string());
-    check!(key.masked_address() == "mysql://localhost:3306".to_string());
+    let key = RdbmsPoolKey::from("mysql://user:password@localhost:3306").unwrap();
+    check!(key.masked_address() == "mysql://user:*****@localhost:3306");
+    let key = RdbmsPoolKey::from("mysql://user@localhost:3306").unwrap();
+    check!(key.masked_address() == "mysql://user@localhost:3306");
+    let key = RdbmsPoolKey::from("mysql://localhost:3306").unwrap();
+    check!(key.masked_address() == "mysql://localhost:3306");
     let key =
-        RdbmsPoolKey::new("postgres://user:password@localhost:5432?abc=xyz&def=xyz".to_string());
-    check!(
-        key.masked_address() == "postgres://user:*****@localhost:5432?abc=xyz&def=xyz".to_string()
-    );
+        RdbmsPoolKey::from("postgres://user:password@localhost:5432?abc=xyz&def=xyz").unwrap();
+    check!(key.masked_address() == "postgres://user:*****@localhost:5432?abc=xyz&def=xyz");
+    let key =
+        RdbmsPoolKey::from("postgres://user:password@localhost:5432?abc=xyz&secret=xyz").unwrap();
+    check!(key.masked_address() == "postgres://user:*****@localhost:5432?abc=xyz&secret=*****");
 }
 
 fn new_worker_id() -> WorkerId {
