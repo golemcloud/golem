@@ -57,7 +57,7 @@ impl DataKey {
         DataKey("nonce".to_string())
     }
 
-    pub fn redirect_uri() -> DataKey {
+    pub fn redirect_url() -> DataKey {
         DataKey("redirect_url".to_string())
     }
 }

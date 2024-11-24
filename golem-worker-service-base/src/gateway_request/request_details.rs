@@ -83,7 +83,7 @@ impl GatewayRequestDetails {
 
 #[derive(Clone, Debug)]
 pub struct HttpRequestDetails {
-    pub request_uri: ApiInputPath,
+    pub api_input_path: ApiInputPath,
     pub request_path_values: RequestPathValues,
     pub request_body: RequestBody,
     pub request_query_values: RequestQueryValues,
@@ -93,7 +93,7 @@ pub struct HttpRequestDetails {
 impl HttpRequestDetails {
     pub fn empty() -> HttpRequestDetails {
         HttpRequestDetails {
-            request_uri: ApiInputPath {
+            api_input_path: ApiInputPath {
                 base_path: "".to_string(),
                 query_path: None,
             },
@@ -104,8 +104,8 @@ impl HttpRequestDetails {
         }
     }
 
-    pub fn get_uri(&self) -> String {
-        self.request_uri.to_string()
+    pub fn get_api_input_path(&self) -> String {
+        self.api_input_path.to_string()
     }
 
     pub fn get_access_token_from_cookie(&self) -> Option<String> {
@@ -211,7 +211,7 @@ impl HttpRequestDetails {
         let header_params = RequestHeaderValues::from(headers)?;
 
         Ok(Self {
-            request_uri: api_input_path.clone(),
+            api_input_path: api_input_path.clone(),
             request_path_values: path_params,
             request_body,
             request_query_values: query_params,

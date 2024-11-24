@@ -35,7 +35,7 @@ pub struct SecuritySchemeRecord {
     pub security_scheme_id: String,
     pub client_id: String,
     pub client_secret: String,
-    pub redirect_uri: String,
+    pub redirect_url: String,
     pub scopes: String,
     pub security_scheme_metadata: Vec<u8>,
 }
@@ -58,7 +58,7 @@ impl SecuritySchemeRecord {
             security_scheme_id: value.security_scheme.scheme_identifier().to_string(),
             client_id: value.security_scheme.client_id().to_string(),
             client_secret: value.security_scheme.client_secret().secret().to_string(),
-            redirect_uri: value.security_scheme.redirect_uri().to_string(),
+            redirect_url: value.security_scheme.redirect_url().to_string(),
             scopes,
             security_scheme_metadata: metadata.into(),
         })
@@ -71,7 +71,7 @@ impl TryFrom<SecuritySchemeRecord> for SecuritySchemeWithProviderMetadata {
         let provider_metadata: GolemIdentityProviderMetadata =
             identity_provider_metadata_serde::deserialize(&value.security_scheme_metadata)?;
 
-        let redirect_url = RedirectUrl::new(value.redirect_uri).map_err(|e| e.to_string())?;
+        let redirect_url = RedirectUrl::new(value.redirect_url).map_err(|e| e.to_string())?;
 
         let provider_type = Provider::from_str(&value.provider_type).map_err(|e| e.to_string())?;
 
@@ -187,7 +187,7 @@ impl SecuritySchemeRepo for DbSecuritySchemeRepo<sqlx::Postgres> {
             .bind(security.provider_type.clone())
             .bind(security.client_id.clone())
             .bind(security.client_secret.clone())
-            .bind(security.redirect_uri.clone())
+            .bind(security.redirect_url.clone())
             .bind(security.scopes.clone())
             .bind(security.security_scheme_metadata.clone())
             .execute(&mut *transaction)

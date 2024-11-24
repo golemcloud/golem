@@ -75,7 +75,7 @@ async fn execute(
     let input = Input::new(
         &resolved_gateway_binding,
         &GatewaySessionStore::in_memory(),
-        Arc::new(DefaultIdentityProviderResolver),
+        Arc::new(internal::TestIdentityProviderResolver),
     );
 
     let poem_response: poem::Response = test_executor.execute_binding(&input).await;
@@ -170,14 +170,15 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
       response
     "#;
 
-    let redirect_url = RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
+    let auth_call_back_url =
+        RedirectUrl::new("http://foodomain/auth/callback".to_string()).unwrap();
 
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding_with_multiple_securities(
             "foo/{user-id}",
             worker_name,
             response_mapping,
-            &redirect_url,
+            &auth_call_back_url,
         )
         .await;
 
@@ -186,39 +187,51 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
 
     // The first response will be a redirect from the auth middleware which
     // redirects to the open id connector login
-    let initial_redirection_opt = match initial_redirect_response_to_identity_provider.clone() {
+    let initial_redirect_response_info_opt = match initial_redirect_response_to_identity_provider.clone() {
         TestResponse::RedirectResponse { redirect_url } => {
             let query = redirect_url.query();
             let query_components =
                 ApiInputPath::query_components_from_str(query.unwrap_or_default());
 
-            Some(internal::get_query_components_from_initial_redirect_response(&query_components))
+            Some(internal::get_initial_redirect_data(&query_components))
         }
         _ => None,
     };
 
-    let initial_redirect_url_data = initial_redirection_opt.expect("Expected initial redirection");
+    let initial_redirect_response_info =
+        initial_redirect_response_info_opt.expect("Expected initial redirection to identity provider");
 
-    let decoded_auth_call_back = internal::decode_url(&initial_redirect_url_data.redirect_uri);
+    let actual_auth_call_back_url =
+        internal::decode_url(&initial_redirect_response_info.auth_call_back_uri);
 
+    assert_eq!(initial_redirect_response_info.response_type, "code");
+    assert_eq!(initial_redirect_response_info.client_id, "client_id_foo");
+    assert_eq!(initial_redirect_response_info.scope, "openid+openiduseremail");
+    assert!(initial_redirect_response_info.state.len() > 1);
+    assert!(initial_redirect_response_info.nonce.len() > 1);
     assert_eq!(
         // The url embedded in the initial redirect should be the same as the redirect url
         // specified in the security scheme
-        Url::parse(&decoded_auth_call_back).unwrap(),
-        redirect_url.url().clone()
+        Url::parse(&actual_auth_call_back_url).unwrap(),
+        auth_call_back_url.url().clone()
     );
 
     // Manually call back the auth_call_back endpoint by assuming the identity-provider
     let call_back_request_from_identity_provider =
         internal::request_from_identity_provider_to_auth_call_back_endpoint(
-            initial_redirect_url_data.state.as_str(),
-            "foo_code",
-            initial_redirect_url_data.scope.as_str(),
-            "/auth/callback",
+            initial_redirect_response_info.state.as_str(),
+            "foo_code", // Decided by IdentityProvider
+            initial_redirect_response_info.scope.as_str(),
+            &auth_call_back_url.to_string(),
             "localhost",
         );
 
-    dbg!(call_back_request_from_identity_provider);
+    // Executing this request against the same API definition
+    let input_http_request =
+        InputHttpRequest::from_request(call_back_request_from_identity_provider).await;
+
+    let _ = execute(&input_http_request.unwrap(), &api_specification).await;
+
     //let redirect_uri_obtained = initial_redirect_url_data.redirect_uri.as_str();
 
     assert_eq!(1, 2);
@@ -300,11 +313,13 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
 
     let expected_cors_preflight = Cors::default();
 
-    let allow_origin_in_actual_response = actual_response.get_cors_allow_origin().unwrap();
+    let allow_origin_in_actual_response = actual_response
+        .get_cors_headers_in_non_preflight_response()
+        .unwrap();
 
     assert_eq!(pre_flight_response, expected_cors_preflight);
     assert_eq!(
-        allow_origin_in_actual_response,
+        allow_origin_in_actual_response.cors_header_allow_origin,
         expected_cors_preflight.get_allow_origin()
     );
 }
@@ -350,11 +365,19 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
 
     let pre_flight_response = preflight_response.get_cors_preflight().unwrap();
 
-    let allow_origin_in_actual_response = actual_response.get_cors_allow_origin().unwrap();
+    let cors_headers_in_actual_response = actual_response
+        .get_cors_headers_in_non_preflight_response()
+        .expect("Expecting cors headers in response");
 
-    let expose_headers_in_actual_response = actual_response.get_expose_headers().unwrap();
+    let allow_origin_in_actual_response = cors_headers_in_actual_response.cors_header_allow_origin;
 
-    let allow_credentials_in_actual_response = actual_response.get_allow_credentials().unwrap();
+    let expose_headers_in_actual_response = cors_headers_in_actual_response
+        .cors_header_expose_headers
+        .expect("Cors expose header missing in actual response");
+
+    let allow_credentials_in_actual_response = cors_headers_in_actual_response
+        .cors_header_allow_credentials
+        .expect("Cors allow credentials missing in actual response");
 
     assert_eq!(pre_flight_response, cors);
 
@@ -933,10 +956,11 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
     let security_scheme1 = SecurityScheme::new(
         Provider::Google,
         security_scheme_identifier1,
-        ClientId::new("foo1".to_string()),
-        ClientSecret::new("bar1".to_string()),
+        ClientId::new("client_id_foo".to_string()),
+        ClientSecret::new("client_secret_foo".to_string()),
         auth_call_back_url.clone(),
         vec![
+            Scope::new("openid".to_string()),
             Scope::new("user".to_string()),
             Scope::new("email".to_string()),
         ],
@@ -945,10 +969,11 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
     let security_scheme2 = SecurityScheme::new(
         Provider::Google,
         security_scheme_identifier2,
-        ClientId::new("foo2".to_string()),
-        ClientSecret::new("bar2".to_string()),
+        ClientId::new("client_id_bar".to_string()),
+        ClientSecret::new("client_secret_bar".to_string()),
         auth_call_back_url.clone(),
         vec![
+            Scope::new("openid".to_string()),
             Scope::new("user".to_string()),
             Scope::new("email".to_string()),
         ],
@@ -1203,14 +1228,11 @@ mod internal {
     use golem_worker_service_base::gateway_middleware::{
         Cors, HttpMiddleware, Middleware, Middlewares,
     };
-    
+
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
-    use golem_worker_service_base::gateway_security::{
-        AuthorizationUrl, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError,
-        IdentityProviderResolver, OpenIdClient, Provider, SecuritySchemeWithProviderMetadata,
-    };
+    use golem_worker_service_base::gateway_security::{AuthorizationUrl, DefaultIdentityProvider, GolemIdentityProviderMetadata, IdentityProvider, IdentityProviderError, IdentityProviderResolver, OpenIdClient, Provider, SecuritySchemeWithProviderMetadata};
     use golem_worker_service_base::repo::security_scheme::{
         SecuritySchemeRecord, SecuritySchemeRepo,
     };
@@ -1275,6 +1297,9 @@ mod internal {
         }
     }
 
+    // A simple testable identity provider
+    // which piggybacks on DefaultIdentityProvider for all non side effecting
+    // functionalities
     struct TestIdentityProvider {}
 
     #[async_trait]
@@ -1292,7 +1317,7 @@ mod internal {
             _code: &AuthorizationCode,
         ) -> Result<CoreTokenResponse, IdentityProviderError> {
             Ok(CoreTokenResponse::new(
-                AccessToken::new("some_secret".to_string()),
+                AccessToken::new("secret_access_token".to_string()),
                 CoreTokenType::Bearer,
                 CoreIdTokenFields::new(Some(get_id_token()), EmptyExtraTokenFields {}),
             ))
@@ -1302,52 +1327,33 @@ mod internal {
             &self,
             _security_scheme: &SecuritySchemeWithProviderMetadata,
         ) -> Result<OpenIdClient, IdentityProviderError> {
-            let core_client = CoreClient::new(
-                ClientId::new("aaa".to_string()),
-                Some(ClientSecret::new("bbb".to_string())),
-                IssuerUrl::new("https://example".to_string()).unwrap(),
-                AuthUrl::new("https://example/authorize".to_string()).unwrap(),
-                Some(TokenUrl::new("https://example/token".to_string()).unwrap()),
-                None,
-                JsonWebKeySet::default(),
-            );
-            Ok(OpenIdClient::new(core_client))
+            let identity_provider = DefaultIdentityProvider;
+            identity_provider.get_client(_security_scheme)
         }
 
         fn get_claims(
             &self,
-            _client: &OpenIdClient,
-            _core_token_response: CoreTokenResponse,
-            _nonce: &Nonce,
+            client: &OpenIdClient,
+            core_token_response: CoreTokenResponse,
+            nonce: &Nonce,
         ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
-            Ok(CoreIdTokenClaims::new(
-                IssuerUrl::new("https://server.example.com".to_string()).unwrap(),
-                vec![Audience::new("s6BhdRkqt3".to_string())],
-                Utc.timestamp_opt(1311281970, 0)
-                    .single()
-                    .expect("valid timestamp"),
-                Utc.timestamp_opt(1311280970, 0)
-                    .single()
-                    .expect("valid timestamp"),
-                StandardClaims::new(SubjectIdentifier::new("24400320".to_string())),
-                EmptyAdditionalClaims {},
-            ))
+            let identity_provider = DefaultIdentityProvider;
+            identity_provider.get_claims(
+                client, core_token_response, nonce
+            )
         }
 
         fn get_authorization_url(
             &self,
-            _client: &OpenIdClient,
-            _scopes: Vec<Scope>,
+            client: &OpenIdClient,
+            scopes: Vec<Scope>,
         ) -> AuthorizationUrl {
-            AuthorizationUrl {
-                url: Url::parse("https:// example. net").unwrap(),
-                csrf_state: CsrfToken::new_random(),
-                nonce: Nonce::new("nonce".to_string()),
-            }
+            let identity_provider = DefaultIdentityProvider;
+            identity_provider.get_authorization_url(client, scopes)
         }
     }
 
-    struct TestIdentityProviderResolver;
+    pub(crate) struct TestIdentityProviderResolver;
 
     impl IdentityProviderResolver for TestIdentityProviderResolver {
         fn resolve(&self, _provider_type: &Provider) -> Arc<dyn IdentityProvider + Sync + Send> {
@@ -1412,10 +1418,10 @@ mod internal {
     }
 
     #[derive(Debug, Clone)]
-    pub struct CorsMiddlewareHeadersInResponse {
-        cors_header_allow_origin: String,
-        cors_header_allow_credentials: Option<bool>, // If cors middleware is applied
-        cors_header_expose_headers: Option<String>,  // If cors middleware is applied
+    pub(crate) struct CorsMiddlewareHeadersInResponse {
+        pub(crate) cors_header_allow_origin: String,
+        pub(crate) cors_header_allow_credentials: Option<bool>, // If cors middleware is applied
+        pub(crate) cors_header_expose_headers: Option<String>,  // If cors middleware is applied
     }
 
     impl TestResponse {
@@ -1453,18 +1459,16 @@ mod internal {
             }
         }
 
-        pub fn get_cors_allow_origin(&self) -> Option<String> {
-            self.get_cors_preflight().map(|x| x.get_allow_origin())
-        }
-
-        pub fn get_allow_credentials(&self) -> Option<bool> {
-            self.get_cors_preflight()
-                .and_then(|x| x.get_allow_credentials())
-        }
-
-        pub fn get_expose_headers(&self) -> Option<String> {
-            self.get_cors_preflight()
-                .and_then(|x| x.get_expose_headers())
+        pub fn get_cors_headers_in_non_preflight_response(
+            &self,
+        ) -> Option<CorsMiddlewareHeadersInResponse> {
+            match self {
+                TestResponse::WorkerResponse {
+                    cors_middleware_headers,
+                    ..
+                } => cors_middleware_headers.clone(),
+                _ => None,
+            }
         }
 
         pub fn get_worker_name(&self) -> Option<String> {
@@ -1959,12 +1963,12 @@ mod internal {
         pub(crate) response_type: String,
         pub(crate) client_id: String,
         pub(crate) state: String,
-        pub(crate) redirect_uri: String,
+        pub(crate) auth_call_back_uri: String,
         pub(crate) scope: String,
         pub(crate) nonce: String,
     }
 
-    pub(crate) fn get_query_components_from_initial_redirect_response(
+    pub(crate) fn get_initial_redirect_data(
         query_components: &HashMap<String, String>,
     ) -> InitialRedirectData {
         let response_type = query_components
@@ -1984,7 +1988,7 @@ mod internal {
             response_type: response_type.to_string(),
             client_id: client_id.to_string(),
             state: state.to_string(),
-            redirect_uri: redirect_uri.to_string(),
+            auth_call_back_uri: redirect_uri.to_string(),
             scope: scope.to_string(),
             nonce: nonce.to_string(),
         }
@@ -2014,6 +2018,17 @@ mod internal {
         decoded
     }
 
+    // A simulated auth call back from identity provider
+    // Example:
+    //  Request {
+    //     method: GET,
+    //     uri: /auth/callback?state=Iy3GSF&code=4%2F0AeanPOWQlsww.googleapis.com%2Fauth%2Fuserinfo.profile+https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fuserinfo.email&authuser=0&hd=ziverge.com&prompt=consent,
+    //     version: HTTP/1.1,
+    //     headers: {
+    //         "host": "127.0.0.1:5000",
+    //         "connection": "keep-alive",
+    //     },
+    // }
     pub(crate) fn request_from_identity_provider_to_auth_call_back_endpoint(
         state: &str,
         code: &str,

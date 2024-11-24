@@ -106,7 +106,7 @@ mod internal {
         client: &OpenIdClient,
         http_authorizer: &HttpRequestAuthentication,
     ) -> Result<MiddlewareSuccess<poem::Response>, MiddlewareInError> {
-        let redirect_uri = input.get_uri();
+        let redirect_uri = input.get_api_input_path();
 
         let authorization =
             identity_provider.get_authorization_url(client, http_authorizer.get_scopes());
@@ -120,7 +120,7 @@ mod internal {
             authorization.nonce.secret().clone(),
         ));
 
-        let redirect_url_data_key = DataKey::redirect_uri();
+        let redirect_url_data_key = DataKey::redirect_url();
 
         let redirect_url_data_value = DataValue(serde_json::Value::String(redirect_uri));
 

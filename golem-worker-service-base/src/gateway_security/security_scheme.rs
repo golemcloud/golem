@@ -213,7 +213,7 @@ impl Display for SecuritySchemeIdentifier {
 }
 
 impl SecurityScheme {
-    pub fn redirect_uri(&self) -> RedirectUrl {
+    pub fn redirect_url(&self) -> RedirectUrl {
         self.redirect_url.clone()
     }
 

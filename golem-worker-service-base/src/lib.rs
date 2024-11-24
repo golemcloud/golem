@@ -18,7 +18,6 @@ use service::worker::WorkerRequestMetadata;
 
 pub mod api;
 pub mod app_config;
-
 pub mod gateway_api_definition;
 pub mod gateway_api_definition_transformer;
 pub mod gateway_api_deployment;

@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use tracing::error;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InputHttpRequest {
     pub host: ApiSiteString,
     pub input_path: ApiInputPath,
@@ -31,6 +31,7 @@ pub struct InputHttpRequest {
     pub req_body: Value,
 }
 
+#[derive(Debug)]
 pub struct ErrorResponse(Response);
 
 impl From<ErrorResponse> for Response {

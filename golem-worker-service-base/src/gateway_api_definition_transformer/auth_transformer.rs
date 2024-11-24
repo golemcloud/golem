@@ -78,8 +78,11 @@ mod internal {
         let mut routes = vec![];
 
         for (_, scheme) in security_schemes {
-            let redirect_url = scheme.security_scheme.redirect_uri().to_string();
-            let path = AllPathPatterns::parse(redirect_url.as_str())?;
+            // In a security scheme, the auth-call-back (aka redirect_url) is full URL
+            // and not just the relative path
+            let redirect_url = scheme.security_scheme.redirect_url();
+            let path = redirect_url.url().path();
+            let path = AllPathPatterns::parse(path)?;
             let method = MethodPattern::Get;
             let binding = GatewayBinding::static_binding(StaticBinding::http_auth_call_back(
                 HttpRequestAuthentication {
