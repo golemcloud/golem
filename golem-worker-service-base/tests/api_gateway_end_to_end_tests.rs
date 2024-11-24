@@ -1956,12 +1956,12 @@ mod internal {
 
     #[derive(Debug)]
     pub(crate) struct InitialRedirectData {
-        pub response_type: String,
-        pub client_id: String,
-        pub state: String,
-        pub redirect_uri: String,
-        pub scope: String,
-        pub nonce: String,
+        pub(crate) response_type: String,
+        pub(crate) client_id: String,
+        pub(crate) state: String,
+        pub(crate) redirect_uri: String,
+        pub(crate) scope: String,
+        pub(crate) nonce: String,
     }
 
     pub(crate) fn get_query_components_from_initial_redirect_response(
@@ -2023,7 +2023,7 @@ mod internal {
     ) -> Request {
         let uri = Uri::from_str(
             format!(
-                "{}?state={}&code={}&scope={}&prompt=consent"
+                "{}?state={}&code={}&scope={}&prompt=consent",
                 redirect_path, state, code, scope
             )
             .as_str(),
