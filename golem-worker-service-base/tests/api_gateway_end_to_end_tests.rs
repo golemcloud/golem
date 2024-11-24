@@ -53,6 +53,7 @@ use url::Url;
 async fn execute(
     api_request: &InputHttpRequest,
     api_specification: &HttpApiDefinition,
+    session_store: &GatewaySessionStore
 ) -> TestResponse {
     let compiled = CompiledHttpApiDefinition::from_http_api_definition(
         api_specification,
@@ -74,7 +75,7 @@ async fn execute(
 
     let input = Input::new(
         &resolved_gateway_binding,
-        &GatewaySessionStore::in_memory(),
+        session_store,
         Arc::new(internal::TestIdentityProviderResolver),
     );
 
@@ -100,7 +101,8 @@ async fn test_end_to_end_api_gateway_simple_worker() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
     let result = (
         test_response.get_function_name().unwrap(),
@@ -137,7 +139,9 @@ async fn test_end_to_end_api_gateway_with_security() {
         get_api_spec_worker_binding_with_security("foo/{user-id}", worker_name, response_mapping)
             .await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
     let result = (
         test_response.get_function_name().unwrap(),
@@ -182,8 +186,10 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
         )
         .await;
 
+    let session_store = GatewaySessionStore::in_memory();
+
     let initial_redirect_response_to_identity_provider =
-        execute(&api_request, &api_specification).await;
+        execute(&api_request, &api_specification, &session_store).await;
 
     // The first response will be a redirect from the auth middleware which
     // redirects to the open id connector login
@@ -230,7 +236,7 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
     let input_http_request =
         InputHttpRequest::from_request(call_back_request_from_identity_provider).await;
 
-    let _ = execute(&input_http_request.unwrap(), &api_specification).await;
+    let _ = execute(&input_http_request.unwrap(), &api_specification, &session_store).await;
 
     //let redirect_uri_obtained = initial_redirect_url_data.redirect_uri.as_str();
 
@@ -256,7 +262,9 @@ async fn test_end_to_end_api_gateway_cors_preflight() {
     let api_specification: HttpApiDefinition =
         get_api_spec_cors_preflight_binding("foo/{user-id}", &cors).await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
     let result = test_response.get_cors_preflight().unwrap();
     assert_eq!(result, cors);
@@ -271,7 +279,9 @@ async fn test_end_to_end_api_gateway_cors_preflight_default() {
     let api_specification: HttpApiDefinition =
         get_api_spec_cors_preflight_binding_default_response("foo/{user-id}").await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
     let result = test_response.get_cors_preflight().unwrap();
 
@@ -306,8 +316,10 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_default_and_actual_requ
         )
         .await;
 
-    let preflight_response = execute(&preflight_request, &api_specification).await;
-    let actual_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+
+    let preflight_response = execute(&preflight_request, &api_specification, &session_store).await;
+    let actual_response = execute(&api_request, &api_specification, &session_store).await;
 
     let pre_flight_response = preflight_response.get_cors_preflight().unwrap();
 
@@ -360,8 +372,10 @@ async fn test_end_to_end_api_gateway_cors_with_preflight_and_actual_request() {
     )
     .await;
 
-    let preflight_response = execute(&preflight_request, &api_specification).await;
-    let actual_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+
+    let preflight_response = execute(&preflight_request, &api_specification, &session_store).await;
+    let actual_response = execute(&api_request, &api_specification, &session_store).await;
 
     let pre_flight_response = preflight_response.get_cors_preflight().unwrap();
 
@@ -412,7 +426,9 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup() {
         get_api_spec_worker_binding("foo/{user-id}?{token-id}", worker_name, response_mapping)
             .await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -461,7 +477,9 @@ async fn test_end_to_end_api_gateway_with_request_path_and_query_lookup_complex(
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -509,7 +527,9 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup1() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -571,7 +591,8 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup2() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -631,7 +652,8 @@ async fn test_end_to_end_api_gateway_with_with_request_body_lookup3() {
     let api_specification: HttpApiDefinition =
         get_api_spec_worker_binding("foo/{user-id}", worker_name, response_mapping).await;
 
-    let test_response = execute(&api_request, &api_specification).await;
+    let session_store = GatewaySessionStore::in_memory();
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
     let result = (
         test_response.get_worker_name().unwrap(),
@@ -750,7 +772,7 @@ fn get_api_request(
 ) -> InputHttpRequest {
     InputHttpRequest {
         host: ApiSiteString("localhost".to_string()),
-        input_path: ApiInputPath {
+        api_input_path: ApiInputPath {
             base_path: base_path.to_string(),
             query_path: query_path.map(|x| x.to_string()),
         },
@@ -768,7 +790,7 @@ fn get_preflight_api_request(
 ) -> InputHttpRequest {
     InputHttpRequest {
         host: ApiSiteString("localhost".to_string()),
-        input_path: ApiInputPath {
+        api_input_path: ApiInputPath {
             base_path: base_path.to_string(),
             query_path: query_path.map(|x| x.to_string()),
         },
@@ -909,7 +931,6 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
           createdAt: 2024-08-21T07:42:15.696Z
           security:
           - {}
-          - {}
           routes:
           - method: Get
             path: {}
@@ -921,26 +942,10 @@ async fn get_api_spec_worker_binding_with_multiple_securities(
                 version: 0
               workerName: '{}'
               response: '${{{}}}'
-          - method: Post
-            path: {}
-            security: {}
-            binding:
-              type: wit-worker
-              componentId:
-                componentId: 0b6d9cd8-f373-4e29-8a5a-548e61b868a5
-                version: 0
-              workerName: '{}'
-              response: '${{{}}}'
-
         "#,
         security_scheme_identifier1,
-        security_scheme_identifier2,
         path_pattern,
         security_scheme_identifier1,
-        worker_name,
-        rib_expression,
-        path_pattern,
-        security_scheme_identifier2,
         worker_name,
         rib_expression
     );
@@ -1245,25 +1250,16 @@ mod internal {
         ACCESS_CONTROL_MAX_AGE, LOCATION,
     };
     use http::{Method, Uri};
-    use openidconnect::core::{
-        CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
-        CoreIdTokenClaims, CoreIdTokenFields, CoreJweContentEncryptionAlgorithm,
-        CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata,
-        CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey, CoreSubjectIdentifierType,
-        CoreTokenResponse, CoreTokenType,
-    };
-    use openidconnect::{
-        AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId,
-        ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail,
-        IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce, RegistrationUrl,
-        ResponseTypes, Scope, StandardClaims, SubjectIdentifier, TokenUrl, UserInfoUrl,
-    };
+    use openidconnect::core::{CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken, CoreIdTokenClaims, CoreIdTokenFields, CoreJsonWebKey, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreJweContentEncryptionAlgorithm, CoreJweKeyManagementAlgorithm, CoreJwsSigningAlgorithm, CoreProviderMetadata, CoreResponseMode, CoreResponseType, CoreRsaPrivateSigningKey, CoreSubjectIdentifierType, CoreTokenResponse, CoreTokenType};
+    use openidconnect::{AccessToken, Audience, AuthUrl, AuthenticationContextClass, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EmptyAdditionalClaims, EmptyExtraTokenFields, EndUserEmail, IdTokenVerifier, IssuerUrl, JsonWebKeyId, JsonWebKeySet, JsonWebKeySetUrl, Nonce, RegistrationUrl, ResponseTypes, Scope, StandardClaims, SubjectIdentifier, TokenUrl, UserInfoUrl};
     use poem::{Request, Response};
     use rib::RibResult;
     use serde_json::Value;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
+    use rsa::pkcs8::DecodePublicKey;
+    use rsa::traits::PublicKeyParts;
     use tokio::sync::Mutex;
     use url::Url;
 
@@ -1297,6 +1293,17 @@ mod internal {
         }
     }
 
+    const PUBLIC_KEY_PEM: &str = "\
+-----BEGIN PUBLIC KEY-----\n\
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsRMj0YYjy7du6v1gWyKS\n\
+TJx3YjBzZTG0XotRP0IaObw0k+6830dXadjL5jVhSWNdcg9OyMyTGWfdNqfdrS6p\n\
+pBqlQNgjZJdloIqL9zOLBZrDm7G4+qN4KeZ4/5TyEilq2zOHHGFEzXpOq/UxqVnm\n\
+3J4fhjqCNaS2nKd7HVVXGBQQ+4+FdVT+MyJXemw5maz2F/h324TQi6XoUPEwUddx\n\
+BwLQFSOlzWnHYMc4/lcyZJ8MpTXCMPe/YJFNtb9CaikKUdf8x4mzwH7usSf8s2d6\n\
+R4dQITzKrjrEJ0u3w3eGkBBapoMVFBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C\n\
+4QIDAQAB\n\
+-----END PUBLIC KEY-----";
+
     // A simple testable identity provider
     // which piggybacks on DefaultIdentityProvider for all non side effecting
     // functionalities
@@ -1325,11 +1332,12 @@ mod internal {
 
         fn get_client(
             &self,
-            _security_scheme: &SecuritySchemeWithProviderMetadata,
+            security_scheme: &SecuritySchemeWithProviderMetadata,
         ) -> Result<OpenIdClient, IdentityProviderError> {
             let identity_provider = DefaultIdentityProvider;
-            identity_provider.get_client(_security_scheme)
+            identity_provider.get_client(security_scheme)
         }
+
 
         fn get_claims(
             &self,
@@ -1337,10 +1345,43 @@ mod internal {
             core_token_response: CoreTokenResponse,
             nonce: &Nonce,
         ) -> Result<CoreIdTokenClaims, IdentityProviderError> {
-            let identity_provider = DefaultIdentityProvider;
-            identity_provider.get_claims(
-                client, core_token_response, nonce
-            )
+            dbg!(nonce.clone());
+
+            let public_key =
+                rsa::RsaPublicKey::from_public_key_pem(PUBLIC_KEY_PEM).expect("Failed to parse public key");
+
+            // Extract modulus and exponent
+            let n = public_key.n().to_bytes_be(); // Modulus in big-endian
+            let e = public_key.e().to_bytes_be(); // Exponent in big-endian
+
+            let kid = JsonWebKeyId::new("my-key-id".to_string()); // Use a unique key ID
+
+            let jwk = CoreJsonWebKey::new_rsa(n, e, Some(kid));
+
+            let jwks = JsonWebKeySet::new(vec![jwk]);
+
+            let id_token_verifier = IdTokenVerifier::new_confidential_client(
+                ClientId::new("client_id_foo".to_string()),
+                ClientSecret::new("client_secret_foo".to_string()),
+                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+                jwks,
+            );
+
+            let id_token_claims: &CoreIdTokenClaims = core_token_response
+                .extra_fields()
+                .id_token()
+                .ok_or(IdentityProviderError::IdTokenVerificationError(
+                    "Failed to get ID token".to_string(),
+                ))?
+                .claims(&id_token_verifier, nonce)
+                .map_err(|err| IdentityProviderError::IdTokenVerificationError(err.to_string()))?;
+
+            Ok(id_token_claims.clone())
+
+            // let identity_provider = DefaultIdentityProvider;
+            // identity_provider.get_claims(
+            //     client, core_token_response, nonce
+            // )
         }
 
         fn get_authorization_url(
@@ -1352,6 +1393,8 @@ mod internal {
             identity_provider.get_authorization_url(client, scopes)
         }
     }
+
+
 
     pub(crate) struct TestIdentityProviderResolver;
 
@@ -1437,6 +1480,7 @@ mod internal {
                         }
                         // If binding was http auth call back, we expect a redirect to the original Url
                         StaticBinding::HttpAuthCallBack(_) => {
+                            dbg!(response);
                             unimplemented!("Http auth call back test response is not handled")
                         }
                     }
@@ -1802,11 +1846,41 @@ mod internal {
         new_provider_metadata
     }
 
+    const TEST_RSA_KEY: &str = "\
+                               -----BEGIN RSA PRIVATE KEY-----\n\
+                                MIIEowIBAAKCAQEAsRMj0YYjy7du6v1gWyKSTJx3YjBzZTG0XotRP0IaObw0k+68\n\
+                                30dXadjL5jVhSWNdcg9OyMyTGWfdNqfdrS6ppBqlQNgjZJdloIqL9zOLBZrDm7G4\n\
+                                +qN4KeZ4/5TyEilq2zOHHGFEzXpOq/UxqVnm3J4fhjqCNaS2nKd7HVVXGBQQ+4+F\n\
+                                dVT+MyJXemw5maz2F/h324TQi6XoUPEwUddxBwLQFSOlzWnHYMc4/lcyZJ8MpTXC\n\
+                                MPe/YJFNtb9CaikKUdf8x4mzwH7usSf8s2d6R4dQITzKrjrEJ0u3w3eGkBBapoMV\n\
+                                FBGPjP3Haz5FsVtHc5VEN3FZVIDF6HrbJH1C4QIDAQABAoIBAHSS3izM+3nc7Bel\n\
+                                8S5uRxRKmcm5je6b11u6qiVUFkHWJmMRc6QmqmSThkCq+b4/vUAe1cYZ7+l02Exo\n\
+                                HOcrZiEULaDP6hUKGqyjKVv3wdlRtt8kFFxlC/HBufzAiNDuFVvzw0oquwnvMCXC\n\
+                                yQvtlK+/JY/PqvM32cSt+b4o9apySsHqAtdsoHHohK82jsQqIfCi1v8XYV/xRBJB\n\
+                                cQMCaA0Ls3tFpmJv3JdikyyQxio4kZ5tswghC63znCp1iL+qDq1wjjKzjick9MDb\n\
+                                Qzb95X09QQP201l1FPWN7Kbhj4ybg6PJGz/VHQcvILcBCoYIc0UY/OMSBt9VN9yD\n\
+                                wr1WlbECgYEA37difsTMcLmUEN57sicFe1q4lxH6eqnUBjmoKBflx4oMIIyRnfjF\n\
+                                Jwsu9yIiBkJfBCP85nl2tZdcV0wfZLf6amxB/KMtdfW6r8eoTDzE472OYxSIg1F5\n\
+                                dI4qn2nBI0Dou0g58xj+Kv0iLaym0pxtyJkSg/rxZGwKb9a+x5WAs50CgYEAyqC0\n\
+                                NcZs2BRIiT5kEOF6+MeUvarbKh1mangKHKcTdXRrvoJ+Z5izm7FifBixo/79MYpt\n\
+                                0VofW0IzYKtAI9KZDq2JcozEbZ+lt/ZPH5QEXO4T39QbDoAG8BbOmEP7l+6m+7QO\n\
+                                PiQ0WSNjDnwk3W7Zihgg31DH7hyxsxQCapKLcxUCgYAwERXPiPcoDSd8DGFlYK7z\n\
+                                1wUsKEe6DT0p7T9tBd1v5wA+ChXLbETn46Y+oQ3QbHg/yn+vAU/5KkFD3G4uVL0w\n\
+                                Gnx/DIxa+OYYmHxXjQL8r6ClNycxl9LRsS4FPFKsAWk/u///dFI/6E1spNjfDY8k\n\
+                                94ab5tHwsqn3Z5tsBHo3nQKBgFUmxbSXh2Qi2fy6+GhTqU7k6G/wXhvLsR9rBKzX\n\
+                                1YiVfTXZNu+oL0ptd/q4keZeIN7x0oaY/fZm0pp8PP8Q4HtXmBxIZb+/yG+Pld6q\n\
+                                YE8BSd7VDu3ABapdm0JHx3Iou4mpOBcLNeiDw3vx1bgsfkTXMPFHzE0XR+H+tak9\n\
+                                nlalAoGBALAmAF7WBGdOt43Rj8hPaKOM/ahj+6z3CNwVreToNsVBHoyNmiO8q7MC\n\
+                                +tRo4jgdrzk1pzs66OIHfbx5P1mXKPtgPZhvI5omAY8WqXEgeNqSL1Ksp6LZ2ql/\n\
+                                ouZns5xwKc9+aRL+GWoAGNzwzcjE8cP52sBy/r0rYXTs/sZo5kgV\n\
+                                -----END RSA PRIVATE KEY-----\
+                                ";
+
     pub fn get_id_token() -> CoreIdToken {
         CoreIdToken::new(
             CoreIdTokenClaims::new(
-                IssuerUrl::new("https://accounts.example.com".to_string()).unwrap(),
-                vec![Audience::new("client-id-123".to_string())],
+                IssuerUrl::new("https://accounts.google.com".to_string()).unwrap(),
+                vec![Audience::new("client_id_foo".to_string())],
                 Utc::now() + Duration::seconds(300),
                 Utc::now(),
                 StandardClaims::new(SubjectIdentifier::new(
@@ -1815,11 +1889,11 @@ mod internal {
                 .set_email(Some(EndUserEmail::new("bob@example.com".to_string())))
                 .set_email_verified(Some(true)),
                 EmptyAdditionalClaims {},
-            ),
-            &CoreRsaPrivateSigningKey::from_pem("", Some(JsonWebKeyId::new("key1".to_string())))
+            ).set_nonce(Some(Nonce::new("nonce".to_string()))),
+            &CoreRsaPrivateSigningKey::from_pem(TEST_RSA_KEY, Some(JsonWebKeyId::new("my-key-id".to_string())))
                 .expect("Invalid RSA private key"),
             CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
-            Some(&AccessToken::new("access_token".to_string())),
+            Some(&AccessToken::new("secret_access_token".to_string())),
             None,
         )
         .unwrap()

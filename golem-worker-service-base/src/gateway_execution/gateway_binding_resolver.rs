@@ -160,8 +160,8 @@ impl<Namespace: Clone + Send + Sync + 'static>
         let api_request = self;
         let router = router::build(compiled_routes);
 
-        let path: Vec<&str> = RouterPattern::split(&api_request.input_path.base_path).collect();
-        let request_query_variables = self.input_path.query_components().unwrap_or_default();
+        let path: Vec<&str> = RouterPattern::split(&api_request.api_input_path.base_path).collect();
+        let request_query_variables = self.api_input_path.query_components().unwrap_or_default();
         let request_body = &self.req_body;
         let headers = &self.headers;
 
@@ -182,7 +182,8 @@ impl<Namespace: Clone + Send + Sync + 'static>
         };
 
         let http_request_details = GatewayRequestDetails::from(
-            &self.input_path,
+            &self.host,
+            &self.api_input_path,
             &zipped_path_params,
             &request_query_variables,
             query_params,

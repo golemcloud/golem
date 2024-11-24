@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::ops::Deref;
 use crate::gateway_binding::HttpRequestDetails;
 use crate::gateway_execution::gateway_session::{
     DataKey, DataValue, GatewaySessionStore, SessionId,
@@ -43,7 +44,9 @@ pub struct AuthorisationSuccess {
     pub token_claims: CoreIdTokenClaims,
 }
 
+#[derive(Debug)]
 pub enum AuthorisationError {
+    BadRequest(String),
     CodeNotFound,
     InvalidCode,
     StateNotFound,
@@ -64,6 +67,7 @@ pub enum AuthorisationError {
 impl SafeDisplay for AuthorisationError {
     fn to_safe_string(&self) -> String {
         match self {
+            AuthorisationError::BadRequest(_) => "Failed authentication".to_string(),
             AuthorisationError::CodeNotFound => "The authorisation code is missing.".to_string(),
             AuthorisationError::InvalidCode => "The authorisation code is invalid.".to_string(),
             AuthorisationError::StateNotFound => {
@@ -118,34 +122,37 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         session_store: &GatewaySessionStore,
         identity_provider_resolver: &Arc<dyn IdentityProviderResolver + Send + Sync>,
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
-        let query_params = &http_request_details.request_path_values;
+        let api_url = &http_request_details.url().map_err(
+           |err| AuthorisationError::BadRequest(err)
+        )?;
+
+
+        let mut query_pairs = api_url.query_pairs();
+
         let identity_provider = identity_provider_resolver.resolve(
             &security_scheme_with_metadata
                 .security_scheme
                 .provider_type(),
         );
 
-        let code_value = query_params
-            .get("code")
-            .ok_or(AuthorisationError::CodeNotFound)?;
+        let mut code = None;
+        let mut state = None;
 
-        let code = code_value.as_str().ok_or(AuthorisationError::InvalidCode)?;
+        for (k, v) in query_pairs {
+            if k == "code" {
+                code = Some(AuthorizationCode::new(v.to_string()))
+            } else if k == "state" {
+                state = Some(v.to_string())
+            }
+        }
 
-        let authorisation_code = AuthorizationCode::new(code.to_string());
+        let authorisation_code = code.ok_or(AuthorisationError::CodeNotFound)?;
+        let state = state.ok_or(AuthorisationError::StateNotFound)?;
 
-        let state_value = query_params
-            .get("state")
-            .ok_or(AuthorisationError::StateNotFound)?;
-
-        let state_str = state_value
-            .as_str()
-            .ok_or(AuthorisationError::InvalidState)?;
-
-        let obtained_state = state_str.to_string();
-
+        dbg!("here?");
         let session_params = session_store
             .0
-            .get_params(SessionId(obtained_state.to_string()))
+            .get_params(SessionId(state.clone()))
             .await
             .map_err(|_| AuthorisationError::MissingParametersInSession)?
             .ok_or(AuthorisationError::InvalidSession)?;
@@ -165,18 +172,25 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
             .await
             .map_err(AuthorisationError::FailedCodeExchange)?;
 
+        dbg!(token_response.clone());
+
         let claims = identity_provider
             .get_claims(
                 &open_id_client,
                 token_response.clone(),
-                &Nonce::new(nonce.clone()),
+                &Nonce::new("nonce".to_string()), //TODO (for testing)
             )
-            .map_err(AuthorisationError::ClaimFetchError)?;
+            .map_err(AuthorisationError::ClaimFetchError).map_err({
+                |err| {
+                    dbg!("error", &err);
+                    err
+                }
+        })?;
 
         let _ = session_store
             .0
             .insert(
-                SessionId(obtained_state.to_string()),
+                SessionId(state.clone()),
                 DataKey("claims".to_string()),
                 DataValue(serde_json::to_value(claims.clone()).unwrap()), // TODO;
             )
@@ -189,7 +203,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
         let _ = session_store
             .0
             .insert(
-                SessionId(obtained_state.to_string()),
+                SessionId(state),
                 DataKey("access_token".to_string()),
                 DataValue(serde_json::Value::String(access_token)),
             )

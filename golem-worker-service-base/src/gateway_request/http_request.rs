@@ -21,11 +21,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use tracing::error;
+use url::form_urlencoded::Parse;
+use url::Url;
 
 #[derive(Clone, Debug)]
 pub struct InputHttpRequest {
     pub host: ApiSiteString,
-    pub input_path: ApiInputPath,
+    pub api_input_path: ApiInputPath,
     pub headers: HeaderMap,
     pub req_method: Method,
     pub req_body: Value,
@@ -45,6 +47,7 @@ impl InputHttpRequest {
         let (req_parts, body) = request.into_parts();
         let headers = req_parts.headers;
         let uri = req_parts.uri;
+
 
         let host = match headers.get(HOST).and_then(|h| h.to_str().ok()) {
             Some(host) => ApiSiteString(host.to_string()),
@@ -75,7 +78,7 @@ impl InputHttpRequest {
 
         Ok(InputHttpRequest {
             host,
-            input_path: ApiInputPath {
+            api_input_path: ApiInputPath {
                 base_path: uri.path().to_string(),
                 query_path: uri.query().map(|x| x.to_string()),
             },
@@ -86,9 +89,9 @@ impl InputHttpRequest {
     }
 
     pub fn uri(&self) -> String {
-        match self.input_path.query_path {
-            Some(ref query_path) => format!("{}?{}", self.input_path.base_path, query_path),
-            None => self.input_path.base_path.clone(),
+        match self.api_input_path.query_path {
+            Some(ref query_path) => format!("{}?{}", self.api_input_path.base_path, query_path),
+            None => self.api_input_path.base_path.clone(),
         }
     }
 }

@@ -18,13 +18,22 @@ use crate::gateway_request::http_request::ApiInputPath;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use url::Url;
+use crate::gateway_api_deployment::ApiSiteString;
 
 #[derive(Clone, Debug)]
 pub enum GatewayRequestDetails {
     Http(HttpRequestDetails),
 }
 impl GatewayRequestDetails {
+    // Form the HttpRequestDetails based on what's required by
+    // ApiDefinition. If there are query or path parameters that are not required
+    // by API definition, they will be discarded here.
+    // If there is a need to fetch any query values or path values that are required
+    // in the workflow but not through API definition, use poem::Request directly
+    // as it will be better performing in the hot path
     pub fn from(
+        host: &ApiSiteString,
         api_input_path: &ApiInputPath,
         path_params: &HashMap<VarInfo, &str>,
         query_variable_values: &HashMap<String, String>,
@@ -33,6 +42,7 @@ impl GatewayRequestDetails {
         headers: &HeaderMap,
     ) -> Result<Self, Vec<String>> {
         Ok(Self::Http(HttpRequestDetails::from_input_http_request(
+            host,
             api_input_path,
             path_params,
             query_variable_values,
@@ -81,8 +91,14 @@ impl GatewayRequestDetails {
     }
 }
 
+// A structure that holds the incoming request details
+// along with parameters that are required by the route in API definition
+// Any extra query parameter values in the incoming request will not be available
+// in query or path values. If we need to retrieve them at any stage, the original
+// api_input_path is still available.
 #[derive(Clone, Debug)]
 pub struct HttpRequestDetails {
+    pub host: ApiSiteString,
     pub api_input_path: ApiInputPath,
     pub request_path_values: RequestPathValues,
     pub request_body: RequestBody,
@@ -91,8 +107,17 @@ pub struct HttpRequestDetails {
 }
 
 impl HttpRequestDetails {
+    pub fn url(&self)  -> Result<Url, String> {
+        let uri_str = format!("http://{}{}", &self.host, &self.api_input_path.to_string());
+        dbg!(uri_str.clone());
+        let result = Url::parse(&uri_str).map_err(|err| err.to_string());
+        dbg!(&result);
+        result
+    }
+
     pub fn empty() -> HttpRequestDetails {
         HttpRequestDetails {
+            host: ApiSiteString("".to_string()),
             api_input_path: ApiInputPath {
                 base_path: "".to_string(),
                 query_path: None,
@@ -198,6 +223,7 @@ impl HttpRequestDetails {
     }
 
     fn from_input_http_request(
+        host: &ApiSiteString,
         api_input_path: &ApiInputPath,
         path_params: &HashMap<VarInfo, &str>,
         query_variable_values: &HashMap<String, String>,
@@ -211,6 +237,7 @@ impl HttpRequestDetails {
         let header_params = RequestHeaderValues::from(headers)?;
 
         Ok(Self {
+            host: host.clone(),
             api_input_path: api_input_path.clone(),
             request_path_values: path_params,
             request_body,
