@@ -384,7 +384,7 @@ async fn rdbms_mysql_create_insert_select(
         db_addresses.clone(),
         "mysql",
         vec![select_test],
-        1,
+        3,
     )
     .await;
 }

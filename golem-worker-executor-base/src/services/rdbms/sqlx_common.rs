@@ -74,20 +74,20 @@ where
     ) -> Result<Arc<Pool<DB>>, Error> {
         let key_clone = key.clone();
         let pool_config = self.config.pool;
-        let name = self.rdbms_type.to_string();
+        let rdbms_type = self.rdbms_type.to_string();
         let pool = self
             .pool_cache
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     info!(
-                        rdbms_type = name,
+                        rdbms_type = rdbms_type,
                         pool_key = key_clone.to_string(),
                         "create pool, connections: {}",
                         pool_config.max_connections
                     );
                     let result = key_clone.create_pool(&pool_config).await.map_err(|e| {
                         error!(
-                            rdbms_type = name,
+                            rdbms_type = rdbms_type,
                             pool_key = key_clone.to_string(),
                             "create pool, connections: {}, error: {}",
                             pool_config.max_connections,

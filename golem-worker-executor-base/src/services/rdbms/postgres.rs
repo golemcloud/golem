@@ -24,6 +24,7 @@ use crate::services::rdbms::{Rdbms, RdbmsPoolKey, RdbmsType};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use futures_util::stream::BoxStream;
+use sqlx::postgres::types::PgInterval;
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
 use std::fmt::Display;
@@ -245,7 +246,7 @@ fn bind_value(
                 DbValuePrimitive::Timestamp(_) => {
                     let values: Vec<_> = get_plain_values(vs, |v| {
                         if let DbValuePrimitive::Timestamp(v) = v {
-                            chrono::DateTime::from_timestamp_millis(v)
+                            Some(v)
                         } else {
                             None
                         }
@@ -255,7 +256,7 @@ fn bind_value(
                 DbValuePrimitive::Interval(_) => {
                     let values: Vec<chrono::Duration> = get_plain_values(vs, |v| {
                         if let DbValuePrimitive::Interval(v) = v {
-                            Some(chrono::Duration::milliseconds(v))
+                            Some(v)
                         } else {
                             None
                         }
@@ -299,10 +300,9 @@ fn bind_value_primitive(
         DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
         DbValuePrimitive::Json(v) => Ok(query.bind(v)),
         DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Timestamp(v) => {
-            Ok(query.bind(chrono::DateTime::from_timestamp_millis(v)))
-        }
-        DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
+        DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Date(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Interval(v) => Ok(query.bind(v)),
         DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
         _ => Err(format!("Type '{}' is not supported", value)),
     }
@@ -402,11 +402,28 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Primitive(DbValuePrimitive::DbNull),
             }
         }
+        pg_type_name::INTERVAL => {
+            let v: Option<PgInterval> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => {
+                    let d = get_duration(v)?;
+                    DbValue::Primitive(DbValuePrimitive::Interval(d))
+                }
+                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+            }
+        }
         pg_type_name::TIMESTAMP | pg_type_name::TIMESTAMPTZ => {
             let v: Option<chrono::DateTime<chrono::Utc>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamp(v.timestamp_millis())),
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamp(v)),
+                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+            }
+        }
+        pg_type_name::DATE => {
+            let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Date(v)),
                 None => DbValue::Primitive(DbValuePrimitive::DbNull),
             }
         }
@@ -487,15 +504,35 @@ fn get_db_value(index: usize, row: &sqlx::postgres::PgRow) -> Result<DbValue, St
                 None => DbValue::Array(vec![]),
             }
         }
+        pg_type_name::INTERVAL_ARRAY => {
+            let vs: Option<Vec<PgInterval>> = row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => {
+                    let mut values = Vec::with_capacity(vs.len());
+                    for v in vs.into_iter() {
+                        let d = get_duration(v)?;
+                        values.push(DbValuePrimitive::Interval(d));
+                    }
+                    DbValue::Array(values)
+                }
+                None => DbValue::Array(vec![]),
+            }
+        }
         pg_type_name::TIMESTAMP_ARRAY | pg_type_name::TIMESTAMPTZ_ARRAY => {
             let vs: Option<Vec<chrono::DateTime<chrono::Utc>>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
             match vs {
-                Some(vs) => DbValue::Array(
-                    vs.into_iter()
-                        .map(|v| DbValuePrimitive::Timestamp(v.timestamp_millis()))
-                        .collect(),
-                ),
+                Some(vs) => {
+                    DbValue::Array(vs.into_iter().map(DbValuePrimitive::Timestamp).collect())
+                }
+                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+            }
+        }
+        pg_type_name::DATE_ARRAY => {
+            let vs: Option<Vec<chrono::NaiveDate>> =
+                row.try_get(index).map_err(|e| e.to_string())?;
+            match vs {
+                Some(vs) => DbValue::Array(vs.into_iter().map(DbValuePrimitive::Date).collect()),
                 None => DbValue::Primitive(DbValuePrimitive::DbNull),
             }
         }
@@ -598,6 +635,16 @@ impl TryFrom<&sqlx::postgres::PgTypeInfo> for DbColumnType {
                 _ => Err(format!("Type '{}' is not supported", type_name))?,
             },
         }
+    }
+}
+
+fn get_duration(interval: PgInterval) -> Result<chrono::Duration, String> {
+    if interval.months != 0 {
+        Err("postgres 'INTERVAL' with months is not supported".to_string())
+    } else {
+        let mut d = chrono::Duration::days(interval.days as i64);
+        d += chrono::Duration::microseconds(interval.microseconds);
+        Ok(d)
     }
 }
 

@@ -137,9 +137,8 @@ fn bind_value_primitive(
         DbValuePrimitive::Uuid(v) => Ok(query.bind(v)),
         DbValuePrimitive::Json(v) => Ok(query.bind(v)),
         // DbValuePrimitive::Xml(v) => Ok(query.bind(v)),
-        DbValuePrimitive::Timestamp(v) => {
-            Ok(query.bind(chrono::DateTime::from_timestamp_millis(v)))
-        }
+        DbValuePrimitive::Timestamp(v) => Ok(query.bind(v)),
+        DbValuePrimitive::Date(v) => Ok(query.bind(v)),
         // DbValuePrimitive::Interval(v) => Ok(query.bind(chrono::Duration::milliseconds(v))),
         DbValuePrimitive::DbNull => Ok(query.bind(None::<String>)),
         _ => Err(format!("Type '{}' is not supported", value)),
@@ -251,7 +250,14 @@ fn get_db_value(index: usize, row: &sqlx::mysql::MySqlRow) -> Result<DbValue, St
             let v: Option<chrono::DateTime<chrono::Utc>> =
                 row.try_get(index).map_err(|e| e.to_string())?;
             match v {
-                Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamp(v.timestamp_millis())),
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Timestamp(v)),
+                None => DbValue::Primitive(DbValuePrimitive::DbNull),
+            }
+        }
+        mysql_type_name::DATE => {
+            let v: Option<chrono::NaiveDate> = row.try_get(index).map_err(|e| e.to_string())?;
+            match v {
+                Some(v) => DbValue::Primitive(DbValuePrimitive::Date(v)),
                 None => DbValue::Primitive(DbValuePrimitive::DbNull),
             }
         }

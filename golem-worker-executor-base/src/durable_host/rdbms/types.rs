@@ -128,10 +128,18 @@ impl TryFrom<DbValuePrimitive> for rdbms_types::DbValuePrimitive {
             DbValuePrimitive::Float(f) => Ok(Self::Float(f)),
             DbValuePrimitive::Double(f) => Ok(Self::Double(f)),
             DbValuePrimitive::Boolean(b) => Ok(Self::Boolean(b)),
-            DbValuePrimitive::Timestamp(u) => Ok(Self::Timestamp(u)),
-            DbValuePrimitive::Time(u) => Ok(Self::Time(u)),
-            DbValuePrimitive::Interval(u) => Ok(Self::Interval(u)),
-            DbValuePrimitive::Date(u) => Ok(Self::Date(u)),
+            DbValuePrimitive::Timestamp(v) => {
+                let t = chrono::DateTime::from_timestamp_millis(v)
+                    .ok_or("Timestamp value is not valid")?;
+                Ok(Self::Timestamp(t))
+            }
+            DbValuePrimitive::Time(v) => Ok(Self::Time(v)),
+            DbValuePrimitive::Interval(v) => Ok(Self::Interval(chrono::Duration::microseconds(v))),
+            DbValuePrimitive::Date(v) => {
+                let t =
+                    chrono::DateTime::from_timestamp_millis(v).ok_or("Date value is not valid")?;
+                Ok(Self::Date(t.date_naive()))
+            }
             DbValuePrimitive::Text(s) => Ok(Self::Text(s)),
             DbValuePrimitive::Blob(u) => Ok(Self::Blob(u)),
             DbValuePrimitive::Json(s) => Ok(Self::Json(s)),
@@ -153,10 +161,13 @@ impl From<rdbms_types::DbValuePrimitive> for DbValuePrimitive {
             rdbms_types::DbValuePrimitive::Float(f) => Self::Float(f),
             rdbms_types::DbValuePrimitive::Double(f) => Self::Double(f),
             rdbms_types::DbValuePrimitive::Boolean(b) => Self::Boolean(b),
-            rdbms_types::DbValuePrimitive::Timestamp(u) => Self::Timestamp(u),
+            rdbms_types::DbValuePrimitive::Timestamp(v) => Self::Timestamp(v.timestamp_millis()),
             rdbms_types::DbValuePrimitive::Time(u) => Self::Time(u),
-            rdbms_types::DbValuePrimitive::Interval(u) => Self::Interval(u),
-            rdbms_types::DbValuePrimitive::Date(u) => Self::Date(u),
+            rdbms_types::DbValuePrimitive::Interval(v) => Self::Interval(v.num_milliseconds()),
+            rdbms_types::DbValuePrimitive::Date(v) => {
+                let v = chrono::NaiveDateTime::from(v).and_utc().timestamp_millis();
+                Self::Date(v)
+            }
             rdbms_types::DbValuePrimitive::Text(s) => Self::Text(s),
             rdbms_types::DbValuePrimitive::Blob(u) => Self::Blob(u),
             rdbms_types::DbValuePrimitive::Json(s) => Self::Json(s),
