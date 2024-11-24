@@ -21,7 +21,7 @@ use golem_service_base::auth::DefaultNamespace;
 
 use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefinition};
 
-use crate::internal::{InitialRedirectData, TestResponse};
+use crate::internal::TestResponse;
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
 use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
@@ -1203,7 +1203,7 @@ mod internal {
     use golem_worker_service_base::gateway_middleware::{
         Cors, HttpMiddleware, Middleware, Middlewares,
     };
-    use golem_worker_service_base::gateway_request::http_request::InputHttpRequest;
+    
     use golem_worker_service_base::gateway_rib_interpreter::{
         DefaultRibInterpreter, EvaluationError, WorkerServiceRibInterpreter,
     };
