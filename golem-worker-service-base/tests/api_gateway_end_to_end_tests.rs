@@ -24,6 +24,7 @@ use crate::gateway_api_definition::http::{CompiledHttpApiDefinition, HttpApiDefi
 use crate::internal::{InitialRedirectData, TestResponse};
 use chrono::{DateTime, Utc};
 use golem_common::model::IdempotencyKey;
+use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 use golem_worker_service_base::gateway_execution::auth_call_back_binding_handler::DefaultAuthCallBack;
 use golem_worker_service_base::gateway_execution::gateway_binding_resolver::GatewayBindingResolver;
 use golem_worker_service_base::gateway_execution::gateway_input_executor::{
@@ -40,7 +41,6 @@ use http::{HeaderMap, HeaderValue, Method};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use serde_json::Value;
 use url::Url;
-use golem_worker_service_base::gateway_api_deployment::ApiSiteString;
 
 // The tests that focus on end to end workflow of API Gateway, without involving any real workers,
 // and stays independent of other modules.
@@ -215,9 +215,8 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
             "foo_code",
             initial_redirect_url_data.scope.as_str(),
             "/auth/callback",
-            "localhost"
+            "localhost",
         );
-
 
     dbg!(call_back_request_from_identity_provider);
     //let redirect_uri_obtained = initial_redirect_url_data.redirect_uri.as_str();
@@ -1223,6 +1222,7 @@ mod internal {
         ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS,
         ACCESS_CONTROL_MAX_AGE, LOCATION,
     };
+    use http::{Method, Uri};
     use openidconnect::core::{
         CoreClaimName, CoreClaimType, CoreClient, CoreClientAuthMethod, CoreGrantType, CoreIdToken,
         CoreIdTokenClaims, CoreIdTokenFields, CoreJweContentEncryptionAlgorithm,
@@ -1242,7 +1242,6 @@ mod internal {
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
-    use http::{Method, Uri};
     use tokio::sync::Mutex;
     use url::Url;
 
@@ -2015,26 +2014,28 @@ mod internal {
         decoded
     }
 
-
     pub(crate) fn request_from_identity_provider_to_auth_call_back_endpoint(
         state: &str,
         code: &str,
         scope: &str,
         redirect_path: &str,
-        redirect_host: &str
+        redirect_host: &str,
     ) -> Request {
         let uri = Uri::from_str(
             format!(
                 "{}?state={}&code={}&scope={}&prompt=consent"
                 redirect_path, state, code, scope
-            ).as_str()
-        ).unwrap();
+            )
+            .as_str(),
+        )
+        .unwrap();
 
-        let request =
-            poem::Request::builder().method(Method::GET).uri(uri).header(
-              "host", redirect_host
-            ).header("connection", "keep-alive")
-                .header("referer", "https://accounts.google.com/");
+        let request = poem::Request::builder()
+            .method(Method::GET)
+            .uri(uri)
+            .header("host", redirect_host)
+            .header("connection", "keep-alive")
+            .header("referer", "https://accounts.google.com/");
 
         request.finish()
     }

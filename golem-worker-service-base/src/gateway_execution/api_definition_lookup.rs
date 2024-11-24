@@ -29,7 +29,10 @@ use tracing::error;
 #[async_trait]
 pub trait ApiDefinitionsLookup<Input> {
     type ApiDefinition;
-    async fn get(&self, input: &Input) -> Result<Vec<Self::ApiDefinition>, ApiDefinitionLookupError>;
+    async fn get(
+        &self,
+        input: &Input,
+    ) -> Result<Vec<Self::ApiDefinition>, ApiDefinitionLookupError>;
 }
 
 pub struct ApiDefinitionLookupError(pub String);
@@ -53,8 +56,7 @@ impl<AuthCtx, Namespace> HttpApiDefinitionLookup<AuthCtx, Namespace> {
 }
 
 #[async_trait]
-impl<AuthCtx, Namespace: HasAccountId + Send + Sync>
-    ApiDefinitionsLookup<InputHttpRequest>
+impl<AuthCtx, Namespace: HasAccountId + Send + Sync> ApiDefinitionsLookup<InputHttpRequest>
     for HttpApiDefinitionLookup<AuthCtx, Namespace>
 {
     type ApiDefinition = CompiledHttpApiDefinition<Namespace>;

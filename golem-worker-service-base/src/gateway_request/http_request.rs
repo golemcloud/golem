@@ -13,14 +13,14 @@
 // limitations under the License.
 
 use crate::gateway_api_deployment::ApiSiteString;
+use http::header::HOST;
+use http::StatusCode;
 use hyper::http::{HeaderMap, Method};
+use poem::{Body, Response};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
-use http::header::HOST;
-use http::StatusCode;
-use poem::{Body, Response};
-use tracing::{error, info};
+use tracing::error;
 
 #[derive(Clone)]
 pub struct InputHttpRequest {
@@ -48,9 +48,11 @@ impl InputHttpRequest {
         let host = match headers.get(HOST).and_then(|h| h.to_str().ok()) {
             Some(host) => ApiSiteString(host.to_string()),
             None => {
-                return Err(ErrorResponse(Response::builder()
-                    .status(StatusCode::BAD_REQUEST)
-                    .body(Body::from_string("Missing host".to_string()))));
+                return Err(ErrorResponse(
+                    Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .body(Body::from_string("Missing host".to_string())),
+                ));
             }
         };
 
@@ -61,9 +63,11 @@ impl InputHttpRequest {
                 Ok(json_request_body) => json_request_body,
                 Err(err) => {
                     error!("API request host: {} - error: {}", host, err);
-                    return Err(ErrorResponse(Response::builder()
-                        .status(StatusCode::BAD_REQUEST)
-                        .body(Body::from_string("Request body parse error".to_string()))))
+                    return Err(ErrorResponse(
+                        Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .body(Body::from_string("Request body parse error".to_string())),
+                    ));
                 }
             }
         };

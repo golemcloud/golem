@@ -19,10 +19,9 @@ use crate::gateway_api_definition::http::CompiledHttpApiDefinition;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingHandler;
 use crate::gateway_rib_interpreter::DefaultRibInterpreter;
 use futures_util::FutureExt;
-use hyper::header::HOST;
 use poem::http::StatusCode;
 use poem::{Body, Endpoint, Request, Response};
-use tracing::{error, info};
+use tracing::error;
 
 use crate::gateway_execution::api_definition_lookup::ApiDefinitionsLookup;
 
@@ -33,7 +32,7 @@ use crate::gateway_execution::gateway_input_executor::{
 };
 use crate::gateway_execution::gateway_session::GatewaySessionStore;
 use crate::gateway_execution::GatewayWorkerRequestExecutor;
-use crate::gateway_request::http_request::{ApiInputPath, InputHttpRequest};
+use crate::gateway_request::http_request::InputHttpRequest;
 use crate::gateway_security::DefaultIdentityProviderResolver;
 
 // Executes custom request with the help of worker_request_executor and definition_service
@@ -41,8 +40,10 @@ use crate::gateway_security::DefaultIdentityProviderResolver;
 #[derive(Clone)]
 pub struct CustomHttpRequestApi<Namespace> {
     pub api_definition_lookup_service: Arc<
-        dyn ApiDefinitionsLookup<InputHttpRequest, ApiDefinition = CompiledHttpApiDefinition<Namespace>>
-            + Sync
+        dyn ApiDefinitionsLookup<
+                InputHttpRequest,
+                ApiDefinition = CompiledHttpApiDefinition<Namespace>,
+            > + Sync
             + Send,
     >,
     pub gateway_binding_executor:
@@ -56,9 +57,11 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
             dyn GatewayWorkerRequestExecutor<Namespace> + Sync + Send,
         >,
         api_definition_lookup_service: Arc<
-            dyn ApiDefinitionsLookup<InputHttpRequest, ApiDefinition = CompiledHttpApiDefinition<Namespace>>
-            + Sync
-            + Send,
+            dyn ApiDefinitionsLookup<
+                    InputHttpRequest,
+                    ApiDefinition = CompiledHttpApiDefinition<Namespace>,
+                > + Sync
+                + Send,
         >,
         file_server_binding_handler: Arc<dyn FileServerBindingHandler<Namespace> + Sync + Send>,
     ) -> Self {
@@ -84,8 +87,7 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
     }
 
     pub async fn execute(&self, request: Request) -> Response {
-        let input_http_request_result =
-            InputHttpRequest::from_request(request).await;
+        let input_http_request_result = InputHttpRequest::from_request(request).await;
 
         match input_http_request_result {
             Ok(input_http_request) => {
@@ -97,9 +99,9 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                     Ok(api_defs) => api_defs,
                     Err(api_defs_lookup_error) => {
                         error!(
-                        "API request host: {} - error: {}",
-                        input_http_request.host, api_defs_lookup_error
-                    );
+                            "API request host: {} - error: {}",
+                            input_http_request.host, api_defs_lookup_error
+                        );
                         return Response::builder()
                             .status(StatusCode::INTERNAL_SERVER_ERROR)
                             .body(Body::from_string("Internal error".to_string()));
@@ -130,9 +132,8 @@ impl<Namespace: Clone + Send + Sync + 'static> CustomHttpRequestApi<Namespace> {
                             .finish()
                     }
                 }
-
             }
-            Err(response) => response.into()
+            Err(response) => response.into(),
         }
     }
 }
