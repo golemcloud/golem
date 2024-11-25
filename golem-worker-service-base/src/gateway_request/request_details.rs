@@ -124,8 +124,7 @@ impl HttpRequestDetails {
             format!("{}{}", &self.host, &self.api_input_path.to_string())
         };
 
-        let result = Url::parse(&url_str).map_err(|err| err.to_string());
-        result
+        Url::parse(&url_str).map_err(|err| err.to_string())
     }
 
     pub fn empty() -> HttpRequestDetails {

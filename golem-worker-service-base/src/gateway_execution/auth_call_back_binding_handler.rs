@@ -127,7 +127,7 @@ impl AuthCallBackBindingHandler for DefaultAuthCallBack {
     ) -> Result<AuthorisationSuccess, AuthorisationError> {
         let api_url = &http_request_details
             .url()
-            .map_err(|err| AuthorisationError::Internal(err))?;
+            .map_err(AuthorisationError::Internal)?;
 
         let query_pairs = api_url.query_pairs();
 

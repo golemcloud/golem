@@ -190,35 +190,28 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
 
     let session_store = GatewaySessionStore::in_memory();
 
-    let initial_redirect_response_to_identity_provider =
+    let initial_response_to_identity_provider =
         execute(&api_request, &api_specification, &session_store).await;
 
-    // The first response will be a redirect from the auth middleware which
-    // redirects to the open id connector login
-    let initial_redirect_response_info_opt =
-        match initial_redirect_response_to_identity_provider.clone() {
-            TestResponse::RedirectResponse { headers } => {
-                let location = headers
-                    .get(LOCATION)
-                    .expect("Expecting location")
-                    .to_str()
-                    .unwrap();
-                let url =
-                    Url::parse(location).expect("Expect the initial redirection to be a full URL");
+    let initial_redirect_response_headers = initial_response_to_identity_provider.as_redirect()
+        .expect("MiddlewareIn for authentication should have resulted in a redirect response indicating login to identity provider");
 
-                let query_components =
-                    ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
+    let location = initial_redirect_response_headers
+        .get(LOCATION)
+        .expect("Expecting location")
+        .to_str()
+        .unwrap();
+    let url =
+        Url::parse(location).expect("Expect the initial redirection to be a full URL");
 
-                Some(security::get_initial_redirect_data(&query_components))
-            }
-            _ => None,
-        };
+    let query_components =
+        ApiInputPath::query_components_from_str(url.query().unwrap_or_default());
 
-    let initial_redirect_response_info = initial_redirect_response_info_opt
-        .expect("Expected initial redirection to identity provider");
+    let initial_redirect_response_info =
+        security::get_initial_redirect_data(&query_components);
 
     let actual_auth_call_back_url =
-        internal::decode_url(&initial_redirect_response_info.auth_call_back_uri);
+        internal::decode_url(&initial_redirect_response_info.auth_call_back_url);
 
     assert_eq!(initial_redirect_response_info.response_type, "code");
     assert_eq!(initial_redirect_response_info.client_id, "client_id_foo");
@@ -230,12 +223,13 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
     assert_eq!(initial_redirect_response_info.nonce, "nonce"); // only for testing
     assert_eq!(
         // The url embedded in the initial redirect should be the same as the redirect url
-        // specified in the security scheme
+        // specified in the security scheme. Note that security scheme will have a full
+        // redirect URL (auth call back URL)
         Url::parse(&actual_auth_call_back_url).unwrap(),
         auth_call_back_url.url().clone()
     );
 
-    // Manually call back the auth_call_back endpoint by assuming the identity-provider
+    // Manually call back the auth_call_back endpoint by assuming we are identity-provider
     let call_back_request_from_identity_provider =
         security::request_from_identity_provider_to_auth_call_back_endpoint(
             initial_redirect_response_info.state.as_str(),
@@ -245,7 +239,6 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
             "localhost",
         );
 
-    // Executing this request against the same API definition
     let request_with_cookies =
         InputHttpRequest::from_request(call_back_request_from_identity_provider)
             .await
@@ -253,38 +246,38 @@ async fn test_end_to_end_api_gateway_with_multiple_security() {
 
     // If successful, then auth call back is successful and we get a redirect response
     // to be then executed against the original endpoint which is in api-request
-    let response = execute(&request_with_cookies, &api_specification, &session_store).await;
+    let response =
+        execute(&request_with_cookies, &api_specification, &session_store).await;
 
-    match response {
-        TestResponse::RedirectResponse { headers } => {
-            let request = security::create_request_from_redirect(&headers);
-            let api_request = InputHttpRequest::from_request(request)
-                .await
-                .expect("Failed to get http request");
+    // The authcallback endpoint results in another redirect response
+    // which will now have the actual URL to the original protected resource
+    let redirect_response_headers= response.as_redirect()
+        .expect("The middleware should have resulted in a redirect response");
 
-            let test_response = execute(&api_request, &api_specification, &session_store).await;
+    // Manually calling it back as we are the browser
+    let request =
+        security::create_request_from_redirect(&redirect_response_headers);
 
-            let result = (
-                test_response.get_function_name().unwrap(),
-                test_response.get_function_params().unwrap(),
-            );
+    let api_request = InputHttpRequest::from_request(request)
+        .await
+        .expect("Failed to get http request");
 
-            let expected = (
-                "golem:it/api.{get-cart-contents}".to_string(),
-                Value::Array(vec![
-                    Value::String("a".to_string()),
-                    Value::String("b".to_string()),
-                ]),
-            );
+    let test_response = execute(&api_request, &api_specification, &session_store).await;
 
-            assert_eq!(result, expected);
-        }
+    let result = (
+        test_response.get_function_name().unwrap(),
+        test_response.get_function_params().unwrap(),
+    );
 
-        _ => assert!(
-            false,
-            "The response from auth middleware is expected to be a redirect response"
-        ),
-    }
+    let expected = (
+        "golem:it/api.{get-cart-contents}".to_string(),
+        Value::Array(vec![
+            Value::String("a".to_string()),
+            Value::String("b".to_string()),
+        ]),
+    );
+
+    assert_eq!(result, expected);
 }
 
 #[test]
@@ -1328,16 +1321,16 @@ mod internal {
 
     #[derive(Debug, Clone)]
     pub(crate) enum TestResponse {
-        WorkerResponse {
+        DefaultResult {
             worker_name: String,
             function_name: String,
             function_params: Value,
             cors_middleware_headers: Option<CorsMiddlewareHeadersInResponse>, // if binding has cors middleware configured
         },
         CorsPreflightResponse(Cors), // preflight test response
-        RedirectResponse {
+        Redirect {
             headers: HeaderMap,
-        }, // If any middleware resulted in redirect
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -1348,6 +1341,13 @@ mod internal {
     }
 
     impl TestResponse {
+        pub fn as_redirect(&self) -> Option<&HeaderMap> {
+            match self {
+                TestResponse::Redirect { headers } => Some(headers),
+                _ => None,
+            }
+        }
+
         pub async fn from_poem_response(
             response: poem::Response,
             resolved_gateway_binding: &ResolvedGatewayBinding<DefaultNamespace>,
@@ -1359,7 +1359,7 @@ mod internal {
                             get_test_response_for_static_preflight(response)
                         }
                         // If binding was http auth call back, we expect a redirect to the original Url
-                        StaticBinding::HttpAuthCallBack(_) => TestResponse::RedirectResponse {
+                        StaticBinding::HttpAuthCallBack(_) => TestResponse::Redirect {
                             headers: response.headers().clone(),
                         },
                     }
@@ -1386,7 +1386,7 @@ mod internal {
             &self,
         ) -> Option<CorsMiddlewareHeadersInResponse> {
             match self {
-                TestResponse::WorkerResponse {
+                TestResponse::DefaultResult {
                     cors_middleware_headers,
                     ..
                 } => cors_middleware_headers.clone(),
@@ -1396,21 +1396,21 @@ mod internal {
 
         pub fn get_worker_name(&self) -> Option<String> {
             match self {
-                TestResponse::WorkerResponse { worker_name, .. } => Some(worker_name.clone()),
+                TestResponse::DefaultResult { worker_name, .. } => Some(worker_name.clone()),
                 _ => None,
             }
         }
 
         pub fn get_function_name(&self) -> Option<String> {
             match self {
-                TestResponse::WorkerResponse { function_name, .. } => Some(function_name.clone()),
+                TestResponse::DefaultResult { function_name, .. } => Some(function_name.clone()),
                 _ => None,
             }
         }
 
         pub fn get_function_params(&self) -> Option<Value> {
             match self {
-                TestResponse::WorkerResponse {
+                TestResponse::DefaultResult {
                     function_params, ..
                 } => Some(function_params.clone()),
                 _ => None,
@@ -1606,7 +1606,7 @@ mod internal {
         // If the binding contains middlewares that can return with a redirect instead of
         // propagating the worker response, we capture that
         if is_middleware_redirect(&binding.middlewares, &response) {
-            return TestResponse::RedirectResponse { headers };
+            return TestResponse::Redirect { headers };
         }
 
         let bytes = response
@@ -1631,7 +1631,7 @@ mod internal {
 
         let function_params = body_json.get("function_params").cloned();
 
-        TestResponse::WorkerResponse {
+        TestResponse::DefaultResult {
             worker_name: worker_name.expect("Worker response expects worker_name"),
             function_name: function_name.expect("Worker response expects function_name"),
             function_params: function_params.expect("Worker response expects function_params"),
@@ -2003,7 +2003,7 @@ mod security {
         pub(crate) response_type: String,
         pub(crate) client_id: String,
         pub(crate) state: String,
-        pub(crate) auth_call_back_uri: String,
+        pub(crate) auth_call_back_url: String,
         pub(crate) scope: String,
         pub(crate) nonce: String,
     }
@@ -2028,7 +2028,7 @@ mod security {
             response_type: response_type.to_string(),
             client_id: client_id.to_string(),
             state: state.to_string(),
-            auth_call_back_uri: redirect_uri.to_string(),
+            auth_call_back_url: redirect_uri.to_string(),
             scope: scope.to_string(),
             nonce: nonce.to_string(),
         }

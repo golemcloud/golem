@@ -91,7 +91,7 @@ impl IdentityProvider for DefaultIdentityProvider {
             .ok_or(IdentityProviderError::IdTokenVerificationError(
                 "Failed to get ID token".to_string(),
             ))?
-            .claims(&id_token_verifier, nonce)
+            .claims(id_token_verifier, nonce)
             .map_err(|err| IdentityProviderError::IdTokenVerificationError(err.to_string()))?;
 
         Ok(id_token_claims.clone())
@@ -104,8 +104,8 @@ impl IdentityProvider for DefaultIdentityProvider {
         state: Option<CsrfToken>,
         nonce: Option<Nonce>,
     ) -> AuthorizationUrl {
-        let state = || state.unwrap_or_else(|| CsrfToken::new_random());
-        let nonce = || nonce.unwrap_or_else(|| Nonce::new_random());
+        let state = || state.unwrap_or_else(CsrfToken::new_random);
+        let nonce = || nonce.unwrap_or_else(Nonce::new_random);
         let builder = client.client.authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
             state,

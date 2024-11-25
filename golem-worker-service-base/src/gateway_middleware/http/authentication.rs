@@ -43,7 +43,7 @@ impl HttpRequestAuthentication {
         let state = cookie_values.get("session_id");
 
         if let (Some(id_token), Some(state)) = (id_token, state) {
-            let id_token = CoreIdToken::from_str(&id_token)
+            let id_token = CoreIdToken::from_str(id_token)
                 .map_err(|err| MiddlewareInError::Unauthorized(err.to_string()))?;
 
             let nonce = session_store
