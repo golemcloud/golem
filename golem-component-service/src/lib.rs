@@ -19,6 +19,7 @@ use anyhow::{anyhow, Context};
 use golem_common::config::DbConfig;
 use golem_common::golem_version;
 use golem_service_base::db;
+use golem_service_base::migration::Migrations;
 use poem::listener::TcpListener;
 use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::EndpointExt;
@@ -51,7 +52,7 @@ impl ComponentService {
     pub async fn new(
         config: ComponentServiceConfig,
         prometheus_registry: Registry,
-        db_migration_path: &Path,
+        migrations: impl Migrations,
     ) -> Result<Self, anyhow::Error> {
         info!(
             "Starting cloud server on ports: http: {}, grpc: {}",
@@ -60,12 +61,12 @@ impl ComponentService {
 
         match config.db.clone() {
             DbConfig::Postgres(c) => {
-                db::postgres_migrate(&c, &db_migration_path.join("postgres"))
+                db::postgres_migrate(&c, migrations.postgres_migrations())
                     .await
                     .context("Postgres DB migration")?;
             }
             DbConfig::Sqlite(c) => {
-                db::sqlite_migrate(&c, &db_migration_path.join("sqlite"))
+                db::sqlite_migrate(&c, migrations.sqlite_migrations())
                     .await
                     .context("SQLite DB migration")?;
             }

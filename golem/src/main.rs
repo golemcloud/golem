@@ -12,8 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod migration;
+
 use anyhow::anyhow;
 use bytes::Bytes;
+use futures::future::BoxFuture;
 use golem_common::config::DbConfig;
 use golem_common::tracing::init_tracing_with_default_debug_env_filter;
 use golem_common::{
@@ -24,6 +27,7 @@ use golem_component_service::config::ComponentServiceConfig;
 use golem_component_service::ComponentService;
 use golem_component_service_base::config::{ComponentStoreConfig, ComponentStoreLocalConfig};
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::migration::Migrations;
 use golem_shard_manager::shard_manager_config::{
     FileSystemPersistenceConfig, PersistenceConfig, ShardManagerConfig,
 };
@@ -35,6 +39,8 @@ use golem_worker_service_base::app_config::WorkerServiceBaseConfig;
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
 use hyper_util::rt::TokioIo;
+use include_dir::Dir;
+use include_dir::include_dir;
 use opentelemetry::global;
 use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
@@ -44,6 +50,8 @@ use poem::middleware::{OpenTelemetryMetrics, Tracing};
 use poem::{Body, Endpoint, EndpointExt, IntoEndpoint, Request, Response};
 use prometheus::{default_registry, Registry};
 use regex::Regex;
+use sqlx::error::BoxDynError;
+use sqlx::migrate::{Migration, MigrationSource};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -101,6 +109,8 @@ async fn run_all(runtime: Arc<Runtime>) -> Result<(), anyhow::Error> {
 
     let prometheus_registry = Registry::default();
     let metrics = PrometheusExporter::new(prometheus_registry.clone());
+
+    let a = MigrationsDir(include_dir!("$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"));
 
     let proxy = Proxy::new(8083, 9005)?
         .with(OpenTelemetryMetrics::new())
@@ -202,6 +212,8 @@ async fn run_component_service(
     let config = component_service_config();
     let prometheus_registry = golem_component_service::metrics::register_all();
     let migration_path = Path::new(
+        // include_dir!("$CARGO_MANIFEST_DIR/../golem-component-service/db/migration"),
+
         "/Users/vigoo/projects/ziverge/golem-services/golem-component-service/db/migration",
     ); // TODO: this needs to be embedded in the final binary
 
@@ -327,5 +339,43 @@ impl Endpoint for Proxy {
 
     async fn call(&self, req: Request) -> poem::Result<Self::Output> {
         self.proxy(req).await
+    }
+}
+
+#[derive(Debug)]
+struct SpecificMigrationsDir<'a>(&'a Dir<'a>);
+
+impl<'a> SpecificMigrationsDir<'a> {
+    async fn resolve_impl(self) -> Result<Vec<Migration>, BoxDynError> {
+        let temp_dir = tempfile::tempdir().map_err(Box::new)?;
+        self.0.extract(temp_dir.path()).map_err(Box::new)?;
+        temp_dir.path().resolve().await
+    }
+}
+
+impl <'a> MigrationSource<'a> for SpecificMigrationsDir<'a> {
+    fn resolve(self) -> BoxFuture<'a, Result<Vec<Migration>, BoxDynError>> {
+        Box::pin(self.resolve_impl())
+    }
+}
+
+struct MigrationsDir(Dir<'static>);
+
+impl MigrationsDir {
+    pub fn new(dir: Dir<'static>) -> Self {
+        Self(dir)
+    }
+}
+
+impl Migrations for MigrationsDir {
+    type Output<'b> = SpecificMigrationsDir<'b>
+        where Self: 'b;
+
+    fn sqlite_migrations<'b>(&'b self) -> Self::Output<'b> {
+        SpecificMigrationsDir(self.0.get_dir("sqlite").unwrap())
+    }
+
+    fn postgres_migrations<'b>(&'b self) -> Self::Output<'b> {
+        SpecificMigrationsDir(self.0.get_dir("postgres").unwrap())
     }
 }

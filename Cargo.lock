@@ -3481,6 +3481,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bytes 1.8.0",
+ "futures",
  "golem-common",
  "golem-component-compilation-service",
  "golem-component-service",
@@ -3494,6 +3495,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.5.0",
  "hyper-util",
+ "include_dir",
  "opentelemetry",
  "opentelemetry-prometheus",
  "opentelemetry_sdk",
@@ -3502,6 +3504,8 @@ dependencies = [
  "prometheus",
  "regex",
  "rustls 0.23.17",
+ "sqlx",
+ "tempfile",
  "tokio",
 ]
 

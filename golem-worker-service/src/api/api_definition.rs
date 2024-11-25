@@ -373,7 +373,7 @@ mod test {
             _auth_ctx: &EmptyAuthCtx,
         ) -> ComponentResult<FunctionConstraintCollection> {
             unimplemented!()
-        }
+        }x
     }
 
     async fn make_route<'c>() -> (poem::Route, SqliteDb<'c>) {
@@ -383,7 +383,7 @@ mod test {
             max_connections: 10,
         };
 
-        db::sqlite_migrate(&db_config, &PathBuf::from("db/migration/sqlite"))
+        db::sqlite_migrate(&db_config, PathBuf::from("db/migration/sqlite"))
             .await
             .unwrap();
 

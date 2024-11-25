@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use anyhow::anyhow;
+use sqlx::migrate::MigrationSource;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Connection, Executor, PgConnection, Pool, Postgres, Sqlite, SqliteConnection};
@@ -53,11 +54,11 @@ pub async fn create_postgres_pool(
         .await
 }
 
-pub async fn postgres_migrate(config: &DbPostgresConfig, path: &Path) -> Result<(), anyhow::Error> {
+pub async fn postgres_migrate(config: &DbPostgresConfig, migrations: impl MigrationSource<'_>) -> Result<(), anyhow::Error> {
     let schema = config.schema.clone().unwrap_or("public".to_string());
     info!(
-        "DB migration: postgresql://{}:{}/{}?currentSchema={}, path: {:?}",
-        config.host, config.port, config.database, schema, path
+        "DB migration: postgresql://{}:{}/{}?currentSchema={}",
+        config.host, config.port, config.database, schema
     );
     let options = create_postgres_options(config);
     let mut conn = PgConnection::connect_with(&options).await?;
@@ -76,7 +77,7 @@ pub async fn postgres_migrate(config: &DbPostgresConfig, path: &Path) -> Result<
         return Err(anyhow!("DB schema {schema} do not exists/was not created"));
     }
 
-    let migrator = sqlx::migrate::Migrator::new(path).await?;
+    let migrator = sqlx::migrate::Migrator::new(migrations).await?;
     migrator.run_direct(&mut conn).await?;
 
     let _ = conn.close().await;
@@ -98,13 +99,13 @@ pub async fn create_sqlite_pool(config: &DbSqliteConfig) -> Result<Pool<Sqlite>,
         .await
 }
 
-pub async fn sqlite_migrate(config: &DbSqliteConfig, path: &Path) -> Result<(), anyhow::Error> {
+pub async fn sqlite_migrate(config: &DbSqliteConfig, migrations: impl MigrationSource<'_>) -> Result<(), anyhow::Error> {
     info!(
-        "DB migration: sqlite://{}, path: {:?}",
-        config.database, path
+        "DB migration: sqlite://{}",
+        config.database
     );
     let mut conn = SqliteConnection::connect_with(&create_sqlite_options(config)).await?;
-    let migrator = sqlx::migrate::Migrator::new(path).await?;
+    let migrator = sqlx::migrate::Migrator::new(migrations).await?;
     migrator.run_direct(&mut conn).await?;
     let _ = conn.close().await;
     Ok(())
